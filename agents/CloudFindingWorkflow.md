@@ -12,10 +12,10 @@ SecurityAgent (aligned to ISO/IEC 27001:2022 intent), Dev, and Platform.
 4. The overall score and status are updated in the file.
 
 ## Filename Conventions
-- **Location:** All findings are stored in `Findings/`.
-- **Format:** `CF-YYYYMMDD-HHMM-xxxx.md`
-- **Date and time:** `YYYYMMDD-HHMM` = UTC date and time of finding creation.
-- **Identifier:** `xxxx` = 4-digit random or sequential identifier.
+- **Location:** All findings are stored in `Findings/Cloud/`.
+- **Format:** `<finding-title>.md`
+- **Finding title:** Use a short, Titlecase identifier from the finding source
+  (e.g., `AZ-001_Unprotected_Storage_Account`).
 
 ## File Template
 ```md
@@ -59,11 +59,14 @@ SecurityAgent (aligned to ISO/IEC 27001:2022 intent), Dev, and Platform.
 
 ## Required Sections
 - SecurityAgent Findings
-- 🛠️ Dev Review
-- 🏗️ Platform Review
-- Skeptics
+- Skeptic
 - SecurityAgent Final Review
-- Overall Score and Status
+- Overall Score
+
+## Cross-Checks
+- Always check existing findings to see if they compound the new issue.
+- If they compound, state that clearly, review both issues, and add backlinks
+  between them.
 
 ## Testing
 - Use the `sample/` directory for test runs and mock findings.

@@ -25,6 +25,12 @@ When updating, prefer short, explicit directives and keep examples minimal.
   want a security review or a triage review before proceeding. If the user does
   not specify, default to a triage review.
 
+## Finding Cross-Checks
+- Always check existing findings to see if they compound the new issue when
+  performing a review.
+- If findings compound, state that clearly, review both issues, and add a
+  backlink between them.
+
 ## Styling
 - All agents must follow the repository styling rules defined in
   settings/Styling.md when producing or editing markdown files.
