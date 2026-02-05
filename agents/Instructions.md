@@ -2,17 +2,15 @@
 
 This file is the canonical place to store instructions for AI agents interacting with this repository.
 
-Suggested contents:
-- Purpose and scope for agents (what tasks they can perform)
-- Repository-specific conventions agents should follow
-- Location of important files (README.md, .github/, any language-specific manifests)
-- How to run builds/tests/lints (populate once the project adds package manifests)
-- CI hooks and workflow notes (if any)
 - Use UK English spelling throughout documentation and messages.
 - sample/ folder: Use sample/ to store example outputs or test artifacts for findings and checks; it's safe to commit placeholder files (e.g., .gitkeep) to reserve the directory.
   - When asked to "test the styling", agents should delete previous contents of sample/ and generate new sample output files into sample/ following Styling.md rules.
 
 When updating, prefer short, explicit directives and keep examples minimal.
+
+Operational verbosity:
+- Agents should emit a brief, verbose log (in their output or comments) describing each processing step when handling a finding. Include which agent is running, the actions it's taking (e.g., parsing evidence, checking policies, scoring), and any key heuristics used.
+- Logs should be concise but informative; avoid raw dumps of large evidence unless necessary.
 
 All agents must follow the repository styling rules defined in settings/Styling.md when producing or editing markdown files.
 
