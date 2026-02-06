@@ -27,6 +27,13 @@ SecurityAgent (aligned to ISO/IEC 27001:2022 intent), Dev, and Platform.
 <details>
 <summary>Summary</summary>
 <content>
+### Recommendations
+- <recommendation>
+
+### Considered Countermeasures
+- 🔴 <countermeasure> — <effectiveness note>
+- 🟡 <countermeasure> — <effectiveness note>
+- 🟢 <countermeasure> — <effectiveness note>
 </details>
 
 ## Skeptic
@@ -55,6 +62,8 @@ SecurityAgent (aligned to ISO/IEC 27001:2022 intent), Dev, and Platform.
 - All timestamps in UTC ISO8601.
 - Each reviewer appends their section with their comments and timestamp.
 - SecurityAgent updates the final score after all reviews.
+- For countermeasures, indicate effectiveness with traffic light circles:
+  🔴 Ineffective, 🟡 Partially effective, 🟢 Effective.
 ```
 
 ## Required Sections
@@ -62,6 +71,8 @@ SecurityAgent (aligned to ISO/IEC 27001:2022 intent), Dev, and Platform.
 - Skeptic
 - SecurityAgent Final Review
 - Overall Score
+- Recommendations
+- Considered Countermeasures
 
 ## Cross-Checks
 - Always check existing findings to see if they compound the new issue.
