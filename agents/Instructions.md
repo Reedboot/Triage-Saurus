@@ -37,6 +37,9 @@ with this repository.
   the diagram before any service ordering list. Include a `## Service Risk
   Order` section that lists all cloud services by descending overall risk score,
   with the service name as a Markdown link to its `Summary/Cloud/` file.
+- **Summary actions backlinks:** In `Summary/` files, references in the `## Actions`
+  section must be Markdown backlinks to the related finding file(s) using the
+  `Findings/...` path.
 - **Summaries (discovery):** When a new cloud service is discovered (even
   outside a full review), create or update the corresponding
   `Summary/Cloud/Storage_Account.md` entry immediately (replace Storage_Account
@@ -74,7 +77,8 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - Always perform automatic compounding checks against all existing findings
   whenever a new finding is created or an existing finding is updated.
 - If findings compound, state that clearly, review both issues, and add a
-  backlink between them.
+  backlink between them. Use Markdown links in the `## Compounding Findings`
+  section (e.g., `[Findings/Cloud/Foo.md](Findings/Cloud/Foo.md)`).
 
 ## Styling
 - All agents must follow the repository styling rules defined in

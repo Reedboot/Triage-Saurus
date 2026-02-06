@@ -64,6 +64,7 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
+  (use Markdown backlinks, e.g., `[Findings/Code/Foo.md](Findings/Code/Foo.md)`)
 
 ## Meta Data
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
