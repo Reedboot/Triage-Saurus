@@ -106,17 +106,20 @@ def to_business_impact(summary: str) -> str:
     impact = summary
     for term, replacement in ACRONYM_REPLACEMENTS.items():
         impact = impact.replace(term, replacement)
-    if not impact.lower().startswith("potential impact"):
-        impact = f"Potential impact: {impact}"
+    # Keep impact short and board-friendly.
+    impact = impact.split(".")[0].strip()
+    if "public network access" in impact.lower():
+        impact = "Public access raises the risk of unauthorised secrets access"
     return impact
 
 
 def resource_type_from_name(name: str) -> str:
-    if name.startswith("AZ-"):
+    upper = name.upper()
+    if upper.startswith("AZ-"):
         return "Azure"
-    if name.startswith("AKS-"):
+    if upper.startswith("AKS-"):
         return "AKS"
-    if name.startswith("A0"):
+    if upper.startswith("A0"):
         return "Application Code"
     return "Application"
 

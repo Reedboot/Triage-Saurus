@@ -24,7 +24,7 @@ Create and maintain the Excel risk register for executive reporting. The registe
 - **Risk Score:** Parse the numeric value from `- **Overall Score:**` (e.g., `7/10` => 7).
 - **Overall Severity:** Parse the severity label from `- **Overall Score:**`.
 - **Business Impact:** Use the `## 🛡️ Security Review` summary sentence and rewrite for
-  business impact if needed.
+  business impact if needed. Keep it concise and do not prefix with “Potential impact”.
 - **File Reference:** Use the relative path under `Findings/`.
 - **Resource Type:**
   - `AZ-` prefix => Azure

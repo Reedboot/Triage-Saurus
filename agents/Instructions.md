@@ -12,6 +12,10 @@ with this repository.
 - **Sample findings only:** When reviewing findings, only use sample findings
   unless explicitly told to use non-sample findings. Treat sample findings as
   test data, not user environment knowledge.
+- **Sample findings off limits:** Do not edit files under `sample findings/`
+  unless the user explicitly asks you to.
+- **Sample findings usage:** Do not use `sample findings/` for evaluation
+  enrichment or context unless the user explicitly asks you to.
 - **Recommendations formatting:** In `## 🛡️ Security Review`, list recommendations as
   checkboxes and include a per-recommendation downscore estimate using arrow emojis,
   e.g., `- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)`. Use `0` when the
@@ -23,6 +27,8 @@ with this repository.
   summary under `Summary/Cloud/`. When reviewing code repositories, update the
   repository summary under `Summary/Repos/`. Use the resource type or repository
   name as the filename and follow `settings/Styling.md`.
+- **Risk register:** After any triage or review that changes findings, run the
+  Risk Register workflow and regenerate `Summary/Risk Register.xlsx`.
 
 When updating, prefer short, explicit directives and keep examples minimal.
 
@@ -86,6 +92,10 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When a user indicates they want to provide an issue for triage, respond with a
   direct prompt: "What issue would you like me to triage? Please share the
   scanner details."
+- Do not ask for the full scanner finding text; use the initial text provided
+  by the user to begin triage.
+- Do not ask for severity, evidence, or resource identifiers in the initial
+  triage prompt.
 - Treat requests to "assess" an issue as a triage request.
 - When the resource type is clear (e.g., cloud or code), acknowledge it in the
   response and proceed with triage only after confirming the cloud provider if

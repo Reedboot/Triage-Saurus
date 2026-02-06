@@ -41,6 +41,8 @@ those tools are added to the repo.
   recommendation is expected to remove the risk entirely.
 - **Header bullet:** Only the document title should include a purple bullet
   point emoji (🟣) after the `#` and before the title text.
+- **Title underscores:** Document titles must not include underscores `_` (e.g.,
+  use `# 🟣 Architecture Azure`).
 - **Review emoji:** Use consistent emoji prefixes for reviewer section headings.
   For cloud findings, use 🛠️ for `Dev Review` and 🏗️ for `Platform Review`.
 - **Mermaid emoji:** Emojis are allowed in Mermaid diagrams if they do not break
