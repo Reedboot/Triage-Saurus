@@ -35,6 +35,12 @@ findings, maintaining summaries, and regenerating the risk register.
 2. Paste the prompt from `SessionKickoff.md`.
 3. Follow the repository instructions in `AGENTS.md` and `agents/Instructions.md`.
 
+## Process sample findings
+
+1. Use your chosen CLI
+2. Enter the prompt `Triage review. Cloud provider: Azure. Process sample findings one by one
+  without confirmations`.
+
 **Tools**
 - **Python:** `python3` is required to run `Skills/risk_register.py` for generating
   `Summary/Risk Register.xlsx`.

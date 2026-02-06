@@ -12,6 +12,10 @@ with this repository.
 - **Sample findings only:** When reviewing findings, only use sample findings
   unless explicitly told to use non-sample findings. Treat sample findings as
   test data, not user environment knowledge.
+- **Sample findings workflow:** Process sample findings one by one, without
+  generating scripts or bulk automation.
+- **Sample findings flow:** When processing sample findings one by one, continue
+  to the next finding without asking for confirmation.
 - **Sample findings off limits:** Do not edit files under `sample findings/`
   unless the user explicitly asks you to.
 - **Sample findings usage:** Do not use `sample findings/` for evaluation
