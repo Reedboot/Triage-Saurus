@@ -17,6 +17,10 @@ those tools are added to the repo.
   timestamp in the footer using UK date and time (DD/MM/YYYY HH:MM with a colon).
   Seconds are optional and not required.
 - **Headers:** Use headings to structure all markdown files; avoid long unheaded blocks.
+- **Summary headers:** In `Summary/Cloud/`, use emoji-prefixed headers:
+  `## 🧭 Overview`, `## ⚠️ Risk`, `## ✅ Actions`, `## 📌 Findings`. Architecture
+  summaries should use `## 📊 Service Risk Order` and `## 📝 Notes`.
+- **Exploitability header:** In findings, use `### 🎯 Exploitability`.
 - **Bullet point colon formatting:** In bullet lists, when a line contains a colon (`:`),
   format the text left of the colon in bold. Example:
   - **Key:** value

@@ -37,9 +37,16 @@ with this repository.
   the diagram before any service ordering list. Include a `## Service Risk
   Order` section that lists all cloud services by descending overall risk score,
   with the service name as a Markdown link to its `Summary/Cloud/` file.
+- **Summary diagrams:** Do not include a `## Diagram` header in `Summary/Cloud/`
+  files; include the Mermaid diagram block directly.
+- **Summary headers:** Use emoji-prefixed section headers in `Summary/Cloud/`:
+  `## 🧭 Overview`, `## ⚠️ Risk`, `## ✅ Actions`, and `## 📌 Findings`. Use
+  `## 📊 Service Risk Order` and `## 📝 Notes` in architecture summaries.
 - **Summary actions backlinks:** In `Summary/` files, references in the `## Actions`
   section must be Markdown backlinks to the related finding file(s) using the
-  `Findings/...` path.
+  `Findings/...` path. Action items should use checkbox bullets, should not start
+  with `Action:`, should not include `Reference:` pretext, and must not duplicate
+  backlink markup.
 - **Summaries (discovery):** When a new cloud service is discovered (even
   outside a full review), create or update the corresponding
   `Summary/Cloud/Storage_Account.md` entry immediately (replace Storage_Account
@@ -55,7 +62,7 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - Include which agent is running, the actions it's taking (e.g., parsing
   evidence, checking policies, scoring), and any key heuristics used.
 - Logs should be concise but informative; avoid raw dumps of large evidence
-  unless necessary.
+  unless necessary. Do not add a `## Processing Log` section to findings.
 
 ## Review Clarification
 - When asked to review files or findings, ask the user to confirm whether they

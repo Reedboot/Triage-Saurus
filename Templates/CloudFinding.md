@@ -29,7 +29,7 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 ### Summary
 <summary>
 
-### Exploitability
+### 🎯 Exploitability
 <exploitability>
 
 ### Recommendations
@@ -56,12 +56,6 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 - **Outcome:** <outcome>
 - **Next step:** <next step>
 
-## Processing Log
-- **Security review:** <summary>
-- **Dev sceptic:** <summary>
-- **Platform sceptic:** <summary>
-- **Collaboration:** <summary>
-
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
   (use Markdown backlinks, e.g., `[Findings/Cloud/Foo.md](Findings/Cloud/Foo.md)`)
@@ -74,7 +68,6 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 - 🛡️ Security Review
 - 🤔 Skeptic
 - 🤝 Collaboration
-- Processing Log
 - Compounding Findings
 - Meta Data
 
