@@ -78,6 +78,24 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When an agent learns something new, prepend messages with a lightbulb emoji
   (💡) and include a one- or two-sentence explanation of the learning in chat
   only.
+- When a user indicates they want to provide an issue for triage, respond with a
+  direct prompt: "What issue would you like me to triage? Please share the
+  scanner details."
+- When the resource type is clear (e.g., cloud or code), acknowledge it in the
+  response and proceed with triage only after confirming the cloud provider if
+  it is not explicitly stated.
+- Ask which cloud provider hosts the resource for cloud-related issues unless
+  the provider is explicitly stated in the issue text.
+- When hosting providers or key technologies are confirmed, persist them in the
+  appropriate file under `Knowlegde/` and include a "Last updated" timestamp in
+  UK date/time format in the file footer. Also notify the user that knowledge
+  was updated using the lightbulb emoji format.
+- When using assumptions derived from `Knowlegde/`, explicitly tell the user
+  and include a book emoji (📘) in the message.
+- Explicitly call out assumptions with the thinking face emoji (🤔) when they
+  are made.
+- If multiple cloud providers may be in use, ask and record the outcome in
+  `Knowlegde/` to avoid repeated questions.
 ## Skeptic Sections
 
 - In findings, use `## 🤔 Skeptic` as the section heading.
