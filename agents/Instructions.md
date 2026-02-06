@@ -75,6 +75,8 @@ When updating, prefer short, explicit directives and keep examples minimal.
 
 ## Chat Behavior
 
+- When an AI or CLI session is initialised, ask: "Would you like a security
+  issue triage, or is there something else I can help with?"
 - When an agent learns something new, prepend messages with a lightbulb emoji
   (💡) and include a one- or two-sentence explanation of the learning in chat
   only.

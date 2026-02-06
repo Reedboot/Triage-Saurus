@@ -20,6 +20,9 @@
 - If requirements or context are unclear, use the `ask_user` tool to request
   clarification.
 - Always use the lightbulb chat format for questions.
+- For cloud findings, ask a short line of clarifying questions (1-3) to confirm
+  scope, policy/rotation expectations, and scanner/source context before
+  proceeding with the review.
 
 ## Findings Report Format
 - List findings as bullet points with severity score, description, and

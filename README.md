@@ -1,5 +1,8 @@
 # Triage-Saurus
 
+Read `AGENTS.md` first for repository-specific agent instructions.
+See `SessionKickoff.md` for a ready-to-paste session initialisation prompt.
+
 Author: Neil Reed 06/02/2026
 
 Security Triage using AI
