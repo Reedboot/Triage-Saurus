@@ -24,9 +24,11 @@ with this repository.
   `Templates/CodeFinding.md` for code findings, and refer to
   `settings/Styling.md` for formatting rules.
 - **Summaries:** When reviewing cloud findings, update the relevant resource
-  summary under `Summary/Cloud/`. When reviewing code repositories, update the
-  repository summary under `Summary/Repos/`. Use the resource type or repository
-  name as the filename and follow `settings/Styling.md`.
+  summary under `Summary/Cloud/`, and update the relevant cloud architecture
+  diagram under `Summary/Cloud/Architecture_<Provider>.md`. When reviewing code
+  repositories, update the repository summary under `Summary/Repos/`. Use the
+  resource type or repository name as the filename and follow
+  `settings/Styling.md`.
 - **Risk register:** After any triage or review that changes findings, run the
   Risk Register workflow and regenerate `Summary/Risk Register.xlsx`.
 
@@ -101,7 +103,8 @@ When updating, prefer short, explicit directives and keep examples minimal.
   response and proceed with triage only after confirming the cloud provider if
   it is not explicitly stated.
 - Ask which cloud provider hosts the resource for cloud-related issues unless
-  the provider is explicitly stated in the issue text.
+  the provider is explicitly stated in the issue text or already recorded in
+  the relevant `Knowledge/` file.
 - When hosting providers or key technologies are confirmed, persist them in the
   appropriate file under `Knowledge/` and include a "Last updated" timestamp in
   UK date/time format in the file footer. Structure cloud knowledge so the
