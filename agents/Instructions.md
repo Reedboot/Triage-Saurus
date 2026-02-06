@@ -59,7 +59,7 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - Do not include an `Evidence` line in findings outputs.
 
 ## Knowledge Updates
-- Create and maintain domain files under Knowlegde/ (e.g., Azure.md, Code.md,
+- Create and maintain domain files under `Knowledge/` (e.g., Azure.md, Code.md,
   DevOps.md).
 - When an agent learns something new, append it to the appropriate file and
   include a "Last updated" timestamp in UK date/time format
@@ -88,15 +88,15 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - Ask which cloud provider hosts the resource for cloud-related issues unless
   the provider is explicitly stated in the issue text.
 - When hosting providers or key technologies are confirmed, persist them in the
-  appropriate file under `Knowlegde/` and include a "Last updated" timestamp in
+  appropriate file under `Knowledge/` and include a "Last updated" timestamp in
   UK date/time format in the file footer. Also notify the user that knowledge
   was updated using the lightbulb emoji format.
-- When using assumptions derived from `Knowlegde/`, explicitly tell the user
+- When using assumptions derived from `Knowledge/`, explicitly tell the user
   and include a book emoji (📘) in the message.
 - Explicitly call out assumptions with the thinking face emoji (🤔) when they
   are made.
 - If multiple cloud providers may be in use, ask and record the outcome in
-  `Knowlegde/` to avoid repeated questions.
+  `Knowledge/` to avoid repeated questions.
 ## Skeptic Sections
 
 - In findings, use `## 🤔 Skeptic` as the section heading.
