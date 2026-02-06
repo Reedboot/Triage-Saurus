@@ -9,6 +9,9 @@ with this repository.
   - When asked to "test the styling", agents should delete previous contents of
     sample/ and generate new sample output files into sample/ following
     settings/Styling.md rules.
+- **Sample findings only:** When reviewing findings, only use sample findings
+  unless explicitly told to use non-sample findings. Treat sample findings as
+  test data, not user environment knowledge.
 - **Recommendations formatting:** In `## 🛡️ Security Review`, list recommendations as
   checkboxes and include a per-recommendation downscore estimate using arrow emojis,
   e.g., `- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)`. Use `0` when the
