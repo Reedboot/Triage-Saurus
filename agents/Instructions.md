@@ -59,8 +59,8 @@ When updating, prefer short, explicit directives and keep examples minimal.
   and a brief description of how the issue could be exploited.
 
 ## Finding Cross-Checks
-- Always check existing findings to see if they compound the new issue when
-  performing a review.
+- Always perform automatic compounding checks against all existing findings
+  whenever a new finding is created or an existing finding is updated.
 - If findings compound, state that clearly, review both issues, and add a
   backlink between them.
 
