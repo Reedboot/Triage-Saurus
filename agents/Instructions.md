@@ -77,9 +77,9 @@ When updating, prefer short, explicit directives and keep examples minimal.
 
 - When an AI or CLI session is initialised, ask: "Would you like a security
   issue triage, or is there something else I can help with?"
-- When an agent learns something new, prepend messages with a lightbulb emoji
-  (💡) and include a one- or two-sentence explanation of the learning in chat
-  only.
+- When an agent learns something new, the immediate chat response must begin
+  with a lightbulb emoji (💡) and include a one- or two-sentence explanation of
+  the learning in chat only. Do not place any other text before the emoji.
 - When a user indicates they want to provide an issue for triage, respond with a
   direct prompt: "What issue would you like me to triage? Please share the
   scanner details."
@@ -91,8 +91,15 @@ When updating, prefer short, explicit directives and keep examples minimal.
   the provider is explicitly stated in the issue text.
 - When hosting providers or key technologies are confirmed, persist them in the
   appropriate file under `Knowledge/` and include a "Last updated" timestamp in
-  UK date/time format in the file footer. Also notify the user that knowledge
-  was updated using the lightbulb emoji format.
+  UK date/time format in the file footer. Structure cloud knowledge so the
+  cloud provider is listed once under a `Cloud Provider` section, and services
+  are listed separately under `Services In Use` as they are discovered. Also
+  notify the user that knowledge was updated using the lightbulb emoji format.
+- When answers are discovered during triage, update the relevant `Knowledge/`
+  file with environment details that can help other findings, such as RBAC vs
+  access policy usage, rotation or expiry defaults, and enforcement mechanisms
+  (e.g., Azure Policy, CI guardrails, IaC checks). Keep the entries concise and
+  add them under clear headings.
 - When using assumptions derived from `Knowledge/`, explicitly tell the user
   and include a book emoji (📘) in the message.
 - Explicitly call out assumptions with the thinking face emoji (🤔) when they
