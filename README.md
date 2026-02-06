@@ -1,7 +1,11 @@
 # Triage-Saurus
 
 Read `AGENTS.md` first for repository-specific agent instructions.
-See `SessionKickoff.md` for a ready-to-paste session initialisation prompt.
+To initialise a session, copy and paste this prompt:
+```text
+Initialise: read AGENTS.md and agents/Instructions.md, then prompt me per repo instructions.
+```
+The same prompt is also saved in `SessionKickoff.md`.
 
 Author: Neil Reed 06/02/2026
 
