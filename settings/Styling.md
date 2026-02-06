@@ -35,9 +35,23 @@ those tools are added to the repo.
   - 🟡 Medium 4-5
   - 🟢 Low 1-3
   - Example: `- **Overall Score:** 🔴 Critical 9/10`
+- **Recommendations format:** In `## 🛡️ Security Review`, use checkbox bullets and
+  include a per-recommendation downscore estimate with arrow emojis, e.g.,
+  `- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)`. Use `0` when the
+  recommendation is expected to remove the risk entirely.
 - **Header bullet:** Only the document title should include a purple bullet
   point emoji (🟣) after the `#` and before the title text.
 - **Review emoji:** Use consistent emoji prefixes for reviewer section headings.
   For cloud findings, use 🛠️ for `Dev Review` and 🏗️ for `Platform Review`.
+- **Mermaid emoji:** Emojis are allowed in Mermaid diagrams if they do not break
+  rendering. Use the following emoji consistently:
+  - 🛡️ Security boundary/control
+  - 🔐 Identity or authentication
+  - 🗄️ Data store
+  - 🧩 Service or component
+  - 🌐 Internet/public edge
+  - 🧑‍💻 User/operator
+  - ⚙️ Automation or pipeline
+  - 📈 Monitoring/alerts
 
 Last updated: 05/02/2026 21:04

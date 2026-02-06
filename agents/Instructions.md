@@ -9,6 +9,17 @@ with this repository.
   - When asked to "test the styling", agents should delete previous contents of
     sample/ and generate new sample output files into sample/ following
     settings/Styling.md rules.
+- **Recommendations formatting:** In `## 🛡️ Security Review`, list recommendations as
+  checkboxes and include a per-recommendation downscore estimate using arrow emojis,
+  e.g., `- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)`. Use `0` when the
+  recommendation is expected to remove the risk entirely.
+- **Templates:** Use `Templates/CloudFinding.md` for the cloud finding layout and
+  `Templates/CodeFinding.md` for code findings, and refer to
+  `settings/Styling.md` for formatting rules.
+- **Summaries:** When reviewing cloud findings, update the relevant resource
+  summary under `Summary/Cloud/`. When reviewing code repositories, update the
+  repository summary under `Summary/Repos/`. Use the resource type or repository
+  name as the filename and follow `settings/Styling.md`.
 
 When updating, prefer short, explicit directives and keep examples minimal.
 
@@ -24,6 +35,17 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When asked to review files or findings, ask the user to confirm whether they
   want a security review or a triage review before proceeding. If the user does
   not specify, default to a triage review.
+- When asked to perform a review or triage, run the full workflow: Security
+  analysis, Dev sceptic, Platform sceptic, then collaboration that
+  incorporates sceptic comments. Do not include a `## Triage` block in outputs.
+- When reviewing code repositories, include a `## Configuration Reference`
+  section that lists any bad configuration settings and the files they are in.
+- Do not include timestamps inside `## 🤝 Collaboration`. Instead, add a
+  `## Meta Data` section containing a `Last updated` entry with an emoji for
+  findings in `Findings/` following `settings/Styling.md` date format.
+- Use `## 🛡️ Security Review` as the section heading for the security review.
+- In `## 🛡️ Security Review`, include the rationale for why the score is valid
+  and a brief description of how the issue could be exploited.
 
 ## Finding Cross-Checks
 - Always check existing findings to see if they compound the new issue when
@@ -34,6 +56,7 @@ When updating, prefer short, explicit directives and keep examples minimal.
 ## Styling
 - All agents must follow the repository styling rules defined in
   settings/Styling.md when producing or editing markdown files.
+- Do not include an `Evidence` line in findings outputs.
 
 ## Knowledge Updates
 - Create and maintain domain files under Knowlegde/ (e.g., Azure.md, Code.md,
@@ -57,7 +80,8 @@ When updating, prefer short, explicit directives and keep examples minimal.
   only.
 ## Skeptic Sections
 
-- In findings, use `### 🛠️ Dev` and `### 🏗️ Platform` under the `## Skeptic` heading.
+- In findings, use `## 🤔 Skeptic` as the section heading.
+- Under it, use `### 🛠️ Dev` and `### 🏗️ Platform`.
 - Skeptic score recommendations must use arrow emojis: `➡️ Keep`, `⬆️ Up`, `⬇️ Down`,
   and include a brief reason.
 - **Dev sceptic:** Optimises to avoid unnecessary code/IaC changes, but will not
