@@ -135,3 +135,6 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When appropriate, probe with targeted questions about the user's cloud
   environment to support deeper analysis and help uncover potential unknown
   risks.
+- If the user asks to "clear repo", confirm with a warning that this will delete
+  all files under `Findings/`, `Summary/`, and `Knowledge/`, plus
+  `Summary/Risk Register.xlsx`, to start fresh. Do not proceed until confirmed.
