@@ -81,6 +81,7 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When a user indicates they want to provide an issue for triage, respond with a
   direct prompt: "What issue would you like me to triage? Please share the
   scanner details."
+- Treat requests to "assess" an issue as a triage request.
 - When the resource type is clear (e.g., cloud or code), acknowledge it in the
   response and proceed with triage only after confirming the cloud provider if
   it is not explicitly stated.
