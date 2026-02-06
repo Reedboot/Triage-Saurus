@@ -74,6 +74,12 @@ def parse_title(lines: list[str], path: Path) -> str:
     return heading
 
 
+def parse_issue(title: str) -> str:
+    # Strip leading ID tokens such as AZ-003, Az-003, AKS-01, A01.
+    cleaned = re.sub(r"^[A-Za-z]{1,3}-?\\d+\\s+", "", title).strip()
+    return cleaned or title
+
+
 def parse_summary(lines: list[str], path: Path) -> str:
     summary_idx = None
     for idx, line in enumerate(lines):
@@ -129,6 +135,7 @@ def build_rows() -> list[RiskRow]:
     for path in iter_finding_files():
         lines = path.read_text(encoding="utf-8").splitlines()
         title = parse_title(lines, path)
+        issue = parse_issue(title)
         severity, score = parse_overall_score(lines, path)
         summary = parse_summary(lines, path)
         impact = to_business_impact(summary)
@@ -137,7 +144,7 @@ def build_rows() -> list[RiskRow]:
             RiskRow(
                 priority=0,
                 resource_type=resource_type,
-                issue=title,
+                issue=issue,
                 risk_score=score,
                 overall_severity=severity,
                 business_impact=impact,
