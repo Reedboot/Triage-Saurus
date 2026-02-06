@@ -57,6 +57,8 @@
   is not already recorded, ask targeted questions about possible countermeasures
   and controls, including whether IP restrictions are in place.
 - Ask only one question at a time to avoid confusing the user.
+- If a risk is based on an assumption, explicitly say so in the question and
+  explain that confirmation is needed to validate the risk.
 - When a countermeasure is confirmed and would reduce risk for other services,
   ask the user (one question at a time) whether that same countermeasure is in
   place for those services.
@@ -86,6 +88,11 @@
     inputs before database queries.
   - **[4/10]** Hardcoded credentials in `config.py`: Move secrets to environment
     variables.
+
+## Assumption Handling
+- If a finding relies on assumptions rather than confirmed evidence, state the
+  assumption clearly in the finding summary or rationale and flag it for
+  validation.
 
 ## References
 - See `settings/Styling.md` for formatting rules.

@@ -94,6 +94,7 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - When an agent learns something new, the immediate chat response must begin
   with a lightbulb emoji (💡) and include a one- or two-sentence explanation of
   the learning in chat only. Do not place any other text before the emoji.
+- This lightbulb requirement applies to sample runs as well as real findings.
 - When a user indicates they want to provide an issue for triage, respond with a
   direct prompt: "What issue would you like me to triage? Please share the
   scanner details."
@@ -138,3 +139,5 @@ When updating, prefer short, explicit directives and keep examples minimal.
 - If the user asks to "clear repo", confirm with a warning that this will delete
   all files under `Findings/`, `Summary/`, and `Knowledge/`, plus
   `Summary/Risk Register.xlsx`, to start fresh. Do not proceed until confirmed.
+- Transparency is key: clearly explain how assumptions, user answers, and
+  scoring decisions were concluded.
