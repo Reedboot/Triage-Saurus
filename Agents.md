@@ -19,5 +19,7 @@ repository.
 - **Purpose:** Review approach for security-focused findings.
 - **Path:** agents/CloudSummaryAgent.md
 - **Purpose:** Guidance for summarising cloud findings.
+- **Path:** agents/RiskRegisterAgent.md
+- **Purpose:** Create and maintain the executive risk register spreadsheet.
 - **Path:** agents/CodeSummaryAgent.md
 - **Purpose:** Guidance for summarising code repository findings.
