@@ -17,10 +17,12 @@
 
 ## Reporting Format
 - **Headings:** Use `## Skeptic` then `### 🛠️ Dev`.
-- **Score recommendation:** Use arrows with a reason, e.g.
+ - **Score recommendation:** Use arrows with a reason, e.g.
   `- **Score recommendation:** ➡️ Keep. Evidence gaps remain; confirm exposure first.`
  - **Section naming:** Findings must use `## 🤔 Skeptic` as the section heading.
  - **Score arrows:** Use `➡️ Keep`, `⬆️ Up`, `⬇️ Down` and include a brief reason.
+ - **Agreement indicator:** When the sceptic agrees with the current score,
+  append a tick emoji `✅` at the end of the score recommendation line.
  - **Bias reminder:** Optimises to avoid unnecessary code/IaC changes, but will not
   accept risk that materially increases exposure or violates policy.
 

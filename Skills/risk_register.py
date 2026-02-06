@@ -121,6 +121,12 @@ def to_business_impact(summary: str) -> str:
 
 def resource_type_from_name(name: str) -> str:
     upper = name.upper()
+    if upper.startswith("AZURE_"):
+        return "Azure"
+    if upper.startswith("AKS_"):
+        return "AKS"
+    if upper.startswith("CODE_"):
+        return "Application Code"
     if upper.startswith("AZ-"):
         return "Azure"
     if upper.startswith("AKS-"):
