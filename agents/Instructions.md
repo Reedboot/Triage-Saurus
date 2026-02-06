@@ -33,6 +33,10 @@ with this repository.
   provider name). When reviewing code repositories, update the repository
   summary under `Summary/Repos/`. Use the resource type or repository name as
   the filename and follow `settings/Styling.md`.
+- **Architecture diagram service order:** In cloud architecture summaries, place
+  the diagram before any service ordering list. Include a `## Service Risk
+  Order` section that lists all cloud services by descending overall risk score,
+  with the service name as a Markdown link to its `Summary/Cloud/` file.
 - **Summaries (discovery):** When a new cloud service is discovered (even
   outside a full review), create or update the corresponding
   `Summary/Cloud/Storage_Account.md` entry immediately (replace Storage_Account
