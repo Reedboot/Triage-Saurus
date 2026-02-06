@@ -5,7 +5,7 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 
 ## Workflow Overview
 1. **SecurityAgent** runs first, analyses the target, and outputs findings to
-   a new file: `Findings/Code/<finding-title>.md`.
+   a new file: `Findings/Code/A01_Broken_Access_Control.md`.
 2. **Dev** and **Platform** review the findings, each appending their own
    sections under `## 🤔 Skeptic`.
 3. **SecurityAgent** reconciles feedback, updates the final score, and appends
@@ -13,7 +13,8 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 
 ## Filename Conventions
 - **Location:** All findings are stored in `Findings/Code/`.
-- **Format:** `<finding-title>.md`
+- **Format:** `Findings/Code/A01_Broken_Access_Control.md` (use a short,
+  Titlecase identifier).
 - **Finding title:** Use a short, Titlecase identifier from the finding source
   (e.g., `A01_Broken_Access_Control`).
 

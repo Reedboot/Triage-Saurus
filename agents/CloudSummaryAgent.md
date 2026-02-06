@@ -22,7 +22,9 @@
   key interactions of the resource.
 - Provide a prioritised list of actions with referenced findings.
 - Include a `## Findings` section listing findings for the resource in priority
-  order.
+  order, with severity emoji, label, and numeric score per entry (e.g.,
+  `- 🟠 **High 7/10:** <path>`), derived from each finding’s
+  `- **Overall Score:**` line.
 
 ## Output Location
 - Write summaries under `Summary/Cloud/` for each distinct resource type.

@@ -16,7 +16,8 @@
 
 ## Output Rules
 - **Location:** `Summary/Cloud/`
-- **Filename:** `Architecture_<Provider>.md` (e.g., `Architecture_Azure.md`)
+- **Filename:** `Summary/Cloud/Architecture_Azure.md` (replace Azure with the
+  provider name).
 - **Structure:**
   - Title header with the provider name.
   - A short overview section.

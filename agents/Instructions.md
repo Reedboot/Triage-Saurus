@@ -25,13 +25,14 @@ with this repository.
   `settings/Styling.md` for formatting rules.
 - **Summaries:** When reviewing cloud findings, update the relevant resource
   summary under `Summary/Cloud/`, and update the relevant cloud architecture
-  diagram under `Summary/Cloud/Architecture_<Provider>.md`. When reviewing code
-  repositories, update the repository summary under `Summary/Repos/`. Use the
-  resource type or repository name as the filename and follow
-  `settings/Styling.md`.
+  diagram under `Summary/Cloud/Architecture_Azure.md` (replace Azure with the
+  provider name). When reviewing code repositories, update the repository
+  summary under `Summary/Repos/`. Use the resource type or repository name as
+  the filename and follow `settings/Styling.md`.
 - **Summaries (discovery):** When a new cloud service is discovered (even
   outside a full review), create or update the corresponding
-  `Summary/Cloud/<Service>.md` entry immediately.
+  `Summary/Cloud/Storage_Account.md` entry immediately (replace Storage_Account
+  with the resource type).
 - **Risk register:** After any triage or review that changes findings, run the
   Risk Register workflow and regenerate `Summary/Risk Register.xlsx`.
 
@@ -95,6 +96,9 @@ When updating, prefer short, explicit directives and keep examples minimal.
   with a lightbulb emoji (💡) and include a one- or two-sentence explanation of
   the learning in chat only. Do not place any other text before the emoji.
 - This lightbulb requirement applies to sample runs as well as real findings.
+- Whenever any content is added to a `Knowledge/` file, the chat summary must
+  include a verbose lightbulb (💡) entry describing exactly what was added and
+  why it matters.
 - When a user indicates they want to provide an issue for triage, respond with a
   direct prompt: "What issue would you like me to triage? Please share the
   scanner details."
