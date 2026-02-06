@@ -29,6 +29,9 @@ with this repository.
   repositories, update the repository summary under `Summary/Repos/`. Use the
   resource type or repository name as the filename and follow
   `settings/Styling.md`.
+- **Summaries (discovery):** When a new cloud service is discovered (even
+  outside a full review), create or update the corresponding
+  `Summary/Cloud/<Service>.md` entry immediately.
 - **Risk register:** After any triage or review that changes findings, run the
   Risk Register workflow and regenerate `Summary/Risk Register.xlsx`.
 
@@ -122,14 +125,13 @@ When updating, prefer short, explicit directives and keep examples minimal.
   are made.
 - If multiple cloud providers may be in use, ask and record the outcome in
   `Knowledge/` to avoid repeated questions.
-## Skeptic Sections
-
-- In findings, use `## 🤔 Skeptic` as the section heading.
-- Under it, use `### 🛠️ Dev` and `### 🏗️ Platform`.
-- Skeptic score recommendations must use arrow emojis: `➡️ Keep`, `⬆️ Up`, `⬇️ Down`,
-  and include a brief reason.
-- **Dev sceptic:** Optimises to avoid unnecessary code/IaC changes, but will not
-  accept risk that materially increases exposure or violates policy.
-- **Platform sceptic:** Optimises to avoid unnecessary platform or configuration
-  changes, but will not accept risk that materially increases exposure or violates
-  policy.
+- Before asking follow-up questions about countermeasures (e.g., IP restrictions,
+  private endpoints), check the relevant `Knowledge/` file first. If the answer
+  is not already recorded, ask targeted questions about possible countermeasures
+  and controls, including whether IP restrictions are in place.
+- Ask only one question at a time to avoid confusing the user.
+- **SecurityAgent ownership:** SecurityAgent maintains service-specific exposure
+  and compounding-risk question sequences (see `agents/SecurityAgent.md`).
+- When appropriate, probe with targeted questions about the user's cloud
+  environment to support deeper analysis and help uncover potential unknown
+  risks.

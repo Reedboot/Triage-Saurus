@@ -51,6 +51,33 @@
   finding evidence provided.
 - Do not ask the user to provide evidence.
 
+### Exposure and Countermeasure Questions
+- Before asking follow-up questions about countermeasures (e.g., IP restrictions,
+  private endpoints), check the relevant `Knowledge/` file first. If the answer
+  is not already recorded, ask targeted questions about possible countermeasures
+  and controls, including whether IP restrictions are in place.
+- Ask only one question at a time to avoid confusing the user.
+- When a countermeasure is confirmed and would reduce risk for other services,
+  ask the user (one question at a time) whether that same countermeasure is in
+  place for those services.
+- For any service that appears internet-exposed, follow a standard question
+  sequence (one question at a time) to confirm: public network access status,
+  IP allowlists/firewall rules and their scope (VPN/managed ranges), private
+  endpoints/VNet integration, and whether public access is required. Apply this
+  flow to any relevant service (including AKS) where exposure is plausible.
+- When a question sequence proves effective (e.g., yields clear exposure and
+  control details), update these instructions to include that line of
+  questions for future use.
+- When a storage account issue is identified, ask one question at a time about
+  common compounding risks: anonymous blob access, shared key access enabled,
+  over-permissive or long-lived SAS tokens, and HTTPS-only enforcement.
+- For all Azure resource types, maintain a tailored compounding-risk question
+  sequence (one question at a time) and update it when new effective questions
+  are discovered. Use service-specific risks rather than generic questions.
+- When AKS/Kubernetes is discovered, ask (one question at a time) whether it is
+  hosting services and, if so, how they are exposed: API Management, Application
+  Gateway, direct internet exposure, firewall, and WAF presence.
+
 ## Findings Report Format
 - List findings as bullet points with severity score, description, and
   recommendation.

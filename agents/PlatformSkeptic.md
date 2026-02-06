@@ -20,6 +20,11 @@
 - **Headings:** Use `## Skeptic` then `### 🏗️ Platform`.
 - **Score recommendation:** Use arrows with a reason, e.g.
   `- **Score recommendation:** ➡️ Keep. Need configuration evidence first.`
+ - **Section naming:** Findings must use `## 🤔 Skeptic` as the section heading.
+ - **Score arrows:** Use `➡️ Keep`, `⬆️ Up`, `⬇️ Down` and include a brief reason.
+ - **Bias reminder:** Optimises to avoid unnecessary platform or configuration
+  changes, but will not accept risk that materially increases exposure or violates
+  policy.
 
 ## Examples
 **Agreement:**
