@@ -13,7 +13,7 @@
 - Keep severity aligned with the referenced finding files; do not rescore.
 - Order actions by practical risk reduction (e.g., enable RBAC before network
   hardening if RBAC is the primary control gap).
-- Follow `settings/Styling.md` for formatting.
+- Follow `Settings/Styling.md` for formatting.
 
 ## Output Format
 - Use headings to structure the summary.

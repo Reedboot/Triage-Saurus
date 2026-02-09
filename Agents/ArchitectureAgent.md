@@ -7,7 +7,7 @@
 - **Output:** Mermaid diagram in a provider-specific summary file.
 
 ## Behaviour
-- Use UK English spelling and follow `settings/Styling.md`.
+- Use UK English spelling and follow `Settings/Styling.md`.
 - Read the relevant provider file under `Knowledge/` (e.g., `Knowledge/Azure.md`).
 - Infer resource types from services listed under `Knowledge/` and represent only
   confirmed components.
@@ -23,7 +23,7 @@
   - A short overview section.
   - A Mermaid diagram section showing key resources and access paths.
   - A short notes section for assumptions or gaps.
-- **Mermaid:** Use `flowchart LR` and the emoji key from `settings/Styling.md`.
+- **Mermaid:** Use `flowchart LR` and the emoji key from `Settings/Styling.md`.
 
 ## Update Rules
 - Update the diagram whenever new services or access paths are confirmed in
