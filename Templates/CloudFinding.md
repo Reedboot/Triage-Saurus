@@ -6,9 +6,14 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ## Workflow Overview
 1. **SecurityAgent** runs first, analyses the target, and outputs findings to
    a new file: `Findings/Cloud/Unprotected_Storage_Account.md`.
-2. **Dev** and **Platform** review the findings, each appending their own
+2. **SecurityAgent** updates `Knowledge/` with any new inferred/confirmed facts
+   discovered while writing the finding (inferred facts must be marked as
+   **assumptions** and user-verified).
+3. **SecurityAgent** generates/updates the relevant architecture diagram under
+   `Summary/Cloud/` based on the updated `Knowledge/` (assumptions = dotted border).
+4. **Dev** and **Platform** review the findings, each appending their own
    sections under `## 🤔 Skeptic`.
-3. **SecurityAgent** reconciles feedback, updates the final score, and appends
+5. **SecurityAgent** reconciles feedback, updates the final score, and appends
    the collaboration summary and metadata.
 
 ## Filename Conventions
