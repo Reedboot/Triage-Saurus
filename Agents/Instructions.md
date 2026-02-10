@@ -14,6 +14,11 @@ This repository supports consistent security triage. The expected workflow is:
 - When a new finding overlaps an existing one, link them under **Compounding Findings**.
 
 ## Outputs
+
+- **Default behaviour:** outputs under `Findings/`, `Knowledge/`, and `Summary/` are
+  **generated per-user/session and are intentionally untracked** (see `.gitignore`).
+  Change that only if you explicitly want to commit triage artifacts.
+
 - **Cloud findings:** `Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Findings/Code/<Titlecase>.md`
 - **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
