@@ -26,5 +26,10 @@
   `- 🟠 **High 7/10:** <path>`), derived from each finding’s
   `- **Overall Score:**` line.
 
+## Helper Skill
+- To quickly generate a consistent table of finding titles + overall scores for reuse in
+  summaries/architecture notes, run:
+  - `python3 Skills/extract_finding_scores.py Findings/Cloud`
+
 ## Output Location
 - Write summaries under `Summary/Cloud/` for each distinct resource type.
