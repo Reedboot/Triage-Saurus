@@ -3,7 +3,10 @@
 Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
 ```text
-Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ to identify missing context (services, environments, networks, pipelines, identities). Ask me targeted questions to fill the gaps before starting any triage work.
+Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
+Before asking any cloud-provider questions, first ask me what we are triaging (Cloud / Code / Repo scan).
+- If Cloud: ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
+- If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
@@ -30,12 +33,12 @@ findings, maintaining summaries, and regenerating the risk register.
 
 ## Using Copilot CLI
 1. Open a Copilot CLI session in the repository root.
-2. Paste the prompt from `SessionKickoff.md`.
+2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Using Codex CLI
 1. Open a Codex CLI session in the repository root.
-2. Paste the prompt from `SessionKickoff.md`.
+2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Process sample findings
