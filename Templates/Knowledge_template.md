@@ -12,6 +12,10 @@ You are capturing *learnt* environment knowledge that should persist across futu
 - **Owner/Audience:** <who this is for>
 - **What this file contains:** <1–2 sentences>
 
+## 🗓️ Learned log (append-only)
+- **Format:** `DD/MM/YYYY HH:MM — <fact>` (UK date/time)
+- <timestamp> — <new confirmed fact>
+
 ## ☁️ Cloud Provider
 - <Provider name>
 
