@@ -14,4 +14,6 @@ Provide a platform/ops-focused challenge of the proposed finding:
 - Comment on:
   - **Score recommendation:** keep/up/down with rationale.
   - **Mitigation note:** concrete platform actions (shared module updates, IAM, network, logging, pipeline changes).
+  - **SKU/tier constraints:** call out when a mitigation requires a specific SKU (e.g., Premium) or feature flag to be possible.
+  - **Change impact:** flag when a mitigation is likely to require reprovisioning/redeployment/restarts and may cause downtime; suggest rollout order/maintenance windows.
   - If a mitigation assumes “just enforce with policy/posture scanning”, suggest the equivalent shared-module or pipeline change that makes it true by default.
