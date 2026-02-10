@@ -3,7 +3,7 @@
 Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
 ```text
-Initialise: read AGENTS.md and agents/Instructions.md, then prompt me per repo instructions.
+Initialise: read AGENTS.md and Agents/Instructions.md, then prompt me per repo instructions.
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
@@ -28,12 +28,12 @@ findings, maintaining summaries, and regenerating the risk register.
 ## Using Copilot CLI
 1. Open a Copilot CLI session in the repository root.
 2. Paste the prompt from `SessionKickoff.md`.
-3. Follow the repository instructions in `AGENTS.md` and `agents/Instructions.md`.
+3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Using Codex CLI
 1. Open a Codex CLI session in the repository root.
 2. Paste the prompt from `SessionKickoff.md`.
-3. Follow the repository instructions in `AGENTS.md` and `agents/Instructions.md`.
+3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Process sample findings
 

@@ -6,6 +6,6 @@ the agent loads the repository instructions before doing any work.
 
 ## Prompt
 ```text
-Initialise: read AGENTS.md and agents/Instructions.md, then prompt me per repo
+Initialise: read AGENTS.md and Agents/Instructions.md, then prompt me per repo
 instructions.
 ```

@@ -1,7 +1,7 @@
 # 🟣 Code Finding Template
 This document defines the layout for code security findings. For formatting
-rules, follow `settings/Styling.md`. For behavioural rules, follow
-`agents/Instructions.md`.
+rules, follow `Settings/Styling.md`. For behavioural rules, follow
+`Agents/Instructions.md`.
 
 ## Workflow Overview
 1. **SecurityAgent** runs first, analyses the target, and outputs findings to
@@ -58,7 +58,7 @@ rules, follow `settings/Styling.md`. For behavioural rules, follow
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
-  (use Markdown backlinks, e.g., `[Findings/Code/Foo.md](Findings/Code/Foo.md)`)
+  (use Markdown backlinks, e.g., `Findings/Code/Foo.md`)
 
 ## Meta Data
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
