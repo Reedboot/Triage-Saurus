@@ -7,6 +7,10 @@ Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and 
 Before asking any cloud-provider questions, first ask me what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
+
+As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
+- If it’s new: record it in `Knowledge/` as **Confirmed** (with timestamp).
+- If it’s already captured: don’t duplicate.
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
