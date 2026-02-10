@@ -20,9 +20,13 @@ This repository supports consistent security triage. The expected workflow is:
 - When a finding implies additional environment context (e.g., “Defender for Cloud” recommendations imply Defender is enabled), record it in `Knowledge/` as an **assumption** and immediately ask the user to confirm/deny.
 - When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), you may record that service as **Confirmed in use** in `Knowledge/` without asking (the finding itself implies the service exists).
 - If a finding recommends enabling an **additional** service/control (e.g., DDoS Standard, Defender plan, Private Link), record that additional service/control as an **Assumption** until the user confirms.
-- When processing findings in bulk (including sample findings), still update
-  `Knowledge/` with inferred services/controls as **assumptions**, then ask the user
-  to verify the assumptions as a follow-up step.
+- When processing findings in bulk (including sample findings), process items **sequentially**.
+  - After completing one finding, **immediately continue to the next finding** without asking
+    “should I continue?”.
+  - Only pause for user input when you need a decision that materially changes remediation,
+    applicability, scoring, or scope.
+  - Still update `Knowledge/` with inferred services/controls as **assumptions**, then ask the
+    user to verify the assumptions as a follow-up step.
 - Keep findings actionable: impact, exploitability, and concrete remediation.
 - When a finding is created or updated, **immediately** update `Knowledge/` with any
   new inferred or confirmed facts discovered while writing the finding.
@@ -35,8 +39,10 @@ This repository supports consistent security triage. The expected workflow is:
   include any newly discovered services.
   - This is a **standing rule throughout the session** (do not wait until session
     kickoff or the end of triage).
-  - **Confirmed services:** solid border.
-  - **Assumed/inferred services:** dotted border.
+  - Draw the diagram **from the internet inwards** (request flow / access paths).
+  - Prefer **top-down** Mermaid (`flowchart TB`) so external → internal flows read naturally.
+  - Only include **confirmed services** on the Mermaid diagram unless the user explicitly asks
+    to include assumed components.
 - While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
 - When a new finding overlaps an existing one, link them under **Compounding Findings**.
 - **Avoid running git commands by default** (e.g., `git status`, `git diff`, `git restore`). Only use git when the user explicitly asks, and explain why it’s needed.
@@ -59,6 +65,9 @@ This repository supports consistent security triage. The expected workflow is:
 ## After changes to findings
 - If you need an updated risk register, run:
   - `python3 Skills/risk_register.py`
+- If you need a quick, consistent score list (for summaries/architecture notes), run:
+  - `python3 Skills/extract_finding_scores.py Findings/Cloud`
+  - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
 
 ## Utility scripts
 - **Clear session artifacts (destructive):**
