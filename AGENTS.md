@@ -26,3 +26,6 @@ repository.
   - **Purpose:** Create and maintain the executive risk register spreadsheet.
 - **Path:** Agents/CodeSummaryAgent.md
 - **Purpose:** Guidance for summarising code repository findings.
+- **Path:** Agents/KnowledgeAgent.md
+  - **Purpose:** Capture and maintain `Knowledge/` (confirmed + assumptions) and keep
+    architecture diagrams in sync.
