@@ -20,8 +20,7 @@ findings, maintaining summaries, and regenerating the risk register.
    `SessionKickoff.md`.
 2. Provide a scanner issue to triage; the agent will confirm cloud provider or
    context as needed.
-3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`,
-   and refreshes relevant summaries in `Summary/`.
+3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Summary/`.
 4. After any finding changes, the agent regenerates
    `Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
 

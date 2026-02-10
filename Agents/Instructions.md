@@ -4,7 +4,7 @@
 This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
 2. Create/update a finding under `Findings/` using the relevant template.
-3. Capture confirmed facts under `Knowledge/`.
+3. Capture confirmed facts under `Knowledge/` (this is the living, authoritative log used to resolve missing context—add new services, dependencies, configuration artefacts, or compound problems there when they are discovered and link to them from related findings). Examples include which terraform modules are in use and their parameters, allowed IP blocks, whether managed identities are enabled, which cloud providers are active, and what CI/CD pipeline(s) deploy the services.
 4. Update `Summary/` outputs (cloud resource summaries and risk register).
 
 ## Behaviour
