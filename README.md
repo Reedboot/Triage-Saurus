@@ -3,7 +3,7 @@
 Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
 ```text
-Initialise: read AGENTS.md and Agents/Instructions.md, then prompt me per repo instructions.
+Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ to identify missing context (services, environments, networks, pipelines, identities). Ask me targeted questions to fill the gaps before starting any triage work.
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
@@ -21,8 +21,8 @@ findings, maintaining summaries, and regenerating the risk register.
 2. Provide a scanner issue to triage; the agent will confirm cloud provider or
    context as needed.
 3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Summary/`.
-4. After any finding changes, the agent regenerates
-   `Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
+4. After any finding changes, the agent may regenerate
+   `Summary/Risk Register.xlsx` using `Skills/risk_register.py` (explain why before running).
 
 > Note: By default, artifacts under `Findings/`, `Knowledge/`, and `Summary/`
 > are **gitignored** so they remain **user-owned**. If you want to persist/share
@@ -45,6 +45,7 @@ findings, maintaining summaries, and regenerating the risk register.
   without confirmations`.
 
 **Tools**
-- **Python:** `python3` is required to run `Skills/risk_register.py` for generating
-  `Summary/Risk Register.xlsx`.
+- **Python:** `python3` is required to run:
+  - `Skills/risk_register.py` (generate `Summary/Risk Register.xlsx`)
+  - `Skills/clear_session.py` (delete per-session artifacts under `Findings/`, `Knowledge/`, `Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
