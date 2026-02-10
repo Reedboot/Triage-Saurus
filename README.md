@@ -24,6 +24,10 @@ findings, maintaining summaries, and regenerating the risk register.
 4. After any finding changes, the agent regenerates
    `Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
 
+> Note: By default, artifacts under `Findings/`, `Knowledge/`, and `Summary/`
+> are **gitignored** so they remain **user-owned**. If you want to persist/share
+> them via git, update `.gitignore` intentionally.
+
 ## Using Copilot CLI
 1. Open a Copilot CLI session in the repository root.
 2. Paste the prompt from `SessionKickoff.md`.
