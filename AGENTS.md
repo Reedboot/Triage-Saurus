@@ -5,10 +5,7 @@ repository.
 ## Primary Instructions
 - **Path:** Agents/Instructions.md
 - **Purpose:** Canonical agent operating rules for this repo.
-
-## User-owned outputs
-- Findings, knowledge, summaries, and the risk register are **generated per-user**
-  and are **not committed by default** (see `.gitignore`).
+- **Note:** By default, the agent should avoid running `git` commands and avoid running scripts unless it explains why first (see `Agents/Instructions.md`).
 
 ## Additional Agent Files
 - **Path:** Templates/CloudFinding.md
