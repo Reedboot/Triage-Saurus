@@ -10,10 +10,12 @@
 - Use UK English spelling and follow `Settings/Styling.md`.
 - Read the relevant provider file under `Knowledge/` (e.g., `Knowledge/Azure.md`).
 - Infer resource types from services listed under `Knowledge/`.
+- Draw diagrams **from the internet inwards** (request flow / access paths).
+- Prefer **top-down** layout for readability on reviews (`flowchart TB`).
 - **Confirmed vs assumed:**
-  - Represent confirmed components with a **solid border** (Mermaid default).
-  - If a service/component is listed as an **assumption** in `Knowledge/`, represent
-    it on the diagram with a **dotted border**.
+  - Default: include **confirmed services only** on the diagram.
+  - Only include assumed components if the user explicitly requests it; if included,
+    use a **dotted border**.
 - If the provider is not explicit in the issue text, ask for it first.
 - Keep diagrams concise and legible; avoid speculative components beyond what is
   explicitly captured as assumptions in `Knowledge/`.
@@ -27,7 +29,7 @@
   - A short overview section.
   - A Mermaid diagram section showing key resources and access paths.
   - A short notes section for assumptions or gaps.
-- **Mermaid:** Use `flowchart LR` and the emoji key from `Settings/Styling.md`.
+- **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and the emoji key from `Settings/Styling.md`.
 - **Mermaid styling for confirmed components:** use the Mermaid default (solid)
   or explicitly set it, e.g.
   ```mermaid
