@@ -15,6 +15,9 @@ As each kickoff question is answered, check whether it adds new context vs exist
 - If it’s new: record it **immediately** in `Knowledge/` as **Confirmed** (with timestamp).
 - If it’s already captured: don’t duplicate.
 
+When processing sample findings in bulk, process them sequentially and **auto-continue** to
+next item; only pause for questions that change scoring/applicability/scope.
+
 If Cloud + provider is confirmed, immediately create/update:
 - `Knowledge/<Provider>.md`
 - `Summary/Cloud/Architecture_<Provider>.md`
