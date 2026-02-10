@@ -16,6 +16,7 @@
   - `Templates/CloudFinding.md`
   - `Templates/CodeFinding.md`
 - Keep scores consistent with the repo’s severity mapping in `Settings/Styling.md`.
+- Recommend prevention-oriented controls where appropriate (e.g., guardrails/policy-as-code, secure-by-default baselines) and pair them with developer-executable fixes (code/config changes).
 - Be appropriately sceptical and look for current countermeasures that reduce
   risk. If present, document them with reasoning and downscore the risk.
 - Listen to Dev and Platform skeptic feedback and incorporate valid points.
