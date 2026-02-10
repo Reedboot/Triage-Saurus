@@ -6,6 +6,10 @@ repository.
 - **Path:** Agents/Instructions.md
 - **Purpose:** Canonical agent operating rules for this repo.
 
+## User-owned outputs
+- Findings, knowledge, summaries, and the risk register are **generated per-user**
+  and are **not committed by default** (see `.gitignore`).
+
 ## Additional Agent Files
 - **Path:** Templates/CloudFinding.md
   - **Purpose:** Template and workflow guidance for cloud findings.
