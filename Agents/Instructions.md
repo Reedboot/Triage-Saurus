@@ -18,7 +18,10 @@ This repository supports consistent security triage. The expected workflow is:
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
 - When asking **multiple-choice** questions, always include a **“Don’t know”** option.
-- When asking a triage question, prefix with `❓` and include the *triggering finding title* (and service) so the question is understandable out of context.
+- When asking a triage question:
+  - start with `📌 Trigger:` `<finding title>`
+  - then ask exactly one question prefixed with `❓`
+  - include the service name so the question is understandable out of context.
 - **Applicability check (per finding):** early in each finding refinement, ask one
   question to establish whether the condition is currently true (Yes / No / Don’t
   know). If **No**, downgrade severity appropriately and rewrite the finding as a
