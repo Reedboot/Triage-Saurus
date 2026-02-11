@@ -15,6 +15,7 @@ This repository supports consistent security triage. The expected workflow is:
 - Follow `Settings/Styling.md` for formatting rules.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
+- When asking **multiple-choice** questions, always include a **“Don’t know”** option.
 - **Post-triage assumption confirmation:** after bulk triage (or whenever assumptions accumulate), ask follow-up questions to confirm/deny assumptions.
   - Ask **service-specific** questions where possible.
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
