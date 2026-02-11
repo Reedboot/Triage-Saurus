@@ -13,7 +13,8 @@ This repository supports consistent security triage. The expected workflow is:
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
-  - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, prompt the user whether they want to continue answering those now (resume), or proceed to new triage.
+  - **How to check `Knowledge/`:** list markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`, not only subfolders). Then search those files for headings `## Unknowns` and `## ❓ Open Questions` and treat any non-empty section as outstanding.
+  - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, prompt the user whether they want to continue answering those now (resume), or proceed to new triage. (In the UI, refer to these as **refinement questions**.)
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, or **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`).
 - Follow `Settings/Styling.md` for formatting rules.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
@@ -46,7 +47,7 @@ This repository supports consistent security triage. The expected workflow is:
   know”). Only promote reusable facts into `Knowledge/`.
 - **Audit log size:** for bulk title imports, prefer an audit summary (count + source
   file path + timestamp). Only include per-item lists when the user explicitly asks.
-- When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source), check whether the answer adds new context vs existing `Knowledge/`.
+- When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
   - If Cloud + provider is confirmed: immediately update `Summary/Cloud/Architecture_<Provider>.md`.
@@ -104,6 +105,7 @@ This repository supports consistent security triage. The expected workflow is:
 
 - **Cloud findings:** `Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Findings/Code/<Titlecase>.md`
+- **Repo scans:** `Findings/Repo/Repo_<RepoName>.md` (one file per repo)
 - **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Skills/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
