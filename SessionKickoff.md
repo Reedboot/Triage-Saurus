@@ -4,7 +4,7 @@
 This note provides a simple prompt you can paste at the start of a new session so
 the agent loads the repository instructions before doing any work.
 
-If the user types `sessionkickoff`, the agent should treat it as “run this kickoff” and then immediately ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
+If the user types `sessionkickoff`, the agent should treat it as “run this kickoff”, check whether there are outstanding questions in `Knowledge/` (e.g., `## Unknowns` / `## ❓ Open Questions`), prompt the user to resume those if desired, and then ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
 
 ## Prompt
 ```text
