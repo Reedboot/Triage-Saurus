@@ -23,6 +23,7 @@ As each kickoff question is answered, check whether it adds new context vs exist
 
 When processing sample findings in bulk, process them sequentially and **auto-continue** to
 next item; only pause for questions that change scoring/applicability/scope.
+- If a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 
 If you have title-only exports and want to save tokens/time, you may generate draft
 findings in bulk (then refine them one-by-one):
