@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+INTAKE_SAMPLE_DIR = ROOT / "Intake" / "Sample"
 
 TARGET_GLOBS: tuple[tuple[Path, str], ...] = (
     (ROOT / "Findings" / "Cloud", "*.md"),
@@ -32,6 +34,10 @@ def iter_targets() -> list[Path]:
         if file_path.exists():
             targets.append(file_path)
 
+    # Only remove sample-staged intake content; never touch user-provided Intake/ files.
+    if INTAKE_SAMPLE_DIR.exists():
+        targets.append(INTAKE_SAMPLE_DIR)
+
     seen: set[Path] = set()
     unique: list[Path] = []
     for path in targets:
@@ -45,7 +51,8 @@ def iter_targets() -> list[Path]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Clear per-session triage artifacts (Findings/Knowledge/Summary) without touching templates or .gitkeep files."
+            "Clear per-session triage artifacts (Findings/Knowledge/Summary) and sample-staged Intake/Sample/ "
+            "without touching templates or user Intake content."
         )
     )
     parser.add_argument(
@@ -71,12 +78,15 @@ def main() -> int:
     deleted = 0
     for path in targets:
         try:
-            path.unlink()
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
             deleted += 1
         except FileNotFoundError:
             pass
 
-    print(f"\nDeleted {deleted} file(s).")
+    print(f"\nDeleted {deleted} path(s).")
     return 0
 
 
