@@ -4,13 +4,15 @@
 This note provides a simple prompt you can paste at the start of a new session so
 the agent loads the repository instructions before doing any work.
 
-If the user types `sessionkickoff`, the agent should treat it as “run this kickoff”, check whether there are outstanding questions in `Knowledge/` (e.g., `## Unknowns` / `## ❓ Open Questions`), prompt the user to resume those if desired, and then ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
+If the user types `sessionkickoff`, the agent should treat it as “run this kickoff”, check whether there are outstanding questions in `Knowledge/` (sections `## Unknowns` / `## ❓ Open Questions`) and refer to them as **refinement questions** in the UI, prompt the user to resume those if desired, and then ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
+
+Note: `Knowledge/` may store provider files at the top-level (e.g., `Knowledge/Azure.md`) as well as subfolders, so the scan must include **all** `Knowledge/**/*.md` plus `Knowledge/*.md`.
 
 ## Prompt
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
 
-First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`.
+First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions` (treat these as **refinement questions** in the UI).
 - If yes: ask whether to **resume answering those now** (or proceed to new triage).
 
 Then ask me to:
@@ -29,7 +31,12 @@ Before asking any cloud-provider questions:
 - If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
-- If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
+- If Code/Repo scan:
+  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask the user for their root repos folder.
+  - Keep track of scanned repos in `Knowledge/Repos.md`; if the same repo is requested again, ask the user to confirm re-scan vs reuse.
+  - Ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
+  - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
+  - Promote reusable context from repo scan (e.g., Terraform/IaC patterns) into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
 When asking **multiple-choice** questions, always include a **“Don’t know”** option.
 
