@@ -4,15 +4,23 @@
 This note provides a simple prompt you can paste at the start of a new session so
 the agent loads the repository instructions before doing any work.
 
+If the user types `sessionkickoff`, the agent should treat it as “run this kickoff” and then immediately ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
+
 ## Prompt
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
-First, ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
+First, ask me to:
+- **copy/paste a single issue** to triage, or
+- **provide a path under `Intake/`** to process in bulk, or
+- **import and triage the sample findings**.
+
 - Example bulk paths in this repo:
   - `Intake/Cloud` (your cloud findings)
   - `Intake/Code` (your code findings)
-  - `Intake/Sample/Cloud` (copy from `Sample Findings/Cloud` first)
-  - `Intake/Sample/Code` (copy from `Sample Findings/Code` first)
+  - `Intake/Sample/Cloud` (already-imported samples)
+  - `Intake/Sample/Code` (already-imported samples)
+  - `Sample Findings/Cloud` (import these samples, then triage)
+  - `Sample Findings/Code` (import these samples, then triage)
 Before asking any cloud-provider questions:
 - If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
