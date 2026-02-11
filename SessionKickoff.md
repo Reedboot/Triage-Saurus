@@ -49,6 +49,7 @@ If Cloud + provider is confirmed, immediately create/update:
 - `Summary/Cloud/Architecture_<Provider>.md`
 
 During triage, capture inferred environment context into Knowledge/ as explicit ASSUMPTIONS and ask me to confirm/deny.
+Do **not** create any new findings beyond the original imported list; keep new discoveries as Knowledge/ context and/or conditional score notes inside the *existing* findings.
 After bulk triage (or whenever assumptions accumulate), ask service-specific follow-up questions **one at a time** (prefix with `❓`).
 - Ask cross-cutting questions once (e.g., “Are Private Endpoints used anywhere?”) rather than repeating per-service.
 - When I answer, update `Knowledge/` (promote to Confirmed or correct/remove) and append an `Audit/` entry that records **the question + the answer** (including “Don’t know”).
