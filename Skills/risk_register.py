@@ -49,7 +49,7 @@ def xml_escape(text: str) -> str:
 
 
 def iter_finding_files() -> Iterable[Path]:
-    for folder in (FINDINGS_DIR / "Cloud", FINDINGS_DIR / "Code"):
+    for folder in (FINDINGS_DIR / "Cloud", FINDINGS_DIR / "Code", FINDINGS_DIR / "Repo"):
         if not folder.exists():
             continue
         for path in sorted(folder.glob("*.md")):
@@ -133,6 +133,8 @@ def resource_type_from_name(name: str) -> str:
         return "AKS"
     if upper.startswith("A0"):
         return "Application Code"
+    if upper.startswith("REPO_"):
+        return "Repository"
     return "Application"
 
 
