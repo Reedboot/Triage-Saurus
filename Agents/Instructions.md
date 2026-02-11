@@ -5,13 +5,16 @@ This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
 2. Create/update a finding under `Findings/` using the relevant template.
 3. Capture confirmed facts under `Knowledge/` (Confirmed + Assumptions). Keep it focused on reusable environment facts used during triage (services in use, identity model, network posture, guardrails).
-   - If you need an append-only audit trail (e.g., bulk imports), write it under `Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
+   - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
 4. Update `Summary/` outputs (cloud resource summaries and risk register).
 
 ## Behaviour
 - Follow `Settings/Styling.md` for formatting rules.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
+- When the user answers questions that materially affect applicability/scope/scoring or
+  change remediation feasibility, append a short entry to an `Audit/` log (append-only)
+  so the decision trail is recoverable. Only promote reusable facts into `Knowledge/`.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source), check whether the answer adds new context vs existing `Knowledge/`.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
