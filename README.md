@@ -14,8 +14,6 @@ As each kickoff question is answered, check whether it adds new context vs exist
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
-Author: Neil Reed 06/02/2026
-
 ## Purpose
 This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
 consistent security triaging. It provides agent instructions, templates, and
