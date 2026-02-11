@@ -7,6 +7,8 @@
 !/.gitkeep
 
 # Keep subfolder markers (so structure remains visible)
+!Repo/
+!Repo/.gitkeep
 !Cloud/
 !Cloud/.gitkeep
 !Code/
