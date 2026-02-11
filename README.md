@@ -4,14 +4,16 @@ Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
-First, ask me to either **copy/paste the issue** to triage or **provide a path to a folder of findings** to process in bulk.
+First, ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
 - Example bulk paths in this repo:
-  - `Sample Findings/Cloud` (Azure cloud sample findings)
-  - `Sample Findings/Code` (code sample findings)
+  - `Intake/Cloud` (your cloud findings)
+  - `Intake/Code` (your code findings)
+  - `Intake/Sample/Cloud` (copy from `Sample Findings/Cloud` first)
+  - `Intake/Sample/Code` (copy from `Sample Findings/Code` first)
 Before asking any cloud-provider questions:
-- If the user provided a bulk folder path that clearly implies scope (e.g., `Sample Findings/Cloud` or `Sample Findings/Code`), treat that as the triage type.
+- If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
-- If Cloud: infer provider when the folder name implies it (e.g., `Sample Findings/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
+- If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
@@ -56,9 +58,10 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 
 ## Process sample findings
 
-1. Use your chosen CLI
-2. Enter the prompt `Triage review. Cloud provider: Azure. Process sample findings one by one
-  without confirmations`.
+1. Stage samples into `Intake/`:
+   - `python3 Skills/stage_sample_findings_to_intake.py --type cloud`
+2. Use your chosen CLI
+3. Provide the bulk path `Intake/Sample/Cloud` (or `Intake/Sample/Code`) for processing.
 
 During bulk processing, if a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 
