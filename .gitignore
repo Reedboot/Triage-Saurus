@@ -1,12 +1,15 @@
-.github/copilot-instructions.md
+# Ignore everything dropped into Intake/
+*
 
-# Generated per-user triage artifacts (intentionally untracked / user-owned).
-Findings/Cloud/*
-Findings/Code/*
-Summary/Cloud/*
-Summary/Code/*
-Summary/Repos/*
-Summary/Risk Register.xlsx
-Knowledge/*
-*__pycache__/
-Audit/*
+# Keep the instructions and ignore rules
+!.gitignore
+!README.md
+!/.gitkeep
+
+# Keep subfolder markers (so structure remains visible)
+!Cloud/
+!Cloud/.gitkeep
+!Code/
+!Code/.gitkeep
+!Sample/
+!Sample/**/.gitkeep
