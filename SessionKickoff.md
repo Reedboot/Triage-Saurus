@@ -8,6 +8,9 @@ the agent loads the repository instructions before doing any work.
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
 First, ask me to either **copy/paste the issue** to triage or **provide a path to a folder of findings** to process in bulk.
+- Example bulk paths in this repo:
+  - `Sample Findings/Cloud` (Azure cloud sample findings)
+  - `Sample Findings/Code` (code sample findings)
 Before asking any cloud-provider questions, ask what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
