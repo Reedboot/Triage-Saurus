@@ -194,8 +194,8 @@ def update_knowledge_generic(knowledge_path: Path, provider: str, titles: list[s
     # Only add a minimal note; don't guess specific services cross-provider.
     block = "\n".join([f"- [{ts}] Finding imported (title-only): {t}." for t in titles[:25]])
     note = (
-        f"\n- [{ts}] Imported {len(titles)} title-only finding(s) via Skills/generate_findings_from_titles.py."\
-        + ("\n" + block + ("\n- [{ts}] (truncated)" if len(titles) > 25 else "") )
+        f"\n- [{ts}] Imported {len(titles)} title-only finding(s) via Skills/generate_findings_from_titles.py."
+        + ("\n" + block + (f"\n- [{ts}] (truncated)" if len(titles) > 25 else ""))
     )
 
     text = knowledge_path.read_text(encoding="utf-8")
