@@ -53,6 +53,11 @@ This repository supports consistent security triage. The expected workflow is:
   - If Cloud + provider is confirmed: immediately update `Summary/Cloud/Architecture_<Provider>.md`.
 - Prefer confirmed facts, **but capture inferred context** in `Knowledge/` as an
   explicit **assumption** and then ask the user to confirm/deny.
+- **Repo scan extraction:** when scanning a repository, always extract:
+  - cloud resources/services deployed or referenced (IaC + config),
+  - service dependencies from configuration/connection strings (datastores, queues/streams, logs/telemetry, APIs),
+  - and container/Kubernetes signals: if Skaffold/Helm/Kubernetes manifests are found, assume Kubernetes deploy; if Dockerfiles are found, assume a container registry; list base images (`FROM ...`) when multiple images/charts exist.
+  - It is OK (and encouraged) to include **evidence snippets** in repo scan findings (code/config excerpts) with **file path + line numbers** to show exactly where the issue/pattern exists.
 - When a finding implies additional environment context (e.g., “Defender for Cloud” recommendations imply Defender is enabled), record it in `Knowledge/` as an **assumption** and immediately ask the user to confirm/deny.
 - When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), record that service as **Confirmed in use** in `Knowledge/` without asking (the finding itself implies the service exists).
   - This also applies to **bulk title-only imports**: if a title clearly names an Azure service (e.g., “secure transfer on storage accounts”, “enable SQL auditing”, “disable ACR admin user”), treat that service as **Confirmed in use**.
@@ -105,7 +110,7 @@ This repository supports consistent security triage. The expected workflow is:
 
 - **Cloud findings:** `Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Findings/Code/<Titlecase>.md`
-- **Repo scans:** `Findings/Repo/Repo_<RepoName>.md` (one file per repo)
+- **Repo scans:** `Findings/Repo/Repo_<RepoName>.md` (one file per repo; include a Mermaid **architecture diagram** near the top)
 - **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Skills/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
