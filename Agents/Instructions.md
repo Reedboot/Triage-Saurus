@@ -22,10 +22,14 @@ This repository supports consistent security triage. The expected workflow is:
   - start with `📌 Trigger:` `<finding title>`
   - then ask exactly one question prefixed with `❓`
   - include the service name so the question is understandable out of context.
-- **Applicability check (per finding):** early in each finding refinement, ask one
-  question to establish whether the condition is currently true (Yes / No / Don’t
-  know). If **No**, downgrade severity appropriately and rewrite the finding as a
-  drift-prevention / assurance item.
+  - include a lightweight progress indicator with remaining count (e.g., `Progress: Q3/10 (7 left)`) when doing bulk refinement.
+  - every 5 questions, remind the user they can pause and resume refinement at any time.
+  - avoid asking tautological applicability questions when the input already implies at least one affected resource (e.g., title-only exports phrased as “should …`).
+- When you adjust a finding score based on user confirmation or Knowledge/, add a one-line note (e.g., `Score change: 5/10 ➜ 7/10 — confirmed internet-facing prod exposure`).
+- **Applicability check (per finding):**
+  - For *evidence-backed* findings (e.g., scanner output that clearly indicates a failing resource), treat applicability as **Yes** by default and ask only scoping questions that change severity/remediation.
+  - For *recommendation-style* findings where applicability is genuinely unclear, ask one question to establish whether the condition is currently true (Yes / No / Don’t know).
+  - If applicability is **No**, downgrade severity appropriately and rewrite the finding as a drift-prevention / assurance item.
 - **Scope discipline:** do **not** create new findings that were not in the original
   input list (e.g., title-only export). It’s fine to:
   - add new environment context to `Knowledge/`, and
