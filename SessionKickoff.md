@@ -9,7 +9,11 @@ If the user types `sessionkickoff`, the agent should treat it as “run this kic
 ## Prompt
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
-First, ask me to:
+
+First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`.
+- If yes: ask whether to **resume answering those now** (or proceed to new triage).
+
+Then ask me to:
 - **copy/paste a single issue** to triage, or
 - **provide a path under `Intake/`** to process in bulk, or
 - **import and triage the sample findings**.
