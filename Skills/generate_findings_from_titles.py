@@ -184,6 +184,9 @@ def ensure_knowledge(provider: str, ts: str) -> Path:
 
 ## Assumptions
 - (none yet)
+
+## Audit log (not knowledge)
+- **Audit folder:** `Audit/` (do not load into triage context)
 """,
         encoding="utf-8",
     )
@@ -191,25 +194,45 @@ def ensure_knowledge(provider: str, ts: str) -> Path:
 
 
 def update_knowledge_generic(knowledge_path: Path, provider: str, titles: list[str], ts: str) -> None:
-    # Only add a minimal note; don't guess specific services cross-provider.
-    block = "\n".join([f"- [{ts}] Finding imported (title-only): {t}." for t in titles[:25]])
-    note = (
-        f"\n- [{ts}] Imported {len(titles)} title-only finding(s) via Skills/generate_findings_from_titles.py."
-        + ("\n" + block + (f"\n- [{ts}] (truncated)" if len(titles) > 25 else ""))
-    )
+    """Write bulk-import audit events to Audit/, not Knowledge/.
 
-    text = knowledge_path.read_text(encoding="utf-8")
-    if "Imported" in text and "generate_findings_from_titles.py" in text:
-        # avoid repeating on reruns
+    Knowledge/ is reserved for reusable environment facts (confirmed/assumptions).
+    """
+
+    audit_dir = ROOT / "Audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / f"KnowledgeImports_{provider.title()}.md"
+
+    lines = [
+        "<!--",
+        "AUDIT LOG ONLY — do not load this file into LLM triage context.",
+        "This is an append-only audit trail of bulk imports and automation events.",
+        "-->",
+        "",
+        f"# 🟣 Audit Log — {provider.title()} Knowledge Imports",
+        "",
+        "## Purpose",
+        "This file exists for auditing only. It should **not** be treated as environment knowledge.",
+        "",
+        "## Entries",
+        f"- [{ts}] Imported {len(titles)} title-only finding(s) via `Skills/generate_findings_from_titles.py`.",
+    ]
+
+    for t in titles[:25]:
+        lines.append(f"  - Finding imported (title-only): {t}.")
+    if len(titles) > 25:
+        lines.append("  - (truncated)")
+
+    if not audit_path.exists():
+        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return
 
-    # Append to Confirmed section end.
-    if "## Confirmed" in text:
-        text = text.rstrip() + "\n" + note + "\n"
-    else:
-        text = text.rstrip() + f"\n\n## Confirmed\n{note}\n"
+    existing = audit_path.read_text(encoding="utf-8")
+    entry = "\n".join(lines[10:]) + "\n"  # append from '## Entries'
+    if entry in existing:
+        return
 
-    knowledge_path.write_text(text, encoding="utf-8")
+    audit_path.write_text(existing.rstrip() + "\n\n" + entry, encoding="utf-8")
 
 
 def update_architecture(provider: str, ts: str) -> None:
