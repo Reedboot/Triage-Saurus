@@ -20,9 +20,10 @@ This repository supports consistent security triage. The expected workflow is:
   - Ask **service-specific** questions where possible.
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
   - Prefix these prompts with `❓` so they’re easy to spot in chat history.
-- When the user answers questions that materially affect applicability/scope/scoring or
-  change remediation feasibility, append a short entry to an `Audit/` log (append-only)
-  so the decision trail is recoverable. Only promote reusable facts into `Knowledge/`.
+- When asking or receiving answers to triage questions that influence scope,
+  applicability, scoring, or remediation, append an entry to an `Audit/` log
+  (append-only) recording **the question + the user's answer** (including “Don’t
+  know”). Only promote reusable facts into `Knowledge/`.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source), check whether the answer adds new context vs existing `Knowledge/`.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
