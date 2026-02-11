@@ -25,6 +25,8 @@ findings, maintaining summaries, and regenerating the risk register.
 ## License
 See `LICENSE` (non-commercial internal use; no redistribution; no warranty).
 
+Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
+
 ## Workflow Overview
 1. Start a CLI session in the repo root and paste the prompt from
    `SessionKickoff.md`.
