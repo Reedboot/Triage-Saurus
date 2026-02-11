@@ -36,7 +36,12 @@ Before asking any cloud-provider questions:
   - Keep track of scanned repos in `Knowledge/Repos.md`; if the same repo is requested again, ask the user to confirm re-scan vs reuse.
   - Ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
   - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
-  - Promote reusable context from repo scan (e.g., Terraform/IaC patterns) into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
+  - During repo scans, extract:
+    - cloud resources/services deployed or referenced (IaC + config),
+    - service dependencies (DBs, queues, logs/telemetry, APIs) from connection strings/config,
+    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles) including base images (`FROM ...`).
+  - It’s OK to include code/config **evidence snippets** with **file path + line numbers** in the repo finding.
+  - Promote reusable context from repo scan into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
 When asking **multiple-choice** questions, always include a **“Don’t know”** option.
 
