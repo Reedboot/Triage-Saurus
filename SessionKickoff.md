@@ -28,6 +28,8 @@ Before asking any cloud-provider questions:
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
+
+When asking **multiple-choice** questions, always include a **“Don’t know”** option.
 - If it’s new: record it **immediately** in `Knowledge/` as **Confirmed** (with timestamp).
 - If it’s already captured: don’t duplicate.
 
