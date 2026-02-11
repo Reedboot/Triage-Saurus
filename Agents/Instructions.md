@@ -22,6 +22,11 @@ This repository supports consistent security triage. The expected workflow is:
   question to establish whether the condition is currently true (Yes / No / Don’t
   know). If **No**, downgrade severity appropriately and rewrite the finding as a
   drift-prevention / assurance item.
+- **Scope discipline:** do **not** create new findings that were not in the original
+  input list (e.g., title-only export). It’s fine to:
+  - add new environment context to `Knowledge/`, and
+  - update the *existing* finding to note: "if X is true, the score increases" (or
+    set Applicability to **Yes** when confirmed).
 - **Post-triage assumption confirmation:** after bulk triage (or whenever assumptions accumulate), ask follow-up questions to confirm/deny assumptions.
   - Ask **service-specific** questions where possible.
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
