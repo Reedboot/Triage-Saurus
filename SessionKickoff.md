@@ -27,14 +27,16 @@ Before asking any cloud-provider questions:
 - If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
 
-As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
-
 When asking **multiple-choice** questions, always include a **“Don’t know”** option.
+
+As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
 - If it’s new: record it **immediately** in `Knowledge/` as **Confirmed** (with timestamp).
 - If it’s already captured: don’t duplicate.
 
 When processing sample findings in bulk, process them sequentially and **auto-continue** to
-next item; only pause for questions that change scoring/applicability/scope.
+next item. Use a default priority order unless I override it: (1) internet exposure,
+(2) data stores/secrets, (3) identity/privilege, (4) logging/monitoring, (5) baseline
+hardening. Only pause for questions that change scoring/applicability/scope.
 - If a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 
 If you have title-only exports in `Intake/` and want to save tokens/time, you may generate draft
