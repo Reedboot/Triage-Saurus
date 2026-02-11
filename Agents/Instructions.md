@@ -4,7 +4,8 @@
 This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
 2. Create/update a finding under `Findings/` using the relevant template.
-3. Capture confirmed facts under `Knowledge/` as a timestamped (DD/MM/YYYY HH:MM) append-only learned log (this is the living, authoritative record used to resolve missing context—add new services, dependencies, configuration artefacts, or compound problems there when they are discovered and link to them from related findings). Examples include which terraform modules are in use and their parameters, allowed IP blocks, whether managed identities are enabled, which cloud providers are active, and what CI/CD pipeline(s) deploy the services.
+3. Capture confirmed facts under `Knowledge/` (Confirmed + Assumptions). Keep it focused on reusable environment facts used during triage (services in use, identity model, network posture, guardrails).
+   - If you need an append-only audit trail (e.g., bulk imports), write it under `Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
 4. Update `Summary/` outputs (cloud resource summaries and risk register).
 
 ## Behaviour
@@ -18,7 +19,8 @@ This repository supports consistent security triage. The expected workflow is:
 - Prefer confirmed facts, **but capture inferred context** in `Knowledge/` as an
   explicit **assumption** and then ask the user to confirm/deny.
 - When a finding implies additional environment context (e.g., “Defender for Cloud” recommendations imply Defender is enabled), record it in `Knowledge/` as an **assumption** and immediately ask the user to confirm/deny.
-- When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), you may record that service as **Confirmed in use** in `Knowledge/` without asking (the finding itself implies the service exists).
+- When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), record that service as **Confirmed in use** in `Knowledge/` without asking (the finding itself implies the service exists).
+  - This also applies to **bulk title-only imports**: if a title clearly names an Azure service (e.g., “secure transfer on storage accounts”, “enable SQL auditing”, “disable ACR admin user”), treat that service as **Confirmed in use**.
 - If a finding recommends enabling an **additional** service/control (e.g., DDoS Standard, Defender plan, Private Link), record that additional service/control as an **Assumption** until the user confirms.
 - When processing findings in bulk (including sample findings), process items **sequentially**.
   - After completing one finding, **immediately continue to the next finding** without asking
