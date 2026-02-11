@@ -4,7 +4,11 @@ Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
-First, ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
+
+First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`.
+- If yes: ask whether to **resume answering those now** (or proceed to new triage).
+
+Then ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
 - Example bulk paths in this repo:
   - `Intake/Cloud` (your cloud findings)
   - `Intake/Code` (your code findings)
@@ -53,7 +57,8 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 ## Using Copilot CLI
 1. Open a Copilot CLI session in the repository root.
 2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
-   - The agent should treat `sessionkickoff` as a kickoff trigger and immediately ask what to triage next (single issue vs bulk `Intake/` path).
+   - The agent should first check for outstanding items under `Knowledge/` → `## Unknowns` / `## ❓ Open Questions` and offer to resume those.
+   - Then it should ask what to triage next (single issue vs bulk `Intake/` path).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Using Codex CLI
