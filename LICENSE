@@ -1,0 +1,43 @@
+TRIAGE-SAURUS NON-COMMERCIAL INTERNAL USE LICENSE
+
+Copyright (c) 2026 Neil Reed
+
+1) Ownership
+   This repository (the “Software”) is owned by the copyright holder above.
+   No ownership rights are transferred by this license.
+
+2) Permission (Non-Commercial Internal Use Only)
+   Permission is hereby granted to any person obtaining a copy of the Software
+   to use, run, and modify the Software solely for personal or internal
+   organizational purposes that are NON-COMMERCIAL.
+
+3) Restrictions
+   You may NOT:
+   a) use the Software for any commercial purpose;
+   b) sell, license, sublicense, rent, lease, or otherwise monetize the Software;
+   c) redistribute, publish, or share the Software (including modified versions)
+      with any third party, whether publicly or privately;
+   d) remove or alter this license notice.
+
+4) No Trademark / Branding Rights
+   This license does not grant any rights in any trademarks, service marks, or
+   logos of the copyright holder.
+
+5) No Warranty; No Liability
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+
+6) AI Output Disclaimer
+   If the Software generates output using AI/LLM systems, such output may be
+   incorrect or incomplete. You are solely responsible for independently
+   reviewing, validating, and testing any AI-generated output before relying on
+   it in any security, operational, compliance, or production context.
+
+7) Intended Purpose (Non-Binding)
+   The intended purpose of the Software is to help security staff triage issues
+   for free. This statement does not expand the permissions granted above.
