@@ -38,11 +38,15 @@ next item; only pause for questions that change scoring/applicability/scope.
 If you have title-only exports in `Intake/` and want to save tokens/time, you may generate draft
 findings in bulk (then refine them one-by-one). Ask the user first because it writes files:
 - `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <intake-path> --out-dir Findings/Cloud --update-knowledge`
+  - Also generates: `Summary/Cloud/*.md` per-service summaries and `Summary/Risk Register.xlsx` (and logs to `Audit/`).
 
 If Cloud + provider is confirmed, immediately create/update:
 - `Knowledge/<Provider>.md`
 - `Summary/Cloud/Architecture_<Provider>.md`
 
 During triage, capture inferred environment context into Knowledge/ as explicit ASSUMPTIONS and ask me to confirm/deny.
+After bulk triage (or whenever assumptions accumulate), ask service-specific follow-up questions **one at a time** (prefix with `❓`).
+- Ask cross-cutting questions once (e.g., “Are Private Endpoints used anywhere?”) rather than repeating per-service.
+- When I answer, update `Knowledge/` (promote to Confirmed or correct/remove) and append an `Audit/` entry.
 Whenever `Knowledge/` is created or updated, generate/update the relevant architecture diagram under `Summary/Cloud/` (assumptions = dotted border).
 ```
