@@ -22,6 +22,9 @@ consistent security triaging. It provides agent instructions, templates, and
 workflows for analysing scanner findings, updating knowledge, producing
 findings, maintaining summaries, and regenerating the risk register.
 
+## License
+See `LICENSE` (non-commercial internal use; no redistribution; no warranty).
+
 ## Workflow Overview
 1. Start a CLI session in the repo root and paste the prompt from
    `SessionKickoff.md`.
