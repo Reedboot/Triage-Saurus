@@ -11,8 +11,10 @@ First, ask me to either **copy/paste the issue** to triage or **provide a path t
 - Example bulk paths in this repo:
   - `Sample Findings/Cloud` (Azure cloud sample findings)
   - `Sample Findings/Code` (code sample findings)
-Before asking any cloud-provider questions, ask what we are triaging (Cloud / Code / Repo scan).
-- If Cloud: ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
+Before asking any cloud-provider questions:
+- If the user provided a bulk folder path that clearly implies scope (e.g., `Sample Findings/Cloud` or `Sample Findings/Code`), treat that as the triage type.
+- Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
+- If Cloud: infer provider when the folder name implies it (e.g., `Sample Findings/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
