@@ -18,6 +18,10 @@ As each kickoff question is answered, check whether it adds new context vs exist
 When processing sample findings in bulk, process them sequentially and **auto-continue** to
 next item; only pause for questions that change scoring/applicability/scope.
 
+If you have title-only exports and want to save tokens/time, you may generate draft
+findings in bulk (then refine them one-by-one):
+- `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> --update-knowledge`
+
 If Cloud + provider is confirmed, immediately create/update:
 - `Knowledge/<Provider>.md`
 - `Summary/Cloud/Architecture_<Provider>.md`
