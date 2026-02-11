@@ -34,6 +34,10 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ### Summary
 <summary>
 
+### Applicability
+- **Status:** Yes / No / Don’t know
+- **Evidence:** <what makes this true/false>
+
 ### 🎯 Exploitability
 <exploitability>
 
