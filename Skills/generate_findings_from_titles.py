@@ -6,8 +6,9 @@ scanner export) and you want to quickly create well-formed finding Markdown
 files that match the repository templates.
 
 Inputs
-- A folder containing files; the generator uses the FIRST LINE of each file as
-  the finding title.
+- A folder containing files (recursively):
+  - 1 file per finding: uses the first non-empty line as the title.
+  - `.txt` / `.csv`: treated as 1 finding per line (entire line is the title).
 
 Outputs
 - Writes finding files to an output folder you specify.
@@ -16,7 +17,7 @@ Outputs
 Example
   python3 Skills/generate_findings_from_titles.py \
     --provider azure \
-    --in-dir "Sample Findings/Cloud" \
+    --in-dir "Intake/Cloud" \
     --out-dir "Findings/Cloud" \
     --update-knowledge
 """
@@ -33,6 +34,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def now_uk() -> str:
     return _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
+
+
+def _normalise_title(line: str) -> str:
+    # Accept both raw lines and Markdown headings.
+    return line.strip().lstrip("\ufeff").lstrip("# ").strip()
+
+
+def _titles_from_path(path: Path) -> list[str]:
+    """Extract one or more finding titles from an input path."""
+
+    ext = path.suffix.lower()
+    text = path.read_text(encoding="utf-8", errors="replace")
+
+    if ext in {".txt", ".csv"}:
+        return [t for t in (_normalise_title(l) for l in text.splitlines()) if t]
+
+    # Default: 1 file = 1 finding (first non-empty line).
+    for line in text.splitlines():
+        t = _normalise_title(line)
+        if t:
+            return [t]
+    return []
+
+
+def _unique_out_path(out_dir: Path, base: str) -> Path:
+    out = out_dir / f"{base}.md"
+    if not out.exists():
+        return out
+
+    i = 2
+    while True:
+        candidate = out_dir / f"{base}_{i}.md"
+        if not candidate.exists():
+            return candidate
+        i += 1
 
 
 def severity(score: int) -> str:
@@ -273,7 +309,11 @@ flowchart TB
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate draft findings from title-only inputs.")
     parser.add_argument("--provider", required=True, choices=["azure", "aws", "gcp"], help="Cloud provider")
-    parser.add_argument("--in-dir", required=True, help="Input folder containing title files")
+    parser.add_argument(
+        "--in-dir",
+        required=True,
+        help="Input folder (recursively) or a single .txt/.csv list file",
+    )
     parser.add_argument("--out-dir", required=True, help="Output folder for generated findings")
     parser.add_argument(
         "--update-knowledge",
@@ -285,8 +325,10 @@ def main() -> int:
     in_dir = (ROOT / args.in_dir).resolve() if not Path(args.in_dir).is_absolute() else Path(args.in_dir)
     out_dir = (ROOT / args.out_dir).resolve() if not Path(args.out_dir).is_absolute() else Path(args.out_dir)
 
-    if not in_dir.exists() or not in_dir.is_dir():
-        raise SystemExit(f"Input folder not found: {in_dir}")
+    if not in_dir.exists():
+        raise SystemExit(f"Input path not found: {in_dir}")
+    if not (in_dir.is_dir() or in_dir.is_file()):
+        raise SystemExit(f"Input path is not a file or folder: {in_dir}")
 
     ts = now_uk()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -294,20 +336,35 @@ def main() -> int:
     titles: list[str] = []
     generated = 0
 
-    for path in sorted(in_dir.glob("*")):
-        if not path.is_file() or path.name.startswith("."):
+    paths: list[Path]
+    if in_dir.is_file():
+        paths = [in_dir]
+    else:
+        paths = sorted(p for p in in_dir.rglob("*") if p.is_file())
+
+    for path in paths:
+        if path.name.startswith("."):
             continue
-        first_line = path.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
-        title = (first_line[0].strip() if first_line else "").lstrip("# ").strip()
-        if not title:
+        if path.name in {"README.md", ".gitignore", ".gitkeep"}:
             continue
 
-        titles.append(title)
-        score = score_for(title)
-        out_name = titlecase_filename(path.stem)
-        out_path = out_dir / f"{out_name}.md"
-        write_finding(out_path, title, score, ts)
-        generated += 1
+        extracted = _titles_from_path(path)
+        if not extracted:
+            continue
+
+        for title in extracted:
+            titles.append(title)
+            score = score_for(title)
+
+            # Preserve old naming for 1-file-per-finding inputs; list files use title-based naming.
+            if path.suffix.lower() in {".txt", ".csv"}:
+                out_name = titlecase_filename(title)
+            else:
+                out_name = titlecase_filename(path.stem)
+
+            out_path = _unique_out_path(out_dir, out_name)
+            write_finding(out_path, title, score, ts)
+            generated += 1
 
     if args.update_knowledge:
         knowledge_path = ensure_knowledge(args.provider, ts)
