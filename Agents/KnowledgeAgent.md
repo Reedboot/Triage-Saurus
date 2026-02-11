@@ -10,7 +10,8 @@
 ## Behaviour
 - Follow `Agents/Instructions.md` and `Settings/Styling.md`.
 - Prefer concise, reusable facts over one-off identifiers.
-- Never rewrite history: append to the learned log; do not delete prior entries.
+- Never rewrite history for **knowledge facts**: append confirmed/assumed facts; do not delete prior entries.
+- Keep audit trails out of `Knowledge/` (use `Audit/` with an explicit “do not load into triage context” declaration).
 - Separate **Confirmed** vs **Assumed** clearly:
   - **Confirmed:** user explicitly confirmed or evidence is provided.
   - **Assumed:** inferred from finding text/titles/controls; must be user verified.
