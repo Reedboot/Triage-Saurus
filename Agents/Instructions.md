@@ -9,6 +9,9 @@ This repository supports consistent security triage. The expected workflow is:
 4. Update `Summary/` outputs (cloud resource summaries and risk register).
 
 ## Behaviour
+- **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
+  - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
+  - Then immediately ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, or **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`).
 - Follow `Settings/Styling.md` for formatting rules.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
