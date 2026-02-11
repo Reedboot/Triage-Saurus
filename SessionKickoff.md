@@ -20,6 +20,8 @@ Before asking any cloud-provider questions:
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
 - If it’s new: record it **immediately** in `Knowledge/` as **Confirmed** (with timestamp).
 - If it’s already captured: don’t duplicate.
+- If it’s a one-off decision (scope/applicability/scoring/feasibility), capture it in an
+  append-only `Audit/` log instead of turning it into general Knowledge/.
 
 When processing sample findings in bulk, process them sequentially and **auto-continue** to
 next item; only pause for questions that change scoring/applicability/scope.
