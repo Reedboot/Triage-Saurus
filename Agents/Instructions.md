@@ -64,6 +64,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Code findings:** `Findings/Code/<Titlecase>.md`
 - **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Skills/risk_register.py`
+- **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
 
 ## After changes to findings
 - If you need an updated risk register, run:
