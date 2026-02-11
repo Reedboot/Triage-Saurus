@@ -1,4 +1,4 @@
-# Triage-Saurus
+# 🦖 Triage-Saurus
 
 Read `AGENTS.md` first for repository-specific agent instructions.
 To initialise a session, copy and paste this prompt:
@@ -19,6 +19,10 @@ Before asking any cloud-provider questions:
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
 - If it’s new: record it in `Knowledge/` as **Confirmed** (with timestamp).
 - If it’s already captured: don’t duplicate.
+
+After bulk triage (or whenever assumptions accumulate), ask follow-up assumption-confirmation questions **one at a time** (prefix with `❓`).
+- Ask cross-cutting questions once (e.g., Private Endpoints used anywhere) rather than repeating per-service.
+- On answer: update `Knowledge/` and append an `Audit/` entry.
 ```
 The same prompt is also saved in `SessionKickoff.md`.
 
