@@ -5,7 +5,7 @@ To initialise a session, copy and paste this prompt:
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
 
-First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`.
+First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions` (treat these as **refinement questions** in the UI).
 - If yes: ask whether to **resume answering those now** (or proceed to new triage).
 
 Then ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
@@ -18,7 +18,12 @@ Before asking any cloud-provider questions:
 - If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
-- If Code/Repo scan: ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source (e.g., SAST, dependency, secrets), then proceed without assuming cloud.
+- If Code/Repo scan:
+  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask the user for their root repos folder.
+  - Keep track of scanned repos in `Knowledge/Repos.md`; if the same repo is requested again, ask the user to confirm re-scan vs reuse.
+  - Ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
+  - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
+  - Promote reusable context from repo scan (e.g., Terraform/IaC patterns) into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
 - If it’s new: record it in `Knowledge/` as **Confirmed** (with timestamp).
@@ -57,7 +62,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 ## Using Copilot CLI
 1. Open a Copilot CLI session in the repository root.
 2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
-   - The agent should first check for outstanding items under `Knowledge/` → `## Unknowns` / `## ❓ Open Questions` and offer to resume those.
+   - The agent should first check for outstanding items under `Knowledge/` → `## Unknowns` / `## ❓ Open Questions` (present these as **refinement questions** in the UI) and offer to resume those.
    - Then it should ask what to triage next (single issue vs bulk `Intake/` path).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
