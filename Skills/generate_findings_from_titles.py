@@ -13,6 +13,8 @@ Inputs
 Outputs
 - Writes finding files to an output folder you specify.
 - Optionally updates Knowledge/<Provider>.md and Summary/Cloud/Architecture_<Provider>.md.
+- When `--update-knowledge` is used, also generates per-service summary files under `Summary/Cloud/`
+  and regenerates the executive risk register (`Summary/Risk Register.xlsx`).
 
 Example
   python3 Skills/generate_findings_from_titles.py \
@@ -27,6 +29,8 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -229,51 +233,66 @@ def ensure_knowledge(provider: str, ts: str) -> Path:
     return path
 
 
-def update_knowledge_generic(knowledge_path: Path, provider: str, titles: list[str], ts: str) -> None:
-    """Write bulk-import audit events to Audit/, not Knowledge/.
+def append_audit_event(audit_path: Path, entry_lines: list[str]) -> None:
+    existing = audit_path.read_text(encoding="utf-8") if audit_path.exists() else ""
+    block = "\n".join(entry_lines).rstrip() + "\n"
+    if block in existing:
+        return
+    if not existing:
+        audit_path.write_text(block, encoding="utf-8")
+        return
+    audit_path.write_text(existing.rstrip() + "\n\n" + block, encoding="utf-8")
 
-    Knowledge/ is reserved for reusable environment facts (confirmed/assumptions).
-    """
 
+def ensure_audit(provider: str) -> Path:
     audit_dir = ROOT / "Audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_path = audit_dir / f"KnowledgeImports_{provider.title()}.md"
 
-    lines = [
-        "<!--",
-        "AUDIT LOG ONLY — do not load this file into LLM triage context.",
-        "This is an append-only audit trail of bulk imports and automation events.",
-        "-->",
-        "",
-        f"# 🟣 Audit Log — {provider.title()} Knowledge Imports",
-        "",
-        "## Purpose",
-        "This file exists for auditing only. It should **not** be treated as environment knowledge.",
-        "",
-        "## Entries",
-        f"- [{ts}] Imported {len(titles)} title-only finding(s) via `Skills/generate_findings_from_titles.py`.",
-    ]
+    if audit_path.exists():
+        return audit_path
 
+    audit_path.write_text(
+        "\n".join(
+            [
+                "<!--",
+                "AUDIT LOG ONLY — do not load this file into LLM triage context.",
+                "This is an append-only audit trail of bulk imports and automation events.",
+                "-->",
+                "",
+                f"# 🟣 Audit Log — {provider.title()} Knowledge Imports",
+                "",
+                "## Purpose",
+                "This file exists for auditing only. It should **not** be treated as environment knowledge.",
+                "",
+                "## Entries",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return audit_path
+
+
+def update_knowledge_generic(knowledge_path: Path, provider: str, titles: list[str], ts: str) -> Path:
+    """Write bulk-import audit events to Audit/, not Knowledge/."""
+
+    audit_path = ensure_audit(provider)
+
+    lines = [f"- [{ts}] Imported {len(titles)} title-only finding(s) via `Skills/generate_findings_from_titles.py`."
+    ]
     for t in titles[:25]:
         lines.append(f"  - Finding imported (title-only): {t}.")
     if len(titles) > 25:
         lines.append("  - (truncated)")
 
-    if not audit_path.exists():
-        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return
-
-    existing = audit_path.read_text(encoding="utf-8")
-    entry = "\n".join(lines[10:]) + "\n"  # append from '## Entries'
-    if entry in existing:
-        return
-
-    audit_path.write_text(existing.rstrip() + "\n\n" + entry, encoding="utf-8")
+    append_audit_event(audit_path, lines)
+    return audit_path
 
 
-def update_architecture(provider: str, ts: str) -> None:
+def update_architecture(provider: str, ts: str) -> Path | None:
     if provider.lower() not in {"azure", "aws", "gcp"}:
-        return
+        return None
 
     out = ROOT / "Summary" / "Cloud" / f"Architecture_{provider.title()}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +323,254 @@ flowchart TB
 """,
         encoding="utf-8",
     )
+    return out
+
+
+def _parse_overall_score(path: Path) -> tuple[str, str, int] | None:
+    """Return (emoji, label, score) from a finding file."""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip().startswith("- **Overall Score:**"):
+            tail = line.split("**Overall Score:**", 1)[-1].strip()
+            m = re.search(r"^(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10", tail)
+            if not m:
+                return None
+            return m.group(1), m.group(2), int(m.group(3))
+    return None
+
+
+def _parse_title(path: Path) -> str:
+    first = path.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+    if not first:
+        return path.stem
+    return first[0].lstrip("# ").lstrip("🟣 ").strip()
+
+
+def _summary_mermaid(service: str) -> str:
+    if service == "Key Vault":
+        return """```mermaid
+flowchart TB
+  User[🧑‍💻 Operator/Workload] --> Entra[🔐 Entra ID]
+  Entra --> KV[🗄️ Key Vault]
+  App[🧩 App/Service] --> KV
+  Internet[🌐 Internet] -. blocked by default .-> KV
+```
+"""
+    if service == "Storage Accounts":
+        return """```mermaid
+flowchart TB
+  App[🧩 App/Service] --> Storage[🗄️ Storage Account]
+  Entra[🔐 Entra ID] --> Storage
+  Internet[🌐 Internet] -. public access (should be disabled) .-> Storage
+```
+"""
+    if service in {"Azure SQL", "RDS", "Cloud SQL", "Databases"}:
+        return """```mermaid
+flowchart TB
+  App[🧩 App/Service] --> DB[🗄️ Database]
+  Entra[🔐 Identity] --> DB
+  Internet[🌐 Internet] -. blocked by firewall/private endpoint .-> DB
+```
+"""
+    if service in {"AKS", "EKS", "GKE", "Kubernetes"}:
+        return """```mermaid
+flowchart TB
+  Dev[🧑‍💻 Operator] --> IdP[🔐 Identity]
+  IdP --> K8s[🧩 Kubernetes]
+  K8s --> Registry[🧩 Image Registry]
+  K8s --> Secrets[🗄️ Secrets Store]
+  K8s --> Storage[🗄️ Storage]
+```
+"""
+    if service in {"Container Registry", "ECR", "Artifact Registry", "Registry"}:
+        return """```mermaid
+flowchart TB
+  CICD[⚙️ CI/CD] --> IdP[🔐 Identity]
+  IdP --> Registry[🧩 Image Registry]
+  Runtime[🧩 Runtime (K8s/VM)] --> Registry
+```
+"""
+    if service in {"App Service", "Lambda", "Cloud Run", "Compute"}:
+        return """```mermaid
+flowchart TB
+  Internet[🌐 Internet] --> App[🧩 Service]
+  CICD[⚙️ CI/CD] --> App
+  App --> Secrets[🗄️ Secrets Store]
+```
+"""
+    if service == "Virtual Machines":
+        return """```mermaid
+flowchart TB
+  Internet[🌐 Internet] -. mgmt ports should be blocked .-> VM[🧩 Virtual Machines]
+  Admin[🧑‍💻 Admin] --> Bastion[🛡️ Bastion/JIT]
+  Bastion --> VM
+  VM --> Data[🗄️ Data Stores]
+```
+"""
+    if service == "Network":
+        return """```mermaid
+flowchart TB
+  Internet[🌐 Internet] --> Edge[🧩 Public Edge]
+  Edge --> NSG[🛡️ Firewall/NSG]
+  NSG --> Subnet[🛡️ VPC/VNet]
+  Subnet --> Workloads[🧩 Workloads]
+```
+"""
+    if service == "Identity":
+        return """```mermaid
+flowchart TB
+  User[🧑‍💻 Privileged user] --> MFA[🛡️ MFA/Conditional Access]
+  MFA --> IdP[🔐 Identity Provider]
+  IdP --> Cloud[🧩 Cloud Control Plane]
+```
+"""
+    return """```mermaid
+flowchart TB
+  Cloud[🧩 Cloud]
+```
+"""
+
+
+def update_service_summaries(provider: str, ts: str) -> list[Path]:
+    """Generate per-service summary Markdown under Summary/Cloud based on Findings/Cloud."""
+
+    findings_dir = ROOT / "Findings" / "Cloud"
+    if not findings_dir.exists():
+        return []
+
+    # Provider-specific service buckets (keyword-based).
+    provider_l = provider.lower()
+    if provider_l == "azure":
+        service_buckets = [
+            ("Identity", ["mfa", "owner", "managed identity", "pim", "entra"]),
+            ("Network", ["nsg", "network security group", "ports", "internet-facing", "ddos", "ip forwarding", "vnet", "virtual network"]),
+            ("Virtual Machines", ["virtual machine", "vm", "endpoint protection", "disk encryption", "management ports"]),
+            ("Key Vault", ["key vault", "keyvault", "secrets", "keys", "soft delete", "private link", "firewall"]),
+            ("Storage Accounts", ["storage", "blob", "shared key", "secure transfer", "public access"]),
+            ("Azure SQL", ["sql", "database", "tde", "auditing", "firewall", "allow azure services"]),
+            ("AKS", ["kubernetes", "aks", "rbac"]),
+            ("Container Registry", ["container registry", "acr", "admin user"]),
+            ("App Service", ["app service", "ftps", "ftp"]),
+        ]
+    elif provider_l == "aws":
+        service_buckets = [
+            ("Identity", ["iam", "mfa", "access key", "assume role"]),
+            ("Network", ["security group", "nacl", "vpc", "internet-facing", "ports", "0.0.0.0"]),
+            ("Virtual Machines", ["ec2", "instance", "ssh", "rdp", "management ports"]),
+            ("Secrets", ["secrets manager", "kms", "ssm parameter"]),
+            ("Storage", ["s3", "bucket", "public access"]),
+            ("RDS", ["rds", "database", "encryption", "audit"]),
+            ("EKS", ["eks", "kubernetes", "rbac"]),
+            ("ECR", ["ecr", "container registry"]),
+            ("Lambda", ["lambda", "serverless"]),
+        ]
+    else:  # gcp
+        service_buckets = [
+            ("Identity", ["iam", "mfa", "service account"]),
+            ("Network", ["vpc", "firewall", "internet-facing", "ports", "0.0.0.0"]),
+            ("Virtual Machines", ["compute engine", "vm", "ssh", "rdp"]),
+            ("Secret Manager", ["secret manager", "kms"]),
+            ("Cloud Storage", ["cloud storage", "bucket", "public access"]),
+            ("Cloud SQL", ["cloud sql", "database", "encryption", "audit"]),
+            ("GKE", ["gke", "kubernetes", "rbac"]),
+            ("Artifact Registry", ["artifact registry", "container registry"]),
+            ("Cloud Run", ["cloud run", "serverless"]),
+        ]
+
+    buckets: dict[str, list[tuple[int, str, str]]] = {name: [] for name, _ in service_buckets}
+
+    for path in sorted(findings_dir.glob("*.md")):
+        title = _parse_title(path)
+        parsed = _parse_overall_score(path)
+        if not parsed:
+            continue
+        emoji, label, score = parsed
+        text = f"{title} {path.stem}".lower()
+        rel = f"Findings/Cloud/{path.name}"
+        for service, kws in service_buckets:
+            if any(k in text for k in kws):
+                buckets[service].append((score, f"{emoji} {label} {score}/10", rel))
+
+    written: list[Path] = []
+    out_dir = ROOT / "Summary" / "Cloud"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for service, _kws in service_buckets:
+        rows = buckets.get(service) or []
+        if not rows:
+            continue
+        rows = sorted(rows, key=lambda x: x[0], reverse=True)
+        top_refs = [r[2] for r in rows[:2]]
+
+        actions = []
+        if service in {"Key Vault", "Storage Accounts", "Azure SQL", "Storage", "Cloud Storage", "RDS", "Cloud SQL"}:
+            actions = [
+                f"Restrict network access (private endpoints / firewall) and remove broad exceptions (see `{top_refs[0]}`).",
+                f"Enforce least privilege (RBAC) and require strong identity controls (see `{top_refs[-1]}`).",
+                "Enable monitoring/auditing and alert on anomalous access.",
+            ]
+        elif service in {"Network", "Virtual Machines"}:
+            actions = [
+                f"Remove broad inbound rules and restrict management access via Bastion/JIT (see `{top_refs[0]}`).",
+                "Segment networks and reduce lateral movement paths.",
+                "Enforce baselines with policy-as-code and monitor drift.",
+            ]
+        elif service == "Identity":
+            actions = [
+                f"Enforce MFA/Conditional Access for privileged roles (see `{top_refs[0]}`).",
+                "Use just-in-time elevation (PIM / role-based workflows) and remove standing privilege.",
+                "Audit privileged assignments and automate offboarding.",
+            ]
+        else:
+            actions = [
+                f"Replace shared/admin credentials with identity-based access (see `{top_refs[0]}`).",
+                "Harden deployment paths (CI/CD) and monitor for drift.",
+            ]
+
+        findings_lines = []
+        for score, overall, rel in rows:
+            m = re.match(r"^(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10$", overall)
+            if m:
+                findings_lines.append(f"- {m.group(1)} **{m.group(2)} {m.group(3)}/10:** `{rel}`")
+            else:
+                findings_lines.append(f"- {overall}: `{rel}`")
+
+        file_name = service.replace(" ", "_") + ".md"
+        out_path = out_dir / file_name
+        out_path.write_text(
+            "\n".join(
+                [
+                    f"# 🟣 {service}",
+                    "",
+                    _summary_mermaid(service).rstrip(),
+                    "",
+                    "## 🧭 Overview",
+                    f"- **Provider:** {provider.title()}",
+                    "- **Scope:** Derived from `Findings/Cloud/`",
+                    "",
+                    "## ⚠️ Risk",
+                    "Risk is driven by the highest-severity findings for this resource/theme.",
+                    "",
+                    "## ✅ Actions",
+                    *[f"- [ ] {a}" for a in actions],
+                    "",
+                    "## 📌 Findings",
+                    *findings_lines,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        written.append(out_path)
+
+    return written
+
+
+def run_risk_register() -> Path | None:
+    script = ROOT / "Skills" / "risk_register.py"
+    if not script.exists():
+        return None
+    subprocess.run([sys.executable, str(script)], check=True)
+    return ROOT / "Summary" / "Risk Register.xlsx"
 
 
 def main() -> int:
@@ -318,7 +585,20 @@ def main() -> int:
     parser.add_argument(
         "--update-knowledge",
         action="store_true",
-        help="Update Knowledge/<Provider>.md and Summary/Cloud/Architecture_<Provider>.md",
+        help=(
+            "Update Knowledge/<Provider>.md and Summary/Cloud/Architecture_<Provider>.md "
+            "(and also generate Summary/Cloud per-service summaries + Risk Register)"
+        ),
+    )
+    parser.add_argument(
+        "--update-summaries",
+        action="store_true",
+        help="Generate per-service summaries under Summary/Cloud (implied by --update-knowledge)",
+    )
+    parser.add_argument(
+        "--update-risk-register",
+        action="store_true",
+        help="Regenerate Summary/Risk Register.xlsx (implied by --update-knowledge)",
     )
     args = parser.parse_args()
 
@@ -367,9 +647,43 @@ def main() -> int:
             generated += 1
 
     if args.update_knowledge:
+        args.update_summaries = True
+        args.update_risk_register = True
+
+    if args.update_knowledge:
         knowledge_path = ensure_knowledge(args.provider, ts)
-        update_knowledge_generic(knowledge_path, args.provider, titles, ts)
-        update_architecture(args.provider, ts)
+        audit_path = update_knowledge_generic(knowledge_path, args.provider, titles, ts)
+
+        arch_path = update_architecture(args.provider, ts)
+        if arch_path is not None:
+            append_audit_event(
+                audit_path,
+                [
+                    f"- [{ts}] Created/updated architecture diagram.",
+                    f"  - Wrote/updated: `{arch_path.relative_to(ROOT)}`.",
+                ],
+            )
+
+        if args.update_summaries:
+            summary_paths = update_service_summaries(args.provider, ts)
+            if summary_paths:
+                rels = [f"  - Wrote/updated: `{p.relative_to(ROOT)}`." for p in summary_paths]
+                append_audit_event(
+                    audit_path,
+                    [f"- [{ts}] Generated per-service cloud summaries.", *rels],
+                )
+
+        if args.update_risk_register:
+            rr = run_risk_register()
+            if rr is not None and rr.exists():
+                append_audit_event(
+                    audit_path,
+                    [
+                        f"- [{ts}] Generated the executive risk register.",
+                        "  - Ran: `python3 Skills/risk_register.py`.",
+                        f"  - Wrote: `{rr.relative_to(ROOT)}`.",
+                    ],
+                )
 
     print(f"Generated {generated} finding(s) into {out_dir}")
     return 0
