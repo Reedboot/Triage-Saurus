@@ -60,6 +60,8 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 2. Enter the prompt `Triage review. Cloud provider: Azure. Process sample findings one by one
   without confirmations`.
 
+During bulk processing, if a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
+
 **Tools**
 - **Python:** `python3` is required to run:
   - `Skills/risk_register.py` (generate `Summary/Risk Register.xlsx`)
