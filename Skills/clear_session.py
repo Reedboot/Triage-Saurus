@@ -13,6 +13,7 @@ TARGET_GLOBS: tuple[tuple[Path, str], ...] = (
     (ROOT / "Summary", "*.md"),
     (ROOT / "Summary" / "Code", "*.md"),
     (ROOT / "Summary" / "Cloud", "*.md"),
+    (ROOT / "Audit", "*.md"),
 )
 
 EXPLICIT_FILES: tuple[Path, ...] = (
