@@ -15,6 +15,10 @@ This repository supports consistent security triage. The expected workflow is:
 - Follow `Settings/Styling.md` for formatting rules.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
+- **Post-triage assumption confirmation:** after bulk triage (or whenever assumptions accumulate), ask follow-up questions to confirm/deny assumptions.
+  - Ask **service-specific** questions where possible.
+  - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
+  - Prefix these prompts with `❓` so they’re easy to spot in chat history.
 - When the user answers questions that materially affect applicability/scope/scoring or
   change remediation feasibility, append a short entry to an `Audit/` log (append-only)
   so the decision trail is recoverable. Only promote reusable facts into `Knowledge/`.
@@ -73,6 +77,8 @@ This repository supports consistent security triage. The expected workflow is:
 - **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Skills/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+  - With `--update-knowledge`, it also generates `Summary/Cloud/*.md` per-service summaries, regenerates
+    `Summary/Risk Register.xlsx`, and appends audit entries under `Audit/`.
 
 ## After changes to findings
 - If you need an updated risk register, run:
