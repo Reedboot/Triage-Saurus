@@ -59,3 +59,4 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
   - `Skills/risk_register.py` (generate `Summary/Risk Register.xlsx`)
   - `Skills/clear_session.py` (delete per-session artifacts under `Findings/`, `Knowledge/`, `Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
+  - Optional helper: `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
