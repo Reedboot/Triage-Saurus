@@ -5,6 +5,8 @@ This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
 2. Create/update a finding under `Findings/` using the relevant template.
 3. Capture confirmed facts under `Knowledge/` (Confirmed + Assumptions). Keep it focused on reusable environment facts used during triage (services in use, identity model, network posture, guardrails).
+   - Keep provider knowledge files consistent: use `## Confirmed`, `## Assumptions`, and
+     `## Unknowns` headings (avoid ad-hoc extra sections).
    - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
 4. Update `Summary/` outputs (cloud resource summaries and risk register).
 
@@ -16,6 +18,10 @@ This repository supports consistent security triage. The expected workflow is:
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
 - When asking **multiple-choice** questions, always include a **“Don’t know”** option.
+- **Applicability check (per finding):** early in each finding refinement, ask one
+  question to establish whether the condition is currently true (Yes / No / Don’t
+  know). If **No**, downgrade severity appropriately and rewrite the finding as a
+  drift-prevention / assurance item.
 - **Post-triage assumption confirmation:** after bulk triage (or whenever assumptions accumulate), ask follow-up questions to confirm/deny assumptions.
   - Ask **service-specific** questions where possible.
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
@@ -24,6 +30,8 @@ This repository supports consistent security triage. The expected workflow is:
   applicability, scoring, or remediation, append an entry to an `Audit/` log
   (append-only) recording **the question + the user's answer** (including “Don’t
   know”). Only promote reusable facts into `Knowledge/`.
+- **Audit log size:** for bulk title imports, prefer an audit summary (count + source
+  file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source), check whether the answer adds new context vs existing `Knowledge/`.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
@@ -35,6 +43,12 @@ This repository supports consistent security triage. The expected workflow is:
   - This also applies to **bulk title-only imports**: if a title clearly names an Azure service (e.g., “secure transfer on storage accounts”, “enable SQL auditing”, “disable ACR admin user”), treat that service as **Confirmed in use**.
 - If a finding recommends enabling an **additional** service/control (e.g., DDoS Standard, Defender plan, Private Link), record that additional service/control as an **Assumption** until the user confirms.
 - When processing findings in bulk (including sample findings), process items **sequentially**.
+  - Use a default priority order unless the user overrides it:
+    1) Internet exposure (public SSH/RDP, public PaaS endpoints, public management planes)
+    2) High-value data stores (SQL/Cosmos/Storage) and secrets (Key Vault)
+    3) Identity/privilege guardrails (owners/RBAC)
+    4) Detection/logging/monitoring
+    5) Hardening baselines
   - After completing one finding, **immediately continue to the next finding** without asking
     “should I continue?”.
   - Only pause for user input when you need a decision that materially changes remediation,
