@@ -62,9 +62,11 @@ This repository supports consistent security triage. The expected workflow is:
 - **Applicability check (per finding):**
   - For *evidence-backed* findings (e.g., scanner output that clearly indicates a failing resource), treat applicability as **Yes** by default and ask only scoping questions that change severity/remediation.
   - For *recommendation-style* findings where applicability is genuinely unclear, ask one question to establish whether the condition is currently true (Yes / No / Don’t know).
-  - **Do not blanket-downgrade** a control finding based on “we have this control” unless the user confirms it’s enabled **everywhere in scope** (e.g., *all* prod internet-facing Application Gateways) or the finding is a confirmed false positive.
-    - If the user says “Yes (some)” or gives a general “Yes” that could be partial coverage, treat coverage as **unknown** and ask a single bounded scoping question (e.g., “Is WAF enabled on all internet-facing gateways in production?”).
-  - If applicability is **No**, downgrade severity appropriately and rewrite the finding as a drift-prevention / assurance item.
+  - **Conflicting signals / partial coverage rule:** if user-provided context says a control is enabled (e.g., “Yes, WAF is enabled”) but the finding still exists (or other evidence suggests it’s not universal), assume **partial coverage**.
+    - Do **not** downgrade based on the optimistic answer.
+    - Default to the **worse (more severe) interpretation** and ask a single follow-up question explaining the conflict (e.g., multiple subscriptions/environments, or user uncertainty).
+    - If the user answers “Yes — all”, but the finding indicates otherwise, keep severity higher until the scope is reconciled.
+  - If applicability is **No** (confirmed false positive / out of scope), downgrade severity appropriately and rewrite the finding as a drift-prevention / assurance item.
 - **Scope discipline:** do **not** create new findings that were not in the original
   input list (e.g., title-only export). It’s fine to:
   - add new environment context to `Knowledge/`, and
@@ -188,12 +190,8 @@ This repository supports consistent security triage. The expected workflow is:
     `Summary/Risk Register.xlsx`, and appends audit entries under `Audit/`.
 
 ## After changes to findings
-- **Risk register must stay current (ExCo/CISO-facing):** after creating or updating any finding, regenerate:
+- **Risk register must stay current:** after creating or updating any finding, regenerate:
   - `python3 Skills/risk_register.py` (updates `Summary/Risk Register.xlsx`)
-  - Priority/ranking is deterministic from finding scores (no AI validation; no team/status columns).
-  - **Multi-cloud:** ensure the Resource Type classifier correctly recognises services across Azure/AWS/GCP.
-    - If `risk_register.py` emits WARNs about falling back to "Cloud" for a clearly named service, update its classifier mappings.
-  - For **Repo** findings, ensure `### Summary` contains a clear, exec-friendly risk statement (so the Issue column is meaningful).
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
   - `python3 Skills/extract_finding_scores.py Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
