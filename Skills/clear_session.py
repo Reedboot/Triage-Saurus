@@ -11,6 +11,7 @@ INTAKE_SAMPLE_DIR = ROOT / "Intake" / "Sample"
 TARGET_GLOBS: tuple[tuple[Path, str], ...] = (
     (ROOT / "Findings" / "Cloud", "*.md"),
     (ROOT / "Findings" / "Code", "*.md"),
+    (ROOT / "Findings" / "Repo", "*.md"),
     (ROOT / "Knowledge", "*.md"),
     (ROOT / "Summary", "*.md"),
     (ROOT / "Summary" / "Code", "*.md"),
