@@ -55,7 +55,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Audit log size:** for bulk title imports, prefer an audit summary (count + source
   file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
-- **Repo scans:** do not ask the user for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
+- **Repo scans:** first check `Knowledge/Repos.md` for known repo root path(s). If it doesn’t exist or is empty, ask: **"I don’t currently know the root directory for your repos."** and persist the answer into `Knowledge/Repos.md`. Then do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
   - If Cloud + provider is confirmed: immediately update `Summary/Cloud/Architecture_<Provider>.md`.
