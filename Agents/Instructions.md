@@ -85,6 +85,7 @@ This repository supports consistent security triage. The expected workflow is:
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - First check `Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
     - Prefer using the stdout-only helper to avoid guesswork: `python3 Skills/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
@@ -202,5 +203,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Delete: `python3 Skills/clear_session.py --yes`
 
 - Ensure each finding includes:
+  - `## 🗺️ Architecture Diagram` directly under the title
   - `- **Overall Score:** <severity> <n>/10`
+  - `## Meta Data` as the final section in the file
   - `- 🗓️ **Last updated:** DD/MM/YYYY HH:MM`
