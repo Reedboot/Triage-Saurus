@@ -25,7 +25,8 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
    context as needed.
 3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Summary/`.
 4. After any finding changes, the agent **regenerates**
-   `Summary/Risk Register.xlsx` using `Skills/risk_register.py` (explain why before running).
+   `Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
+   - This spreadsheet is **ExCo/CISO-facing** (no team/status columns); priority/ranking is deterministic from finding scores.
 
 > Note: By default, artifacts under `Findings/`, `Knowledge/`, and `Summary/`
 > are **gitignored** so they remain **user-owned**. If you want to persist/share
