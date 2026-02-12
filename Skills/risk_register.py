@@ -234,23 +234,75 @@ def to_exec_risk_issue(issue: str, impact_label: str) -> str:
     return out
 
 
-def resource_type_from_name(name: str) -> str:
-    upper = name.upper()
-    if upper.startswith("AZURE_"):
-        return "Azure"
-    if upper.startswith("AKS_"):
-        return "AKS"
-    if upper.startswith("CODE_"):
+def resource_type_from_path(path: Path, title: str) -> str:
+    parts = {p.lower() for p in path.parts}
+
+    if "code" in parts:
         return "Application Code"
-    if upper.startswith("AZ-"):
-        return "Azure"
-    if upper.startswith("AKS-"):
-        return "AKS"
-    if upper.startswith("A0"):
-        return "Application Code"
-    if upper.startswith("REPO_"):
+    if "repo" in parts:
         return "Repository"
-    return "Application"
+    if "cloud" not in parts:
+        return "Application"
+
+    t = f"{title} {path.stem}".lower()
+
+    if any(k in t for k in ["virtual machine", "virtual machines", "vm", "management ports", "rdp", "ssh"]):
+        return "Virtual Machine"
+    if any(k in t for k in ["key vault", "keyvault", "secret", "secrets", "keys"]):
+        return "Key Vault"
+    if any(k in t for k in ["cosmos db", "cosmosdb"]):
+        return "Cosmos DB"
+
+    # AWS/GCP common services
+    if any(k in t for k in ["s3", "amazon s3"]):
+        return "S3"
+    if any(k in t for k in ["rds", "aurora"]):
+        return "RDS"
+    if any(k in t for k in ["ec2", "elastic compute cloud"]):
+        return "EC2"
+    if any(k in t for k in ["iam", "identity and access management"]):
+        return "IAM"
+    if any(k in t for k in ["kms", "key management service"]):
+        return "KMS"
+    if any(k in t for k in ["eks"]):
+        return "EKS"
+
+    if any(k in t for k in ["cloud sql"]):
+        return "Cloud SQL"
+    if any(k in t for k in ["gke"]):
+        return "GKE"
+    if any(k in t for k in ["cloud run"]):
+        return "Cloud Run"
+    if any(k in t for k in ["artifact registry"]):
+        return "Artifact Registry"
+    if any(k in t for k in ["storage account", "storage accounts", "blob", "shared key", "secure transfer"]):
+        return "Storage Account"
+    if any(k in t for k in ["sql", "tde", "postgresql", "mysql", "mariadb"]):
+        return "Database"
+    if any(k in t for k in ["kubernetes", "aks"]):
+        return "Kubernetes"
+    if any(k in t for k in ["container registry", "acr", "image registry"]):
+        return "Container Registry"
+    if any(k in t for k in ["app service", "web app", "function app"]):
+        return "App Service"
+    if any(k in t for k in ["api management"]):
+        return "API Management"
+    if any(k in t for k in ["application gateway", "waf"]):
+        return "Application Gateway"
+    if any(k in t for k in ["nsg", "network security group", "vnet", "virtual network", "ddos", "flow logs", "network watcher", "azure firewall"]):
+        return "Networking"
+    if any(k in t for k in ["entra", "mfa", "owner", "rbac", "privilege", "permissions", "role"]):
+        return "Identity & Access"
+
+    # Fallback: try to extract a service-like phrase from common cloud wording.
+    # Example: "Azure Cosmos DB should ..." -> "Cosmos DB".
+    m = re.search(r"\b(?:azure|aws|gcp)\s+(.+?)\s+(should|must)\b", title, flags=re.IGNORECASE)
+    if m:
+        svc = re.sub(r"\s+", " ", m.group(1)).strip(" .:-")
+        if svc:
+            return svc
+
+    return "Cloud"
 
 
 def _normalise_issue_key(issue: str) -> str:
@@ -264,17 +316,70 @@ def _normalise_issue_key(issue: str) -> str:
     return s
 
 
+def _warn_on_missed_service_classification(title: str, resource_type: str) -> None:
+    # Non-fatal guardrail: if a finding title clearly names a service but we fell back to "Cloud",
+    # emit a warning so the mapping can be improved.
+    t = title.lower()
+    candidates = [
+        ("cosmos db", "Cosmos DB"),
+        ("cosmosdb", "Cosmos DB"),
+        ("aws ", "AWS service"),
+        ("gcp ", "GCP service"),
+    ]
+    for needle, expected in candidates:
+        if needle in t and resource_type == "Cloud":
+            print(
+                f"WARN: Risk register Resource Type fell back to 'Cloud' but title contains '{expected}': {title}",
+                file=sys.stderr,
+            )
+
+
+def _is_repo_finding(path: Path) -> bool:
+    parts = {p.lower() for p in path.parts}
+    return "findings" in parts and "repo" in parts
+
+
+def _repo_issue_from_summary(title: str, summary: str) -> str:
+    # Repo finding titles are often just the repo name, so use the summary to build an exec-facing issue.
+    repo = re.sub(r"^repo\s+", "", title.strip(), flags=re.IGNORECASE).strip() or title.strip()
+
+    # Split into sentences; prefer one that signals risk (risk/secret/exposure/supply-chain).
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", summary.strip()) if s.strip()]
+    pick = sentences[0] if sentences else summary.strip()
+    for s in sentences[:3]:
+        if re.search(r"\brisk\b|secret|expos|supply[- ]chain|pipeline|state", s, flags=re.IGNORECASE):
+            pick = s
+            break
+
+    pick = re.sub(r"^this repo\b\s*", "", pick, flags=re.IGNORECASE).strip()
+    pick = pick.rstrip(".")
+    return f"Repo {repo}: {pick}".strip()
+
+
 def build_rows() -> list[RiskRow]:
     rows: list[RiskRow] = []
     for path in iter_finding_files():
         lines = path.read_text(encoding="utf-8").splitlines()
         title = parse_title(lines, path)
-        issue = parse_issue(title)
         severity, score = parse_overall_score(lines, path)
         summary = parse_summary(lines, path)
+
+        if _is_repo_finding(path):
+            issue = _repo_issue_from_summary(title, summary)
+        else:
+            issue = parse_issue(title)
+
         impact = to_business_impact(summary, issue)
         exec_issue = to_exec_risk_issue(issue, impact)
-        resource_type = resource_type_from_name(path.stem)
+        resource_type = resource_type_from_path(path, title)
+        _warn_on_missed_service_classification(title, resource_type)
+
+        if _is_repo_finding(path) and re.fullmatch(r"Repo\s+[^:]+", issue, flags=re.IGNORECASE):
+            print(
+                f"WARN: Repo finding Issue is too generic (check ### Summary): {path.relative_to(ROOT)}",
+                file=sys.stderr,
+            )
+
         rows.append(
             RiskRow(
                 priority=0,
