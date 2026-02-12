@@ -26,10 +26,14 @@ flowchart TB
 - **Repo path:** <absolute local path>
 - **Repo URL (if applicable):** <url or N/A>
 - **Scan scope:** SAST / dependency (SCA) / secrets / IaC / All
-- **Primary tech:** <Terraform/Go/Node/etc>
+- **Languages/frameworks detected:** <e.g., Terraform, Go, Node.js (Express), Python (Django), .NET, Java (Spring), etc>
+- **Evidence for detection:** <key files e.g., go.mod, package.json, pom.xml, requirements.txt, *.tf>
 - **CI/CD:** <Azure Pipelines/GitHub Actions/etc>
 
 ## 🛡️ Security Review
+### Languages & Frameworks (extracted)
+- <language/framework> — evidence: `<path>`
+
 ### Summary
 <short summary of material risks>
 
