@@ -3,6 +3,8 @@ Intake/
 Intake/Cloud/
 Instake/Code/
 
+Audit/*
+
 # Keep the instructions and ignore rules
 !.gitignore
 !README.md
