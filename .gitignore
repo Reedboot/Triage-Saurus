@@ -17,4 +17,4 @@ Summary/*
 !README.md
 !/.gitkeep
 
-__pycache__
+*/__pycache__/*
