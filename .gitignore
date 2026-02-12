@@ -4,6 +4,7 @@ Intake/Cloud/
 Instake/Code/
 
 Audit/*
+Findings/*
 
 # Keep the instructions and ignore rules
 !.gitignore
