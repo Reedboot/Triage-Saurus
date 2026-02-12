@@ -9,6 +9,9 @@ Findings/Cloud/*
 Findings/Code/*
 Findings/Repo/*
 
+Knowledge/*
+Summary/*
+
 # Keep the instructions and ignore rules
 !.gitignore
 !README.md
