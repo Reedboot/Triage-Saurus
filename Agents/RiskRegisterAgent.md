@@ -26,6 +26,7 @@ python3 Skills/risk_register.py
   include countermeasures or implementation detail.
 - The **Issue** column is written in exec-friendly phrasing and should not start with "Risk:".
 - Duplicate Issues are de-duplicated (keeping the highest-scoring entry) to avoid noisy repeats.
+  - Note: this is a *presentation* de-dupe; bulk finding generation should also avoid creating duplicate findings.
 - The spreadsheet header row is styled (blue) for readability; keep the content concise and
   board-friendly.
 - Ensure findings are well-formed before generating.
