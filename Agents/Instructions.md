@@ -22,6 +22,9 @@ This repository supports consistent security triage. The expected workflow is:
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
+- If triage type is **Cloud** and the provider is not explicit from the folder path, quickly skim the intake titles and:
+  - if they strongly indicate a provider, state it plainly (e.g., “From looking at the items to triage, it looks like you are using Azure.”)
+  - then ask a single confirmation question prefixed with `❓` and choices: `Yes (Azure)` / `AWS` / `GCP` / `Don’t know` (freeform allowed for other).
 - Follow `Settings/Styling.md` for formatting rules.
   - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
     not inline-code backticks.
