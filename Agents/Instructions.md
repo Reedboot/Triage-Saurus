@@ -16,6 +16,9 @@ This repository supports consistent security triage. The expected workflow is:
   - **How to check `Knowledge/`:** prefer the repo helper script (stdout-only):
     - `python3 Skills/scan_knowledge_refinement.py`
     It lists Markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`) and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
+  - **How to enumerate `Intake/` files:** prefer the repo helper script (stdout-only):
+    - `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
+    It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
