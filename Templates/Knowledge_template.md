@@ -53,7 +53,7 @@ Record how services depend on each other so compounding issues are easier to spo
 ## ✅ Known Good Baselines
 - <Short bullet list of “this is already in place” controls that reduce risk>
 
-## ⚠️ Known Exceptions / Risk Acceptances
+## 🚩 Known Exceptions / Risk Acceptances
 - <Exception + rationale + scope>
 
 ## ❓ Open Questions
