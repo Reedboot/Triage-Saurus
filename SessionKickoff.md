@@ -20,7 +20,8 @@ First, check whether `Knowledge/` contains outstanding items under `## Unknowns`
 Then ask me to:
 - **copy/paste a single issue** to triage, or
 - **provide a path under `Intake/`** to process in bulk, or
-- **import and triage the sample findings**.
+- **import and triage the sample findings**, or
+- **scan a repo**.
 
 - Example bulk paths in this repo:
   - `Intake/Cloud` (your cloud findings)
@@ -34,9 +35,11 @@ Before asking any cloud-provider questions:
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan:
-  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask the user for their root repos folder.
-  - Keep track of scanned repos in `Knowledge/Repos.md`; if the same repo is requested again, ask the user to confirm re-scan vs reuse.
-  - Ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
+  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask: **"I don’t currently know the root directory for your repos."**
+  - Record the repo root path(s) in `Knowledge/Repos.md`.
+  - Then ask which directory within that root should be scanned (or confirm the current repo).
+  - Ask for language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
+  - If the same repo is requested again, ask the user to confirm re-scan vs reuse.
   - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
   - During repo scans, extract:
     - cloud resources/services deployed or referenced (IaC + config),
@@ -46,7 +49,7 @@ Before asking any cloud-provider questions:
       - For Dockerfiles, capture both the **dev/local image** and the **shipping/runtime base image** (often multi-stage builds with multiple `FROM` lines; the later stages are commonly the shipped service base).
   - It is OK to list dependencies/modules (including private/internal module repos). If a dependency/module points to another company repo, ask the user to provide that repo next for better context.
   - When you discover CI/CD (pipelines, runners, deploy scripts), it is OK to ask clarification questions about where secrets are stored and how CI/CD authenticates/connects to the target environment.
-  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal (prod/staging/dev overrides) and ask which environments are in-scope for the current scan/triage.
+  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal, but **do not** ask about environment tiers during the repo scan itself. Instead, record it in `Knowledge/` as an **Assumption** and defer any environment-scope questions until the user starts cloud triage (or explicitly requests environment scoping).
   - It’s OK to include code/config **evidence snippets** with **file path + line numbers** in the repo finding.
   - Promote reusable context from repo scan into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
