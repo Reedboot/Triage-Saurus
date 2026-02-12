@@ -252,6 +252,12 @@ def resource_type_from_path(path: Path, title: str) -> str:
         return "Key Vault"
     if any(k in t for k in ["cosmos db", "cosmosdb"]):
         return "Cosmos DB"
+    if any(k in t for k in ["azure data explorer", "kusto"]):
+        return "Azure Data Explorer"
+    if any(k in t for k in ["microsoft foundry", "foundry"]):
+        return "Microsoft Foundry"
+    if any(k in t for k in ["service fabric"]):
+        return "Service Fabric"
 
     # AWS/GCP common services
     if any(k in t for k in ["s3", "amazon s3"]):
@@ -323,6 +329,9 @@ def _warn_on_missed_service_classification(title: str, resource_type: str) -> No
     candidates = [
         ("cosmos db", "Cosmos DB"),
         ("cosmosdb", "Cosmos DB"),
+        ("azure data explorer", "Azure Data Explorer"),
+        ("microsoft foundry", "Microsoft Foundry"),
+        ("service fabric", "Service Fabric"),
         ("aws ", "AWS service"),
         ("gcp ", "GCP service"),
     ]
