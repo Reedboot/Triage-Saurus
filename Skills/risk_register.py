@@ -6,7 +6,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import os
 from zipfile import ZipFile, ZIP_DEFLATED
+
+# Header fill colour (Excel ARGB): FF1F4E79 (dark blue)
 
 ROOT = Path(__file__).resolve().parents[1]
 FINDINGS_DIR = ROOT / "Findings"
@@ -77,6 +80,12 @@ def parse_title(lines: list[str], path: Path) -> str:
 def parse_issue(title: str) -> str:
     # Strip leading ID tokens such as AZ-003, Az-003, AKS-01, A01.
     cleaned = re.sub(r"^[A-Za-z]{1,3}-?\\d+\\s+", "", title).strip()
+
+    # Keep the Issue close to the finding title, but drop inline config/value noise.
+    cleaned = re.sub(r"\s*\([^)]*\)", "", cleaned).strip()  # remove parenthetical details
+    cleaned = re.sub(r"\s*\.\s*and\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
     return cleaned or title
 
 
@@ -108,15 +117,107 @@ def parse_summary(lines: list[str], path: Path) -> str:
     return summary
 
 
-def to_business_impact(summary: str) -> str:
-    impact = summary
+def _classify_business_impact(text: str) -> str:
+    t = text.lower()
+
+    # Ordered from most-specific to most-general.
+    if any(k in t for k in ["ddos", "denial of service", "dos"]):
+        return "Denial of service."
+
+    if any(k in t for k in ["bypass", "authentication", "auth", "mfa", "entra authentication only", "active directory only"]):
+        return "Bypass of authentication."
+
+    if any(k in t for k in ["owner", "rbac", "privilege", "privileged", "admin", "permissions", "role"]):
+        return "Unauthorised access to critical systems."
+
+    if any(k in t for k in ["audit", "logging", "logs", "activity log", "alert", "retention", "monitor", "defender", "edr"]):
+        return "Difficulty tracing actions."
+
+    if any(k in t for k in [
+        "public network access",
+        "public access",
+        "anonymous",
+        "storage",
+        "blob",
+        "bucket",
+        "key vault",
+        "secret",
+        "keys",
+        "certificate",
+        "encryption",
+        "tls",
+        "tde",
+        "secure transfer",
+        "backup",
+        "recovery",
+    ]):
+        return "Data loss or exposure."
+
+    if any(k in t for k in ["management ports", "ssh", "rdp", "internet facing", "public ip", "open ports", "nsg", "firewall rule"]):
+        return "Increased attack surface."
+
+    return "Increased security risk."
+
+
+def to_business_impact(summary: str, issue: str) -> str:
+    # Business Impact is a single short, management-friendly sentence.
+    base = "" if "draft finding generated from a title-only input" in summary.lower() else summary.strip()
+
     for term, replacement in ACRONYM_REPLACEMENTS.items():
-        impact = impact.replace(term, replacement)
-    # Keep impact short and board-friendly.
-    impact = impact.split(".")[0].strip()
-    if "public network access" in impact.lower():
-        impact = "Public access raises the risk of unauthorised secrets access"
-    return impact
+        base = base.replace(term, replacement)
+
+    base = re.sub(r"\*\*", "", base)
+    base = base.replace("`", "")
+    base = re.sub(r"^if not addressed\s*[,:\-]?\s*", "", base, flags=re.IGNORECASE)
+
+    # Classify using both issue + optional summary context, but output only the label.
+    return _classify_business_impact(f"{issue}\n{base}")
+
+
+def to_exec_risk_issue(issue: str, impact_label: str) -> str:
+    # Exec-friendly risk phrasing + a very brief "why".
+    s = issue.strip().rstrip(".")
+
+    # Heuristic rewrites from compliance wording ("should …") into a risk statement.
+    rules: list[tuple[str, str]] = [
+        (r"\bshould be enabled\b", "is not enabled"),
+        (r"\bshould be disabled\b", "is enabled"),
+        (r"\bshould be disallowed\b", "is allowed"),
+        (r"\bshould disable\b", "does not disable"),
+        (r"\bshould not allow\b", "allows"),
+        (r"\bshould not be\b", "is"),
+        (r"\bshould have\b", "does not have"),
+        (r"\bshould use only\b", "does not enforce"),
+        (r"\bshould use\b", "does not use"),
+        (r"\bshould prevent\b", "does not prevent"),
+        (r"\bshould be restricted\b", "is not restricted"),
+        (r"\bshould be stored\b", "is not stored"),
+        (r"\bshould be retained\b", "is not retained"),
+        (r"\bshould exist\b", "is missing"),
+        (r"\bshould be\b", "is not"),
+    ]
+    for pat, repl in rules:
+        s = re.sub(pat, repl, s, flags=re.IGNORECASE)
+
+    if re.search(r"\bshould\b", s, flags=re.IGNORECASE):
+        s = re.sub(r"\bshould\b", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s+", " ", s).strip()
+
+    why = {
+        "Increased attack surface.": "creates an internet-reachable entry point",
+        "Data loss or exposure.": "raises likelihood of data exposure",
+        "Bypass of authentication.": "weakens access controls",
+        "Unauthorised access to critical systems.": "enables privilege misuse",
+        "Difficulty tracing actions.": "reduces auditability",
+        "Denial of service.": "can disrupt service availability",
+    }.get(impact_label, "indicates a control gap")
+
+    out = f"Risk: {s} — {why}."
+    out = out.replace(" ports is ", " ports are ")
+    out = out.replace(" virtual machines is ", " virtual machines are ")
+    out = out.replace(" registries allows ", " registries allow ")
+    out = re.sub(r"\s+", " ", out)
+    return out
 
 
 def resource_type_from_name(name: str) -> str:
@@ -146,13 +247,14 @@ def build_rows() -> list[RiskRow]:
         issue = parse_issue(title)
         severity, score = parse_overall_score(lines, path)
         summary = parse_summary(lines, path)
-        impact = to_business_impact(summary)
+        impact = to_business_impact(summary, issue)
+        exec_issue = to_exec_risk_issue(issue, impact)
         resource_type = resource_type_from_name(path.stem)
         rows.append(
             RiskRow(
                 priority=0,
                 resource_type=resource_type,
-                issue=issue,
+                issue=exec_issue,
                 risk_score=score,
                 overall_severity=severity,
                 business_impact=impact,
@@ -226,7 +328,7 @@ def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
         "File Reference",
     ]
 
-    header_cells = "".join(cell(shared_index, h, style=1) for h in headers)
+    header_cells = "".join(cell(shared_index, h, style=2) for h in headers)
     header_row = f"<row r=\"1\">{header_cells}</row>"
 
     data_rows = []
@@ -273,7 +375,7 @@ def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
 def build_styles_xml() -> str:
     return """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">
-  <fonts count=\"2\">
+  <fonts count=\"3\">
     <font>
       <sz val=\"11\"/>
       <color theme=\"1\"/>
@@ -287,10 +389,26 @@ def build_styles_xml() -> str:
       <name val=\"Calibri\"/>
       <family val=\"2\"/>
     </font>
+    <font>
+      <b/>
+      <sz val=\"11\"/>
+      <color rgb=\"FFFFFFFF\"/>
+      <name val=\"Calibri\"/>
+      <family val=\"2\"/>
+    </font>
   </fonts>
-  <fills count=\"1\">
+  <fills count=\"3\">
     <fill>
       <patternFill patternType=\"none\"/>
+    </fill>
+    <fill>
+      <patternFill patternType=\"gray125\"/>
+    </fill>
+    <fill>
+      <patternFill patternType=\"solid\">
+        <fgColor rgb=\"FF1F4E79\"/>
+        <bgColor rgb=\"FF1F4E79\"/>
+      </patternFill>
     </fill>
   </fills>
   <borders count=\"1\">
@@ -301,9 +419,12 @@ def build_styles_xml() -> str:
   <cellStyleXfs count=\"1\">
     <xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/>
   </cellStyleXfs>
-  <cellXfs count=\"2\">
+  <cellXfs count=\"3\">
     <xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>
     <xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>
+    <xf numFmtId=\"0\" fontId=\"2\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\">
+      <alignment horizontal=\"center\" vertical=\"center\"/>
+    </xf>
   </cellXfs>
 </styleSheet>
 """
@@ -373,7 +494,9 @@ def write_xlsx(rows: list[RiskRow], output_path: Path) -> None:
     strings, index = build_shared_strings(rows, headers)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with ZipFile(output_path, "w", ZIP_DEFLATED) as zf:
+
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with ZipFile(tmp_path, "w", ZIP_DEFLATED) as zf:
         zf.writestr("[Content_Types].xml", build_content_types_xml())
         zf.writestr("_rels/.rels", build_root_rels_xml())
         zf.writestr("xl/workbook.xml", build_workbook_xml())
@@ -381,6 +504,14 @@ def write_xlsx(rows: list[RiskRow], output_path: Path) -> None:
         zf.writestr("xl/styles.xml", build_styles_xml())
         zf.writestr("xl/sharedStrings.xml", build_shared_strings_xml(strings))
         zf.writestr("xl/worksheets/sheet1.xml", build_sheet_xml(rows, index))
+
+    try:
+        os.replace(tmp_path, output_path)
+    except PermissionError:
+        # Common when the spreadsheet is open/locked by another process.
+        alt = output_path.with_name(output_path.stem + " (new)" + output_path.suffix)
+        os.replace(tmp_path, alt)
+        print(f"WARNING: {output_path} is locked; wrote updated file to {alt}", file=sys.stderr)
 
 
 def main() -> int:
