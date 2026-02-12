@@ -13,7 +13,9 @@ This repository supports consistent security triage. The expected workflow is:
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
-  - **How to check `Knowledge/`:** list markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`, not only subfolders). Avoid relying on recursive glob patterns (they’re not consistently supported across all environments); prefer a filesystem listing (e.g., `find Knowledge -type f -name '*.md'`) and then search those files for headings `## Unknowns` and `## ❓ Open Questions` and treat any non-empty section as outstanding.
+  - **How to check `Knowledge/`:** prefer the repo helper script (stdout-only):
+    - `python3 Skills/scan_knowledge_refinement.py`
+    It lists Markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`) and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
@@ -95,9 +97,22 @@ This repository supports consistent security triage. The expected workflow is:
   - Prefer reusable environment knowledge (services in use, guardrails, identity
     model, network defaults, dependencies/modules) over one-off resource IDs.
   - It is OK to list dependencies/modules (including private/internal module repos).
-  - If a repo scan finds **Terraform module usage** and the module source points to a repo/path that is **not already recorded in `Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan that module repo next to increase context/accuracy.
-    - If the module source is a remote URL (e.g., Azure DevOps/GitHub) or otherwise not obviously local, first ask the user for the **local path** to the module repo (or confirmation that it exists under a known repo root) before attempting any scan.
-    - Use `python3 Skills/scan_repo_quick.py` for the initial scan of that module repo too.
+  - If a repo scan finds **Terraform module usage**, automatically:
+    1) extract all Terraform `module` blocks and their `source` values,
+    2) classify each as **local path**, **known local repo**, **unknown local repo**, **remote git URL**, or **Terraform Registry module** (format these as `https://registry.terraform.io/modules/<namespace>/<name>/<provider>` and include version if pinned),
+    3) scan any **local-path** modules immediately,
+    4) for any module repo/path that is **not already recorded in `Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
+       - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
+       - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
+       - use `python3 Skills/scan_repo_quick.py` for the initial scan.
+    5) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
+  - **Terraform module value resolution:** when reviewing Terraform code that calls modules, do not assume a variable/output implies insecure behaviour in the root module.
+    - Example: a variable named `secret` or an output named `client_secret` may be passed into a module that stores it in Key Vault and only returns a reference/ID.
+    - Rule: if a repo uses modules, treat security-relevant intent (secrets handling, network exposure defaults, RBAC) as **potentially hidden inside modules**; prioritise scanning the module code before drawing conclusions.
+    - If the module source is not locally available, ask the user for the local path (per the module discovery rules) so you can confirm how values are actually handled.
+    - If you have **reasonable suspicion** (e.g., an output/variable appears secret-like, a pipeline consumes a value as a secret, or a resource suggests public exposure) and you cannot confirm intent from available code, it is OK to:
+      - ask a single `❓` confirmation question, and/or
+      - add a short **"Follow-up task for repo owners"** bullet in the repo finding describing what to verify (and where).
   - If a dependency/module points to another company repo (e.g., Terraform modules), ask the user to provide that repo next for better context.
   - For Dockerfiles, capture both the **dev/local image** and the **shipping/runtime base image** (often multi-stage builds with multiple `FROM` lines; the later stages are commonly the shipped service base).
   - When you discover CI/CD (pipelines, runners, deploy scripts), it is OK to ask clarification questions about:
@@ -125,6 +140,7 @@ This repository supports consistent security triage. The expected workflow is:
   - what it does,
   - what files it will write/change,
   - why it’s necessary now.
+  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Skills/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
 
