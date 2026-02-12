@@ -35,8 +35,9 @@ Before asking any cloud-provider questions:
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
 - If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan:
-  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask: **"I don’t currently know the root directory for your repos."**
-  - Record the repo root path(s) in `Knowledge/Repos.md`.
+  - First check `Knowledge/Repos.md` for known repo root path(s).
+    - If it **does not exist** or has no repo roots recorded, ask: **"I don’t currently know the root directory for your repos."**
+    - If the user provides one, create/update `Knowledge/Repos.md` and record the repo root path(s).
   - Then ask which directory within that root should be scanned (or confirm the current repo).
   - **Do not ask for language/ecosystem up-front** — infer languages/frameworks from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - Ask for the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
