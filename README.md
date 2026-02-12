@@ -26,7 +26,9 @@ Before asking any cloud-provider questions:
   - During repo scans, extract:
     - cloud resources/services deployed or referenced (IaC + config),
     - service dependencies (DBs, queues, logs/telemetry, APIs) from connection strings/config,
-    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles) including base images (`FROM ...`).
+    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles).
+      - For Dockerfiles, capture both the dev/local image and the shipping/runtime base image (multi-stage builds may have multiple `FROM` lines; later stages are commonly the shipped service base).
+    - As CI/CD is discovered, ask where secrets are stored and how CI/CD authenticates/connects to the target environment.
   - It’s OK to include code/config **evidence snippets** with **file path + line numbers** in the repo finding.
   - Promote reusable context from repo scan into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
@@ -57,7 +59,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 2. Provide a scanner issue to triage; the agent will confirm cloud provider or
    context as needed.
 3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Summary/`.
-4. After any finding changes, the agent may regenerate
+4. After any finding changes, the agent **regenerates**
    `Summary/Risk Register.xlsx` using `Skills/risk_register.py` (explain why before running).
 
 > Note: By default, artifacts under `Findings/`, `Knowledge/`, and `Summary/`
