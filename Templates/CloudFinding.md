@@ -32,7 +32,7 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 
 ## 🛡️ Security Review
 ### Summary
-<summary>
+<brief business impact summary: what it means to the business if this isn’t fixed>
 
 ### Applicability
 - **Status:** Yes / No / Don’t know
