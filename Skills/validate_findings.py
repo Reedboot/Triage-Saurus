@@ -92,7 +92,7 @@ def validate_cloud_summary(path: Path) -> list[Problem]:
         probs.append(Problem(path, "ERROR", "Summary uses backticked finding paths; use markdown links instead"))
 
     # Soft structure checks.
-    for h in ["## 🧭 Overview", "## ⚠️ Risk", "## ✅ Actions", "## 📌 Findings"]:
+    for h in ["## 🧭 Overview", "## 🚩 Risk", "## ✅ Actions", "## 📌 Findings"]:
         if h not in text:
             probs.append(Problem(path, "WARN", f"Missing heading: {h}"))
 
