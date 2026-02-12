@@ -1,46 +1,10 @@
 # 🦖 Triage-Saurus
 
 Read `AGENTS.md` first for repository-specific agent instructions.
-To initialise a session, copy and paste this prompt:
-```text
-Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
 
-First, check whether `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions` (treat these as **refinement questions** in the UI).
-- If yes: ask whether to **resume answering those now** (or proceed to new triage).
-
-Then ask me to either **copy/paste the issue** to triage or **provide a path under `Intake/`** to process in bulk.
-- Example bulk paths in this repo:
-  - `Intake/Cloud` (your cloud findings)
-  - `Intake/Code` (your code findings)
-  - `Intake/Sample/Cloud` (copy from `Sample Findings/Cloud` first)
-  - `Intake/Sample/Code` (copy from `Sample Findings/Code` first)
-Before asking any cloud-provider questions:
-- If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
-- Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
-- If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
-- If Code/Repo scan:
-  - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask the user for their root repos folder.
-  - Keep track of scanned repos in `Knowledge/Repos.md`; if the same repo is requested again, ask the user to confirm re-scan vs reuse.
-  - Ask for the repo path (or confirm current repo), language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
-  - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
-  - During repo scans, extract:
-    - cloud resources/services deployed or referenced (IaC + config),
-    - service dependencies (DBs, queues, logs/telemetry, APIs) from connection strings/config,
-    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles).
-      - For Dockerfiles, capture both the dev/local image and the shipping/runtime base image (multi-stage builds may have multiple `FROM` lines; later stages are commonly the shipped service base).
-    - As CI/CD is discovered, ask where secrets are stored and how CI/CD authenticates/connects to the target environment.
-  - It’s OK to include code/config **evidence snippets** with **file path + line numbers** in the repo finding.
-  - Promote reusable context from repo scan into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
-
-As each kickoff question is answered, check whether it adds new context vs existing `Knowledge/`.
-- If it’s new: record it in `Knowledge/` as **Confirmed** (with timestamp).
-- If it’s already captured: don’t duplicate.
-
-After bulk triage (or whenever assumptions accumulate), ask follow-up assumption-confirmation questions **one at a time** (prefix with `❓`).
-- Ask cross-cutting questions once (e.g., Private Endpoints used anywhere) rather than repeating per-service.
-- On answer: update `Knowledge/` and append an `Audit/` entry.
-```
-The same prompt is also saved in `SessionKickoff.md`.
+## Session kick-off
+- In your CLI, type `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
+- Then provide either a single issue to triage (paste into chat) or a bulk path under `Intake/`.
 
 ## Purpose
 This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
@@ -90,6 +54,8 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 **Tools**
 - **Python:** `python3` is required to run:
   - `Skills/risk_register.py` (generate `Summary/Risk Register.xlsx`)
+  - `Skills/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
+  - `Skills/validate_findings.py` (validate finding + summary formatting)
   - `Skills/clear_session.py` (delete per-session artifacts under `Findings/`, `Knowledge/`, `Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
   - Optional helper: `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
