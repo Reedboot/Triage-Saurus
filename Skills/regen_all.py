@@ -50,7 +50,7 @@ def main() -> int:
 
     ts: str
     try:
-        from Skills.generate_findings_from_titles import now_uk, update_service_summaries
+        from generate_findings_from_titles import now_uk, update_service_summaries
     except Exception as e:  # pragma: no cover
         raise SystemExit(f"Unable to load summary generator: {e}")
 
@@ -66,7 +66,7 @@ def main() -> int:
 
     if not args.no_risk_register:
         try:
-            from Skills.risk_register import main as rr_main
+            from risk_register import main as rr_main
         except Exception as e:  # pragma: no cover
             raise SystemExit(f"Unable to load risk register generator: {e}")
 
