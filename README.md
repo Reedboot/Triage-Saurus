@@ -5,6 +5,7 @@ Read `AGENTS.md` first for repository-specific agent instructions.
 ## Session kick-off
 - In your CLI, type `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
 - Then provide either a single issue to triage (paste into chat) or a bulk path under `Intake/`.
+- Bulk import note: `Skills/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
 
 ## Purpose
 This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
