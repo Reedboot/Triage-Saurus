@@ -16,6 +16,7 @@ This repository supports consistent security triage. The expected workflow is:
   - **How to check `Knowledge/`:** list markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`, not only subfolders). Avoid relying on recursive glob patterns (they’re not consistently supported across all environments); prefer a filesystem listing (e.g., `find Knowledge -type f -name '*.md'`) and then search those files for headings `## Unknowns` and `## ❓ Open Questions` and treat any non-empty section as outstanding.
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
+- After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
 - Follow `Settings/Styling.md` for formatting rules.
   - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
     not inline-code backticks.
@@ -55,7 +56,9 @@ This repository supports consistent security triage. The expected workflow is:
 - **Audit log size:** for bulk title imports, prefer an audit summary (count + source
   file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
-- **Repo scans:** first check `Knowledge/Repos.md` for known repo root path(s).
+- **Repo scans:**
+  - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - First check `Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory** (e.g., parent folder of the current repo) and ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
   - If the user confirms or provides an alternative, persist it into `Knowledge/Repos.md`.
   - **Only after** at least one repo root is recorded (or the user explicitly confirms **"current repo"**), ask which repo/directory under that root should be scanned.
@@ -91,7 +94,11 @@ This repository supports consistent security triage. The expected workflow is:
   - Capture inferred facts as **assumptions** and ask the user to confirm/deny.
   - Prefer reusable environment knowledge (services in use, guardrails, identity
     model, network defaults, dependencies/modules) over one-off resource IDs.
-  - It is OK to list dependencies/modules (including private/internal module repos). If a dependency/module points to another company repo (e.g., Terraform modules), ask the user to provide that repo next for better context.
+  - It is OK to list dependencies/modules (including private/internal module repos).
+  - If a repo scan finds **Terraform module usage** and the module source points to a repo/path that is **not already recorded in `Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan that module repo next to increase context/accuracy.
+    - If the module source is a remote URL (e.g., Azure DevOps/GitHub) or otherwise not obviously local, first ask the user for the **local path** to the module repo (or confirmation that it exists under a known repo root) before attempting any scan.
+    - Use `python3 Skills/scan_repo_quick.py` for the initial scan of that module repo too.
+  - If a dependency/module points to another company repo (e.g., Terraform modules), ask the user to provide that repo next for better context.
   - For Dockerfiles, capture both the **dev/local image** and the **shipping/runtime base image** (often multi-stage builds with multiple `FROM` lines; the later stages are commonly the shipped service base).
   - When you discover CI/CD (pipelines, runners, deploy scripts), it is OK to ask clarification questions about:
     - where secrets are stored (vault vs CI variables vs cloud secret store) and whether they are encrypted/rotated,
