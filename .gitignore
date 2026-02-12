@@ -1,10 +1,15 @@
 # Ignore everything dropped into Intake/
 *
+Intake/Cloud/
+Instake/Code/
 
 # Keep the instructions and ignore rules
 !.gitignore
 !README.md
 !/.gitkeep
+
+# Keep Skills tooling (even though most generated artefacts remain untracked)
+Skills/__init__.py
 
 # Keep subfolder markers (so structure remains visible)
 !Repo/
