@@ -6,7 +6,9 @@ the agent loads the repository instructions before doing any work.
 
 If the user types `sessionkickoff`, the agent should treat it as “run this kickoff”, check whether there are outstanding questions in `Knowledge/` (sections `## Unknowns` / `## ❓ Open Questions`) and refer to them as **refinement questions** in the UI, prompt the user to resume those if desired, and then ask what to triage next (single issue vs bulk `Intake/` path vs importing sample findings).
 
-Note: `Knowledge/` may store provider files at the top-level (e.g., `Knowledge/Azure.md`) as well as subfolders, so the scan must include **all** `Knowledge/**/*.md` plus `Knowledge/*.md`.
+Note: `Knowledge/` may store provider files at the top-level (e.g., `Knowledge/Azure.md`) as well as subfolders.
+To make this reliable across different CLIs/tooling, **do not rely on recursive glob patterns** like `Knowledge/**/*.md`.
+Instead, scan by listing files from the filesystem (e.g., `find Knowledge -type f -name '*.md'`) and then check each file for `## Unknowns` / `## ❓ Open Questions`.
 
 ## Prompt
 ```text
@@ -39,7 +41,12 @@ Before asking any cloud-provider questions:
   - During repo scans, extract:
     - cloud resources/services deployed or referenced (IaC + config),
     - service dependencies (DBs, queues, logs/telemetry, APIs) from connection strings/config,
-    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles) including base images (`FROM ...`).
+    - module/dependency sources (e.g., Terraform modules, internal/shared company repos),
+    - and container/Kubernetes signals (Skaffold/Helm/Dockerfiles).
+      - For Dockerfiles, capture both the **dev/local image** and the **shipping/runtime base image** (often multi-stage builds with multiple `FROM` lines; the later stages are commonly the shipped service base).
+  - It is OK to list dependencies/modules (including private/internal module repos). If a dependency/module points to another company repo, ask the user to provide that repo next for better context.
+  - When you discover CI/CD (pipelines, runners, deploy scripts), it is OK to ask clarification questions about where secrets are stored and how CI/CD authenticates/connects to the target environment.
+  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal (prod/staging/dev overrides) and ask which environments are in-scope for the current scan/triage.
   - It’s OK to include code/config **evidence snippets** with **file path + line numbers** in the repo finding.
   - Promote reusable context from repo scan into `Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
