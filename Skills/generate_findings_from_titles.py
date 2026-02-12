@@ -568,7 +568,7 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
                     f"- **Provider:** {provider.title()}",
                     "- **Scope:** Derived from [Cloud findings](../../Findings/Cloud/)",
                     "",
-                    "## ⚠️ Risk",
+                    "## 🚩 Risk",
                     "Risk is driven by the highest-severity findings for this resource/theme.",
                     "",
                     "## ✅ Actions",
