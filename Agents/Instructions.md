@@ -14,7 +14,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
   - **How to check `Knowledge/`:** list markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`, not only subfolders). Avoid relying on recursive glob patterns (they’re not consistently supported across all environments); prefer a filesystem listing (e.g., `find Knowledge -type f -name '*.md'`) and then search those files for headings `## Unknowns` and `## ❓ Open Questions` and treat any non-empty section as outstanding.
-  - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, prompt the user whether they want to continue answering those now (resume), or proceed to new triage. (In the UI, refer to these as **refinement questions**.)
+  - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
 - Follow `Settings/Styling.md` for formatting rules.
   - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
@@ -55,6 +55,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Audit log size:** for bulk title imports, prefer an audit summary (count + source
   file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
+- **Repo scans:** do not ask the user for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
   - If Cloud + provider is confirmed: immediately update `Summary/Cloud/Architecture_<Provider>.md`.
