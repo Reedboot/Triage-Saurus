@@ -15,12 +15,17 @@ This repository supports consistent security triage. The expected workflow is:
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
   - **How to check `Knowledge/`:** list markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`, not only subfolders). Avoid relying on recursive glob patterns (they’re not consistently supported across all environments); prefer a filesystem listing (e.g., `find Knowledge -type f -name '*.md'`) and then search those files for headings `## Unknowns` and `## ❓ Open Questions` and treat any non-empty section as outstanding.
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, prompt the user whether they want to continue answering those now (resume), or proceed to new triage. (In the UI, refer to these as **refinement questions**.)
-  - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, or **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`).
+  - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
 - Follow `Settings/Styling.md` for formatting rules.
   - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
     not inline-code backticks.
 - At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
+- **UK spelling in user-facing questions:** use UK English (e.g., *prioritise, assess, organisation*).
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
+- For **info-gathering / refinement** questions, avoid broad prompts (e.g., “Do you have internet-facing workloads?”). Instead:
+  - briefly state the purpose (e.g., “To better assess applicability and prioritisation…”), and
+  - ask a bounded, easy-to-answer question (prefer multiple-choice categories such as *public customer-facing*, *mostly private/internal*, *private-only*), and
+  - include **“Don’t know”**.
 - When asking **multiple-choice** questions, always include a **“Don’t know”** option.
 - When asking a triage question:
   - start with `📌 Trigger:` `<finding title>`
@@ -87,7 +92,7 @@ This repository supports consistent security triage. The expected workflow is:
     - where secrets are stored (vault vs CI variables vs cloud secret store) and whether they are encrypted/rotated,
     - how CI/CD authenticates to the target environment (OIDC/workload identity vs long-lived keys/service principals),
     - and how CI/CD reaches the environment (network path, VPN/peering, private endpoints).
-  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal (prod/staging/dev overrides) and ask which environments are in-scope for the current scan/triage.
+  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal, but **do not** ask about environment tiers during the repo scan itself. Record it in `Knowledge/` as an **Assumption** and defer any environment-scope questions until the user starts cloud triage (or explicitly requests environment scoping).
 - When `Knowledge/` is created or updated (including assumptions), **immediately**
   generate or update the provider architecture diagram under `Summary/Cloud/` (e.g.,
   `Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
