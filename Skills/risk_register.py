@@ -175,11 +175,15 @@ def to_business_impact(summary: str, issue: str) -> str:
 
 
 def to_exec_risk_issue(issue: str, impact_label: str) -> str:
-    # Exec-friendly risk phrasing + a very brief "why".
+    # Exec-friendly issue phrasing + a very brief "why".
     s = issue.strip().rstrip(".")
 
     # Heuristic rewrites from compliance wording ("should …") into a risk statement.
     rules: list[tuple[str, str]] = [
+        # Special-case JIT wording: convert "protected with JIT" to a "missing JIT" statement.
+        (r"\bprotected with just[- ]in[- ]time network access control\b", "missing just-in-time access controls (no JIT)"),
+        (r"\bprotected with just[- ]in[- ]time\b", "missing just-in-time access controls (no JIT)"),
+        (r"\bjust[- ]in[- ]time network access control\b", "just-in-time access controls"),
         (r"\bshould be enabled\b", "is not enabled"),
         (r"\bshould be disabled\b", "is enabled"),
         (r"\bshould be disallowed\b", "is allowed"),
@@ -203,16 +207,26 @@ def to_exec_risk_issue(issue: str, impact_label: str) -> str:
         s = re.sub(r"\bshould\b", "", s, flags=re.IGNORECASE)
         s = re.sub(r"\s+", " ", s).strip()
 
-    why = {
-        "Increased attack surface.": "creates an internet-reachable entry point",
-        "Data loss or exposure.": "raises likelihood of data exposure",
-        "Bypass of authentication.": "weakens access controls",
-        "Unauthorised access to critical systems.": "enables privilege misuse",
-        "Difficulty tracing actions.": "reduces auditability",
-        "Denial of service.": "can disrupt service availability",
-    }.get(impact_label, "indicates a control gap")
+    # Slightly tailor "why" for common patterns without turning it into a remediation instruction.
+    if re.search(r"\bno jit\b|\bjust[- ]in[- ]time\b", issue, flags=re.IGNORECASE):
+        why = "misses an opportunity to reduce exposure of management access"
+    else:
+        why = {
+            "Increased attack surface.": "creates an internet-reachable entry point",
+            "Data loss or exposure.": "raises likelihood of data exposure",
+            "Bypass of authentication.": "weakens access controls",
+            "Unauthorised access to critical systems.": "enables privilege misuse",
+            "Difficulty tracing actions.": "reduces auditability",
+            "Denial of service.": "can disrupt service availability",
+        }.get(impact_label, "indicates a control gap")
 
-    out = f"Risk: {s} — {why}."
+    s = s[:1].upper() + s[1:] if s else s
+
+    out = f"{s} — {why}."
+    out = out.replace(" are not missing ", " are missing ")
+    out = out.replace(" is not missing ", " is missing ")
+    out = out.replace(" are not not ", " are not ")
+    out = out.replace(" is not not ", " is not ")
     out = out.replace(" ports is ", " ports are ")
     out = out.replace(" virtual machines is ", " virtual machines are ")
     out = out.replace(" registries allows ", " registries allow ")
@@ -237,6 +251,13 @@ def resource_type_from_name(name: str) -> str:
     if upper.startswith("REPO_"):
         return "Repository"
     return "Application"
+
+
+def _normalise_issue_key(issue: str) -> str:
+    s = issue.strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    s = s.rstrip(".")
+    return s
 
 
 def build_rows() -> list[RiskRow]:
@@ -271,17 +292,29 @@ def build_rows() -> list[RiskRow]:
         )
     )
 
-    prioritised = []
-    for idx, row in enumerate(rows, start=1):
-        prioritised.append(row.__class__(
-            priority=idx,
-            resource_type=row.resource_type,
-            issue=row.issue,
-            risk_score=row.risk_score,
-            overall_severity=row.overall_severity,
-            business_impact=row.business_impact,
-            file_reference=row.file_reference,
-        ))
+    # Remove duplicate Issues (keep the highest-scoring row due to sort order).
+    deduped: list[RiskRow] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = _normalise_issue_key(row.issue)
+        if key in seen:
+            continue
+        deduped.append(row)
+        seen.add(key)
+
+    prioritised: list[RiskRow] = []
+    for idx, row in enumerate(deduped, start=1):
+        prioritised.append(
+            row.__class__(
+                priority=idx,
+                resource_type=row.resource_type,
+                issue=row.issue,
+                risk_score=row.risk_score,
+                overall_severity=row.overall_severity,
+                business_impact=row.business_impact,
+                file_reference=row.file_reference,
+            )
+        )
     return prioritised
 
 
