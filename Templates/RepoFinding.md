@@ -6,9 +6,6 @@ Use this template for **one file per scanned repo** under `Findings/Repo/`.
 ```md
 # 🟣 Repo <repo-name>
 
-- **Description:** Security scan/triage summary for this repository.
-- **Overall Score:** <severity emoji + label> <score>/10
-
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
@@ -22,6 +19,9 @@ flowchart TB
   CI -. secrets scanning .-> Secrets[🛡️ Secret scanning]
 ```
 
+- **Description:** Security scan/triage summary for this repository.
+- **Overall Score:** <severity emoji + label> <score>/10
+
 ## 🧭 Overview
 - **Repo path:** <absolute local path>
 - **Repo URL (if applicable):** <url or N/A>
@@ -34,19 +34,26 @@ flowchart TB
 ### Languages & Frameworks (extracted)
 - <language/framework> — evidence: `<path>`
 
-### Summary
+### 🧾 Summary
 <short summary of material risks>
 
-### Applicability
+### ✅ Applicability
 - **Status:** Yes / No / Don’t know
 - **Evidence:** <what was observed>
 
 ### 🎯 Exploitability
 <how an attacker would realistically leverage issues>
 
-### Findings
-- <bullet list of notable issues or patterns; link to related cloud/code findings if they exist>
-- (Optional) Include supporting **evidence snippets** with `path:line` (or `path:start-end`) so issues are easy to verify.
+### 🚩 Risks
+- <bullet list of notable risks/issues; link to related cloud/code findings if they exist>
+
+### 🔎 Key Evidence (deep dive)
+Mark each deep-dive evidence item as positive/negative:
+- ✅ = observed guardrail / good practice / risk reducer
+- ❌ = observed weakness / insecure default / risk increaser
+
+- ✅ <positive observation> — evidence: `<path:line>`
+- ❌ <negative observation> — evidence: `<path:line>`
 
 ### Follow-up tasks for repo owners (optional)
 - [ ] <what to verify> — evidence/source to check: `<path>`
@@ -82,10 +89,10 @@ Extract downstream dependencies indicated by configuration, e.g.:
 - **Container build artifacts:** <Dockerfile paths>
 - **Base images:** <list of FROM images>
 
-### Recommendations
+### ✅ Recommendations
 - [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
 
-### Rationale
+### 📐 Rationale
 <why the score is what it is>
 
 ## 🤔 Skeptic
@@ -106,5 +113,6 @@ Extract downstream dependencies indicated by configuration, e.g.:
   (use Markdown backlinks, e.g., `Findings/Cloud/Foo.md`)
 
 ## Meta Data
+<!-- Meta Data must remain the final section in the file. -->
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
