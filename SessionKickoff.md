@@ -105,7 +105,7 @@ hardening. Only pause for questions that change scoring/applicability/scope.
 If you have title-only exports in `Intake/` and want to save tokens/time, you may generate draft
 findings in bulk (then refine them one-by-one). Ask the user first because it writes files:
 - `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <intake-path> --out-dir Findings/Cloud --update-knowledge`
-  - Also generates: `Summary/Cloud/*.md` per-service summaries and `Summary/Risk Register.xlsx` (and logs to `Audit/`).
+  - Also generates: `Summary/Cloud/*.md` per-service summaries and `Summary/Risk Register.xlsx` (ExCo/CISO-facing; no team/status columns) (and logs to `Audit/`).
 
 If Cloud + provider is confirmed, immediately create/update:
 - `Knowledge/<Provider>.md`
