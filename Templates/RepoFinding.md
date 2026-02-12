@@ -48,6 +48,9 @@ flowchart TB
 - <bullet list of notable issues or patterns; link to related cloud/code findings if they exist>
 - (Optional) Include supporting **evidence snippets** with `path:line` (or `path:start-end`) so issues are easy to verify.
 
+### Follow-up tasks for repo owners (optional)
+- [ ] <what to verify> — evidence/source to check: `<path>`
+
 ### Cloud Environment Implications
 Capture any **reusable** cloud context inferred from the repo (IaC + app config).
 Promote reusable facts into `Knowledge/` as **Confirmed**/**Assumptions**.
