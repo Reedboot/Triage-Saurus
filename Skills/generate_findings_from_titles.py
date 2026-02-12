@@ -345,6 +345,16 @@ def _parse_title(path: Path) -> str:
     return first[0].lstrip("# ").lstrip("🟣 ").strip()
 
 
+def _link_text_for(path: Path) -> str:
+    # Prefer filename-derived Titlecase (matches repo convention in Summary/).
+    return path.stem.replace("_", " ")
+
+
+def _rel_link_from_summary(rel_finding: str) -> str:
+    # Summary/Cloud/*.md -> ../../Findings/Cloud/*.md
+    return f"../../{rel_finding}"
+
+
 def _summary_mermaid(service: str) -> str:
     if service == "Key Vault":
         return """```mermaid
@@ -476,7 +486,7 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
             ("Cloud Run", ["cloud run", "serverless"]),
         ]
 
-    buckets: dict[str, list[tuple[int, str, str]]] = {name: [] for name, _ in service_buckets}
+    buckets: dict[str, list[tuple[int, str, str, str]]] = {name: [] for name, _ in service_buckets}
 
     for path in sorted(findings_dir.glob("*.md")):
         title = _parse_title(path)
@@ -486,9 +496,10 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
         emoji, label, score = parsed
         text = f"{title} {path.stem}".lower()
         rel = f"Findings/Cloud/{path.name}"
+        link_text = _link_text_for(path)
         for service, kws in service_buckets:
             if any(k in text for k in kws):
-                buckets[service].append((score, f"{emoji} {label} {score}/10", rel))
+                buckets[service].append((score, f"{emoji} {label} {score}/10", rel, link_text))
 
     written: list[Path] = []
     out_dir = ROOT / "Summary" / "Cloud"
@@ -499,40 +510,41 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
         if not rows:
             continue
         rows = sorted(rows, key=lambda x: x[0], reverse=True)
-        top_refs = [r[2] for r in rows[:2]]
+        top_refs = [(r[2], r[3]) for r in rows[:2]]
 
         actions = []
         if service in {"Key Vault", "Storage Accounts", "Azure SQL", "Storage", "Cloud Storage", "RDS", "Cloud SQL"}:
             actions = [
-                f"Restrict network access (private endpoints / firewall) and remove broad exceptions (see `{top_refs[0]}`).",
-                f"Enforce least privilege (RBAC) and require strong identity controls (see `{top_refs[-1]}`).",
+                f"Restrict network access (private endpoints / firewall) and remove broad exceptions (see [{top_refs[0][1]}]({_rel_link_from_summary(top_refs[0][0])})).",
+                f"Enforce least privilege (RBAC) and require strong identity controls (see [{top_refs[-1][1]}]({_rel_link_from_summary(top_refs[-1][0])})).",
                 "Enable monitoring/auditing and alert on anomalous access.",
             ]
         elif service in {"Network", "Virtual Machines"}:
             actions = [
-                f"Remove broad inbound rules and restrict management access via Bastion/JIT (see `{top_refs[0]}`).",
+                f"Remove broad inbound rules and restrict management access via Bastion/JIT (see [{top_refs[0][1]}]({_rel_link_from_summary(top_refs[0][0])})).",
                 "Segment networks and reduce lateral movement paths.",
                 "Enforce baselines with policy-as-code and monitor drift.",
             ]
         elif service == "Identity":
             actions = [
-                f"Enforce MFA/Conditional Access for privileged roles (see `{top_refs[0]}`).",
+                f"Enforce MFA/Conditional Access for privileged roles (see [{top_refs[0][1]}]({_rel_link_from_summary(top_refs[0][0])})).",
                 "Use just-in-time elevation (PIM / role-based workflows) and remove standing privilege.",
                 "Audit privileged assignments and automate offboarding.",
             ]
         else:
             actions = [
-                f"Replace shared/admin credentials with identity-based access (see `{top_refs[0]}`).",
+                f"Replace shared/admin credentials with identity-based access (see [{top_refs[0][1]}]({_rel_link_from_summary(top_refs[0][0])})).",
                 "Harden deployment paths (CI/CD) and monitor for drift.",
             ]
 
         findings_lines = []
-        for score, overall, rel in rows:
+        for score, overall, rel, link_text in rows:
+            link = f"[{link_text}]({_rel_link_from_summary(rel)})"
             m = re.match(r"^(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10$", overall)
             if m:
-                findings_lines.append(f"- {m.group(1)} **{m.group(2)} {m.group(3)}/10:** `{rel}`")
+                findings_lines.append(f"- {m.group(1)} **{m.group(2)} {m.group(3)}/10:** {link}")
             else:
-                findings_lines.append(f"- {overall}: `{rel}`")
+                findings_lines.append(f"- {overall}: {link}")
 
         file_name = service.replace(" ", "_") + ".md"
         out_path = out_dir / file_name
@@ -545,7 +557,7 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
                     "",
                     "## 🧭 Overview",
                     f"- **Provider:** {provider.title()}",
-                    "- **Scope:** Derived from `Findings/Cloud/`",
+                    "- **Scope:** Derived from [Cloud findings](../../Findings/Cloud/)",
                     "",
                     "## ⚠️ Risk",
                     "Risk is driven by the highest-severity findings for this resource/theme.",
