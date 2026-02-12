@@ -17,5 +17,4 @@ Summary/*
 !README.md
 !/.gitkeep
 
-# Keep Skills tooling (even though most generated artefacts remain untracked)
-Skills/__init__.py
+__pycache__
