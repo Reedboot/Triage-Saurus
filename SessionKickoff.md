@@ -12,6 +12,10 @@ Instead, use the repo helper script (stdout-only):
 - `python3 Skills/scan_knowledge_refinement.py`
 It walks the filesystem under `Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
 
+For bulk triage under `Intake/`, enumerate input files using the repo helper script (stdout-only):
+- `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
+It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
+
 ## Prompt
 ```text
 Initialise: read AGENTS.md and Agents/Instructions.md. Then scan Knowledge/ and existing Findings/ for missing context.
