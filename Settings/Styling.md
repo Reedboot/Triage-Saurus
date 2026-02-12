@@ -20,6 +20,10 @@ those tools are added to the repo.
 - **Summary headers:** In `Summary/Cloud/`, use emoji-prefixed headers:
   `## 🧭 Overview`, `## ⚠️ Risk`, `## ✅ Actions`, `## 📌 Findings`. Architecture
   summaries should use `## 📊 Service Risk Order` and `## 📝 Notes`.
+- **Summary backlinks:** When referencing a finding from `Summary/`, use **markdown links**
+  with **human-readable link text** (the finding title), not the file path, e.g.
+  `[Public Network Access On Azure SQL Database Should Be Disabled](../../Findings/Cloud/Public_Network_Access_On_Azure_SQL_Database_Should_Be_Disabled.md)`.
+  Avoid inline code backticks (not reliably clickable).
 - **Exploitability header:** In findings, use `### 🎯 Exploitability`.
 - **Bullet point colon formatting:** In bullet lists, when a line contains a colon (`:`),
   format the text left of the colon in bold. Example:
