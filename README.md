@@ -35,6 +35,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 1. Open a Copilot CLI session in the repository root.
 2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
    - The agent should first check for outstanding items under `Knowledge/` → `## Unknowns` / `## ❓ Open Questions` (present these as **refinement questions** in the UI) and offer to resume those.
+   - If there are no refinement questions and `Knowledge/` is empty (first run), it should greet with: `🦖 Welcome to Triage-Saurus.`
    - Then it should ask what to triage next (single issue vs bulk `Intake/` path).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
