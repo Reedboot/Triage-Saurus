@@ -39,7 +39,9 @@ Then ask me to:
 Before asking any cloud-provider questions:
 - If the user provided a bulk folder path that clearly implies scope (e.g., `Intake/Cloud` or `Intake/Code`), treat that as the triage type.
 - Otherwise, ask what we are triaging (Cloud / Code / Repo scan).
-- If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo); otherwise ask which provider (Azure/AWS/GCP) and then ask targeted context questions (services, environments, networks, pipelines, identities).
+- If Cloud: infer provider when the folder name implies it (e.g., `Intake/Sample/Cloud` = Azure samples in this repo).
+  - If the provider is not explicit from the folder, quickly skim the intake titles; if they strongly indicate a provider, state it plainly (e.g., “From looking at the items to triage, it looks like you are using Azure.”) then ask a single confirmation question prefixed with `❓` and choices: `Yes (Azure)` / `AWS` / `GCP` / `Don’t know` (freeform allowed for other).
+  - Then ask targeted context questions (services, environments, networks, pipelines, identities).
 - If Code/Repo scan:
   - First check `Knowledge/Repos.md` for known repo root path(s).
     - If it **does not exist** or has no repo roots recorded, **suggest a default** based on the current working directory (e.g., parent folder of the current repo) and ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
