@@ -255,6 +255,10 @@ def resource_type_from_name(name: str) -> str:
 
 def _normalise_issue_key(issue: str) -> str:
     s = issue.strip().lower()
+
+    # Treat common Linux "dash" backup files as the same underlying issue (e.g. /etc/shadow-).
+    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
+
     s = re.sub(r"\s+", " ", s)
     s = s.rstrip(".")
     return s
