@@ -6,6 +6,7 @@
 - Focus on risk, exposure, and prioritised remediation themes.
 
 ## Behaviour
+- Follow `Agents/Instructions.md` and `Settings/Styling.md`.
 - Use clear, direct language and UK English spelling.
 - Group findings by distinct resource type and generate one summary per type.
 - Highlight the highest-risk issues first, then cluster related findings.
