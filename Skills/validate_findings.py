@@ -105,6 +105,13 @@ def iter_md_files(folder: Path) -> list[Path]:
     return sorted(p for p in folder.glob("*.md") if p.is_file() and p.name != ".gitkeep")
 
 
+def _dedupe_key(title: str) -> str:
+    s = title.strip().lower()
+    s = re.sub(r"\s+", " ", s).strip().rstrip(".")
+    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
+    return s
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Findings/ and Summary/ formatting")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")
@@ -112,9 +119,26 @@ def main() -> int:
 
     problems: list[Problem] = []
 
+    seen_titles: dict[str, Path] = {}
     for sub in ["Cloud", "Code", "Repo"]:
         for f in iter_md_files(ROOT / "Findings" / sub):
             problems.extend(validate_finding(f, strict=args.strict))
+
+            # Detect duplicate findings by title (common when bulk-importing title-only exports).
+            lines = _read_lines(f)
+            if lines and lines[0].startswith("# "):
+                title = lines[0].lstrip("# ").replace("🟣 ", "").strip()
+                key = _dedupe_key(title)
+                if key in seen_titles:
+                    problems.append(
+                        Problem(
+                            f,
+                            "WARN" if not args.strict else "ERROR",
+                            f"Duplicate finding title (also in {seen_titles[key].relative_to(ROOT)})",
+                        )
+                    )
+                else:
+                    seen_titles[key] = f
 
     for s in iter_md_files(ROOT / "Summary" / "Cloud"):
         problems.extend(validate_cloud_summary(s))
