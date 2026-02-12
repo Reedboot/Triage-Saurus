@@ -45,6 +45,15 @@ def _normalise_title(line: str) -> str:
     return line.strip().lstrip("\ufeff").lstrip("# ").strip()
 
 
+def _dedupe_key(title: str) -> str:
+    # Coarse dedupe for bulk imports: avoid generating multiple findings for the same title.
+    # Keep it conservative: whitespace/case normalisation + common /etc/*- backup patterns.
+    s = _normalise_title(title).lower()
+    s = re.sub(r"\s+", " ", s).strip().rstrip(".")
+    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
+    return s
+
+
 def _titles_from_path(path: Path) -> list[str]:
     """Extract one or more finding titles from an input path."""
 
@@ -627,6 +636,19 @@ def main() -> int:
 
     titles: list[str] = []
     generated = 0
+    skipped_dupes = 0
+
+    seen: set[str] = set()
+    # Prevent re-creating findings we already generated in the output folder.
+    if out_dir.exists():
+        for existing in sorted(out_dir.glob("*.md")):
+            if existing.is_file():
+                try:
+                    first = existing.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+                    if first:
+                        seen.add(_dedupe_key(first[0]))
+                except OSError:
+                    pass
 
     paths: list[Path]
     if in_dir.is_file():
@@ -645,6 +667,12 @@ def main() -> int:
             continue
 
         for title in extracted:
+            key = _dedupe_key(title)
+            if key in seen:
+                skipped_dupes += 1
+                continue
+            seen.add(key)
+
             titles.append(title)
             score = score_for(title)
 
@@ -697,7 +725,10 @@ def main() -> int:
                     ],
                 )
 
-    print(f"Generated {generated} finding(s) into {out_dir}")
+    msg = f"Generated {generated} finding(s) into {out_dir}"
+    if skipped_dupes:
+        msg += f" (skipped {skipped_dupes} duplicate title(s))"
+    print(msg)
     return 0
 
 
