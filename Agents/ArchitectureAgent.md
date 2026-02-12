@@ -7,7 +7,8 @@
 - **Output:** Mermaid diagram in a provider-specific summary file.
 
 ## Behaviour
-- Use UK English spelling and follow `Settings/Styling.md`.
+- Follow `Agents/Instructions.md` and `Settings/Styling.md`.
+- Use UK English spelling.
 - Read the relevant provider file under `Knowledge/` (e.g., `Knowledge/Azure.md`).
 - Infer resource types from services listed under `Knowledge/`.
 - Draw diagrams **from the internet inwards** (request flow / access paths).
