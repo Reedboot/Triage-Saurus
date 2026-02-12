@@ -5,6 +5,9 @@ Instake/Code/
 
 Audit/*
 Findings/*
+Findings/Cloud/*
+Findings/Code/*
+Findings/Repo/*
 
 # Keep the instructions and ignore rules
 !.gitignore
@@ -13,13 +16,3 @@ Findings/*
 
 # Keep Skills tooling (even though most generated artefacts remain untracked)
 Skills/__init__.py
-
-# Keep subfolder markers (so structure remains visible)
-!Repo/
-!Repo/.gitkeep
-!Cloud/
-!Cloud/.gitkeep
-!Code/
-!Code/.gitkeep
-!Sample/
-!Sample/**/.gitkeep
