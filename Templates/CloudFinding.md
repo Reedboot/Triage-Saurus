@@ -27,29 +27,42 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ```md
 # 🟣 <finding-title>
 
+## 🗺️ Architecture Diagram
+```mermaid
+flowchart TB
+  Edge[🌐 Internet / Users] --> Svc[🧩 <cloud service>]
+  Svc --> Data[🗄️ <data store>]
+  Svc --> Logs[📈 Monitoring/Logs]
+
+  Sec[🛡️ Controls] -.-> Svc
+```
+
 - **Description:** <short description>
 - **Overall Score:** <severity emoji + label> <score>/10
 
 ## 🛡️ Security Review
-### Summary
+### 🧾 Summary
 <brief business impact summary: what it means to the business if this isn’t fixed>
 
-### Applicability
+### ✅ Applicability
 - **Status:** Yes / No / Don’t know
 - **Evidence:** <what makes this true/false>
+
+### 🔎 Key Evidence
+- <evidence bullets with `path:line` references>
 
 ### 🎯 Exploitability
 <exploitability>
 
-### Recommendations
+### ✅ Recommendations
 - [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
 
-### Considered Countermeasures
+### 🧰 Considered Countermeasures
 - 🔴 <countermeasure> — <effectiveness note>
 - 🟡 <countermeasure> — <effectiveness note>
 - 🟢 <countermeasure> — <effectiveness note>
 
-### Rationale
+### 📐 Rationale
 <rationale>
 
 ## 🤔 Skeptic
@@ -70,6 +83,7 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
   (use Markdown backlinks, e.g., `Findings/Cloud/Foo.md`)
 
 ## Meta Data
+<!-- Meta Data must remain the final section in the file. -->
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
 
