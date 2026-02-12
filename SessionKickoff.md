@@ -38,7 +38,8 @@ Before asking any cloud-provider questions:
   - First check `Knowledge/Repos.md` for known repo root path(s). If none, ask: **"I don’t currently know the root directory for your repos."**
   - Record the repo root path(s) in `Knowledge/Repos.md`.
   - Then ask which directory within that root should be scanned (or confirm the current repo).
-  - Ask for language/ecosystem, and the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
+  - **Do not ask for language/ecosystem up-front** — infer languages/frameworks from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
+  - Ask for the scanner/source/scope (SAST / dependency (SCA) / secrets / IaC / **All**).
   - If the same repo is requested again, ask the user to confirm re-scan vs reuse.
   - Log repo scans under `Audit/` and output one consolidated finding per repo under `Findings/Repo/`.
   - During repo scans, extract:
