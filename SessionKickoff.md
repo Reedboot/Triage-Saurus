@@ -8,7 +8,9 @@ If the user types `sessionkickoff`, the agent should treat it as “run this kic
 
 Note: `Knowledge/` may store provider files at the top-level (e.g., `Knowledge/Azure.md`) as well as subfolders.
 To make this reliable across different CLIs/tooling, **do not rely on recursive glob patterns** like `Knowledge/**/*.md`.
-Instead, scan by listing files from the filesystem (e.g., `find Knowledge -type f -name '*.md'`) and then check each file for `## Unknowns` / `## ❓ Open Questions`.
+Instead, use the repo helper script (stdout-only):
+- `python3 Skills/scan_knowledge_refinement.py`
+It walks the filesystem under `Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
 
 ## Prompt
 ```text
