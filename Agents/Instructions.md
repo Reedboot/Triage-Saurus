@@ -13,18 +13,33 @@ This repository supports consistent security triage. The expected workflow is:
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
-  - **How to check `Knowledge/`:** prefer the repo helper script (stdout-only):
-    - `python3 Skills/scan_knowledge_refinement.py`
-    It lists Markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`) and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
-  - **How to enumerate `Intake/` files:** prefer the repo helper script (stdout-only):
-    - `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
-    It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
+  - If there are **no findings** under `Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
+  - **Preferred workspace scan (stdout-only):**
+    - `python3 Skills/scan_workspace.py`
+    It scans `Knowledge/` (refinement questions), `Findings/`, and common `Intake/`/sample paths.
+  - **Targeted helpers (stdout-only):**
+    - **Check `Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
+      It lists Markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`) and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
+    - **Enumerate `Intake/` files:** `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
+      It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
+    - **Check whether `Findings/` has anything in it:** `python3 Skills/scan_findings_files.py`
+      It walks `Findings/` and lists `.md` files reliably.
   - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
+  - If there are **no refinement questions** *and* the `Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
+    - `🦖 Welcome to Triage-Saurus.`
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
+    - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
+      - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
+      - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
+        - `python3 Skills/scan_intake_files.py <candidate-path>`
+      - Only offer **non-empty** candidates as choices.
+      - Candidate paths in this repo: `Intake/Cloud`, `Intake/Code`, `Intake/Sample/Cloud` (if present), `Intake/Sample/Code` (if present)
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
 - If triage type is **Cloud** and the provider is not explicit from the folder path, quickly skim the intake titles and:
   - if they strongly indicate a provider, state it plainly (e.g., “From looking at the items to triage, it looks like you are using Azure.”)
-  - then ask a single confirmation question prefixed with `❓` and choices: `Yes (Azure)` / `AWS` / `GCP` / `Don’t know` (freeform allowed for other).
+  - then ask a single confirmation question prefixed with `❓` **on its own line**.
+    - Use the provider name as the choice label (avoid “Yes (Azure)”): `Azure` / `AWS` / `GCP` / `Don’t know` (freeform allowed for other).
+    - In the line *above* the `❓` question, include a brief “why” based on the titles (e.g., 🤔 Key Vault / Entra / Defender ⇒ Azure).
 - Follow `Settings/Styling.md` for formatting rules.
   - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
     not inline-code backticks.
@@ -67,9 +82,14 @@ This repository supports consistent security triage. The expected workflow is:
 - **Repo scans:**
   - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - First check `Knowledge/Repos.md` for known repo root path(s).
-  - If it doesn’t exist or is empty, **suggest a default based on the current working directory** (e.g., parent folder of the current repo) and ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
+  - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
+    - Prefer using the stdout-only helper to avoid guesswork: `python3 Skills/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
+    - Then ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
   - If the user confirms or provides an alternative, persist it into `Knowledge/Repos.md`.
   - **Only after** at least one repo root is recorded (or the user explicitly confirms **"current repo"**), ask which repo/directory under that root should be scanned.
+    - Accept either a single repo name/path, a list (comma/newline separated), or a simple wildcard/prefix pattern like `terraform-*`.
+    - If the user provides a pattern/wildcard, **expand it into concrete repo names** and ask for an explicit confirmation of the expanded list before scanning.
+    - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
