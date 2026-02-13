@@ -135,15 +135,25 @@ This repository supports consistent security triage. The expected workflow is:
   - Prefer reusable environment knowledge (services in use, guardrails, identity
     model, network defaults, dependencies/modules) over one-off resource IDs.
   - It is OK to list dependencies/modules (including private/internal module repos).
+  - **Repo finding Key Evidence section:**
+    - Use emoji markers: 💡 (in use/neutral signal), ✅ (security-positive), ❌ (security-negative)
+    - For secret-like signals: check module context before flagging
+      - If inside a secure module (e.g., Key Vault storage), use 💡 or ✅
+      - Only flag as ❌ if cleartext exposure or insecure handling is confirmed
+    - For language/framework detection: infer from lockfiles/build files (*.tf = Terraform, go.mod = Go, package.json = Node.js, etc)
+      - Do NOT report CI systems or containers as languages
+      - The scan script now outputs a "Languages/frameworks detected" section - use that
+  - **Repo finding Overview "Evidence for detection":**
+    - If single evidence file: show inline
+    - If multiple evidence files: format as bullet list
   - If a repo scan finds **Terraform module usage**, automatically:
-    1) extract all Terraform `module` blocks and their `source` values,
-    2) classify each as **local path**, **known local repo**, **unknown local repo**, **remote git URL**, or **Terraform Registry module** (format these as `https://registry.terraform.io/modules/<namespace>/<name>/<provider>` and include version if pinned),
-    3) scan any **local-path** modules immediately,
-    4) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
+    1) extract and classify module dependencies using (stdout-only): `python3 Skills/analyze_terraform_modules.py <repo-path>`
+    2) scan any **local-path** modules immediately,
+    3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
        - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
        - use `python3 Skills/scan_repo_quick.py` for the initial scan.
-    5) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
+    4) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
   - **Terraform module value resolution:** when reviewing Terraform code that calls modules, do not assume a variable/output implies insecure behaviour in the root module.
     - Example: a variable named `secret` or an output named `client_secret` may be passed into a module that stores it in Key Vault and only returns a reference/ID.
     - Rule: if a repo uses modules, treat security-relevant intent (secrets handling, network exposure defaults, RBAC) as **potentially hidden inside modules**; prioritise scanning the module code before drawing conclusions.
@@ -210,7 +220,8 @@ This repository supports consistent security triage. The expected workflow is:
   - Delete: `python3 Skills/clear_session.py --yes`
 
 - Ensure each finding includes:
-  - `## 🗺️ Architecture Diagram` directly under the title
-  - `- **Overall Score:** <severity> <n>/10`
+  - `## 🗺️ Architecture Diagram` **directly under the title** (first section, before Overview)
+  - `- **Overall Score:** <severity> <n>/10` **immediately after the diagram** (before Overview)
   - `## Meta Data` as the final section in the file
   - `- 🗓️ **Last updated:** DD/MM/YYYY HH:MM`
+  - **All finding types** (Cloud, Code, Repo) must include the Architecture Diagram section
