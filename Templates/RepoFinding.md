@@ -9,14 +9,14 @@ Use this template for **one file per scanned repo** under `Findings/Repo/`.
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Dev[🧑‍💻 <repo-name> repo] --> CI[⚙️ <CI/CD system>]
-  CI --> Build[🧩 Build/Test]
+  Dev[<repo-name> repo] --> CI[<CI/CD system>]
+  CI --> Build[Build/Test]
 
-  Build --> IaC[🧩 IaC / App]
-  IaC --> Cloud[☁️ Cloud Resources]
-  Cloud --> Deps[🔗 Service Dependencies]
+  Build --> IaC[IaC / App]
+  IaC --> Cloud[Cloud Resources]
+  Cloud --> Deps[Service Dependencies]
 
-  CI -. secrets scanning .-> Secrets[🛡️ Secret scanning]
+  CI -. secrets scanning .-> Secrets[Secret scanning]
 ```
 
 - **Description:** Security scan/triage summary for this repository.
