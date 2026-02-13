@@ -17,6 +17,13 @@ This repository supports consistent security triage. The expected workflow is:
   - **Preferred workspace scan (stdout-only):**
     - `python3 Skills/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
+  - **Check for draft findings requiring validation:**
+    - `python3 Skills/check_draft_findings.py`
+    It identifies findings with generic boilerplate that need evidence, applicability confirmation, and accurate risk scoring.
+    - If **>10% of findings are drafts**, prominently warn the user and offer to complete them:
+      - "⚠️ Found **N draft findings** that need validation. These have placeholder scores and generic boilerplate."
+      - "Would you like to **validate draft findings** now, or **proceed with new triage**?"
+    - Draft findings show as "⚠️ Draft - Needs Triage" in the Risk Register Status column.
   - **Targeted helpers (stdout-only):**
     - **Check `Output/Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
       It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
