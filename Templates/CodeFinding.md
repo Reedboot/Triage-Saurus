@@ -82,6 +82,9 @@ flowchart TB
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
+- **Category:** <OWASP/CWE category>
+- **Languages:** <affected languages>
+- **Source:** <SAST tool/manual review/etc>
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
 
