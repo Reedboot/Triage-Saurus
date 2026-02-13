@@ -92,7 +92,7 @@ def parse_issue(title: str) -> str:
 def parse_summary(lines: list[str], path: Path) -> str:
     summary_idx = None
     for idx, line in enumerate(lines):
-        if line.strip() == "### Summary":
+        if re.match(r"^###\s+(?:🧾\s+)?Summary\s*$", line.strip()):
             summary_idx = idx + 1
             break
     if summary_idx is None:
