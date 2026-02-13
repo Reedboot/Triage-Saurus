@@ -13,6 +13,7 @@
 - Infer resource types from services listed under `Knowledge/`.
 - Draw diagrams **from the internet inwards** (request flow / access paths).
 - Prefer **top-down** layout for readability on reviews (`flowchart TB`).
+- **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
 - **Confirmed vs assumed:**
   - Default: include **confirmed services only** on the diagram.
   - Only include assumed components if the user explicitly requests it; if included,
@@ -44,6 +45,12 @@
     kv[🗄️ Azure Key Vault]
     style kv stroke-dasharray: 5 5
   ```
+- **Mermaid theme-aware styling:** **Do not use `style fill`** in diagrams. Background
+  fill colors break on dark themes. Use **stroke/border styling** or **emojis** for
+  distinction:
+  - Emphasis: `stroke-width:3px`
+  - Assumptions/caution: `stroke-dasharray: 5 5`
+  - Never: `style <node> fill:<color>`
 
 ## Update Rules
 - Update (or create) the diagram **each time** the relevant provider file under
@@ -68,6 +75,7 @@ flowchart LR
   internet --> kv
   users --> kv
 
+  %% Note: Only include nodes that have connections
   %% Dotted border = assumed component
   style kv stroke-dasharray: 5 5
 ~~~
