@@ -42,6 +42,8 @@ from output_paths import (
     OUTPUT_SUMMARY_DIR,
 )
 
+from markdown_validator import validate_markdown_file
+
 
 def now_uk() -> str:
     return _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -255,6 +257,11 @@ provider baseline guidance. Confirm exact control mappings in your environment.
         encoding="utf-8",
     )
 
+    probs = validate_markdown_file(out_path, fix=True)
+    errs = [p for p in probs if p.level == "ERROR"]
+    if errs:
+        raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
+
 
 def ensure_knowledge(provider: str, ts: str) -> Path:
     path = OUTPUT_KNOWLEDGE_DIR / f"{provider.title()}.md"
@@ -369,6 +376,12 @@ flowchart TB
 """,
         encoding="utf-8",
     )
+
+    probs = validate_markdown_file(out, fix=True)
+    errs = [p for p in probs if p.level == "ERROR"]
+    if errs:
+        raise SystemExit(f"Mermaid validation failed for {out}: {errs[0].message}")
+
     return out
 
 
@@ -620,6 +633,12 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
             ),
             encoding="utf-8",
         )
+
+        probs = validate_markdown_file(out_path, fix=True)
+        errs = [p for p in probs if p.level == "ERROR"]
+        if errs:
+            raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
+
         written.append(out_path)
 
     return written
