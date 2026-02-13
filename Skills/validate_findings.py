@@ -21,6 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
+
 SCORE_RE = re.compile(r"^\s*- \*\*Overall Score:\*\*\s+(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10\s*$")
 LAST_UPDATED_RE = re.compile(r"^- \U0001f5d3\ufe0f \*\*Last updated:\*\* \d{2}/\d{2}/\d{4} \d{2}:\d{2}\s*$")
 
@@ -157,7 +159,7 @@ def main() -> int:
 
     seen_titles: dict[str, Path] = {}
     for sub in ["Cloud", "Code", "Repo"]:
-        for f in iter_md_files(ROOT / "Findings" / sub):
+        for f in iter_md_files(OUTPUT_FINDINGS_DIR / sub):
             problems.extend(validate_finding(f, strict=args.strict))
 
             # Detect duplicate findings by title (common when bulk-importing title-only exports).
@@ -176,7 +178,7 @@ def main() -> int:
                 else:
                     seen_titles[key] = f
 
-    for s in iter_md_files(ROOT / "Summary" / "Cloud"):
+    for s in iter_md_files(OUTPUT_SUMMARY_DIR / "Cloud"): 
         problems.extend(validate_cloud_summary(s))
 
     errs = [p for p in problems if p.level == "ERROR"]
