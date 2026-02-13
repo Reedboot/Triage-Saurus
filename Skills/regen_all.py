@@ -22,13 +22,15 @@ from pathlib import Path
 def _infer_provider(root: Path) -> str | None:
     # Best-effort inference; prefer explicit --provider in automation.
     for p in ("azure", "aws", "gcp"):
-        if (root / "Knowledge" / f"{p.title()}.md").exists():
+        if (OUTPUT_KNOWLEDGE_DIR / f"{p.title()}.md").exists():
             return p
     return None
 
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
+
+    from output_paths import OUTPUT_KNOWLEDGE_DIR
 
     parser = argparse.ArgumentParser(description="Regenerate Summary outputs from Findings")
     parser.add_argument("--provider", choices=["azure", "aws", "gcp"], help="Cloud provider")
@@ -53,6 +55,9 @@ def main() -> int:
         from generate_findings_from_titles import now_uk, update_service_summaries
     except Exception as e:  # pragma: no cover
         raise SystemExit(f"Unable to load summary generator: {e}")
+
+    # Regen intentionally does not rewrite findings; use generate_findings_from_titles.py
+    # with --upgrade-existing if you want to upgrade old draft findings.
 
     ts = now_uk()
 
