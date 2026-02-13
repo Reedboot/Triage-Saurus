@@ -179,6 +179,12 @@ This repository supports consistent security triage. The expected workflow is:
   - Only include **confirmed services** on the Mermaid diagram unless the user explicitly asks
     to include assumed components.
 - While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Output/Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
+- **Finding content completeness:** ensure all findings have:
+  - A clear **Overall Score** with severity and numeric score (e.g., `🔴 High 8/10`)
+  - Proper **Summary** section (not generic boilerplate)
+  - **Key Evidence** section with specific resource IDs, paths, or context
+  - **Applicability** section with clear status (Yes/No/Don't know) and evidence
+  - These sections are used by the risk register generator for accurate resource type classification and issue extraction
 - When a recommendation depends on **platform SKU/tier/feature availability** (common examples: private endpoints, private registries, WAF features, auditing tiers), explicitly call out the dependency and note that remediation may require a **SKU change** (e.g., ACR private connectivity may require Premium depending on the provider/service).
 - When a recommendation may require **reprovisioning/redeployment/restart** to take effect, explicitly warn about potential **downtime/maintenance windows** and rollout sequencing.
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
