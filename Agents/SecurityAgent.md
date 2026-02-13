@@ -26,3 +26,9 @@
 - A new/updated finding file under `Findings/`.
 - Any confirmed facts added to `Knowledge/`.
 - Any impacted summaries updated under `Summary/`.
+
+### Risk Register Content Requirements
+- **Summary:** Must be meaningful business impact statement, not generic boilerplate
+- **Key Evidence:** Include specific resource IDs, paths, or service names for accurate resource type classification
+- **Applicability:** Clear status with specific evidence helps establish scope and priority
+- The risk register generator uses these sections to classify resource types and extract issues
