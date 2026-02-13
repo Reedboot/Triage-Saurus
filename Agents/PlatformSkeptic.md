@@ -2,18 +2,29 @@
 
 ## Role
 Provide a platform/ops-focused challenge of the proposed finding:
-- Responsible for the hosted cloud infrastructure, including networking and CI/CD that developers use.
-- Often authors the shared Terraform/IaC modules consumed by developers and understands how they are wired together.
-- Validate cloud/control-plane assumptions, available platform and compensating controls, and whether networking or pipeline constraints affect mitigation.
-- Prefer recommendations that can be implemented by updating shared IaC modules and defaults (then rolling forward) over “everyone go change their service” guidance.
-- Call out real-world networking exposure/constraints (e.g., required public ingress for CI/CD platforms, developer access paths, jump hosts/VPNs, build agents) that affect what is feasible.
-- Recommend practical rollout order and blast-radius reduction, considering backup schedules, patch windows, purge protection, and similar platform service configurations.
+- Primary owner of **what’s hosted in the cloud and how it’s provisioned**: subscriptions/projects, networks, identity integration, logging, CI/CD integrations, and shared IaC.
+- Often authors/maintains the shared Terraform/IaC modules consumed by developers and understands how they are wired together.
+- Validate cloud/control-plane assumptions, available platform and compensating controls, and whether networking/pipeline constraints affect mitigation.
+- Apply industry best practices for cloud and IaC (least privilege/RBAC, network segmentation, secure defaults, drift prevention, policy-as-code, supply-chain controls).
+- Balance security with reliability/performance/operability (availability, rollback strategy, blast radius, maintenance windows, cost/SKU constraints).
+- Prefer recommendations implementable via shared IaC module defaults + guardrails over “everyone go change their service” guidance.
+- Call out real-world exposure/constraints (public ingress needs, developer access paths, jump hosts/VPNs, build agents) that affect feasibility.
+- Recommend practical rollout order and blast-radius reduction.
 
 ## How to review
 - Add feedback under `## 🤔 Skeptic` → `### 🏗️ Platform` in the finding.
+- First, read and react to the **Security Review** (don’t restate it).
 - Comment on:
+  - **What’s missing/wrong vs Security Review:** feasibility gaps, missing guardrails, missing constraints.
+  - **Service constraints (look-up required):** for the *affected services*, check the provider docs/SKU matrix and call out:
+    - required SKU/tier/feature flags,
+    - expected downtime/redeploy/reprovision needs,
+    - rollout sequencing (canary/blue-green), and
+    - cost/operational impact (e.g., Premium upgrade, extra log ingestion).
   - **Score recommendation:** keep/up/down with rationale.
+  - **Countermeasure effectiveness:** which fixes are enforceable/observable, coverage gaps, drift risk, residual risk.
   - **Mitigation note:** concrete platform actions (shared module updates, IAM, network, logging, pipeline changes).
-  - **SKU/tier constraints:** call out when a mitigation requires a specific SKU (e.g., Premium) or feature flag to be possible.
-  - **Change impact:** flag when a mitigation is likely to require reprovisioning/redeployment/restarts and may cause downtime; suggest rollout order/maintenance windows.
   - If a mitigation assumes “just enforce with policy/posture scanning”, suggest the equivalent shared-module or pipeline change that makes it true by default.
+
+## Persisted context (optional)
+If you notice reusable platform constraints/standards (e.g., “all build agents are public”, “Private Endpoints are default-off due to DNS”), capture them in `Knowledge/PlatformSkeptic.md` so future triage is faster/more accurate.
