@@ -30,11 +30,11 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Edge[🌐 Internet / Users] --> Svc[🧩 <cloud service>]
-  Svc --> Data[🗄️ <data store>]
-  Svc --> Logs[📈 Monitoring/Logs]
+  Edge[Internet / Users] --> Svc[<cloud service>]
+  Svc --> Data[<data store>]
+  Svc --> Logs[Monitoring/Logs]
 
-  Sec[🛡️ Controls] -.-> Svc
+  Sec[Controls] -.-> Svc
 ```
 
 - **Description:** <short description>
