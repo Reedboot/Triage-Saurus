@@ -73,6 +73,18 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
                 block = [b.replace("\t", "  ") for b in block]
                 changed = True
 
+        # Check for forbidden 'style fill' usage (breaks dark themes).
+        for j, b in enumerate(block):
+            if re.search(r"\bstyle\s+\S+\s+fill:", b, re.IGNORECASE):
+                problems.append(
+                    Problem(
+                        Path("."),
+                        "ERROR",
+                        "Mermaid 'style fill' breaks dark themes; use stroke-width/stroke-dasharray instead (see Settings/Styling.md)",
+                        start_line_no + j,
+                    )
+                )
+
         # Determine first non-empty line.
         first_non_empty_i = next((j for j, b in enumerate(block) if b.strip()), None)
         directive_line = block[first_non_empty_i].strip() if first_non_empty_i is not None else ""
