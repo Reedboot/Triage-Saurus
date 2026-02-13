@@ -53,7 +53,13 @@ def iter_targets() -> list[Path]:
                 continue
             if folder.is_dir():
                 # Remove files under Output/, but keep the folder structure.
-                targets.extend(sorted(p for p in folder.rglob("*") if p.is_file()))
+                targets.extend(
+                    sorted(
+                        p
+                        for p in folder.rglob("*")
+                        if p.is_file() and p.name != ".gitkeep"
+                    )
+                )
 
     seen: set[Path] = set()
     unique: list[Path] = []
