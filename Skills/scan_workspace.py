@@ -34,6 +34,11 @@ import scan_knowledge_refinement as skr
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from output_paths import (
+    OUTPUT_FINDINGS_DIR,
+    OUTPUT_KNOWLEDGE_DIR,
+)
+
 
 def _print_rel(path: Path, *, absolute: bool) -> str:
     if absolute:
@@ -46,6 +51,9 @@ def _print_rel(path: Path, *, absolute: bool) -> str:
 
 def scan_knowledge() -> None:
     print("== Knowledge refinement ==")
+
+    # Ensure Knowledge scan uses Output/ by default.
+    skr.KNOWLEDGE_DIR = OUTPUT_KNOWLEDGE_DIR
 
     if not skr.KNOWLEDGE_DIR.exists():
         print(f"Knowledge directory not found: {skr.KNOWLEDGE_DIR}")
@@ -155,7 +163,7 @@ def main() -> int:
     parser.add_argument(
         "--findings-path",
         default="Findings",
-        help="Folder to scan for findings (default: Findings).",
+        help="Folder to scan for findings (default: Output/Findings).",
     )
     parser.add_argument(
         "--intake",
@@ -206,8 +214,9 @@ def main() -> int:
         scan_knowledge()
 
     if not args.skip_findings:
+        findings_path = str(OUTPUT_FINDINGS_DIR) if args.findings_path in {"Findings", "Findings/"} else args.findings_path
         scan_findings(
-            args.findings_path,
+            findings_path,
             exts=findings_exts,
             include_hidden=args.include_hidden,
             absolute=args.absolute,
