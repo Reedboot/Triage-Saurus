@@ -28,11 +28,11 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  User[🧑‍💻 User] --> App[🧩 App/API]
-  App --> Dep[🔗 Dependency]
-  App --> Data[🗄️ Data]
+  User[User] --> App[App/API]
+  App --> Dep[Dependency]
+  App --> Data[Data]
 
-  Sec[🛡️ Controls] -.-> App
+  Sec[Controls] -.-> App
 ```
 
 - **Description:** <short description>
