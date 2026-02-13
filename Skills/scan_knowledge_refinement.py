@@ -30,7 +30,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KNOWLEDGE_DIR = ROOT / "Knowledge"
+
+from output_paths import OUTPUT_KNOWLEDGE_DIR
+
+KNOWLEDGE_DIR = OUTPUT_KNOWLEDGE_DIR
 
 HEADING_RE = re.compile(r"^##\s+(Unknowns|❓\s*Open\s+Questions)\s*$", re.IGNORECASE)
 NEXT_SECTION_RE = re.compile(r"^#{1,2}\s+")
