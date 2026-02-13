@@ -47,12 +47,12 @@ def iter_matching_files(root: Path, exts: set[str], include_hidden: bool) -> lis
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Walk Findings/ and list finding files.")
+    parser = argparse.ArgumentParser(description="Walk Output/Findings and list finding files.")
     parser.add_argument(
         "path",
         nargs="?",
         default="Findings",
-        help="Folder to scan (default: Findings).",
+        help="Folder to scan (default: Output/Findings).",
     )
     parser.add_argument(
         "--ext",
@@ -78,7 +78,14 @@ def main() -> int:
     if not target.is_absolute():
         target = (repo_root / target).resolve()
 
-    findings_root = repo_root / "Findings"
+    from output_paths import OUTPUT_FINDINGS_DIR
+
+    findings_root = OUTPUT_FINDINGS_DIR
+
+    # Back-compat: allow callers to use the old default arg but scan Output/.
+    if args.path in ("Findings", "Findings/"):
+        target = findings_root
+
     if args.path in ("Findings", "Findings/") and not findings_root.exists():
         print(f"Findings directory not found: {findings_root}")
         return 2
