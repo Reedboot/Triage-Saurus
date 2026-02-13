@@ -48,6 +48,9 @@ flowchart TB
 - **Status:** Yes / No / Don’t know
 - **Evidence:** <what makes this true/false>
 
+### ⚠️ Assumptions
+- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+
 ### 🔎 Key Evidence
 - <evidence bullets with `path:line` references>
 
@@ -66,13 +69,22 @@ flowchart TB
 <rationale>
 
 ## 🤔 Skeptic
+> Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
+
 ### 🛠️ Dev
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **How it could be worse:** <concrete escalation path, e.g., public endpoint + weak auth, lateral movement, data exfil>
+- **Countermeasure effectiveness:** <which recommendation actually removes risk vs just reduces it; why>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ### 🏗️ Platform
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Service constraints checked:** <service doc/SKU/downtime/cost notes; include links if available>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **Operational constraints:** <SKU/tier, network design, downtime, rollout sequencing>
+- **Countermeasure effectiveness:** <coverage/drift risks; how to enforce/monitor at scale>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ## 🤝 Collaboration
 - **Outcome:** <outcome>
