@@ -231,3 +231,16 @@ This repository supports consistent security triage. The expected workflow is:
   - `## Meta Data` as the final section in the file
   - `- 🗓️ **Last updated:** DD/MM/YYYY HH:MM`
   - **All finding types** (Cloud, Code, Repo) must include the Architecture Diagram section
+
+## Draft Finding Detection
+
+- The spreadsheet includes a **Status** column that flags draft findings
+- **"✅ Validated"**: Finding has been triaged with evidence, applicability confirmation, and accurate scoring
+- **"⚠️ Draft - Needs Triage"**: Finding has generic boilerplate from title-only input and needs:
+  - Applicability confirmation (Yes/No/Don't know)
+  - Specific evidence (resource IDs, query output, screenshots)
+  - Environment context (production, internet-facing, etc.)
+  - Accurate risk scoring based on actual exposure
+- Draft findings typically have placeholder 5/10 Medium scores
+- Use `python3 Skills/check_draft_findings.py` to identify draft findings needing validation
+- During session kickoff, prompt users to complete draft findings if >10% are unvalidated
