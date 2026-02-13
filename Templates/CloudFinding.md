@@ -96,6 +96,9 @@ flowchart TB
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
+- **Provider:** <Azure/AWS/GCP>
+- **Resource Type:** <Key Vault/Storage Account/etc>
+- **Source:** <Defender/Advisor/Scanner name>
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
 
