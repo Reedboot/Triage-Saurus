@@ -120,6 +120,128 @@ def parse_summary(lines: list[str], path: Path) -> str:
     return summary
 
 
+def parse_business_impact(lines: list[str], path: Path) -> str | None:
+    """Extract Business Impact section if it exists (typically in repo findings)."""
+    impact_idx = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^###\s+Business\s+Impact\s*$", line.strip(), re.IGNORECASE):
+            impact_idx = idx + 1
+            break
+    
+    if impact_idx is None:
+        return None
+    
+    impact_lines = []
+    for line in lines[impact_idx:]:
+        if not line.strip():
+            if impact_lines:
+                break
+            continue
+        if line.startswith("#"):
+            break
+        impact_lines.append(line.strip())
+    
+    if not impact_lines:
+        return None
+    
+    impact = " ".join(impact_lines)
+    
+    # Extract first sentence if it's long
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', impact) if s.strip()]
+    if sentences:
+        return sentences[0]
+    
+    return impact if len(impact) < 200 else impact[:197] + "..."
+
+
+def parse_risk_assessment(lines: list[str], path: Path) -> str | None:
+    """Extract Risk Assessment section if it exists (typically in repo findings)."""
+    risk_idx = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^###\s+Risk\s+Assessment\s*$", line.strip(), re.IGNORECASE):
+            risk_idx = idx + 1
+            break
+    
+    if risk_idx is None:
+        return None
+    
+    risk_lines = []
+    for line in lines[risk_idx:]:
+        if not line.strip():
+            if risk_lines:
+                break
+            continue
+        if line.startswith("#"):
+            break
+        risk_lines.append(line.strip())
+    
+    if not risk_lines:
+        return None
+    
+    risk = " ".join(risk_lines)
+    
+    # Extract the key issue after the score
+    # Format: "**Medium (6/10)** — <actual issue>. Primary risk is..."
+    # We want the full statement before "Primary risk" or first period
+    match = re.search(r'—\s*(.+?)(?:\.\s+Primary risk|\.\s+Mitigating)', risk)
+    if match:
+        issue = match.group(1).strip()
+        return issue
+    
+    # Fallback: extract text after score and before first period
+    match2 = re.search(r'—\s*(.+?)\.', risk)
+    if match2:
+        return match2.group(1).strip()
+    
+    return None
+
+
+def parse_key_evidence(lines: list[str], path: Path) -> str:
+    """Extract Key Evidence section for additional resource type context."""
+    evidence_idx = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^###\s+(?:🔎\s+)?Key\s+Evidence\s*$", line.strip(), re.IGNORECASE):
+            evidence_idx = idx + 1
+            break
+    
+    if evidence_idx is None:
+        return ""
+    
+    evidence_lines = []
+    for line in lines[evidence_idx:]:
+        if line.startswith("#"):
+            break
+        if line.strip() and not line.strip().startswith("-"):
+            evidence_lines.append(line.strip())
+        if len(evidence_lines) >= 5:  # Limit to first few lines
+            break
+    
+    return " ".join(evidence_lines)
+
+
+def parse_applicability(lines: list[str], path: Path) -> str:
+    """Extract Applicability section for additional resource type context."""
+    app_idx = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^###\s+(?:✅\s+)?Applicability\s*$", line.strip(), re.IGNORECASE):
+            app_idx = idx + 1
+            break
+    
+    if app_idx is None:
+        return ""
+    
+    app_lines = []
+    for line in lines[app_idx:]:
+        if line.startswith("#"):
+            break
+        if line.strip():
+            app_lines.append(line.strip())
+        if len(app_lines) >= 5:  # Limit to first few lines
+            break
+    
+    return " ".join(app_lines)
+
+
 def _classify_business_impact(text: str) -> str:
     t = text.lower()
 
@@ -237,7 +359,7 @@ def to_exec_risk_issue(issue: str, impact_label: str) -> str:
     return out
 
 
-def resource_type_from_path(path: Path, title: str) -> str:
+def resource_type_from_path(path: Path, title: str, issue: str = "", evidence: str = "", applicability: str = "") -> str:
     parts = {p.lower() for p in path.parts}
 
     if "code" in parts:
@@ -247,19 +369,25 @@ def resource_type_from_path(path: Path, title: str) -> str:
     if "cloud" not in parts:
         return "Application"
 
-    t = f"{title} {path.stem}".lower()
+    # Check title, filename, issue text, evidence, and applicability for resource type keywords
+    t = f"{title} {path.stem} {issue} {evidence} {applicability}".lower()
 
-    if any(k in t for k in ["virtual machine", "virtual machines", "vm", "management ports", "rdp", "ssh"]):
+    # Check for specific Azure/cloud services first (with provider prefixes)
+    if any(k in t for k in ["virtual machine", "virtual machines", "vm", "management ports", "rdp", "ssh", "windows machines", "linux machines"]):
         return "Virtual Machine"
-    if any(k in t for k in ["key vault", "keyvault", "secret", "secrets", "keys"]):
+    if any(k in t for k in ["event hub", "eventhub", "azure event hub"]):
+        return "Event Hub"
+    if any(k in t for k in ["logic app", "logic apps", "azure logic app"]):
+        return "Logic App"
+    if any(k in t for k in ["key vault", "keyvault", "azure key vault", "secret", "secrets", "keys"]):
         return "Key Vault"
-    if any(k in t for k in ["cosmos db", "cosmosdb"]):
+    if any(k in t for k in ["cosmos db", "cosmosdb", "azure cosmos db", "azure cosmos database"]):
         return "Cosmos DB"
     if any(k in t for k in ["azure data explorer", "kusto"]):
         return "Azure Data Explorer"
     if any(k in t for k in ["microsoft foundry", "foundry"]):
         return "Microsoft Foundry"
-    if any(k in t for k in ["service fabric"]):
+    if any(k in t for k in ["service fabric", "azure service fabric"]):
         return "Service Fabric"
 
     # AWS/GCP common services
@@ -284,15 +412,26 @@ def resource_type_from_path(path: Path, title: str) -> str:
         return "Cloud Run"
     if any(k in t for k in ["artifact registry"]):
         return "Artifact Registry"
-    if any(k in t for k in ["storage account", "storage accounts", "blob", "shared key", "secure transfer"]):
+    if any(k in t for k in ["storage account", "storage accounts", "azure storage account", "blob", "shared key", "secure transfer"]):
         return "Storage Account"
-    if any(k in t for k in ["sql", "tde", "postgresql", "mysql", "mariadb"]):
+    # Check SQL Server before generic Database (more specific)
+    if any(k in t for k in ["sql server", "sql servers"]):
+        return "SQL Server"
+    if any(k in t for k in ["sql database", "azure sql", "tde", "postgresql", "mysql", "mariadb"]):
         return "Database"
-    if any(k in t for k in ["kubernetes", "aks"]):
+    if any(k in t for k in ["kubernetes", "aks", "azure kubernetes"]):
         return "Kubernetes"
-    if any(k in t for k in ["container registry", "acr", "image registry"]):
+    if any(k in t for k in ["container registry", "container registries", "acr", "azure container registry", "image registry"]):
         return "Container Registry"
-    if any(k in t for k in ["app service", "web app", "function app"]):
+    # Check Microsoft Defender before App Service (it's a security service, not an app)
+    if any(k in t for k in ["microsoft defender", "defender for"]):
+        return "Microsoft Defender"
+    # Check Function App and Web App before App Service (more specific)
+    if any(k in t for k in ["function app", "function apps"]):
+        return "Function App"
+    if any(k in t for k in ["web app", "web apps"]):
+        return "Web App"
+    if any(k in t for k in ["app service"]):
         return "App Service"
     if any(k in t for k in ["api management"]):
         return "API Management"
@@ -353,19 +492,77 @@ def _is_repo_finding(path: Path) -> bool:
 
 def _repo_issue_from_summary(title: str, summary: str) -> str:
     # Repo finding titles are often just the repo name, so use the summary to build an exec-facing issue.
-    repo = re.sub(r"^repo\s+", "", title.strip(), flags=re.IGNORECASE).strip() or title.strip()
+    # Title format is typically "Repo: terraform-xyz" or just "terraform-xyz"
+    repo = re.sub(r"^repo\s*:\s*", "", title.strip(), flags=re.IGNORECASE).strip() or title.strip()
 
+    # Remove generic boilerplate if present
+    summary = re.sub(r"^This repository manages \S+ infrastructure using Terraform\.?\s*", "", summary, flags=re.IGNORECASE).strip()
+    
     # Split into sentences; prefer one that signals risk (risk/secret/exposure/supply-chain).
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", summary.strip()) if s.strip()]
     pick = sentences[0] if sentences else summary.strip()
     for s in sentences[:3]:
-        if re.search(r"\brisk\b|secret|expos|supply[- ]chain|pipeline|state", s, flags=re.IGNORECASE):
+        if re.search(r"\brisk\b|secret|expos|supply[- ]chain|pipeline|state|control|critical|misconfig", s, flags=re.IGNORECASE):
             pick = s
             break
 
     pick = re.sub(r"^this repo\b\s*", "", pick, flags=re.IGNORECASE).strip()
     pick = pick.rstrip(".")
-    return f"Repo {repo}: {pick}".strip()
+    
+    # If still too generic or empty, use the repo name only
+    if not pick or len(pick) < 20 or pick.lower().startswith("this"):
+        return repo
+    
+    # No "Repo" prefix needed - Resource Type column already shows "Repository"
+    return f"{repo}: {pick}".strip()
+
+
+def _strip_markdown_formatting(text: str) -> str:
+    """Remove markdown formatting from text for Excel display."""
+    # Remove bold (**text**)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    # Remove italic (*text* or _text_)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
+    # Remove inline code (`text`)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    return text
+
+
+def _strip_resource_type_prefix(issue: str, resource_type: str) -> str:
+    """Remove redundant resource type mention from start of issue text."""
+    if not resource_type or resource_type in ["Cloud", "Application", "Application Code"]:
+        return issue
+    
+    # Build patterns to match (singular and plural forms)
+    patterns = [
+        resource_type.lower(),  # exact match
+        resource_type.lower().rstrip('s') + 's',  # plural
+        resource_type.lower() + 's',  # plural
+    ]
+    
+    # Special cases for compound names
+    if resource_type == "Container Registry":
+        patterns.extend(["container registries", "container registry"])
+    elif resource_type == "Function App":
+        patterns.extend(["function apps", "function app"])
+    elif resource_type == "Storage Account":
+        patterns.extend(["storage accounts", "storage account"])
+    elif resource_type == "Key Vault":
+        patterns.extend(["key vaults", "key vault"])
+    elif resource_type == "Virtual Machine":
+        patterns.extend(["virtual machines", "virtual machine", "vms", "vm"])
+    
+    issue_lower = issue.lower()
+    for pattern in patterns:
+        # Match at start of string, followed by space or punctuation
+        if issue_lower.startswith(pattern + " ") or issue_lower.startswith(pattern + "'"):
+            # Remove the prefix and capitalize the first letter
+            remaining = issue[len(pattern):].strip()
+            if remaining:
+                return remaining[0].upper() + remaining[1:]
+    
+    return issue
 
 
 def build_rows() -> list[RiskRow]:
@@ -375,16 +572,38 @@ def build_rows() -> list[RiskRow]:
         title = parse_title(lines, path)
         severity, score = parse_overall_score(lines, path)
         summary = parse_summary(lines, path)
+        
+        # Extract additional context for better resource type classification
+        evidence = parse_key_evidence(lines, path)
+        applicability = parse_applicability(lines, path)
 
         if _is_repo_finding(path):
-            issue = _repo_issue_from_summary(title, summary)
+            # For repo findings, prefer Risk Assessment > Business Impact > Summary
+            risk_assessment_text = parse_risk_assessment(lines, path)
+            business_impact_text = parse_business_impact(lines, path)
+            
+            if risk_assessment_text:
+                issue_text = risk_assessment_text
+            elif business_impact_text:
+                issue_text = business_impact_text
+            else:
+                issue_text = summary
+            
+            issue = _repo_issue_from_summary(title, issue_text)
         else:
             issue = parse_issue(title)
 
         impact = to_business_impact(summary, issue)
         exec_issue = to_exec_risk_issue(issue, impact)
-        resource_type = resource_type_from_path(path, title)
+        # Use full context from finding file for better resource type classification
+        resource_type = resource_type_from_path(path, title, issue, evidence, applicability)
         _warn_on_missed_service_classification(title, resource_type)
+        
+        # Strip redundant resource type prefix from issue text
+        exec_issue = _strip_resource_type_prefix(exec_issue, resource_type)
+        
+        # Strip markdown formatting for Excel display
+        exec_issue = _strip_markdown_formatting(exec_issue)
 
         if _is_repo_finding(path) and re.fullmatch(r"Repo\s+[^:]+", issue, flags=re.IGNORECASE):
             print(
