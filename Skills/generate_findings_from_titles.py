@@ -35,6 +35,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from output_paths import (
+    OUTPUT_AUDIT_DIR,
+    OUTPUT_FINDINGS_DIR,
+    OUTPUT_KNOWLEDGE_DIR,
+    OUTPUT_SUMMARY_DIR,
+)
+
 
 def now_uk() -> str:
     return _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -172,11 +179,11 @@ def write_finding(out_path: Path, title: str, score: int, ts: str) -> None:
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Internet[🌐 Internet / Users] --> Svc[🧩 Affected service]
-  Svc --> Data[🗄️ Data store (if applicable)]
-  Svc --> Logs[📈 Monitoring/Logs]
+  Internet[Internet / Users] --> Svc[Affected service]
+  Svc --> Data[Data store]
+  Svc --> Logs[Monitoring/Logs]
 
-  Sec[🛡️ Controls] -.-> Svc
+  Sec[Controls] -.-> Svc
 ```
 
 - **Description:** {title}
@@ -197,7 +204,7 @@ production workloads.
 
 ### ⚠️ Assumptions
 - Unconfirmed: Scope includes production workloads.
-- Unconfirmed: Exposure is internet-facing (if applicable).
+- Unconfirmed: Exposure is internet-facing (where relevant).
 
 ### 🎯 Exploitability
 Misconfiguration findings are typically exploitable by either (a) external attackers
@@ -250,7 +257,7 @@ provider baseline guidance. Confirm exact control mappings in your environment.
 
 
 def ensure_knowledge(provider: str, ts: str) -> Path:
-    path = ROOT / "Knowledge" / f"{provider.title()}.md"
+    path = OUTPUT_KNOWLEDGE_DIR / f"{provider.title()}.md"
     if path.exists():
         return path
 
@@ -284,7 +291,7 @@ def append_audit_event(audit_path: Path, entry_lines: list[str]) -> None:
 
 
 def ensure_audit(provider: str) -> Path:
-    audit_dir = ROOT / "Audit"
+    audit_dir = OUTPUT_AUDIT_DIR
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_path = audit_dir / f"KnowledgeImports_{provider.title()}.md"
 
@@ -333,7 +340,7 @@ def update_architecture(provider: str, ts: str) -> Path | None:
     if provider.lower() not in {"azure", "aws", "gcp"}:
         return None
 
-    out = ROOT / "Summary" / "Cloud" / f"Architecture_{provider.title()}.md"
+    out = OUTPUT_SUMMARY_DIR / "Cloud" / f"Architecture_{provider.title()}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     # Confirmed-only generic skeleton; specific services should be added during triage.
@@ -347,7 +354,7 @@ def update_architecture(provider: str, ts: str) -> Path | None:
 
 ```mermaid
 flowchart TB
-  Internet[🌐 Internet] --> Cloud[🧩 {provider.title()}]
+  Internet[Internet] --> Cloud[{provider.title()}]
 ```
 
 ## 📊 Service Risk Order
@@ -395,86 +402,87 @@ def _rel_link_from_summary(rel_finding: str) -> str:
 
 
 def _summary_mermaid(service: str) -> str:
+    # Keep Mermaid labels ASCII-only for broad renderer compatibility.
     if service == "Key Vault":
         return """```mermaid
 flowchart TB
-  User[🧑‍💻 Operator/Workload] --> Entra[🔐 Entra ID]
-  Entra --> KV[🗄️ Key Vault]
-  App[🧩 App/Service] --> KV
-  Internet[🌐 Internet] -. blocked by default .-> KV
+  User[Operator/Workload] --> Entra[Entra ID]
+  Entra --> KV[Key Vault]
+  App[App/Service] --> KV
+  Internet[Internet] -. blocked by default .-> KV
 ```
 """
     if service == "Storage Accounts":
         return """```mermaid
 flowchart TB
-  App[🧩 App/Service] --> Storage[🗄️ Storage Account]
-  Entra[🔐 Entra ID] --> Storage
-  Internet[🌐 Internet] -. public access (should be disabled) .-> Storage
+  App[App/Service] --> Storage[Storage Account]
+  Entra[Entra ID] --> Storage
+  Internet[Internet] -. public access (should be disabled) .-> Storage
 ```
 """
     if service in {"Azure SQL", "RDS", "Cloud SQL", "Databases"}:
         return """```mermaid
 flowchart TB
-  App[🧩 App/Service] --> DB[🗄️ Database]
-  Entra[🔐 Identity] --> DB
-  Internet[🌐 Internet] -. blocked by firewall/private endpoint .-> DB
+  App[App/Service] --> DB[Database]
+  Entra[Identity] --> DB
+  Internet[Internet] -. blocked by firewall/private endpoint .-> DB
 ```
 """
     if service in {"AKS", "EKS", "GKE", "Kubernetes"}:
         return """```mermaid
 flowchart TB
-  Dev[🧑‍💻 Operator] --> IdP[🔐 Identity]
-  IdP --> K8s[🧩 Kubernetes]
-  K8s --> Registry[🧩 Image Registry]
-  K8s --> Secrets[🗄️ Secrets Store]
-  K8s --> Storage[🗄️ Storage]
+  Dev[Operator] --> IdP[Identity]
+  IdP --> K8s[Kubernetes]
+  K8s --> Registry[Image Registry]
+  K8s --> Secrets[Secrets Store]
+  K8s --> Storage[Storage]
 ```
 """
     if service in {"Container Registry", "ECR", "Artifact Registry", "Registry"}:
         return """```mermaid
 flowchart TB
-  CICD[⚙️ CI/CD] --> IdP[🔐 Identity]
-  IdP --> Registry[🧩 Image Registry]
-  Runtime[🧩 Runtime (K8s/VM)] --> Registry
+  CICD[CI/CD] --> IdP[Identity]
+  IdP --> Registry[Image Registry]
+  Runtime[Runtime (K8s/VM)] --> Registry
 ```
 """
     if service in {"App Service", "Lambda", "Cloud Run", "Compute"}:
         return """```mermaid
 flowchart TB
-  Internet[🌐 Internet] --> App[🧩 Service]
-  CICD[⚙️ CI/CD] --> App
-  App --> Secrets[🗄️ Secrets Store]
+  Internet[Internet] --> App[Service]
+  CICD[CI/CD] --> App
+  App --> Secrets[Secrets Store]
 ```
 """
     if service == "Virtual Machines":
         return """```mermaid
 flowchart TB
-  Internet[🌐 Internet] -. mgmt ports should be blocked .-> VM[🧩 Virtual Machines]
-  Admin[🧑‍💻 Admin] --> Bastion[🛡️ Bastion/JIT]
+  Internet[Internet] -. mgmt ports should be blocked .-> VM[Virtual Machines]
+  Admin[Admin] --> Bastion[Bastion/JIT]
   Bastion --> VM
-  VM --> Data[🗄️ Data Stores]
+  VM --> Data[Data Stores]
 ```
 """
     if service == "Network":
         return """```mermaid
 flowchart TB
-  Internet[🌐 Internet] --> Edge[🧩 Public Edge]
-  Edge --> NSG[🛡️ Firewall/NSG]
-  NSG --> Subnet[🛡️ VPC/VNet]
-  Subnet --> Workloads[🧩 Workloads]
+  Internet[Internet] --> Edge[Public Edge]
+  Edge --> NSG[Firewall/NSG]
+  NSG --> Subnet[VPC/VNet]
+  Subnet --> Workloads[Workloads]
 ```
 """
     if service == "Identity":
         return """```mermaid
 flowchart TB
-  User[🧑‍💻 Privileged user] --> MFA[🛡️ MFA/Conditional Access]
-  MFA --> IdP[🔐 Identity Provider]
-  IdP --> Cloud[🧩 Cloud Control Plane]
+  User[Privileged user] --> MFA[MFA/Conditional Access]
+  MFA --> IdP[Identity Provider]
+  IdP --> Cloud[Cloud Control Plane]
 ```
 """
     return """```mermaid
 flowchart TB
-  Cloud[🧩 Cloud]
+  Cloud[Cloud]
 ```
 """
 
@@ -482,7 +490,7 @@ flowchart TB
 def update_service_summaries(provider: str, ts: str) -> list[Path]:
     """Generate per-service summary Markdown under Summary/Cloud based on Findings/Cloud."""
 
-    findings_dir = ROOT / "Findings" / "Cloud"
+    findings_dir = OUTPUT_FINDINGS_DIR / "Cloud"
     if not findings_dir.exists():
         return []
 
@@ -542,7 +550,7 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
                 buckets[service].append((score, f"{emoji} {label} {score}/10", rel, link_text))
 
     written: list[Path] = []
-    out_dir = ROOT / "Summary" / "Cloud"
+    out_dir = OUTPUT_SUMMARY_DIR / "Cloud"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for service, _kws in service_buckets:
@@ -622,7 +630,7 @@ def run_risk_register() -> Path | None:
     if not script.exists():
         return None
     subprocess.run([sys.executable, str(script)], check=True)
-    return ROOT / "Summary" / "Risk Register.xlsx"
+    return OUTPUT_SUMMARY_DIR / "Risk Register.xlsx"
 
 
 def upgrade_existing_draft_findings(out_dir: Path, ts: str) -> int:
@@ -714,7 +722,9 @@ def main() -> int:
                 try:
                     first = existing.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
                     if first:
-                        seen.add(_dedupe_key(first[0]))
+                        # First line is typically: "# 🟣 <title>".
+                        existing_title = _normalise_title(first[0]).lstrip("🟣 ").strip()
+                        seen.add(_dedupe_key(existing_title))
                 except OSError:
                     pass
 
