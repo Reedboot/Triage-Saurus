@@ -23,12 +23,12 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
    `SessionKickoff.md`.
 2. Provide a scanner issue to triage; the agent will confirm cloud provider or
    context as needed.
-3. The agent creates or updates findings in `Findings/`, updates `Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Summary/`.
+3. The agent creates or updates findings in `Output/Findings/`, updates `Output/Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Output/Summary/`.
 4. After any finding changes, the agent **regenerates**
-   `Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
+   `Output/Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
    - This spreadsheet is **ExCo/CISO-facing** (no team/status columns); priority/ranking is deterministic from finding scores.
 
-> Note: By default, artifacts under `Findings/`, `Knowledge/`, and `Summary/`
+> Note: By default, artifacts under `Output/Findings/`, `Output/Knowledge/`, and `Output/Summary/`
 > are **gitignored** so they remain **user-owned**. If you want to persist/share
 > them via git, update `.gitignore` intentionally.
 
@@ -56,9 +56,9 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 
 **Tools**
 - **Python:** `python3` is required to run:
-  - `Skills/risk_register.py` (generate `Summary/Risk Register.xlsx`)
+  - `Skills/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
   - `Skills/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
   - `Skills/validate_findings.py` (validate finding + summary formatting)
-  - `Skills/clear_session.py` (delete per-session artifacts under `Findings/`, `Knowledge/`, `Summary/`)
+  - `Skills/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
   - Optional helper: `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
