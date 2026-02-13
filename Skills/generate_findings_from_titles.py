@@ -169,41 +169,71 @@ def write_finding(out_path: Path, title: str, score: int, ts: str) -> None:
     out_path.write_text(
         f"""# 🟣 {title}
 
+## 🗺️ Architecture Diagram
+```mermaid
+flowchart TB
+  Internet[🌐 Internet / Users] --> Svc[🧩 Affected service]
+  Svc --> Data[🗄️ Data store (if applicable)]
+  Svc --> Logs[📈 Monitoring/Logs]
+
+  Sec[🛡️ Controls] -.-> Svc
+```
+
 - **Description:** {title}
 - **Overall Score:** {sev} {score}/10
 
 ## 🛡️ Security Review
-### Summary
+### 🧾 Summary
 This is a draft finding generated from a title-only input. Validate the affected
 resources/scope and confirm whether the exposure is internet-facing and/or impacts
 production workloads.
+
+### ✅ Applicability
+- **Status:** Don’t know
+- **Evidence:** Title-only input; needs validation.
+
+### 🔎 Key Evidence
+- <add evidence here, e.g., resource IDs, query output, screenshots, or IaC paths>
+
+### ⚠️ Assumptions
+- Unconfirmed: Scope includes production workloads.
+- Unconfirmed: Exposure is internet-facing (if applicable).
 
 ### 🎯 Exploitability
 Misconfiguration findings are typically exploitable by either (a) external attackers
 when exposure is public, or (b) internal threat actors / compromised identities when
 permissions and network paths are overly broad.
 
-### Recommendations
+### ✅ Recommendations
 - [ ] {recs[0]} — ⬇️ {score}➡️{reduced_1} (est.)
 - [ ] {recs[1]} — ⬇️ {reduced_1}➡️{reduced_2} (est.)
 
-### Considered Countermeasures
+### 🧰 Considered Countermeasures
 - 🔴 Rely on ad-hoc manual configuration — prone to drift and gaps.
 - 🟡 Point-in-time remediation only — helps now but without policy, issues often return.
 - 🟢 Enforce with policy-as-code + monitoring — reduces recurrence and improves coverage.
 
-### Rationale
+### 📐 Rationale
 The recommendation reduces attack surface and/or blast radius and should align with
 provider baseline guidance. Confirm exact control mappings in your environment.
 
 ## 🤔 Skeptic
+> Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
+
 ### 🛠️ Dev
-- **Score recommendation:** ➡️ Keep (confirm which apps/workloads are impacted).
-- **Mitigation note:** Update IaC so the fix persists.
+- **What’s missing/wrong vs Security Review:** <fill in>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — why vs Security Review.
+- **How it could be worse:** <fill in>
+- **Countermeasure effectiveness:** <fill in>
+- **Assumptions to validate:** <fill in>
 
 ### 🏗️ Platform
-- **Score recommendation:** ➡️ Keep (may require policy/networking/SKU changes).
-- **Mitigation note:** Roll out guardrails first, then remediate at scale.
+- **What’s missing/wrong vs Security Review:** <fill in>
+- **Service constraints checked:** <fill in: SKU/tier, downtime, cost>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — why vs Security Review.
+- **Operational constraints:** <fill in>
+- **Countermeasure effectiveness:** <fill in>
+- **Assumptions to validate:** <fill in>
 
 ## 🤝 Collaboration
 - **Outcome:** Draft finding created; requires environment validation.
@@ -465,7 +495,8 @@ def update_service_summaries(provider: str, ts: str) -> list[Path]:
             ("Virtual Machines", ["virtual machine", "vm", "endpoint protection", "disk encryption", "management ports"]),
             ("Key Vault", ["key vault", "keyvault", "secrets", "keys", "soft delete", "private link", "firewall"]),
             ("Storage Accounts", ["storage", "blob", "shared key", "secure transfer", "public access"]),
-            ("Azure SQL", ["sql", "database", "tde", "auditing", "firewall", "allow azure services"]),
+            ("Azure SQL", ["azure sql", "sql server", "sql databases", "transparent data encryption", "tde", "sql threat detection"]),
+            ("PostgreSQL", ["postgres", "postgresql", "flexible server"]),
             ("AKS", ["kubernetes", "aks", "rbac"]),
             ("Container Registry", ["container registry", "acr", "admin user"]),
             ("App Service", ["app service", "ftps", "ftp"]),
@@ -594,6 +625,38 @@ def run_risk_register() -> Path | None:
     return ROOT / "Summary" / "Risk Register.xlsx"
 
 
+def upgrade_existing_draft_findings(out_dir: Path, ts: str) -> int:
+    """Bring existing title-only generated findings up to the current template."""
+
+    upgraded = 0
+    marker = "draft finding generated from a title-only input"
+
+    for p in sorted(out_dir.glob("*.md")):
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        lower = text.lower()
+        if marker not in lower:
+            continue
+
+        # Avoid rewriting files that already look upgraded.
+        if (
+            "## 🗺️ architecture diagram" in lower
+            and "### ⚠️ assumptions" in lower
+            and "what’s missing/wrong vs security review" in lower
+        ):
+            continue
+
+        title = _parse_title(p) or p.stem.replace("_", " ")
+        parsed = _parse_overall_score(p)
+        score = parsed[2] if parsed else score_for(title)
+
+        write_finding(p, title, score, ts)
+        upgraded += 1
+
+    return upgraded
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate draft findings from title-only inputs.")
     parser.add_argument("--provider", required=True, choices=["azure", "aws", "gcp"], help="Cloud provider")
@@ -620,6 +683,11 @@ def main() -> int:
         "--update-risk-register",
         action="store_true",
         help="Regenerate Summary/Risk Register.xlsx (implied by --update-knowledge)",
+    )
+    parser.add_argument(
+        "--upgrade-existing",
+        action="store_true",
+        help="Upgrade existing title-only draft findings in --out-dir to the latest template",
     )
     args = parser.parse_args()
 
@@ -649,6 +717,11 @@ def main() -> int:
                         seen.add(_dedupe_key(first[0]))
                 except OSError:
                     pass
+
+    if args.upgrade_existing:
+        upgraded = upgrade_existing_draft_findings(out_dir, ts)
+        if upgraded:
+            print(f"Upgraded {upgraded} existing draft finding(s) in {out_dir}")
 
     paths: list[Path]
     if in_dir.is_file():
@@ -690,6 +763,8 @@ def main() -> int:
         args.update_summaries = True
         args.update_risk_register = True
 
+    audit_path: Path | None = None
+
     if args.update_knowledge:
         knowledge_path = ensure_knowledge(args.provider, ts)
         audit_path = update_knowledge_generic(knowledge_path, args.provider, titles, ts)
@@ -703,27 +778,30 @@ def main() -> int:
                     f"  - Wrote/updated: `{arch_path.relative_to(ROOT)}`.",
                 ],
             )
+    elif args.update_summaries or args.update_risk_register:
+        # Allow summaries/risk register generation without creating/updating Knowledge/.
+        audit_path = ensure_audit(args.provider)
 
-        if args.update_summaries:
-            summary_paths = update_service_summaries(args.provider, ts)
-            if summary_paths:
-                rels = [f"  - Wrote/updated: `{p.relative_to(ROOT)}`." for p in summary_paths]
-                append_audit_event(
-                    audit_path,
-                    [f"- [{ts}] Generated per-service cloud summaries.", *rels],
-                )
+    if args.update_summaries:
+        summary_paths = update_service_summaries(args.provider, ts)
+        if audit_path is not None and summary_paths:
+            rels = [f"  - Wrote/updated: `{p.relative_to(ROOT)}`." for p in summary_paths]
+            append_audit_event(
+                audit_path,
+                [f"- [{ts}] Generated per-service cloud summaries.", *rels],
+            )
 
-        if args.update_risk_register:
-            rr = run_risk_register()
-            if rr is not None and rr.exists():
-                append_audit_event(
-                    audit_path,
-                    [
-                        f"- [{ts}] Generated the executive risk register.",
-                        "  - Ran: `python3 Skills/risk_register.py`.",
-                        f"  - Wrote: `{rr.relative_to(ROOT)}`.",
-                    ],
-                )
+    if args.update_risk_register:
+        rr = run_risk_register()
+        if audit_path is not None and rr is not None and rr.exists():
+            append_audit_event(
+                audit_path,
+                [
+                    f"- [{ts}] Generated the executive risk register.",
+                    "  - Ran: `python3 Skills/risk_register.py`.",
+                    f"  - Wrote: `{rr.relative_to(ROOT)}`.",
+                ],
+            )
 
     msg = f"Generated {generated} finding(s) into {out_dir}"
     if skipped_dupes:
