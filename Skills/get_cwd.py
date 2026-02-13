@@ -4,7 +4,7 @@
 Purpose:
 - Provide a reliable "where am I?" signal for CLIs/agents.
 - Suggest a default "repos root" directory for repo scan workflows when
-  Knowledge/Repos.md has not yet been configured.
+  Output/Knowledge/Repos.md has not yet been configured.
 
 Heuristics (no git commands):
 - cwd = os.getcwd()
