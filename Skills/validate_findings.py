@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SCORE_RE = re.compile(r"^\s*- \*\*Overall Score:\*\*\s+(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10\s*$")
 LAST_UPDATED_RE = re.compile(r"^- \U0001f5d3\ufe0f \*\*Last updated:\*\* \d{2}/\d{2}/\d{4} \d{2}:\d{2}\s*$")
 
+# Accept both plain and emoji-prefixed headings.
+SUMMARY_H_RE = re.compile(r"^###\s+(?:🧾\s+)?Summary\s*$")
+RECS_H_RE = re.compile(r"^###\s+(?:✅\s+)?Recommendations\s*$")
+
 
 @dataclass
 class Problem:
@@ -39,6 +43,10 @@ def _read_lines(path: Path) -> list[str]:
 def _has_heading(lines: list[str], heading: str) -> bool:
     h = heading.strip()
     return any(l.strip() == h for l in lines)
+
+
+def _has_heading_re(lines: list[str], pattern: re.Pattern[str]) -> bool:
+    return any(pattern.match(l.strip()) for l in lines)
 
 
 def validate_finding(path: Path, strict: bool) -> list[Problem]:
@@ -58,18 +66,41 @@ def validate_finding(path: Path, strict: bool) -> list[Problem]:
     elif not SCORE_RE.match(score_line):
         probs.append(Problem(path, "ERROR", "Overall Score format should be: - **Overall Score:** 🟠 High 7/10"))
 
-    if not _has_heading(lines, "### Summary"):
+    if not _has_heading_re(lines, SUMMARY_H_RE):
         probs.append(Problem(path, "ERROR", "Missing ### Summary section"))
     else:
         # Check for forbidden prefix (even if author used it).
         joined = "\n".join(lines)
-        if re.search(r"### Summary\n\s*If not addressed\s*[,\-:]?", joined, flags=re.IGNORECASE):
+        if re.search(r"###\s+(?:🧾\s+)?Summary\n\s*If not addressed\s*[,\-:]?", joined, flags=re.IGNORECASE):
             probs.append(Problem(path, "ERROR", "Summary must not start with 'If not addressed,'"))
         if "draft finding generated from a title-only input" in joined.lower():
             probs.append(Problem(path, "WARN", "Draft title-only boilerplate still present in Summary"))
 
-    if not _has_heading(lines, "### Recommendations"):
+    if not _has_heading_re(lines, RECS_H_RE):
         probs.append(Problem(path, "WARN" if not strict else "ERROR", "Missing ### Recommendations section"))
+
+    if not _has_heading(lines, "## 🗺️ Architecture Diagram"):
+        probs.append(Problem(path, "WARN" if not strict else "ERROR", "Missing ## 🗺️ Architecture Diagram section"))
+
+    for h in ["## 🤔 Skeptic", "## 🤝 Collaboration", "## Compounding Findings"]:
+        if not _has_heading(lines, h):
+            probs.append(Problem(path, "WARN" if not strict else "ERROR", f"Missing {h} section"))
+
+    joined = "\n".join(lines).lower()
+    if "purpose: review the **security review**" not in joined and _has_heading(lines, "## 🤔 Skeptic"):
+        probs.append(Problem(path, "WARN", "Skeptic section missing purpose line; reviewers may default to boilerplate"))
+
+    if _has_heading(lines, "## 🤔 Skeptic") and "what’s missing/wrong vs security review" not in joined:
+        probs.append(Problem(path, "WARN", "Skeptic section missing 'What’s missing/wrong vs Security Review' prompt"))
+
+    if not any(l.strip() == "### ⚠️ Assumptions" for l in lines):
+        probs.append(
+            Problem(
+                path,
+                "WARN",
+                "Missing ### ⚠️ Assumptions section (capture unconfirmed scope/exposure assumptions)",
+            )
+        )
 
     if not _has_heading(lines, "## Meta Data"):
         probs.append(Problem(path, "WARN" if not strict else "ERROR", "Missing ## Meta Data section"))
@@ -79,6 +110,11 @@ def validate_finding(path: Path, strict: bool) -> list[Problem]:
             probs.append(Problem(path, "WARN" if not strict else "ERROR", "Last updated must be: - 🗓️ **Last updated:** DD/MM/YYYY HH:MM"))
         if not last:
             probs.append(Problem(path, "WARN" if not strict else "ERROR", "Missing - 🗓️ **Last updated:**"))
+
+        # Meta Data should be the final section.
+        md_i = next((i for i, l in enumerate(lines) if l.strip() == "## Meta Data"), -1)
+        if md_i != -1 and any(l.startswith("## ") for l in lines[md_i + 1 :]):
+            probs.append(Problem(path, "WARN" if not strict else "ERROR", "## Meta Data should be the final section"))
 
     return probs
 
