@@ -8,19 +8,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INTAKE_SAMPLE_DIR = ROOT / "Intake" / "Sample"
 
+from output_paths import (
+    OUTPUT_AUDIT_DIR,
+    OUTPUT_FINDINGS_DIR,
+    OUTPUT_KNOWLEDGE_DIR,
+    OUTPUT_SUMMARY_DIR,
+)
+
 TARGET_GLOBS: tuple[tuple[Path, str], ...] = (
-    (ROOT / "Findings" / "Cloud", "*.md"),
-    (ROOT / "Findings" / "Code", "*.md"),
-    (ROOT / "Findings" / "Repo", "*.md"),
-    (ROOT / "Knowledge", "*.md"),
-    (ROOT / "Summary", "*.md"),
-    (ROOT / "Summary" / "Code", "*.md"),
-    (ROOT / "Summary" / "Cloud", "*.md"),
-    (ROOT / "Audit", "*.md"),
+    (OUTPUT_FINDINGS_DIR / "Cloud", "*.md"),
+    (OUTPUT_FINDINGS_DIR / "Code", "*.md"),
+    (OUTPUT_FINDINGS_DIR / "Repo", "*.md"),
+    (OUTPUT_KNOWLEDGE_DIR, "*.md"),
+    (OUTPUT_SUMMARY_DIR, "*.md"),
+    (OUTPUT_SUMMARY_DIR / "Code", "*.md"),
+    (OUTPUT_SUMMARY_DIR / "Cloud", "*.md"),
+    (OUTPUT_AUDIT_DIR, "*.md"),
 )
 
 EXPLICIT_FILES: tuple[Path, ...] = (
-    ROOT / "Summary" / "Risk Register.xlsx",
+    OUTPUT_SUMMARY_DIR / "Risk Register.xlsx",
 )
 
 
@@ -39,6 +46,15 @@ def iter_targets() -> list[Path]:
     if INTAKE_SAMPLE_DIR.exists():
         targets.append(INTAKE_SAMPLE_DIR)
 
+    # Also remove Output/ content (but keep the folders).
+    if (ROOT / "Output").exists():
+        for folder in (ROOT / "Output").iterdir():
+            if folder.name.startswith("."):
+                continue
+            if folder.is_dir():
+                # Remove files under Output/, but keep the folder structure.
+                targets.extend(sorted(p for p in folder.rglob("*") if p.is_file()))
+
     seen: set[Path] = set()
     unique: list[Path] = []
     for path in targets:
@@ -52,7 +68,7 @@ def iter_targets() -> list[Path]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Clear per-session triage artifacts (Findings/Knowledge/Summary) and sample-staged Intake/Sample/ "
+            "Clear per-session triage artifacts under Output/ (Findings/Knowledge/Summary/Audit) and sample-staged Intake/Sample/ "
             "without touching templates or user Intake content."
         )
     )
