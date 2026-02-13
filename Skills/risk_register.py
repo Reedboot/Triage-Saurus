@@ -12,8 +12,11 @@ from zipfile import ZipFile, ZIP_DEFLATED
 # Header fill colour (Excel ARGB): FF1F4E79 (dark blue)
 
 ROOT = Path(__file__).resolve().parents[1]
-FINDINGS_DIR = ROOT / "Findings"
-OUTPUT_PATH = ROOT / "Summary" / "Risk Register.xlsx"
+
+from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
+
+FINDINGS_DIR = OUTPUT_FINDINGS_DIR
+OUTPUT_PATH = OUTPUT_SUMMARY_DIR / "Risk Register.xlsx"
 
 SEVERITY_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
 
