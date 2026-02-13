@@ -41,6 +41,9 @@ flowchart TB
 - **Status:** Yes / No / Don’t know
 - **Evidence:** <what was observed>
 
+### ⚠️ Assumptions
+- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+
 ### 🎯 Exploitability
 <how an attacker would realistically leverage issues>
 
@@ -96,13 +99,21 @@ Extract downstream dependencies indicated by configuration, e.g.:
 <why the score is what it is>
 
 ## 🤔 Skeptic
+> Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
+
 ### 🛠️ Dev
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **How it could be worse:** <realistic attacker path leveraging repo/app/IaC>
+- **Countermeasure effectiveness:** <which recommendations measurably reduce risk; which are hygiene>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ### 🏗️ Platform
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **Operational constraints:** <pipelines, auth to cloud, network reachability, rollout sequencing>
+- **Countermeasure effectiveness:** <guardrail coverage, drift prevention, enforceability>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ## 🤝 Collaboration
 - **Outcome:** <outcome>
