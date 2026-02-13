@@ -23,7 +23,9 @@ def _first_matching(lines: list[str], prefix: str) -> Optional[str]:
 
 
 def main() -> int:
-    findings_dir = sys.argv[1] if len(sys.argv) > 1 else "Findings/Cloud"
+    from output_paths import OUTPUT_FINDINGS_DIR
+
+    findings_dir = sys.argv[1] if len(sys.argv) > 1 else str(OUTPUT_FINDINGS_DIR / "Cloud")
     pattern = os.path.join(findings_dir, "*.md")
 
     rows: list[tuple[str, str, str, str]] = []
