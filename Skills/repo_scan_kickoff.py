@@ -19,7 +19,9 @@ from pathlib import Path
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
-    repos_md = repo_root / "Knowledge" / "Repos.md"
+    from output_paths import OUTPUT_KNOWLEDGE_DIR
+
+    repos_md = OUTPUT_KNOWLEDGE_DIR / "Repos.md"
     suggested_root = repo_root.parent
 
     print("== Repo scan kickoff ==")
