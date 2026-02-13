@@ -688,6 +688,7 @@ def build_rows() -> list[RiskRow]:
                 risk_score=row.risk_score,
                 overall_severity=row.overall_severity,
                 business_impact=row.business_impact,
+                validation_status=row.validation_status,
                 file_reference=row.file_reference,
             )
         )
@@ -712,6 +713,7 @@ def build_shared_strings(rows: list[RiskRow], headers: list[str]) -> tuple[list[
         add(row.issue)
         add(row.overall_severity)
         add(row.business_impact)
+        add(row.validation_status)
         add(row.file_reference)
     return values, index
 
@@ -734,6 +736,7 @@ def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
         "Risk Score",
         "Overall Severity",
         "Business Impact",
+        "Status",
         "File Reference",
     ]
 
@@ -749,6 +752,7 @@ def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
             number_cell(row.risk_score),
             cell(shared_index, row.overall_severity),
             cell(shared_index, row.business_impact),
+            cell(shared_index, row.validation_status),
             cell(shared_index, row.file_reference),
         ]
         data_rows.append(f"<row r=\"{idx}\">{''.join(cells)}</row>")
@@ -897,6 +901,7 @@ def write_xlsx(rows: list[RiskRow], output_path: Path) -> None:
         "Risk Score",
         "Overall Severity",
         "Business Impact",
+        "Status",
         "File Reference",
     ]
 
