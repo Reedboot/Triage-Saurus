@@ -19,16 +19,10 @@ flowchart TB
   CI -. secrets scanning .-> Secrets[Secret scanning]
 ```
 
-- **Description:** Security scan/triage summary for this repository.
 - **Overall Score:** <severity emoji + label> <score>/10
 
 ## 🧭 Overview
-- **Repo path:** <absolute local path>
-- **Repo URL (if applicable):** <url or N/A>
-- **Scan scope:** SAST / dependency (SCA) / secrets / IaC / All
-- **Languages/frameworks detected:** <e.g., Terraform, Go, Node.js (Express), Python (Django), .NET, Java (Spring), etc>
-- **Evidence for detection:** <key files e.g., go.mod, package.json, pom.xml, requirements.txt, *.tf>
-- **CI/CD:** <Azure Pipelines/GitHub Actions/etc>
+<short overview of the repository purpose and key findings>
 
 ## 🛡️ Security Review
 ### Languages & Frameworks (extracted)
@@ -51,12 +45,20 @@ flowchart TB
 - <bullet list of notable risks/issues; link to related cloud/code findings if they exist>
 
 ### 🔎 Key Evidence (deep dive)
-Mark each deep-dive evidence item as positive/negative:
-- ✅ = observed guardrail / good practice / risk reducer
-- ❌ = observed weakness / insecure default / risk increaser
+Mark each deep-dive evidence item:
+- 💡 = notable signal / observed component / in-use indicator (neutral)
+- ✅ = observed guardrail / good practice / risk reducer (positive)
+- ❌ = observed weakness / insecure default / risk increaser (negative)
 
-- ✅ <positive observation> — evidence: `<path:line>`
-- ❌ <negative observation> — evidence: `<path:line>`
+For secret-like signals (password, token, etc):
+- If used inside a module: check module code before flagging as ❌ (may be securely handled)
+- If output is consumed by secure storage (e.g., Key Vault): flag as 💡 or ✅ depending on context
+- Only flag as ❌ if cleartext exposure or insecure handling is confirmed
+
+Examples:
+- 💡 Terraform module in use — evidence: `modules/azure/resource.tf:42:module "firewall_rules" {`
+- ✅ Secret stored via Key Vault module — evidence: `main.tf:15:module.key_vault.store_secret`
+- ❌ Cleartext secret in pipeline variable — evidence: `pipeline.yml:20:ARM_CLIENT_SECRET=$plaintext`
 
 ### Follow-up tasks for repo owners (optional)
 - [ ] <what to verify> — evidence/source to check: `<path>`
@@ -125,5 +127,13 @@ Extract downstream dependencies indicated by configuration, e.g.:
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
+- **Repo Name:** <repo-name>
+- **Repo Path:** <absolute local path>
+- **Repo URL:** <url or N/A>
+- **Repo Type:** <Terraform/Go/Node.js/etc + purpose>
+- **Languages/Frameworks:** <comma-separated list>
+- **CI/CD:** <Azure Pipelines/GitHub Actions/etc or N/A>
+- **Scan Scope:** <SAST / dependency (SCA) / secrets / IaC / All>
+- **Scanner:** <tool name>
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
