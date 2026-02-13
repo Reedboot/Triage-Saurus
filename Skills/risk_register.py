@@ -41,6 +41,7 @@ class RiskRow:
     risk_score: int
     overall_severity: str
     business_impact: str
+    validation_status: str  # "✅ Validated" or "⚠️ Draft - Needs Triage"
     file_reference: str
 
 
@@ -98,6 +99,21 @@ def parse_issue(title: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     return cleaned or title
+
+
+def is_draft_finding(lines: list[str]) -> bool:
+    """Check if a finding is a draft (generic boilerplate, not validated)."""
+    text = " ".join(lines).lower()
+    
+    # Check for draft indicators
+    draft_indicators = [
+        "draft finding generated from a title-only input",
+        "this is a draft finding",
+        "validate the affected resources/scope",
+        "title-only input; needs validation",
+    ]
+    
+    return any(indicator in text for indicator in draft_indicators)
 
 
 def parse_summary(lines: list[str], path: Path) -> str:
@@ -620,6 +636,9 @@ def build_rows() -> list[RiskRow]:
         
         # Strip markdown formatting for Excel display
         exec_issue = _strip_markdown_formatting(exec_issue)
+        
+        # Check if this is a draft finding
+        validation_status = "⚠️ Draft - Needs Triage" if is_draft_finding(lines) else "✅ Validated"
 
         if _is_repo_finding(path) and re.fullmatch(r"Repo\s+[^:]+", issue, flags=re.IGNORECASE):
             print(
@@ -635,6 +654,7 @@ def build_rows() -> list[RiskRow]:
                 risk_score=score,
                 overall_severity=severity,
                 business_impact=impact,
+                validation_status=validation_status,
                 file_reference=str(path.relative_to(ROOT)),
             )
         )
