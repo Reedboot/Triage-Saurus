@@ -16,6 +16,10 @@ repository.
   - **Purpose:** Review approach for developer-focused findings.
 - **Path:** Agents/PlatformSkeptic.md
   - **Purpose:** Review approach for platform-focused findings.
+- **Path:** Knowledge/DevSkeptic.md
+  - **Purpose:** Reusable dev-centric context (app patterns, common mitigations, org conventions).
+- **Path:** Knowledge/PlatformSkeptic.md
+  - **Purpose:** Reusable platform-centric context (networking/CI/CD constraints, guardrails, rollout realities).
 - **Path:** Agents/SecurityAgent.md
   - **Purpose:** Review approach for security-focused findings.
 - **Path:** Agents/ArchitectureAgent.md
