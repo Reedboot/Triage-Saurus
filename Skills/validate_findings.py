@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
+from markdown_validator import validate_markdown_file
 
 SCORE_RE = re.compile(r"^\s*- \*\*Overall Score:\*\*\s+(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10\s*$")
 LAST_UPDATED_RE = re.compile(r"^- \U0001f5d3\ufe0f \*\*Last updated:\*\* \d{2}/\d{2}/\d{4} \d{2}:\d{2}\s*$")
@@ -54,6 +55,14 @@ def _has_heading_re(lines: list[str], pattern: re.Pattern[str]) -> bool:
 def validate_finding(path: Path, strict: bool) -> list[Problem]:
     lines = _read_lines(path)
     probs: list[Problem] = []
+
+    # Mermaid validation (and safe auto-fix) for findings.
+    m_probs = validate_markdown_file(path, fix=True)
+    for mp in m_probs:
+        if mp.level == "ERROR":
+            probs.append(Problem(path, "ERROR", mp.message))
+        elif mp.level == "WARN":
+            probs.append(Problem(path, "WARN" if not strict else "ERROR", mp.message))
 
     if not lines or not lines[0].startswith("# "):
         probs.append(Problem(path, "ERROR", "Missing markdown title heading on first line"))
