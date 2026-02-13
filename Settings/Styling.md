@@ -25,7 +25,7 @@ those tools are added to the repo.
   with **human-readable link text** (the finding title), not the file path, e.g.
   `[Public Network Access On Azure SQL Database Should Be Disabled](../../Findings/Cloud/Public_Network_Access_On_Azure_SQL_Database_Should_Be_Disabled.md)`.
   Avoid inline code backticks (not reliably clickable).
-- **Diagram placement:** In findings, place `## 🗺️ Architecture Diagram` immediately under the document title (the `# 🟣 ...` line).
+- **Diagram placement:** In **all findings** (Cloud, Code, Repo), place `## 🗺️ Architecture Diagram` **immediately under the document title** (the `# 🟣 ...` line) as the **first section**. The `- **Overall Score:** ...` line must come **immediately after** the closing diagram fence (` ``` `), **before** any other section.
 - **Security Review subheadings:** Prefer emoji-prefixed subheadings in findings:
   - `### 🧾 Summary`
   - `### ✅ Applicability`
@@ -75,6 +75,13 @@ those tools are added to the repo.
   - 🧑‍💻 User/operator
   - ⚙️ Automation or pipeline
   - 📈 Monitoring/alerts
+- **Mermaid colors (theme-aware):** **Do not use `style fill`** in Mermaid diagrams.
+  Background fill colors (e.g., `fill:#90EE90`, `fill:#FFB6C1`) break on dark themes.
+  Use theme-neutral alternatives:
+  - **Positive/secure components:** Use thicker borders (`stroke-width:3px`)
+  - **Risk/exposure components:** Use dotted/dashed borders (`stroke-dasharray: 5 5`)
+  - **Emphasis:** Use border styling (`stroke-width`, `stroke-dasharray`) or emojis
+  - **Never use:** `style <node> fill:<color>` (breaks theme compatibility)
 
 Last updated: 05/02/2026 21:04
 
