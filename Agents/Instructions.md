@@ -3,29 +3,29 @@
 ## Purpose
 This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
-2. Create/update a finding under `Findings/` using the relevant template.
-3. Capture confirmed facts under `Knowledge/` (Confirmed + Assumptions). Keep it focused on reusable environment facts used during triage (services in use, identity model, network posture, guardrails).
+2. Create/update a finding under `Output/Findings/` using the relevant template.
+3. Capture confirmed facts under `Output/Knowledge/` (Confirmed + Assumptions). Keep it focused on reusable environment facts used during triage (services in use, identity model, network posture, guardrails).
    - Keep provider knowledge files consistent: use `## Confirmed`, `## Assumptions`, and
      `## Unknowns` headings (avoid ad-hoc extra sections).
-   - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
-4. Update `Summary/` outputs (cloud resource summaries and risk register).
+   - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Output/Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
+4. Update `Output/Summary/` outputs (cloud resource summaries and risk register).
 
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
-  - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Knowledge/` and existing `Findings/` for missing context.
-  - If there are **no findings** under `Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
+  - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
+  - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
     - `python3 Skills/scan_workspace.py`
-    It scans `Knowledge/` (refinement questions), `Findings/`, and common `Intake/`/sample paths.
+    It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
   - **Targeted helpers (stdout-only):**
-    - **Check `Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
-      It lists Markdown files under `Knowledge/` (including top-level files like `Knowledge/Azure.md`) and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
+    - **Check `Output/Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
+      It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
     - **Enumerate `Intake/` files:** `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
       It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
-    - **Check whether `Findings/` has anything in it:** `python3 Skills/scan_findings_files.py`
-      It walks `Findings/` and lists `.md` files reliably.
-  - If `Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
-  - If there are **no refinement questions** *and* the `Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
+    - **Check whether `Output/Findings/` has anything in it:** `python3 Skills/scan_findings_files.py`
+      It walks `Output/Findings/` and lists `.md` files reliably.
+  - If `Output/Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
+  - If there are **no refinement questions** *and* the `Output/Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
     - `🦖 Welcome to Triage-Saurus.`
   - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
     - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
@@ -33,6 +33,13 @@ This repository supports consistent security triage. The expected workflow is:
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
         - `python3 Skills/scan_intake_files.py <candidate-path>`
       - Only offer **non-empty** candidates as choices.
+    - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
+      - Run (stdout-only): `python3 Skills/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
+      - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
+        - proceed with **new items only** (recommended), or
+        - stop and let the user adjust the intake.
+      - If **no new items** remain, stop and tell the user.
+      - If **new items exist**, proceed using only that new-item subset.
       - Candidate paths in this repo: `Intake/Cloud`, `Intake/Code`, `Intake/Sample/Cloud` (if present), `Intake/Sample/Code` (if present)
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
 - If triage type is **Cloud** and the provider is not explicit from the folder path, quickly skim the intake titles and:
@@ -41,9 +48,9 @@ This repository supports consistent security triage. The expected workflow is:
     - Use the provider name as the choice label (avoid “Yes (Azure)”): `Azure` / `AWS` / `GCP` / `Don’t know` (freeform allowed for other).
     - In the line *above* the `❓` question, include a brief “why” based on the titles (e.g., 🤔 Key Vault / Entra / Defender ⇒ Azure).
 - Follow `Settings/Styling.md` for formatting rules.
-  - In `Summary/`, ensure any references to findings are **markdown links** (clickable),
+  - In `Output/Summary/`, ensure any references to findings are **markdown links** (clickable),
     not inline-code backticks.
-- At session start, quickly review existing `Knowledge/` and any existing findings under `Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
+- At session start, quickly review existing `Output/Knowledge/` and any existing findings under `Output/Findings/` to spot missing context; ask targeted questions to fill gaps before proceeding.
 - **UK spelling in user-facing questions:** use UK English (e.g., *prioritise, assess, organisation*).
 - Ask one targeted question at a time; avoid bundling multiple confirmations into a single prompt.
 - For **info-gathering / refinement** questions, avoid broad prompts (e.g., “Do you have internet-facing workloads?”). Instead:
@@ -58,7 +65,7 @@ This repository supports consistent security triage. The expected workflow is:
   - include a lightweight progress indicator with remaining count (e.g., `Progress: Q3/10 (7 left)`) when doing bulk refinement.
   - every 5 questions, remind the user they can pause and resume refinement at any time, and include the estimated remaining *batches of 5* (e.g., `~3 batches left`).
   - avoid asking tautological applicability questions when the input already implies at least one affected resource (e.g., title-only exports phrased as “should …`).
-- When you adjust a finding score based on user confirmation or Knowledge/, add a one-line note (e.g., `Score change: 5/10 ➜ 7/10 — confirmed internet-facing prod exposure`).
+- When you adjust a finding score based on user confirmation or `Output/Knowledge/`, add a one-line note (e.g., `Score change: 5/10 ➜ 7/10 — confirmed internet-facing prod exposure`).
 - **Applicability check (per finding):**
   - For *evidence-backed* findings (e.g., scanner output that clearly indicates a failing resource), treat applicability as **Yes** by default and ask only scoping questions that change severity/remediation.
   - For *recommendation-style* findings where applicability is genuinely unclear, ask one question to establish whether the condition is currently true (Yes / No / Don’t know).
@@ -69,7 +76,7 @@ This repository supports consistent security triage. The expected workflow is:
   - If applicability is **No** (confirmed false positive / out of scope), downgrade severity appropriately and rewrite the finding as a drift-prevention / assurance item.
 - **Scope discipline:** do **not** create new findings that were not in the original
   input list (e.g., title-only export). It’s fine to:
-  - add new environment context to `Knowledge/`, and
+  - add new environment context to `Output/Knowledge/`, and
   - update the *existing* finding to note: "if X is true, the score increases" (or
     set Applicability to **Yes** when confirmed).
 - **Post-triage assumption confirmation:** after bulk triage (or whenever assumptions accumulate), ask follow-up questions to confirm/deny assumptions.
@@ -77,32 +84,32 @@ This repository supports consistent security triage. The expected workflow is:
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
   - Prefix these prompts with `❓` so they’re easy to spot in chat history.
 - When asking or receiving answers to triage questions that influence scope,
-  applicability, scoring, or remediation, append an entry to an `Audit/` log
+  applicability, scoring, or remediation, append an entry to an `Output/Audit/` log
   (append-only) recording **the question + the user's answer** (including “Don’t
-  know”). Only promote reusable facts into `Knowledge/`.
+  know”). Only promote reusable facts into `Output/Knowledge/`.
 - **Audit log size:** for bulk title imports, prefer an audit summary (count + source
   file path + timestamp). Only include per-item lists when the user explicitly asks.
-- When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Knowledge/`.
+- When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
-  - First check `Knowledge/Repos.md` for known repo root path(s).
+  - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
     - Prefer using the stdout-only helper to avoid guesswork: `python3 Skills/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
     - Then ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
-  - If the user confirms or provides an alternative, persist it into `Knowledge/Repos.md`.
+  - If the user confirms or provides an alternative, persist it into `Output/Knowledge/Repos.md`.
   - **Only after** at least one repo root is recorded (or the user explicitly confirms **"current repo"**), ask which repo/directory under that root should be scanned.
     - Accept either a single repo name/path, a list (comma/newline separated), or a simple wildcard/prefix pattern like `terraform-*`.
     - If the user provides a pattern/wildcard, **expand it into concrete repo names** and ask for an explicit confirmation of the expanded list before scanning.
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
-  - If new: append it **immediately** to `Knowledge/` as **Confirmed** with a timestamp.
+  - If new: append it **immediately** to `Output/Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
-  - If Cloud + provider is confirmed: immediately update `Summary/Cloud/Architecture_<Provider>.md`.
-- Prefer confirmed facts, **but capture inferred context** in `Knowledge/` as an
+  - If Cloud + provider is confirmed: immediately update `Output/Summary/Cloud/Architecture_<Provider>.md`.
+- Prefer confirmed facts, **but capture inferred context** in `Output/Knowledge/` as an
   explicit **assumption** and then ask the user to confirm/deny.
-- When a finding implies additional environment context (e.g., “Defender for Cloud” recommendations imply Defender is enabled), record it in `Knowledge/` as an **assumption** and immediately ask the user to confirm/deny.
-- When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), record that service as **Confirmed in use** in `Knowledge/` without asking (the finding itself implies the service exists).
+- When a finding implies additional environment context (e.g., “Defender for Cloud” recommendations imply Defender is enabled), record it in `Output/Knowledge/` as an **assumption** and immediately ask the user to confirm/deny.
+- When findings reference a specific cloud service as the **subject** of the finding (e.g., AKS, Key Vault, Storage Accounts), record that service as **Confirmed in use** in `Output/Knowledge/` without asking (the finding itself implies the service exists).
   - This also applies to **bulk title-only imports**: if a title clearly names an Azure service (e.g., “secure transfer on storage accounts”, “enable SQL auditing”, “disable ACR admin user”), treat that service as **Confirmed in use**.
 - If a finding recommends enabling an **additional** service/control (e.g., DDoS Standard, Defender plan, Private Link), record that additional service/control as an **Assumption** until the user confirms.
 - When processing findings in bulk (including sample findings), process items **sequentially**.
@@ -116,13 +123,13 @@ This repository supports consistent security triage. The expected workflow is:
     “should I continue?”.
   - Only pause for user input when you need a decision that materially changes remediation,
     applicability, scoring, or scope.
-  - Still update `Knowledge/` with inferred services/controls as **assumptions**, then ask the
+  - Still update `Output/Knowledge/` with inferred services/controls as **assumptions**, then ask the
     user to verify the assumptions as a follow-up step.
 - Keep findings actionable: impact, exploitability, and concrete remediation.
   - The `### Summary` section should start with a **business-impact** sentence. The Risk
     Register “Business Impact” column is a **single short sentence** for management and
     should avoid countermeasure/implementation detail.
-- When a finding is created or updated, **immediately** update `Knowledge/` with any
+- When a finding is created or updated, **immediately** update `Output/Knowledge/` with any
   new inferred or confirmed facts discovered while writing the finding.
   - Capture inferred facts as **assumptions** and ask the user to confirm/deny.
   - Prefer reusable environment knowledge (services in use, guardrails, identity
@@ -132,7 +139,7 @@ This repository supports consistent security triage. The expected workflow is:
     1) extract all Terraform `module` blocks and their `source` values,
     2) classify each as **local path**, **known local repo**, **unknown local repo**, **remote git URL**, or **Terraform Registry module** (format these as `https://registry.terraform.io/modules/<namespace>/<name>/<provider>` and include version if pinned),
     3) scan any **local-path** modules immediately,
-    4) for any module repo/path that is **not already recorded in `Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
+    4) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
        - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
        - use `python3 Skills/scan_repo_quick.py` for the initial scan.
@@ -150,10 +157,10 @@ This repository supports consistent security triage. The expected workflow is:
     - where secrets are stored (vault vs CI variables vs cloud secret store) and whether they are encrypted/rotated,
     - how CI/CD authenticates to the target environment (OIDC/workload identity vs long-lived keys/service principals),
     - and how CI/CD reaches the environment (network path, VPN/peering, private endpoints).
-  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal, but **do not** ask about environment tiers during the repo scan itself. Record it in `Knowledge/` as an **Assumption** and defer any environment-scope questions until the user starts cloud triage (or explicitly requests environment scoping).
-- When `Knowledge/` is created or updated (including assumptions), **immediately**
-  generate or update the provider architecture diagram under `Summary/Cloud/` (e.g.,
-  `Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
+  - If you detect **Hiera** (YAML hierarchy/overrides), treat it as an environment-scope signal, but **do not** ask about environment tiers during the repo scan itself. Record it in `Output/Knowledge/` as an **Assumption** and defer any environment-scope questions until the user starts cloud triage (or explicitly requests environment scoping).
+- When `Output/Knowledge/` is created or updated (including assumptions), **immediately**
+  generate or update the provider architecture diagram under `Output/Summary/Cloud/` (e.g.,
+  `Output/Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
   include any newly discovered services.
   - This is a **standing rule throughout the session** (do not wait until session
     kickoff or the end of triage).
@@ -161,7 +168,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Prefer **top-down** Mermaid (`flowchart TB`) so external → internal flows read naturally.
   - Only include **confirmed services** on the Mermaid diagram unless the user explicitly asks
     to include assumed components.
-- While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
+- While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Output/Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
 - When a recommendation depends on **platform SKU/tier/feature availability** (common examples: private endpoints, private registries, WAF features, auditing tiers), explicitly call out the dependency and note that remediation may require a **SKU change** (e.g., ACR private connectivity may require Premium depending on the provider/service).
 - When a recommendation may require **reprovisioning/redeployment/restart** to take effect, explicitly warn about potential **downtime/maintenance windows** and rollout sequencing.
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
@@ -177,24 +184,24 @@ This repository supports consistent security triage. The expected workflow is:
 
 ## Outputs
 
-- **Default behaviour:** outputs under `Findings/`, `Knowledge/`, and `Summary/` are
+- **Default behaviour:** outputs under `Output/Findings/`, `Output/Knowledge/`, and `Output/Summary/` are
   **generated per-user/session and are intentionally untracked** (see `.gitignore`).
   Change that only if you explicitly want to commit triage artifacts.
 
-- **Cloud findings:** `Findings/Cloud/<Titlecase>.md`
-- **Code findings:** `Findings/Code/<Titlecase>.md`
-- **Repo scans:** `Findings/Repo/Repo_<RepoName>.md` (one file per repo)
-- **Cloud summaries:** `Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
+- **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
+- **Code findings:** `Output/Findings/Code/<Titlecase>.md`
+- **Repo scans:** `Output/Findings/Repo/Repo_<RepoName>.md` (one file per repo)
+- **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Skills/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
-  - With `--update-knowledge`, it also generates `Summary/Cloud/*.md` per-service summaries, regenerates
-    `Summary/Risk Register.xlsx`, and appends audit entries under `Audit/`.
+  - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
+    `Output/Summary/Risk Register.xlsx`, and appends audit entries under `Output/Audit/`.
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:
-  - `python3 Skills/risk_register.py` (updates `Summary/Risk Register.xlsx`)
+  - `python3 Skills/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
-  - `python3 Skills/extract_finding_scores.py Findings/Cloud`
+  - `python3 Skills/extract_finding_scores.py Output/Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
 
 ## Utility scripts
