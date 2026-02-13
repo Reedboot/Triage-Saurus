@@ -72,6 +72,14 @@ def parse_overall_score(lines: list[str], path: Path) -> tuple[str, int]:
     raise ValueError(f"Missing overall score in {path}")
 
 
+def parse_description(lines: list[str], path: Path) -> str:
+    """Extract the Description line which often has more context than title."""
+    for line in lines:
+        if line.strip().startswith("- **Description:**"):
+            return line.replace("- **Description:**", "").strip()
+    return ""
+
+
 def parse_title(lines: list[str], path: Path) -> str:
     if not lines:
         raise ValueError(f"Empty finding: {path}")
@@ -359,7 +367,7 @@ def to_exec_risk_issue(issue: str, impact_label: str) -> str:
     return out
 
 
-def resource_type_from_path(path: Path, title: str, issue: str = "", evidence: str = "", applicability: str = "") -> str:
+def resource_type_from_path(path: Path, title: str, issue: str = "", evidence: str = "", applicability: str = "", description: str = "") -> str:
     parts = {p.lower() for p in path.parts}
 
     if "code" in parts:
@@ -369,11 +377,18 @@ def resource_type_from_path(path: Path, title: str, issue: str = "", evidence: s
     if "cloud" not in parts:
         return "Application"
 
-    # Check title, filename, issue text, evidence, and applicability for resource type keywords
-    t = f"{title} {path.stem} {issue} {evidence} {applicability}".lower()
+    # Check title, filename, description, issue text, evidence, and applicability for resource type keywords
+    t = f"{title} {path.stem} {description} {issue} {evidence} {applicability}".lower()
 
     # Check for specific Azure/cloud services first (with provider prefixes)
-    if any(k in t for k in ["virtual machine", "virtual machines", "vm", "management ports", "rdp", "ssh", "windows machines", "linux machines"]):
+    # Azure subscription/tenant-level controls
+    if any(k in t for k in ["azure subscription", "subscriptions should", "activity log", "log profile"]):
+        return "Subscription"
+    if any(k in t for k in ["flow log", "network watcher"]):
+        return "Network Watcher"
+    
+    # Azure compute and services
+    if any(k in t for k in ["virtual machine", "virtual machines", "vm", "management ports", "rdp", "ssh", "windows machines", "linux machines", "bootloader"]):
         return "Virtual Machine"
     if any(k in t for k in ["event hub", "eventhub", "azure event hub"]):
         return "Event Hub"
@@ -574,6 +589,7 @@ def build_rows() -> list[RiskRow]:
         summary = parse_summary(lines, path)
         
         # Extract additional context for better resource type classification
+        description = parse_description(lines, path)
         evidence = parse_key_evidence(lines, path)
         applicability = parse_applicability(lines, path)
 
@@ -596,7 +612,7 @@ def build_rows() -> list[RiskRow]:
         impact = to_business_impact(summary, issue)
         exec_issue = to_exec_risk_issue(issue, impact)
         # Use full context from finding file for better resource type classification
-        resource_type = resource_type_from_path(path, title, issue, evidence, applicability)
+        resource_type = resource_type_from_path(path, title, issue, evidence, applicability, description)
         _warn_on_missed_service_classification(title, resource_type)
         
         # Strip redundant resource type prefix from issue text
