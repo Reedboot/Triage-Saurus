@@ -81,6 +81,17 @@ def parse_description(lines: list[str], path: Path) -> str:
     return ""
 
 
+def parse_meta_resource_type(lines: list[str], path: Path) -> str:
+    """Extract Resource Type from the finding Meta Data section (if populated)."""
+    for line in lines:
+        if line.strip().startswith("- **Resource Type:**"):
+            val = line.replace("- **Resource Type:**", "").strip()
+            if not val or val.upper() == "TODO":
+                return ""
+            return val
+    return ""
+
+
 def parse_title(lines: list[str], path: Path) -> str:
     if not lines:
         raise ValueError(f"Empty finding: {path}")
@@ -635,7 +646,8 @@ def build_rows() -> list[RiskRow]:
         impact = to_business_impact(summary, issue)
         exec_issue = to_exec_risk_issue(issue, impact)
         # Use full context from finding file for better resource type classification
-        resource_type = resource_type_from_path(path, title, issue, evidence, applicability, description)
+        meta_resource_type = parse_meta_resource_type(lines, path)
+        resource_type = meta_resource_type or resource_type_from_path(path, title, issue, evidence, applicability, description)
         _warn_on_missed_service_classification(title, resource_type)
         
         # Strip redundant resource type prefix from issue text
