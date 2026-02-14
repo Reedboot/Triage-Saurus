@@ -18,7 +18,7 @@ from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
 FINDINGS_DIR = OUTPUT_FINDINGS_DIR
 OUTPUT_PATH = OUTPUT_SUMMARY_DIR / "Risk Register.xlsx"
 
-SEVERITY_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+SEVERITY_ORDER = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Informational": 0}
 
 ACRONYM_REPLACEMENTS = {
     "RBAC": "access control",
@@ -66,7 +66,7 @@ def iter_finding_files() -> Iterable[Path]:
 def parse_overall_score(lines: list[str], path: Path) -> tuple[str, int]:
     for line in lines:
         if line.strip().startswith("- **Overall Score:**"):
-            match = re.search(r"(Critical|High|Medium|Low)\s+(\d+)/10", line)
+            match = re.search(r"(Critical|High|Medium|Low|Informational)\s+(\d+)/10", line)
             if not match:
                 raise ValueError(f"Unable to parse overall score in {path}")
             return match.group(1), int(match.group(2))

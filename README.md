@@ -65,3 +65,7 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - `Skills/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
   - Optional helper: `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+
+## Auto-regenerate risk register
+- Run `python3 Skills/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
+- Use `python3 Skills/watch_risk_register.py --full` to also refresh summaries/descriptions/scores before regenerating.

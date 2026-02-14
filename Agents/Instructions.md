@@ -153,6 +153,8 @@ This repository supports consistent security triage. The expected workflow is:
   - The `### Summary` section should start with a **business-impact** sentence. The Risk
     Register “Business Impact” column is a **single short sentence** for management and
     should avoid countermeasure/implementation detail.
+  - **Validated summary refresh:** when a finding’s `Validation Status` is set to `✅ Validated`, replace any title-only boilerplate in `### 🧾 Summary` with a short, evidence-backed summary based on **confirmed** context (do not over-claim specific resource IDs if you don’t have them yet).
+    - Helper (writes files; use when needed): `python3 Skills/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
 - When a finding is created or updated, **immediately** update `Output/Knowledge/` with any
   new inferred or confirmed facts discovered while writing the finding.
   - Capture inferred facts as **assumptions** and ask the user to confirm/deny.
@@ -202,6 +204,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Prefer **top-down** Mermaid (`flowchart TB`) so external → internal flows read naturally.
   - Only include **confirmed services** on the Mermaid diagram unless the user explicitly asks
     to include assumed components.
+  - If any `✅ Validated` findings still contain title-only boilerplate in `### 🧾 Summary`, refresh them (writes files): `python3 Skills/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
 - While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Output/Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
 - **Finding content completeness:** ensure all findings have:
   - A clear **Overall Score** with severity and numeric score (e.g., `🔴 High 8/10`)
@@ -219,6 +222,10 @@ This repository supports consistent security triage. The expected workflow is:
   - what files it will write/change,
   - why it’s necessary now.
   - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Skills/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
+  - **Exception (user-requested automation):** if the user asks for summaries to update automatically as new information becomes available, it is OK to run `python3 Skills/update_validated_summaries.py --path Output/Findings/Cloud --in-place` after each material Q&A/knowledge update (it only removes title-only boilerplate when there is confirmed/applicability context).
+  - **Exception (user-requested automation):** if the user asks for descriptions to stop repeating titles, it is OK to run `python3 Skills/update_descriptions.py --path Output/Findings/Cloud --in-place` after bulk imports and/or as part of draft validation.
+  - **Exception (user-requested automation):** if the user asks to adjust scores based on confirmed countermeasures and compounding, it is OK to run `python3 Skills/adjust_finding_scores.py --path Output/Findings/Cloud --in-place` after material Q&A/knowledge updates (it only adjusts when the finding contains confirmed context and records the applied drivers under `### 📐 Rationale`).
+  - **Exception (user-requested automation):** if the user asks for the risk register to auto-regenerate, it is OK to run a watcher in a separate terminal: `python3 Skills/watch_risk_register.py` (or `--full` to also run the refresh helpers).
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
 

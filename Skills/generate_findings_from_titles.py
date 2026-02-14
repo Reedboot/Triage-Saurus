@@ -186,11 +186,15 @@ def _score_parts(score: int) -> tuple[str, str]:
 
 def build_finding_model(*, title: str, score: int, ts: str, recs: list[str], source_path: Path | None) -> dict:
     emoji, label = _score_parts(score)
+    try:
+        from finding_text import cloud_description_for_title  # type: ignore
+    except Exception:
+        cloud_description_for_title = None
     model: dict = {
         "version": 1,
         "kind": "cloud",
         "title": title,
-        "description": title,
+        "description": cloud_description_for_title(title) if cloud_description_for_title else title,
         "overall_score": {"severity": label, "score": score},
         # The generators still pick a generic diagram; AI-driven pipelines can override this field.
         "architecture_mermaid": "flowchart TB\n  Internet[Internet / Users] --> Svc[Affected service]\n  Svc --> Data[Data store]\n  Svc --> Logs[Monitoring/Logs]\n\n  Sec[Controls] -.-> Svc",
@@ -241,6 +245,11 @@ def build_finding_model(*, title: str, score: int, ts: str, recs: list[str], sou
 def write_finding(out_path: Path, title: str, score: int, ts: str) -> None:
     sev = severity(score)
     recs = recommendations_for(title)
+    try:
+        from finding_text import cloud_description_for_title  # type: ignore
+    except Exception:
+        cloud_description_for_title = None
+    desc = cloud_description_for_title(title) if cloud_description_for_title else title
 
     reduced_1 = max(0, score - 2)
     reduced_2 = max(0, reduced_1 - 2)
@@ -258,7 +267,7 @@ flowchart TB
   Sec[Controls] -.-> Svc
 ```
 
-- **Description:** {title}
+- **Description:** {desc}
 - **Overall Score:** {sev} {score}/10
 
 ## 🛡️ Security Review
