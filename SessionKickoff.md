@@ -17,6 +17,9 @@ Targeted helpers still exist (stdout-only):
 - `python3 Skills/scan_knowledge_refinement.py`
 - `python3 Skills/scan_findings_files.py`
 - `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
+- Draft triage queue helper (stdout-only):
+  - `python3 Skills/triage_queue.py`
+  Use this after bulk imports to skim drafts and identify common missing context, so you can ask cross-cutting questions first.
 
 ## Prompt
 ```text
@@ -104,6 +107,8 @@ When processing sample findings in bulk, process them sequentially and **auto-co
 next item. Use a default priority order unless I override it: (1) internet exposure,
 (2) data stores/secrets, (3) identity/privilege, (4) logging/monitoring, (5) baseline
 hardening. Only pause for questions that change scoring/applicability/scope.
+
+After bulk import/generation, if a large portion are drafts, first skim drafts and ask a small set of cross-cutting questions (private endpoints, bastion/JIT, public exposure, prod scope) before asking per-finding questions.
 - If a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 
 If you have title-only exports in `Intake/` and want to save tokens/time, you may generate draft
@@ -126,4 +131,3 @@ Whenever `Output/Knowledge/` is created or updated, generate/update the relevant
 ## See also
 - Repo overview + workflow: `README.md`
 - Canonical operating rules: `AGENTS.md` and `Agents/Instructions.md`
-

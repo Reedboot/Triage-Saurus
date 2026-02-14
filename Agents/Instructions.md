@@ -24,6 +24,18 @@ This repository supports consistent security triage. The expected workflow is:
       - "⚠️ Found **N draft findings** that need validation. These have placeholder scores and generic boilerplate."
       - "Would you like to **validate draft findings** now, or **proceed with new triage**?"
     - Draft findings show as "⚠️ Draft - Needs Triage" in the Risk Register Status column.
+    - **Draft completion workflow (question-first):** when the user chooses to validate drafts:
+      - First, skim the draft set and identify **common missing context** before asking per-finding questions.
+        - Preferred helper (stdout-only): `python3 Skills/triage_queue.py`
+      - Ask **cross-cutting** questions first (one at a time, prefix with `❓`) so answers apply to many findings, e.g.:
+        - cloud provider confirmation (if missing)
+        - production vs non-prod scoping (if known)
+        - internet exposure posture (public endpoints, management ports)
+        - private connectivity patterns (Private Endpoints/Private Link)
+        - privileged access model (Bastion/JIT, jump hosts, allowlisted admin IPs)
+        - storage access model (public blobs, shared keys)
+      - Then apply those answers across the impacted drafts and only then go deeper into the highest-severity items.
+      - **Do not** "validate" a finding by removing boilerplate text. Set validation explicitly using the finding `Validation Status` field (e.g., `⚠️ Draft - Needs Triage` vs `✅ Validated`) once evidence/applicability is sufficiently confirmed.
   - **Targeted helpers (stdout-only):**
     - **Check `Output/Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
       It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
