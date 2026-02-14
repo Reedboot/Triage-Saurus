@@ -36,7 +36,7 @@ To make this reliable across different CLIs/tooling, avoid shell `find`/recursiv
 - `python3 Skills/scan_workspace.py` (preferred)
 - `python3 Skills/scan_findings_files.py` (targeted)
 
-Then ask me to (numbered options):
+Then ask me to (numbered options; I should be able to reply with just the number):
 1. **Copy/paste a single issue** to triage
 2. **Provide a path under `Intake/`** to process in bulk
 3. **Import and triage the sample findings**
@@ -98,6 +98,7 @@ Before asking any cloud-provider questions:
   - Promote reusable context from repo scan into `Output/Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
 When asking **multiple-choice** questions, always include a **“Don’t know”** option.
+- In plain chat (non-selectable), present choices as a **numbered list** so I can reply with just the number.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Output/Knowledge/`.
 - If it’s new: record it **immediately** in `Output/Knowledge/` as **Confirmed** (with timestamp).

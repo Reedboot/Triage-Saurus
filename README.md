@@ -54,6 +54,9 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 
 During bulk processing, if a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 
+## Answering questions quickly
+- When the agent asks a multiple-choice question in plain chat, it should provide **numbered options** so you can reply with just `1`, `2`, etc.
+
 **Tools**
 - **Python:** `python3` is required to run:
   - `Skills/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)

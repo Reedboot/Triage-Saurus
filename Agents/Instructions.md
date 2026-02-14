@@ -52,10 +52,15 @@ This repository supports consistent security triage. The expected workflow is:
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
         - `python3 Skills/scan_intake_files.py <candidate-path>`
       - Only offer **non-empty** candidates as choices.
-    - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
-      - Run (stdout-only): `python3 Skills/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
-      - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
-        - proceed with **new items only** (recommended), or
+  - **Multiple-choice questions (UX):**
+    - When asking a multiple-choice question in plain chat, include **numbered options** (e.g., `1) ...`) so the user can reply with just a number.
+      - Always include a **“Don’t know”** option as one of the numbered choices.
+      - Accept either the **number** or the **full text** as a valid answer.
+    - Exception: when using a **selectable** UI prompt (where the client renders choices), do **not** include numeric prefixes in the labels.
+  - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
+    - Run (stdout-only): `python3 Skills/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
+    - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
+      - proceed with **new items only** (recommended), or
         - stop and let the user adjust the intake.
       - If **no new items** remain, stop and tell the user.
       - If **new items exist**, proceed using only that new-item subset.
