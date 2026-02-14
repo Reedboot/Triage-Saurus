@@ -3,14 +3,14 @@ Intake/
 Intake/Cloud/
 Instake/Code/
 
-Audit/*
-Findings/*
-Findings/Cloud/*
-Findings/Code/*
-Findings/Repo/*
+Output/Audit/*
+Output/Findings/*
+Output/Findings/Cloud/*
+Output/Findings/Code/*
+Output/Findings/Repo/*
 
-Knowledge/*
-Summary/*
+Output/Knowledge/*
+Output/Summary/*
 
 # Keep the instructions and ignore rules
 !.gitignore
