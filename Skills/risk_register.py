@@ -104,6 +104,13 @@ def parse_issue(title: str) -> str:
 def is_draft_finding(lines: list[str]) -> bool:
     """Check if a finding is a draft (generic boilerplate, not validated)."""
     text = " ".join(lines).lower()
+
+    # Prefer explicit status in Meta Data (more stable than phrase matching).
+    joined = "\n".join(lines)
+    if "Validation Status:** ⚠️ Draft - Needs Triage" in joined:
+        return True
+    if "Validation Status:** ✅ Validated" in joined:
+        return False
     
     # Check for draft indicators
     draft_indicators = [

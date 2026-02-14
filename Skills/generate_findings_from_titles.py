@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import re
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from output_paths import (
     OUTPUT_AUDIT_DIR,
     OUTPUT_FINDINGS_DIR,
     OUTPUT_KNOWLEDGE_DIR,
+    OUTPUT_RENDER_INPUTS_DIR,
     OUTPUT_SUMMARY_DIR,
 )
 
@@ -166,6 +168,74 @@ def recommendations_for(title: str) -> list[str]:
         "Apply the recommended secure configuration and enforce it with policy-as-code",
         "Add monitoring/alerting to detect drift and verify changes in lower environments first",
     ]
+
+
+def _render_json_dir(kind: str) -> Path:
+    # Organize render inputs by finding kind so the renderer can be replayed later.
+    base = OUTPUT_RENDER_INPUTS_DIR / kind.title()
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _score_parts(score: int) -> tuple[str, str]:
+    sev = severity(score)
+    # sev is like "🔴 Critical", split it.
+    emoji, label = sev.split(" ", 1)
+    return emoji, label
+
+
+def build_finding_model(*, title: str, score: int, ts: str, recs: list[str], source_path: Path | None) -> dict:
+    emoji, label = _score_parts(score)
+    model: dict = {
+        "version": 1,
+        "kind": "cloud",
+        "title": title,
+        "description": title,
+        "overall_score": {"severity": label, "score": score},
+        # The generators still pick a generic diagram; AI-driven pipelines can override this field.
+        "architecture_mermaid": "flowchart TB\n  Internet[Internet / Users] --> Svc[Affected service]\n  Svc --> Data[Data store]\n  Svc --> Logs[Monitoring/Logs]\n\n  Sec[Controls] -.-> Svc",
+        "security_review": {
+            "summary": (
+                "This is a draft finding generated from a title-only input. Validate the affected "
+                "resources/scope and confirm whether the exposure is internet-facing and/or impacts "
+                "production workloads."
+            ),
+            "applicability": {"status": "Don’t know", "evidence": "Title-only input; needs validation."},
+            "key_evidence": (
+                [f"**Source:** `{source_path.relative_to(ROOT)}`"] if source_path is not None else ["TODO"]
+            ),
+            "assumptions": [
+                "Unconfirmed: Scope includes production workloads.",
+                "Unconfirmed: Exposure is internet-facing (where relevant).",
+            ],
+            "exploitability": (
+                "Misconfiguration findings are typically exploitable by either (a) external attackers "
+                "when exposure is public, or (b) internal threat actors / compromised identities when "
+                "permissions and network paths are overly broad."
+            ),
+            "recommendations": [
+                {"text": recs[0], "score_from": score, "score_to": max(0, score - 2)},
+                {"text": recs[1], "score_from": max(0, score - 2), "score_to": max(0, score - 4)},
+            ],
+            "countermeasures": [
+                "🔴 Rely on ad-hoc manual configuration — prone to drift and gaps.",
+                "🟡 Point-in-time remediation only — helps now but without policy, issues often return.",
+                "🟢 Enforce with policy-as-code + monitoring — reduces recurrence and improves coverage.",
+            ],
+            "rationale": (
+                "The recommendation reduces attack surface and/or blast radius and should align with "
+                "provider baseline guidance. Confirm exact control mappings in your environment."
+            ),
+        },
+        "meta": {
+            "category": "Cloud misconfiguration (draft)",
+            "languages": "N/A",
+            "source": "Title-only intake import",
+            "validation_status": "⚠️ Draft - Needs Triage",
+            "last_updated": ts,
+        },
+    }
+    return model
 
 
 def write_finding(out_path: Path, title: str, score: int, ts: str) -> None:
@@ -694,6 +764,16 @@ def main() -> int:
     )
     parser.add_argument("--out-dir", required=True, help="Output folder for generated findings")
     parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help="Overwrite existing findings that match the computed output filename",
+    )
+    parser.add_argument(
+        "--emit-render-json",
+        action="store_true",
+        help="Also write JSON render inputs under Output/Audit/RenderInputs/ (repro/debug only).",
+    )
+    parser.add_argument(
         "--update-knowledge",
         action="store_true",
         help=(
@@ -732,10 +812,14 @@ def main() -> int:
     titles: list[str] = []
     generated = 0
     skipped_dupes = 0
+    skipped_existing = 0
+    skipped_existing_examples: list[str] = []
 
     seen: set[str] = set()
+    preexisting_paths = set(sorted(out_dir.glob("*.md"))) if out_dir.exists() else set()
+    existing_by_key: dict[str, Path] = {}
     # Prevent re-creating findings we already generated in the output folder.
-    if out_dir.exists():
+    if out_dir.exists() and not args.overwrite_existing:
         for existing in sorted(out_dir.glob("*.md")):
             if existing.is_file():
                 try:
@@ -743,7 +827,9 @@ def main() -> int:
                     if first:
                         # First line is typically: "# 🟣 <title>".
                         existing_title = _normalise_title(first[0]).lstrip("🟣 ").strip()
-                        seen.add(_dedupe_key(existing_title))
+                        k = _dedupe_key(existing_title)
+                        seen.add(k)
+                        existing_by_key.setdefault(k, existing)
                 except OSError:
                     pass
 
@@ -772,6 +858,21 @@ def main() -> int:
             key = _dedupe_key(title)
             if key in seen:
                 skipped_dupes += 1
+                if args.emit_render_json:
+                    existing = existing_by_key.get(key)
+                    if existing is not None:
+                        model = build_finding_model(
+                            title=title,
+                            score=score_for(title),
+                            ts=ts,
+                            recs=recommendations_for(title),
+                            source_path=path,
+                        )
+                        model["output"] = {"path": str(existing.relative_to(ROOT))}
+                        json_dir = _render_json_dir("Cloud")
+                        json_path = json_dir / existing.with_suffix(".json").name
+                        if not json_path.exists():
+                            json_path.write_text(json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 continue
             seen.add(key)
 
@@ -784,8 +885,44 @@ def main() -> int:
             else:
                 out_name = titlecase_filename(path.stem)
 
-            out_path = _unique_out_path(out_dir, out_name)
+            out_path = out_dir / f"{out_name}.md"
+            if out_path.exists() and not args.overwrite_existing:
+                # Preserve user-edited output by default. If we collide with an
+                # already-existing file from a previous run, skip and tell the user.
+                if out_path in preexisting_paths:
+                    skipped_existing += 1
+                    if len(skipped_existing_examples) < 10:
+                        skipped_existing_examples.append(f"{path} -> {out_path.name}")
+                    if args.emit_render_json:
+                        model = build_finding_model(
+                            title=title,
+                            score=score,
+                            ts=ts,
+                            recs=recommendations_for(title),
+                            source_path=path,
+                        )
+                        model["output"] = {"path": str(out_path.relative_to(ROOT))}
+                        json_dir = _render_json_dir("Cloud")
+                        json_path = json_dir / out_path.with_suffix(".json").name
+                        json_path.write_text(json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                    continue
+                # If the collision happened within this run, keep the new item by
+                # writing to a unique suffixed name.
+                out_path = _unique_out_path(out_dir, out_name)
             write_finding(out_path, title, score, ts)
+            if args.emit_render_json:
+                model = build_finding_model(
+                    title=title,
+                    score=score,
+                    ts=ts,
+                    recs=recommendations_for(title),
+                    source_path=path,
+                )
+                # Point model output at the actual generated path for deterministic re-render.
+                model["output"] = {"path": str(out_path.relative_to(ROOT))}
+                json_dir = _render_json_dir("Cloud")
+                json_path = json_dir / out_path.with_suffix(".json").name
+                json_path.write_text(json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             generated += 1
 
     if args.update_knowledge:
@@ -835,7 +972,16 @@ def main() -> int:
     msg = f"Generated {generated} finding(s) into {out_dir}"
     if skipped_dupes:
         msg += f" (skipped {skipped_dupes} duplicate title(s))"
+    if skipped_existing:
+        msg += f" (skipped {skipped_existing} existing output file(s))"
     print(msg)
+    if skipped_existing:
+        print("Note: Some findings were not generated because the output file already exists.")
+        print("      Re-run with `--overwrite-existing` if you intended to regenerate outputs.")
+        if skipped_existing_examples:
+            print("Examples (input -> existing output):")
+            for ex in skipped_existing_examples:
+                print(f"  - {ex}")
     return 0
 
 

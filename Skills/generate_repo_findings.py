@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import fnmatch
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from output_paths import OUTPUT_AUDIT_DIR, OUTPUT_FINDINGS_DIR, OUTPUT_KNOWLEDGE_DIR
+from output_paths import OUTPUT_AUDIT_DIR, OUTPUT_FINDINGS_DIR, OUTPUT_KNOWLEDGE_DIR, OUTPUT_RENDER_INPUTS_DIR
 
 
 def now_uk() -> str:
@@ -437,6 +438,92 @@ def write_finding(scan: Scan, *, scope: str, update_knowledge: bool) -> Path:
     return out_path
 
 
+def emit_render_json(out_path: Path, scan: Scan, *, scope: str) -> Path:
+    """Write a JSON finding-model next to other render inputs (audit/debug only)."""
+
+    # Minimal model that the template-driven renderer can use.
+    repo_folder = scan.repo_path.name
+    title_repo = _display_repo_name(repo_folder)
+
+    ci = detect_ci(scan.key_files, scan.secret_hits)
+    langs = detect_langs(scan.key_files)
+    provider = detect_provider(scan.tf_hits)
+    score = score_repo(scan.secret_hits)
+    emoji, label = severity(score)
+    services = infer_services_from_repo_name(repo_folder)
+
+    overview: list[str] = [
+        f"**Repo path:** `{scan.repo_path}`",
+        f"**Scan scope:** {scope}",
+        f"**Languages/frameworks detected:** {', '.join(langs)}",
+        f"**CI/CD:** {ci}",
+        f"**Provider(s) referenced:** {provider}",
+    ]
+    if services:
+        overview.append("**Cloud resources/services referenced:** " + ", ".join(services))
+
+    # Evidence lines are already preformatted as strings in scan_* outputs; keep them simple.
+    key_evidence_deep: list[str] = []
+    if scan.tf_hits:
+        key_evidence_deep.append(f"✅ IaC provider/module usage — evidence: `{scan.tf_hits[0].lstrip('./')}`")
+    for l in _pick_evidence(scan.secret_hits, n=5):
+        key_evidence_deep.append(f"❌ Secret-like signal — evidence: `{l.lstrip('./')}`")
+
+    model: dict = {
+        "version": 1,
+        "kind": "repo",
+        "title": f"Repo {title_repo}",
+        "description": "Repo scan summary (IaC + secrets + dependency/module discovery).",
+        "overall_score": {"severity": label, "score": score},
+        "architecture_mermaid": "graph TB\n  Dev[Repo] --> CI[CI/CD];\n  CI --> TF[Terraform plan/apply];\n  TF --> Cloud[Cloud resources];\n  CI --> Secrets[Secret scanning];",
+        "overview_bullets": overview,
+        "security_review": {
+            "summary": (
+                "This repo appears to manage cloud infrastructure via IaC. Secret-like values (tokens, passwords, "
+                "connection strings) may be referenced in code/config and can leak via Terraform state, CI variables, "
+                "or outputs if not handled as sensitive."
+            ),
+            "applicability": {"status": "Yes", "evidence": "IaC files and provider/module usage were detected in the repo."},
+            "assumptions": [
+                "Terraform state is stored in a remote backend with encryption and restricted read access (Unconfirmed).",
+                "Secrets are injected at runtime (CI secret vars / secret store) rather than committed (Unconfirmed).",
+            ],
+            "exploitability": (
+                "If an attacker (or over-privileged insider) can read Terraform state files, CI variable groups, "
+                "or pipeline logs, they may recover credentials/connection strings and pivot into the cloud environment."
+            ),
+            "risks": [
+                "State/outputs/logs may expose secret material if not treated as sensitive.",
+                "Long-lived credentials in automation increase blast radius if leaked.",
+            ],
+            "key_evidence_deep": key_evidence_deep,
+            "recommendations": [
+                {"text": "Confirm Terraform state backend, encryption, and who can read state; remove secret outputs", "score_from": score, "score_to": max(score - 2, 0)},
+                {"text": "Move CI/CD to federated auth (OIDC/workload identity) and rotate any long-lived credentials", "score_from": max(score - 2, 0), "score_to": max(score - 4, 0)},
+            ],
+            "countermeasures": [
+                "🟡 Secret scanning — helpful, but doesn't prevent secrets in state/outputs.",
+                "🟢 Harden state backend + least privilege — directly reduces blast radius and exposure.",
+            ],
+            "rationale": "Score is driven by secret-like material detected in quick scan results; severity depends on state/CI access controls.",
+        },
+        "meta": {
+            "category": "Repo scan (draft)",
+            "languages": ", ".join(langs),
+            "source": "Skills/generate_repo_findings.py",
+            "validation_status": "⚠️ Draft - Needs Triage",
+            "last_updated": now_uk(),
+        },
+        "output": {"path": str(out_path.relative_to(ROOT))},
+    }
+
+    out_dir = OUTPUT_RENDER_INPUTS_DIR / "Repo"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / out_path.with_suffix(".json").name
+    json_path.write_text(json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return json_path
+
+
 def expand_pattern(repos_root: Path, pattern: str) -> list[Path]:
     if not repos_root.is_dir():
         raise SystemExit(f"repos root not found: {repos_root}")
@@ -455,6 +542,11 @@ def main() -> int:
     p.add_argument("--pattern", help="Simple pattern to expand under --repos-root (e.g., terraform-*)")
     p.add_argument("--scope", default="All (IaC + secrets + dependency/module discovery)")
     p.add_argument("--update-knowledge", action="store_true", help="Also update Output/Knowledge/<Provider>.md")
+    p.add_argument(
+        "--emit-render-json",
+        action="store_true",
+        help="Also write JSON render inputs under Output/Audit/RenderInputs/Repo/ (repro/debug only).",
+    )
     p.add_argument("--no-audit", action="store_true", help="Do not append Output/Audit/RepoScans.md")
     args = p.parse_args()
 
@@ -485,7 +577,10 @@ def main() -> int:
     written: list[Path] = []
     for repo in repos:
         scan = run_quick_scan(repo)
-        written.append(write_finding(scan, scope=args.scope, update_knowledge=args.update_knowledge))
+        out_path = write_finding(scan, scope=args.scope, update_knowledge=args.update_knowledge)
+        written.append(out_path)
+        if args.emit_render_json:
+            emit_render_json(out_path, scan, scope=args.scope)
 
     if not args.no_audit:
         audit = write_audit(repos, args.scope)

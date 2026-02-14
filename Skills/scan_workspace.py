@@ -107,6 +107,21 @@ def scan_findings(
     print()
 
 
+def scan_drafts() -> None:
+    """Report draft vs validated findings (stdout-only)."""
+    try:
+        import triage_queue as tq
+    except Exception as e:
+        print("== Draft triage queue ==")
+        print(f"Unable to load triage queue helper: {e}")
+        print()
+        return
+
+    print("== Draft triage queue ==")
+    tq.print_queue(limit=20)
+    print()
+
+
 def scan_intake_paths(
     paths: list[str],
     *,
@@ -159,6 +174,11 @@ def main() -> int:
         "--skip-intake",
         action="store_true",
         help="Skip Intake/ scan.",
+    )
+    parser.add_argument(
+        "--skip-drafts",
+        action="store_true",
+        help="Skip draft-triage queue summary.",
     )
     parser.add_argument(
         "--findings-path",
@@ -221,6 +241,9 @@ def main() -> int:
             include_hidden=args.include_hidden,
             absolute=args.absolute,
         )
+
+        if not args.skip_drafts:
+            scan_drafts()
 
     if not args.skip_intake:
         scan_intake_paths(

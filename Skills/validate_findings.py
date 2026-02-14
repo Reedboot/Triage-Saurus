@@ -187,7 +187,10 @@ def main() -> int:
                 else:
                     seen_titles[key] = f
 
-    for s in iter_md_files(OUTPUT_SUMMARY_DIR / "Cloud"): 
+    for s in iter_md_files(OUTPUT_SUMMARY_DIR / "Cloud"):
+        # Architecture_* uses a different schema than per-service summaries.
+        if s.name.startswith("Architecture_"):
+            continue
         problems.extend(validate_cloud_summary(s))
 
     errs = [p for p in problems if p.level == "ERROR"]

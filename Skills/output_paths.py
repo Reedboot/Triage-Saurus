@@ -15,3 +15,6 @@ OUTPUT_FINDINGS_DIR = OUTPUT_ROOT / "Findings"
 OUTPUT_KNOWLEDGE_DIR = OUTPUT_ROOT / "Knowledge"
 OUTPUT_SUMMARY_DIR = OUTPUT_ROOT / "Summary"
 OUTPUT_AUDIT_DIR = OUTPUT_ROOT / "Audit"
+
+# JSON inputs used to render findings (audit/debug/repro only).
+OUTPUT_RENDER_INPUTS_DIR = OUTPUT_AUDIT_DIR / "RenderInputs"

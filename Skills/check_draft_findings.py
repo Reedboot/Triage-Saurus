@@ -21,6 +21,13 @@ def is_draft_finding(file_path: Path) -> bool:
     """Check if a finding is a draft."""
     try:
         content = file_path.read_text(encoding="utf-8")
+        # Prefer explicit status in Meta Data to avoid relying on boilerplate phrasing.
+        if "Validation Status:**" in content:
+            if "Validation Status:** ⚠️ Draft - Needs Triage" in content:
+                return True
+            if "Validation Status:** ✅ Validated" in content:
+                return False
+
         draft_indicators = [
             "draft finding generated from a title-only input",
             "this is a draft finding",
