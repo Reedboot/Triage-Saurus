@@ -35,8 +35,12 @@ flowchart TB
   Sec[Controls] -.-> App
 ```
 
+**CRITICAL: Never use `style fill:<color>` in Mermaid diagrams** - breaks dark themes (Settings/Styling.md lines 79-85). Use emojis instead: ✅ ❌ ⚠️ 🔴 🟡 🟢
+
 - **Description:** <short description>
-- **Overall Score:** <severity emoji + label> <score>/10
+- **Overall Score:** <severity emoji + label> <score>/10 — *Final after skeptic review: Security X/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
+  - Note: Show score progression through skeptic reviews. Use ✅ if no change, ⬇️ if downgraded, ⬆️ if upgraded.
+  - Example: `🟡 **6/10** (HIGH - Moderate) — *Final: Security 8/10 → Dev ⬇️6/10 → Platform ✅6/10*`
 
 ## 📊 TL;DR - Executive Summary
 *(Add this section after Collaboration is complete for quick reference)*
