@@ -41,18 +41,23 @@
     vm[🧩 Azure VM]
     style vm stroke-dasharray: 0
   ```
-- **Mermaid styling for assumptions:** apply dotted borders to assumed nodes, e.g.
+- **Confirmed vs Assumed components:**
+  - **Confirmed** (solid border): Services/components proven via IaC files, repo findings, or user confirmation
+  - **Assumed** (dashed border): Services/components inferred but not explicitly confirmed - apply `style <nodeName> stroke-dasharray: 5 5` to the node
+  - Use ❓ emoji for assumed components (optional but recommended)
+  - Example:
   ```mermaid
   flowchart LR
-    kv[🗄️ Azure Key Vault]
-    style kv stroke-dasharray: 5 5
+    confirmed[✅ Confirmed Service]
+    assumed[❓ Assumed Service]
+    style assumed stroke-dasharray: 5 5
   ```
 - **Mermaid theme-aware styling:** **NEVER use `style fill:<color>` in diagrams** - background
   fill colors break on dark themes (Settings/Styling.md lines 79-85). Use **stroke/border styling** or **emojis** for
   distinction:
   - Emphasis: `stroke-width:3px`
-  - Assumptions/caution: `stroke-dasharray: 5 5`
-  - Status indicators: Use emojis (✅ ❌ ⚠️ 🔴 🟡 🟢)
+  - **Assumptions/unconfirmed:** `style <nodeName> stroke-dasharray: 5 5` (dashed border on specific node)
+  - Status indicators: Use emojis (✅ ❌ ⚠️ 🔴 🟡 🟢 ❓)
   - **FORBIDDEN:** `style <node> fill:<color>` or `fill:#xxxxxx`
 
 ## Update Rules
