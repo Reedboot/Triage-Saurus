@@ -17,12 +17,12 @@ You can place findings anywhere under `Intake/` (including subfolders).
 
 ## Sample findings
 If you want to use the repo samples, stage them into Intake first:
-- `python3 Skills/stage_sample_findings_to_intake.py --type cloud`
-- `python3 Skills/stage_sample_findings_to_intake.py --type code`
+- `python3 Scripts/stage_sample_findings_to_intake.py --type cloud`
+- `python3 Scripts/stage_sample_findings_to_intake.py --type code`
 
 ## Batch processing (ask me)
 If you want to batch-generate draft findings from Intake, ask the agent to run:
-- `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <intake-path> --out-dir Findings/Cloud --update-knowledge`
+- `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <intake-path> --out-dir Findings/Cloud --update-knowledge`
 
 ## Notes
 - Avoid pasting secrets/credentials.
