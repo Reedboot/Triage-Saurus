@@ -21,10 +21,11 @@ those tools are added to the repo.
 - **Summary headers:** In `Summary/Cloud/`, use emoji-prefixed headers:
   `## 🧭 Overview`, `## 🚩 Risk`, `## ✅ Actions`, `## 📌 Findings`. Architecture
   summaries should use `## 📊 Service Risk Order` and `## 📝 Notes`.
-- **Summary backlinks:** When referencing a finding from `Summary/`, use **markdown links**
-  with **human-readable link text** (the finding title), not the file path, e.g.
+- **Summary backlinks:** When referencing a finding from `Summary/`, use **clickable markdown links**
+  with **human-readable link text** (the finding title) and **relative paths from the current file location**, not the file path, e.g.
   `[Public Network Access On Azure SQL Database Should Be Disabled](../../Findings/Cloud/Public_Network_Access_On_Azure_SQL_Database_Should_Be_Disabled.md)`.
-  Avoid inline code backticks (not reliably clickable).
+  Avoid inline code backticks (`` `path/to/file.md` ``) as they are not clickable. This applies to all file references within the Triage-Saurus repository.
+- **Compounding findings:** In the `## Compounding Findings` section, use clickable markdown links with relative paths, e.g., `[Related_Finding.md](../Cloud/Related_Finding.md)` or `[Other_Finding.md](../Code/Other_Finding.md)`.
 - **Diagram placement:** In **all findings** (Cloud, Code, Repo), place `## 🗺️ Architecture Diagram` **immediately under the document title** (the `# 🟣 ...` line) as the **first section**. The `- **Overall Score:** ...` line must come **immediately after** the closing diagram fence (` ``` `), **before** any other section.
 - **Security Review subheadings:** Prefer emoji-prefixed subheadings in findings:
   - `### 🧾 Summary`
