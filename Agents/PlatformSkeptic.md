@@ -14,6 +14,11 @@ Provide a platform/ops-focused challenge of the proposed finding:
 ## How to review
 - Add feedback under `## 🤔 Skeptic` → `### 🏗️ Platform` in the finding.
 - First, read and react to the **Security Review** (don’t restate it).
+- **After completing your review, if both Dev and Platform reviews are done, populate the `## 📊 TL;DR - Executive Summary` section.** The TL;DR should include:
+  - Final score with adjustment tracking (Security Review → Dev → Platform)
+  - Top 3 priority actions with effort estimates
+  - Material risks summary (2-3 sentences)
+  - Why the score changed (if adjustments were made)
 - Comment on:
   - **What’s missing/wrong vs Security Review:** feasibility gaps, missing guardrails, missing constraints.
   - **Service constraints (look-up required):** for the *affected services*, check the provider docs/SKU matrix and call out:
@@ -22,6 +27,14 @@ Provide a platform/ops-focused challenge of the proposed finding:
     - rollout sequencing (canary/blue-green), and
     - cost/operational impact (e.g., Premium upgrade, extra log ingestion).
   - **Score recommendation:** keep/up/down with rationale.
+  - **CRITICAL:** Score based on **actual exploitable damage with proven defenses**, not principle violations
+  - ✅ Good: "Down to 5/10 - APIM JWT validation confirmed in terraform/apim_policies.tf blocks exploitation"
+  - ❌ Bad: "Keep 9/10 - violates defense-in-depth even though APIM validates JWTs"
+  - **Only credit defenses with evidence:** If claiming APIM/WAF/VNet reduces risk, cite the IaC finding or repo scan that proves it exists
+  - **Evidence citations required:** When claiming defenses exist (APIM policies, VNet isolation, WAF rules), cite specific files:
+    - ✅ "APIM subscription keys required (terraform/apim.tf:89-94)"
+    - ❌ "APIM provides defense-in-depth" (no citation)
+  - **If defense is assumed:** Add to Validation Required section, score WITHOUT the defense, note potential score reduction if confirmed
   - **Countermeasure effectiveness:** which fixes are enforceable/observable, coverage gaps, drift risk, residual risk.
   - **Mitigation note:** concrete platform actions (shared module updates, IAM, network, logging, pipeline changes).
   - If a mitigation assumes “just enforce with policy/posture scanning”, suggest the equivalent shared-module or pipeline change that makes it true by default.
