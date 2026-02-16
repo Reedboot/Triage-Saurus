@@ -118,6 +118,11 @@ This repository supports consistent security triage. The expected workflow is:
 - **Repo scans:**
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
+  - **After creating findings, automatically run skeptic reviews:** Once repo scan findings are created, immediately run both Dev and Platform skeptic reviews in parallel:
+    - Launch `general-purpose` task agent for Dev Skeptic review (follows `Agents/DevSkeptic.md`)
+    - Launch `general-purpose` task agent for Platform Skeptic review (follows `Agents/PlatformSkeptic.md`)
+    - Both agents should update the `### 🛠️ Dev` and `### 🏗️ Platform` sections respectively
+    - Wait for both to complete before presenting final summary to user
   - **Scanner scope defaults to "All"** (SAST, SCA, Secrets, IaC) — do not ask unless the user wants to override.
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
@@ -162,6 +167,7 @@ This repository supports consistent security triage. The expected workflow is:
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo finding under `## 📋 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
+  - **Repository knowledge structure:** Create individual files `Output/Knowledge/Repos/<repo-name>.md` (use Templates/RepoKnowledge.md) for detailed repo-specific context. Update `Output/Knowledge/Repos.md` as an index/summary only.
   - **Trace request ingress path:** For application/service repos, determine how requests reach the service by examining:
     - IaC files (load balancers, API gateways, ingress controllers, public IPs)
     - Application configuration (listening ports, hostnames, base URLs)
@@ -212,11 +218,12 @@ This repository supports consistent security triage. The expected workflow is:
     Register “Business Impact” column is a **single short sentence** for management and
     should avoid countermeasure/implementation detail.
   - **Validated summary refresh:** when a finding’s `Validation Status` is set to `✅ Validated`, replace any title-only boilerplate in `### 🧾 Summary` with a short, evidence-backed summary based on **confirmed** context (do not over-claim specific resource IDs if you don’t have them yet).
-  - **TL;DR - Executive Summary:** After collaboration (Dev/Platform Skeptic reviews) is complete, add a `## 📊 TL;DR - Executive Summary` section immediately after the architecture diagram. This provides security engineers quick access to:
+  - **TL;DR - Executive Summary:** After collaboration (Dev/Platform Skeptic reviews) is complete, **immediately populate** the `## 📊 TL;DR - Executive Summary` section (which should be placed immediately after the architecture diagram). This provides security engineers quick access to:
     - Final score with adjustment tracking (Security Review → Dev → Platform)
     - Top 3 priority actions with effort estimates
     - Material risks summary (2-3 sentences)
     - Why the score changed (if adjustments were made)
+    - **Critical:** The TL;DR must be populated by the skeptic review agents, not left as a placeholder. If using task agents for skeptic reviews, instruct them to populate the TL;DR section.
   - **Validation Required:** If there are critical **unconfirmed assumptions** that could significantly change the risk score, add a `## ❓ Validation Required` section immediately after the TL;DR. This must:
     - Clearly state what assumption was made and why it matters
     - Show evidence found vs evidence NOT found
@@ -324,6 +331,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
 - **Repo scans:** `Output/Findings/Repo/Repo_<RepoName>.md` (one file per repo)
 - **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
+- **Repo summaries:** `Output/Summary/Repos/<repo-name>.md` (see `Agents/RepoSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
