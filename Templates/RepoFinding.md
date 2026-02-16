@@ -21,6 +21,41 @@ flowchart TB
 
 - **Overall Score:** <severity emoji + label> <score>/10
 
+## 📊 TL;DR - Executive Summary
+*(Add this section after Collaboration is complete for quick reference)*
+
+| Aspect | Value |
+|--------|-------|
+| **Final Score** | <emoji> **X/10** (Risk Level) |
+| **Initial Score** | Security Review: X/10 |
+| **Adjustments** | Dev: <✅/⬆️/⬇️> → Platform: <✅/⬆️/⬇️> |
+| **Key Takeaway** | <one sentence summary of outcome> |
+
+**Top 3 Actions:**
+1. <Priority 1 with effort estimate>
+2. <Priority 2 with effort estimate>
+3. <Priority 3 with effort estimate>
+
+**Material Risks:** <2-3 sentence summary>
+
+**Why Score Changed:** <explain if Dev/Platform adjusted score>
+
+---
+
+## ❓ Validation Required
+*(Include this section if there are critical assumptions that need user confirmation)*
+
+**⚠️ <Assumption Topic> (UNCONFIRMED):**
+<Description of what was assumed and why it matters>
+
+- Evidence found: <what supports the assumption>
+- Evidence NOT found: <what's missing>
+- Impact on score: <how confirmation/rejection would change assessment>
+
+**Please confirm:** <specific question for human reviewer>
+
+---
+
 ## 🧭 Overview
 <short overview of the repository purpose and key findings>
 
@@ -105,14 +140,14 @@ Extract downstream dependencies indicated by configuration, e.g.:
 
 ### 🛠️ Dev
 - **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down — *explicitly state why vs the Security Review score*.
 - **How it could be worse:** <realistic attacker path leveraging repo/app/IaC>
 - **Countermeasure effectiveness:** <which recommendations measurably reduce risk; which are hygiene>
 - **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ### 🏗️ Platform
 - **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
-- **Score recommendation:** ➡️ Keep/⬆️ Up/⬇️ Down — *explicitly state why vs the Security Review score*.
+- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down — *explicitly state why vs the Security Review score*.
 - **Operational constraints:** <pipelines, auth to cloud, network reachability, rollout sequencing>
 - **Countermeasure effectiveness:** <guardrail coverage, drift prevention, enforceability>
 - **Assumptions to validate:** <which assumptions would change applicability/score>
