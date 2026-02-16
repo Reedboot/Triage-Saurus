@@ -48,7 +48,13 @@ Extract high-level purpose from:
 
 **Record in:**
 - `## 🧭 Overview` section of finding
-- `Output/Knowledge/Repos.md` for cross-repo context
+- `Output/Knowledge/Repos/<repo-name>.md` for detailed repo-specific context (architecture, dependencies, infrastructure, security posture)
+- `Output/Knowledge/Repos.md` index file for cross-repo discovery and quick reference
+
+**Structure:**
+- Create `Output/Knowledge/Repos/` directory if it doesn't exist
+- Create individual file per repo: `Output/Knowledge/Repos/<repo-name>.md` (matches finding filename)
+- Update `Output/Knowledge/Repos.md` index with one-line summary and link to detailed file
 
 **Examples:**
 - "Terraform platform modules for Azure PaaS security defaults"
@@ -91,6 +97,13 @@ Extract high-level purpose from:
 
 **Promote to Knowledge:**
 - Confirmed services: `Output/Knowledge/<Provider>.md`
+- Confirmed modules/dependencies: `Output/Knowledge/Repos/<repo-name>.md`
+- **CRITICAL:** When documenting defense layers (APIM, WAF, VNet, etc.), ALWAYS cite specific evidence:
+  - ✅ Good: "APIM JWT validation enabled - see terraform/apim_policies.tf:45-67"
+  - ✅ Good: "VNet integration enabled - see terraform/app_service.tf:23 (vnet_route_all_enabled = true)"
+  - ❌ Bad: "APIM is the enforcement point" (no evidence)
+  - ❌ Bad: "VNet isolation limits exposure" (assumed, not proven)
+- If defense layer is suspected but not proven, mark as **Assumption** in `Output/Knowledge/Repos/<repo-name>.md` under `## ⚠️ Assumptions (Unconfirmed)`
 - Assumed services: Mark as assumptions, ask user to confirm
 
 ### 5. Module & Dependency Sources
@@ -229,8 +242,9 @@ flowchart TB
 4. **Extract context:** Purpose, languages, cloud resources, dependencies, secrets patterns
 5. **Security analysis:** SAST, SCA, Secrets, IaC findings
 6. **Generate finding:** Follow RepoFinding.md template
-7. **Promote knowledge:** Confirmed facts → `Output/Knowledge/`, Assumptions → ask user
-8. **Update audit log:** Record scan metadata in `Output/Audit/`
+7. **Promote knowledge:** Confirmed facts → `Output/Knowledge/Repos/<repo-name>.md`, Assumptions → ask user
+8. **Create summary:** Generate executive summary → `Output/Summary/Repos/<repo-name>.md` (follow RepoSummaryAgent.md guidance)
+9. **Update audit log:** Record scan metadata in `Output/Audit/`
 
 ## Priority Order for Scanning
 1. **IaC/platform repos first** (`*-modules`, `terraform-*`, `*-platform*`)
@@ -248,10 +262,20 @@ flowchart TB
 - **SecurityAgent:** Writes initial security review
 - **DevSkeptic:** Reviews from developer perspective
 - **PlatformSkeptic:** Reviews from infrastructure perspective
+- **RepoSummaryAgent:** Creates executive summary in `Output/Summary/Repos/<repo-name>.md`
 - **KnowledgeAgent:** Promotes reusable context to Knowledge files
 - **ArchitectureAgent:** Updates cloud architecture diagrams if provider detected
 
+## Deliverables per Repo Scan
+- **Finding file:** `Output/Findings/Repo/<repo-name>*.md` (detailed technical analysis)
+- **Knowledge file:** `Output/Knowledge/Repos/<repo-name>.md` (reusable context with evidence citations)
+- **Summary file:** `Output/Summary/Repos/<repo-name>.md` (executive summary with prioritized actions)
+- **Knowledge index:** Update `Output/Knowledge/Repos.md` with one-line entry
+- **Audit log:** `Output/Audit/<repo-name>_scan_YYYYMMDD.md`
+
 ## Related Files
-- **Template:** `Templates/RepoFinding.md`
+- **Template:** `Templates/RepoFinding.md` (finding structure)
+- **Template:** `Templates/RepoKnowledge.md` (knowledge file structure)
+- **Agent:** `Agents/RepoSummaryAgent.md` (summary generation guidance)
 - **Instructions:** `Agents/Instructions.md` (lines 118-250)
 - **Helper script:** `Scripts/scan_repo_quick.py`
