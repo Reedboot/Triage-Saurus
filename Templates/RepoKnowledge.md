@@ -71,7 +71,7 @@
 - ❌ **<Control>**: Not implemented — **Searched:** <files checked>
 
 ### Security Findings
-- **<Severity>** (<score>/10): <finding title> — `Output/Findings/Repo/<finding-file>.md`
+- **<Severity>** (<score>/10): [<finding title>](../Summary/Repos/Repo_<RepoName>.md) — brief description
 
 ## 🔑 Configuration & Secrets
 
@@ -111,6 +111,6 @@
 - ALWAYS cite specific files and line numbers for claims
 - Mark assumptions clearly - don't claim defenses exist without proof
 - Update "Last Scanned" timestamp when repo is re-scanned
-- Link to security findings in Output/Findings/Repo/
+- Link to security findings using clickable markdown links with relative paths
 
 Last updated: DD/MM/YYYY HH:MM
