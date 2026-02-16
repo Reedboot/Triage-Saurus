@@ -108,7 +108,7 @@ Score based on **actual exploitable damage given proven defenses**, not theoreti
    - Trust boundaries: Where does authentication happen?
    - Network isolation: Public, private, hybrid?
 
-2. **Repo findings** (`Output/Findings/Repo/`)
+2. **Repo summaries** (`Output/Summary/Repos/`)
    - Middleware pipeline: What security controls execute before reaching vulnerable code?
    - Authentication patterns: JWT, OAuth, API keys, managed identity?
    - Service permissions: What can this service access?
