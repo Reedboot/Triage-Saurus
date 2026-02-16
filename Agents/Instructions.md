@@ -124,6 +124,8 @@ This repository supports consistent security triage. The expected workflow is:
     - Both agents should update the `### 🛠️ Dev` and `### 🏗️ Platform` sections respectively
     - Wait for both to complete before presenting final summary to user
   - **Scanner scope defaults to "All"** (SAST, SCA, Secrets, IaC) — do not ask unless the user wants to override.
+  - **Code findings must be fully populated (no FILL placeholders):** Unlike bulk cloud finding generation (which uses FILL for user-provided context), code findings from repo scans must have all sections completed with evidence-backed content. Use the CodeFinding template sections with actual findings from the scan.
+  - **Repo summary is mandatory:** After completing a repo scan, create `Output/Summary/Repos/Repo_<RepoName>.md` containing architecture, security findings summary, and recommendations. This is separate from the detailed knowledge file (`Output/Knowledge/Repos/<repo-name>.md`).
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
     - Look for repo names containing: `*-modules`, `*-platform*`, `terraform-*`, `pulumi-*`, `cloudformation-*`, `infrastructure`, `iac`
@@ -149,11 +151,11 @@ This repository supports consistent security triage. The expected workflow is:
       - Any that failed or were interrupted
       - Progress indicator (e.g., "7/14 repos completed")
     - **After all scans complete**, run a **consolidation pass**:
-      1. Review all generated findings under `Output/Findings/Repo/`
+      1. Review all generated repo summaries under `Output/Summary/Repos/`
       2. Check `Output/Knowledge/` for cross-repo patterns (shared modules, common auth patterns, repeated issues)
       3. Identify **countermeasures** (controls in one repo that mitigate risks in another)
       4. Identify **compounding issues** (weaknesses that chain across repos)
-      5. Update finding scores and add cross-references under `## 🔗 Compounding Findings` sections
+      5. Update finding scores and add cross-references using clickable markdown links under `## Compounding Findings` sections
       6. Regenerate risk register: `python3 Scripts/risk_register.py`
       7. Update architecture diagrams if cloud provider context is confirmed
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
@@ -167,7 +169,14 @@ This repository supports consistent security triage. The expected workflow is:
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
   - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo finding under `## 📋 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
-  - **Repository knowledge structure:** Create individual files `Output/Knowledge/Repos/<repo-name>.md` (use Templates/RepoKnowledge.md) for detailed repo-specific context. Update `Output/Knowledge/Repos.md` as an index/summary only.
+  - **Repository knowledge structure:** 
+    - **Repo summary (REQUIRED):** Create `Output/Summary/Repos/Repo_<RepoName>.md` following `Templates/RepoFinding.md` structure containing architecture diagram, security review, skeptic reviews, and recommendations. Use Titlecase for repo name (e.g., `Repo_FI_API.md`, not `Repo_fi-api.md`).
+    - **Detailed knowledge:** Create `Output/Knowledge/<RepoName>_Repo.md` for tech stack, dependencies, and reusable context
+    - **Index:** Update `Output/Knowledge/Repos.md` as an index/summary only
+  - **Cloud architecture extraction (MANDATORY for repos with IaC or cloud services):** When a repo scan discovers cloud architecture context (Azure/AWS/GCP services, ingress paths, network patterns, authentication mechanisms), immediately create/update:
+    - `Output/Knowledge/<Provider>.md` (e.g., Azure.md, AWS.md) - Add discovered services, network topology, authentication patterns under `## Confirmed` or `## Assumptions`
+    - `Output/Summary/Cloud/Architecture_<Provider>.md` - Create/update architecture diagram showing discovered services, connections, and security controls
+    - This is separate from the repo-specific knowledge - extract reusable cloud environment facts that apply across multiple applications
   - **Trace request ingress path:** For application/service repos, determine how requests reach the service by examining:
     - IaC files (load balancers, API gateways, ingress controllers, public IPs)
     - Application configuration (listening ports, hostnames, base URLs)
@@ -274,6 +283,7 @@ This repository supports consistent security triage. The expected workflow is:
   generate or update the provider architecture diagram under `Output/Summary/Cloud/` (e.g.,
   `Output/Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
   include any newly discovered services.
+  - **Note:** This applies only to cloud findings and cloud-related knowledge. Code-only repo scans do NOT create `Output/Summary/Cloud/` files unless cloud architecture context (ingress paths, Azure/AWS/GCP services) is discovered during the scan.
   - This is a **standing rule throughout the session** (do not wait until session
     kickoff or the end of triage).
   - Draw the diagram **from the internet inwards** (request flow / access paths).
@@ -326,12 +336,17 @@ This repository supports consistent security triage. The expected workflow is:
 - **Default behaviour:** outputs under `Output/Findings/`, `Output/Knowledge/`, and `Output/Summary/` are
   **generated per-user/session and are intentionally untracked** (see `.gitignore`).
   Change that only if you explicitly want to commit triage artifacts.
+  - **File path references:** When referencing files within the Triage-Saurus repository (findings, knowledge, templates, agents), use **clickable markdown links with relative paths** from the current file location (e.g., `[Finding.md](../../Findings/Cloud/Finding.md)`, not inline code like `` `Output/Findings/Cloud/Finding.md` ``). External repo paths can remain as inline code.
 
 - **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
-- **Repo scans:** `Output/Findings/Repo/Repo_<RepoName>.md` (one file per repo)
+  - **Note:** Repo scans that identify specific code-level security vulnerabilities (e.g., SQL injection, XSS, insecure deserialization) should extract those as individual findings under `Output/Findings/Code/` for tracking and remediation.
+- **Repo scan summaries:** `Output/Summary/Repos/Repo_<RepoName>.md` (one file per repo; follows `Templates/RepoFinding.md` structure with architecture diagram, security review, skeptic reviews, and metadata)
+  - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings` or in relevant finding summaries
+  - **Cloud architecture knowledge:** When scanning a repo, any cloud architecture knowledge discovered (ingress paths, services used, authentication patterns, network topology) should be immediately captured in:
+    - `Output/Knowledge/<Provider>.md` (confirmed services, controls, architecture facts)
+    - `Output/Summary/Cloud/Architecture_<Provider>.md` (updated architecture diagrams)
 - **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
-- **Repo summaries:** `Output/Summary/Repos/<repo-name>.md` (see `Agents/RepoSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
