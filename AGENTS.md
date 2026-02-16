@@ -33,3 +33,5 @@ repository.
 - **Path:** Agents/KnowledgeAgent.md
   - **Purpose:** Capture and maintain `Knowledge/` (confirmed + assumptions) and keep
     architecture diagrams in sync.
+- **Path:** Agents/CloudContextAgent.md
+  - **Purpose:** Gather foundational cloud environment context through structured survey before triage.
