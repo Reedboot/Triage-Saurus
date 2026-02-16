@@ -188,7 +188,7 @@ This repository supports consistent security triage. The expected workflow is:
 - When a recommendation depends on **platform SKU/tier/feature availability** (common examples: private endpoints, private registries, WAF features, auditing tiers), explicitly call out the dependency and note that remediation may require a **SKU change** (e.g., ACR private connectivity may require Premium depending on the provider/service).
 - When a recommendation may require **reprovisioning/redeployment/restart** to take effect, explicitly warn about potential **downtime/maintenance windows** and rollout sequencing.
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
-- When a new finding overlaps an existing one, link them under **Compounding Findings**.
+- When a new finding overlaps an existing one, link them under **Compounding Findings** using clickable markdown links with relative paths (e.g., `[Related_Finding.md](../Cloud/Related_Finding.md)`).
 - **Avoid running git commands by default** (e.g., `git status`, `git diff`, `git restore`). Only use git when the user explicitly asks, and explain why it’s needed.
 - **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/risk_register.py`), first explain:
   - what it does,
@@ -206,7 +206,10 @@ This repository supports consistent security triage. The expected workflow is:
 
 - **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
-- **Repo scans:** `Output/Findings/Repo/Repo_<RepoName>.md` (one file per repo)
+  - **Note:** Repo scans that identify specific code-level security vulnerabilities should extract those as individual findings here
+- **Repo scan summaries:** `Output/Summary/Repos/Repo_<RepoName>.md` (one file per repo; see `Agents/RepoSummaryAgent.md`)
+  - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings`
+  - Cloud architecture knowledge from repo scans should be captured in `Output/Knowledge/<Provider>.md` and `Output/Summary/Cloud/Architecture_<Provider>.md`
 - **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
