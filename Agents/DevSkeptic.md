@@ -54,17 +54,36 @@
 ## How to review
 - Add feedback under `## 🤔 Skeptic` → `### 🛠️ Dev` in the finding.
 - First, read and react to the **Security Review** (don’t restate it).
+- **After completing your review, if both Dev and Platform reviews are done, populate the `## 📊 TL;DR - Executive Summary` section.** The TL;DR should include:
+  - Final score with adjustment tracking (Security Review → Dev → Platform)
+  - Top 3 priority actions with effort estimates
+  - Material risks summary (2-3 sentences)
+  - Why the score changed (if adjustments were made)
 - Comment on:
 - **Trace data sources for injection vulnerabilities:**
   - "The SQLi finding shows variable `userId` - need to confirm: is this from user input (query param) or internal (auth token claim)?"
   - "If `userId` comes from JWT claim (internal), exploitability is LOW - attacker would need to forge JWT first (compounding issue)"
   - "If `userId` comes from `req.query.id` (user input), exploitability is HIGH - directly exploitable SQLi"
+- **Check deployment scope for dependency vulnerabilities:**
+  - **Test-only dependencies** (`tests/`, `test_requirements.txt`, `devDependencies`, `testImplementation`, `[dev-dependencies]`) → Not deployed to production, **significantly lower severity**
+  - **Build-time only** (Webpack plugins, linters, formatters, code generators) → Not in runtime, lower severity
+  - **Production dependencies** (runtime imports, production Docker layers) → Full severity applies
+  - **Example:** "CVE-2023-1234 in `pytest` (test-only). This is never deployed - ⬇️ Down to 2/10 (informational hygiene issue)"
+  - **Verify with:** Check `Dockerfile` (multi-stage builds often exclude test deps), CI/CD config, import statements in production code
   - **What’s missing/wrong vs Security Review:** assumptions, exploit path realism, missing evidence.
   - **Score recommendation:** keep/up/down with rationale.
+  - **CRITICAL:** Score based on **actual exploitable damage**, not principle violations
+  - ✅ Good: "Down to 5/10 - log poisoning only, auth bypass blocked by APIM subscription keys (confirmed in IaC finding)"
+  - ❌ Bad: "Keep 9/10 - violates security fundamentals even though damage is limited"
+  - **Score what CAN be exploited**, not what COULD be exploited if defenses didnt exist
+  - **If defense layers are assumed but not proven:** Flag as UNCONFIRMED and score WITHOUT assuming the defense exists
   - **Countermeasure effectiveness:** which fixes *remove* the risk vs *reduce* it, and what residual risk remains.
   - **Mitigation note:** specific engineering actions a dev can take (small code/config changes, safe defaults, tests, rollout notes).
   - Call out when a suggested mitigation is platform/guardrail-heavy and offer a developer-first alternative where possible.
 
+  - **Evidence citations required:** When claiming countermeasures exist (auth middleware, validation layers), cite specific code files:
+    - ✅ "AuthenticationMiddleware validates at line 64 (Middleware/AuthenticationMiddleware.cs:64)"
+    - ❌ "Middleware validates tokens" (no citation)
 ## Persisted context (optional)
 If you notice reusable dev patterns (e.g., common auth libraries, shared middleware, standard CI steps), capture them in `Knowledge/DevSkeptic.md` so future triage is faster/more accurate.
 
