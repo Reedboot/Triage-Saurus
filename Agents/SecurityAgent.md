@@ -78,6 +78,23 @@ Actual risk: MEDIUM (not anonymous exploitation)
 - ❌ "Hard-coded secret = Exploitable" (what does the secret unlock? Is it rotated?)
 
 **Instead ask:**
+
+**CRITICAL SCORING PRINCIPLE:**
+Score based on **actual exploitable damage given proven defenses**, not theoretical risk or principle violations.
+
+✅ **Correct scoring:**
+- "SQL injection scored 5/10 - service has read-only DB permissions (confirmed in IaC), blast radius limited to data disclosure"
+- "Unsigned JWT scored 6/10 - log poisoning confirmed, but APIM subscription keys (see terraform/apim.tf) block auth bypass"
+
+❌ **Incorrect scoring:**
+- "SQL injection scored 9/10 because SQLi is inherently critical" (ignores blast radius)
+- "Unsigned JWT scored 9/10 - violates security fundamentals" (ignores that damage is actually limited to log poisoning)
+
+**Evidence requirements for defense layers:**
+- Only credit defenses that are PROVEN (IaC files, repo findings, architecture diagrams with evidence)
+- If defense is ASSUMED ("APIM probably validates"), flag in Validation Required and score WITHOUT the defense
+- Cite evidence: "APIM JWT validation confirmed in terraform/apim_policies.tf line 45"
+
 - ✅ "SQL injection on admin endpoint with DB owner role = Critical"
 - ✅ "Public endpoint DNS record but NSG blocks public traffic = Low"
 - ✅ "Missing MFA on Azure Portal for subscription owners = High"
