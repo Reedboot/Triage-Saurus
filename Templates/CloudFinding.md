@@ -127,7 +127,7 @@ flowchart TB
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
-  (use Markdown backlinks, e.g., `Findings/Cloud/Foo.md`)
+  (use clickable markdown links with relative paths, e.g., `[Foo.md](../Cloud/Foo.md)` or `[Bar.md](../Code/Bar.md)`)
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
@@ -146,8 +146,8 @@ flowchart TB
 
 ## Cross-Checks
 - Always check existing findings to see if they compound the new issue.
-- If they compound, state that clearly, review both issues, and add backlinks
-  between them.
+- If they compound, state that clearly, review both issues, and add clickable links
+  (e.g., `[Related_Finding.md](../Cloud/Related_Finding.md)`) in both `## Compounding Findings` sections.
 
 ## Testing
 - Use the `sample/` directory for test runs and mock findings.
