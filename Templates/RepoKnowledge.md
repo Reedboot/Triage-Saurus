@@ -71,7 +71,7 @@
 - ❌ **<Control>**: Not implemented — **Searched:** <files checked>
 
 ### Security Findings
-- **<Severity>** (<score>/10): [<finding title>](../Summary/Repos/Repo_<RepoName>.md) — brief description
+- **<Severity>** (<score>/10): [<finding title>](../Summary/Repos/<RepoName>.md) — brief description
 
 ## 🔑 Configuration & Secrets
 
