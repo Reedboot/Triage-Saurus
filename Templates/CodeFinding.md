@@ -1,25 +1,27 @@
-# 🟣 Code Finding Template
-This document defines the layout for code security findings. For formatting
+# 🟣 Cloud Finding Template
+This document defines the layout for cloud security findings. For formatting
 rules, follow `Settings/Styling.md`. For behavioural rules, follow
 `Agents/Instructions.md`.
 
 ## Workflow Overview
 1. **SecurityAgent** runs first, analyses the target, and outputs findings to
-   a new file: `Findings/Code/A01_Broken_Access_Control.md`.
+   a new file: `Findings/Cloud/Unprotected_Storage_Account.md`.
 2. **SecurityAgent** updates `Knowledge/` with any new inferred/confirmed facts
    discovered while writing the finding (inferred facts must be marked as
    **assumptions** and user-verified).
-3. **Dev** and **Platform** review the findings, each appending their own
+3. **SecurityAgent** generates/updates the relevant architecture diagram under
+   `Summary/Cloud/` based on the updated `Knowledge/` (assumptions = dotted border).
+4. **Dev** and **Platform** review the findings, each appending their own
    sections under `## 🤔 Skeptic`.
-4. **SecurityAgent** reconciles feedback, updates the final score, and appends
+5. **SecurityAgent** reconciles feedback, updates the final score, and appends
    the collaboration summary and metadata.
 
 ## Filename Conventions
-- **Location:** All findings are stored in `Findings/Code/`.
-- **Format:** `Findings/Code/A01_Broken_Access_Control.md` (use a short,
-  Titlecase identifier).
+- **Location:** All findings are stored in `Findings/Cloud/`.
+- **Format:** `Findings/Cloud/Unprotected_Storage_Account.md` (use a
+  short, Titlecase identifier).
 - **Finding title:** Use a short, Titlecase identifier from the finding source
-  (e.g., `A01_Broken_Access_Control`).
+  (e.g., `Unprotected_Storage_Account`).
 
 ## File Template
 ```md
@@ -28,11 +30,11 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  User[User] --> App[App/API]
-  App --> Dep[Dependency]
-  App --> Data[Data]
+  Edge[Internet / Users] --> Svc[<cloud service>]
+  Svc --> Data[<data store>]
+  Svc --> Logs[Monitoring/Logs]
 
-  Sec[Controls] -.-> App
+  Sec[Controls] -.-> Svc
 ```
 
 **CRITICAL: Never use `style fill:<color>` in Mermaid diagrams** - breaks dark themes (Settings/Styling.md lines 79-85). Use emojis instead: ✅ ❌ ⚠️ 🔴 🟡 🟢
@@ -40,7 +42,7 @@ flowchart TB
 - **Description:** <short description>
 - **Overall Score:** <severity emoji + label> <score>/10 — *Final after skeptic review: Security X/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
   - Note: Show score progression through skeptic reviews. Use ✅ if no change, ⬇️ if downgraded, ⬆️ if upgraded.
-  - Example: `🟡 **6/10** (HIGH - Moderate) — *Final: Security 8/10 → Dev ⬇️6/10 → Platform ✅6/10*`
+  - Example: `🟠 **7/10** (HIGH) — *Final: Security 9/10 → Dev ⬇️7/10 → Platform ✅7/10*`
 
 ## 📊 TL;DR - Executive Summary
 *(Add this section after Collaboration is complete for quick reference)*
@@ -85,6 +87,9 @@ flowchart TB
 - **Status:** Yes / No / Don’t know
 - **Evidence:** <what makes this true/false>
 
+### ⚠️ Assumptions
+- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+
 ### 🔎 Key Evidence
 - <evidence bullets with `path:line` references>
 
@@ -103,13 +108,22 @@ flowchart TB
 <rationale>
 
 ## 🤔 Skeptic
+> Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
+
 ### 🛠️ Dev
-- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down — *explicitly state why vs the Security Review score*.
+- **How it could be worse:** <concrete escalation path, e.g., public endpoint + weak auth, lateral movement, data exfil>
+- **Countermeasure effectiveness:** <which recommendation actually removes risk vs just reduces it; why>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ### 🏗️ Platform
-- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down (explain why).
-- **Mitigation note:** <note>
+- **What’s missing/wrong vs Security Review:** <call out gaps, incorrect assumptions, or missing context>
+- **Service constraints checked:** <service doc/SKU/downtime/cost notes; include links if available>
+- **Score recommendation:** ✅ Keep / ⬆️ Up / ⬇️ Down — *explicitly state why vs the Security Review score*.
+- **Operational constraints:** <SKU/tier, network design, downtime, rollout sequencing>
+- **Countermeasure effectiveness:** <coverage/drift risks; how to enforce/monitor at scale>
+- **Assumptions to validate:** <which assumptions would change applicability/score>
 
 ## 🤝 Collaboration
 - **Outcome:** <outcome>
@@ -117,13 +131,13 @@ flowchart TB
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
-  (use clickable markdown links with relative paths, e.g., `[Foo.md](../Code/Foo.md)` or `[Bar.md](../Cloud/Bar.md)`)
+  (use clickable markdown links with relative paths, e.g., `[Foo.md](../Cloud/Foo.md)` or `[Bar.md](../Code/Bar.md)`)
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
-- **Category:** <OWASP/CWE category>
-- **Languages:** <affected languages>
-- **Source:** <SAST tool/manual review/etc>
+- **Provider:** <Azure/AWS/GCP>
+- **Resource Type:** <Key Vault/Storage Account/etc>
+- **Source:** <Defender/Advisor/Scanner name>
 - 🗓️ **Last updated:** DD/MM/YYYY HH:MM
 ```
 
@@ -133,6 +147,11 @@ flowchart TB
 - 🤝 Collaboration
 - Compounding Findings
 - Meta Data
+
+## Cross-Checks
+- Always check existing findings to see if they compound the new issue.
+- If they compound, state that clearly, review both issues, and add clickable links
+  (e.g., `[Related_Finding.md](../Cloud/Related_Finding.md)`) in both `## Compounding Findings` sections.
 
 ## Testing
 - Use the `sample/` directory for test runs and mock findings.
