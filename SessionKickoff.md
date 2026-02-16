@@ -80,8 +80,9 @@ Targeted helpers (stdout-only):
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - Ask user to select scan scope using ask_user tool:
-     - Choices: "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
-     - Default is "All" but must be explicitly selected by user
+     - Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
+     - Default is "IaC + SCA" for discovering architecture/logic and detecting code flow bugs (auth, injection patterns)
+     - SAST available but not default (more time-intensive, less actionable for initial triage)
    - **During scan:** Create Output/Summary/Repos/<RepoName>.md FIRST before creating any findings. Use exact repo name as-is (e.g., `fi_api.md` not `Repo_fi_api.md`). This ensures consistency and allows findings to link back to the summary as it's progressively updated.
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
