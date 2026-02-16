@@ -113,7 +113,7 @@ flowchart TB
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
-  (use Markdown backlinks, e.g., `Findings/Code/Foo.md`)
+  (use clickable markdown links with relative paths, e.g., `[Foo.md](../Code/Foo.md)` or `[Bar.md](../Cloud/Bar.md)`)
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
