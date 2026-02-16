@@ -108,15 +108,70 @@ This repository supports consistent security triage. The expected workflow is:
   - Ask **service-specific** questions where possible.
   - Ask **cross-cutting** questions once (e.g., “Are Private Endpoints used anywhere?”) and then apply the answer across relevant services.
   - Prefix these prompts with `❓` so they’re easy to spot in chat history.
-- When asking or receiving answers to triage questions that influence scope,
-  applicability, scoring, or remediation, append an entry to an `Output/Audit/` log
-  (append-only) recording **the question + the user's answer** (including “Don’t
-  know”). Only promote reusable facts into `Output/Knowledge/`.
-- **Audit log size:** for bulk title imports, prefer an audit summary (count + source
-  file path + timestamp). Only include per-item lists when the user explicitly asks.
+- **Audit logging (MANDATORY for all sessions):**
+  - Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` at the start of each triage session (use timestamp from session start).
+  - **Log ALL of the following:**
+    - **Session initialization:** triage type selected, cloud provider, intake path, repo path, scan scope
+    - **Questions asked:** Every `❓` question asked during triage with timestamp
+    - **User answers:** All user responses (including "Don't know" / freeform / multiple choice selections)
+    - **Assumptions made:** When the agent infers context and records it as an assumption
+    - **Actions taken:** Finding created/updated, Knowledge updated, Summary regenerated
+    - **Bulk operations:** Import source, count of items, which items were processed
+    - **Score changes:** When findings are rescored (initial → Dev skeptic → Platform skeptic)
+  - **Audit log format:**
+    ```markdown
+    # 🟣 Audit Log - Session YYYY-MM-DD HHMMSS
+    
+    **AUDIT LOG ONLY — do not load into LLM triage context**
+    
+    ## Session Metadata
+    - **Date:** DD/MM/YYYY
+    - **Start time:** HH:MM
+    - **Triage type:** Cloud / Code / Repo scan / Mixed
+    - **Provider:** Azure / AWS / GCP / N/A
+    - **Intake source:** <path or "Interactive paste">
+    
+    ## Q&A Log
+    
+    ### HH:MM - Question
+    ❓ <question text>
+    
+    **Answer:** <user response>
+    
+    **Action taken:** <what was done with this answer - e.g., "Updated Azure.md Confirmed section", "Set applicability to Yes">
+    
+    ## Actions Log
+    
+    ### HH:MM - <Action Type>
+    - **Action:** <Created/Updated/Deleted>
+    - **Target:** <file path>
+    - **Reason:** <why this action was taken>
+    - **Impact:** <what changed - e.g., "Added 3 services to Confirmed", "Score changed 7→5">
+    
+    ## Bulk Operations
+    
+    ### HH:MM - Bulk Import
+    - **Source:** <path>
+    - **Items count:** N
+    - **Items processed:** <list or "See details below">
+    - **Duration:** <if long-running>
+    
+    ## Summary
+    - **Total findings created:** N
+    - **Total findings updated:** N
+    - **Knowledge files updated:** <list>
+    - **Summaries regenerated:** <list>
+    - **Questions asked:** N
+    - **Assumptions made:** N (see Knowledge files for details)
+    ```
+  - **When to append (not replace):** Always append to the session log, never overwrite previous entries
+  - **Audit log size:** for bulk title imports, prefer an audit summary (count + source file path + timestamp). Only include per-item lists when the user explicitly asks or when count is <20 items.
+  - **Audit log is append-only:** clearly mark at the top of each audit file as shown above. These logs are for human review and compliance tracking, not for feeding back into context windows.
+
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **After creating findings, automatically run skeptic reviews:** Once repo scan findings are created, immediately run both Dev and Platform skeptic reviews in parallel:
     - Launch `general-purpose` task agent for Dev Skeptic review (follows `Agents/DevSkeptic.md`)
@@ -125,7 +180,6 @@ This repository supports consistent security triage. The expected workflow is:
     - Wait for both to complete before presenting final summary to user
   - **Scanner scope defaults to "All"** (SAST, SCA, Secrets, IaC) — do not ask unless the user wants to override.
   - **Code findings must be fully populated (no FILL placeholders):** Unlike bulk cloud finding generation (which uses FILL for user-provided context), code findings from repo scans must have all sections completed with evidence-backed content. Use the CodeFinding template sections with actual findings from the scan.
-  - **Repo summary is mandatory:** After completing a repo scan, create `Output/Summary/Repos/Repo_<RepoName>.md` containing architecture, security findings summary, and recommendations. This is separate from the detailed knowledge file (`Output/Knowledge/Repos/<repo-name>.md`).
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
     - Look for repo names containing: `*-modules`, `*-platform*`, `terraform-*`, `pulumi-*`, `cloudformation-*`, `infrastructure`, `iac`
@@ -167,16 +221,17 @@ This repository supports consistent security triage. The expected workflow is:
     - Accept either a single repo name/path, a list (comma/newline separated), or a simple wildcard/prefix pattern like `terraform-*`.
     - If the user provides a pattern/wildcard, **expand it into concrete repo names** and ask for an explicit confirmation of the expanded list before scanning.
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
-  - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
-  - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo finding under `## 📋 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
+  - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo summary.
+  - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo summary under `## 🧭 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
   - **Repository knowledge structure:** 
-    - **Repo summary (REQUIRED):** Create `Output/Summary/Repos/Repo_<RepoName>.md` following `Templates/RepoFinding.md` structure containing architecture diagram, security review, skeptic reviews, and recommendations. Use Titlecase for repo name (e.g., `Repo_FI_API.md`, not `Repo_fi-api.md`).
+    - **Repo summary (CREATED FIRST):** Create `Output/Summary/Repos/<RepoName>.md` following `Templates/RepoFinding.md` structure as the FIRST step of any repo scan. This file tracks architecture diagram, languages/frameworks, security review, skeptic reviews, and recommendations. All subsequent findings should link back to this summary. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
     - **Detailed knowledge:** Create `Output/Knowledge/<RepoName>_Repo.md` for tech stack, dependencies, and reusable context
     - **Index:** Update `Output/Knowledge/Repos.md` as an index/summary only
   - **Cloud architecture extraction (MANDATORY for repos with IaC or cloud services):** When a repo scan discovers cloud architecture context (Azure/AWS/GCP services, ingress paths, network patterns, authentication mechanisms), immediately create/update:
     - `Output/Knowledge/<Provider>.md` (e.g., Azure.md, AWS.md) - Add discovered services, network topology, authentication patterns under `## Confirmed` or `## Assumptions`
-    - `Output/Summary/Cloud/Architecture_<Provider>.md` - Create/update architecture diagram showing discovered services, connections, and security controls
+    - `Output/Summary/Cloud/Architecture_<Provider>.md` - Create/update architecture diagram showing discovered services, connections, and security controls (follow `Agents/ArchitectureAgent.md`)
     - This is separate from the repo-specific knowledge - extract reusable cloud environment facts that apply across multiple applications
+    - **Example:** If repo deploys to Azure App Service, add App Service to both Azure.md and Architecture_Azure.md
   - **Trace request ingress path:** For application/service repos, determine how requests reach the service by examining:
     - IaC files (load balancers, API gateways, ingress controllers, public IPs)
     - Application configuration (listening ports, hostnames, base URLs)
@@ -341,7 +396,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
   - **Note:** Repo scans that identify specific code-level security vulnerabilities (e.g., SQL injection, XSS, insecure deserialization) should extract those as individual findings under `Output/Findings/Code/` for tracking and remediation.
-- **Repo scan summaries:** `Output/Summary/Repos/Repo_<RepoName>.md` (one file per repo; follows `Templates/RepoFinding.md` structure with architecture diagram, security review, skeptic reviews, and metadata)
+- **Repo scan summaries:** `Output/Summary/Repos/<RepoName>.md` (one file per repo; follows `Templates/RepoFinding.md` structure with architecture diagram, security review, skeptic reviews, and metadata; use exact repo name without prefix)
   - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings` or in relevant finding summaries
   - **Cloud architecture knowledge:** When scanning a repo, any cloud architecture knowledge discovered (ingress paths, services used, authentication patterns, network topology) should be immediately captured in:
     - `Output/Knowledge/<Provider>.md` (confirmed services, controls, architecture facts)
