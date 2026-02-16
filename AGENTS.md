@@ -28,6 +28,8 @@ repository.
   - **Purpose:** Create and update cloud architecture diagrams based on knowledge.
 - **Path:** Agents/CloudSummaryAgent.md
   - **Purpose:** Guidance for summarising cloud findings.
+- **Path:** Agents/RepoSummaryAgent.md
+  - **Purpose:** Create executive summaries for scanned repositories.
 - **Path:** Agents/RiskRegisterAgent.md
   - **Purpose:** Create and maintain the executive risk register spreadsheet.
 - **Path:** Agents/CodeSummaryAgent.md
