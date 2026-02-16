@@ -161,6 +161,7 @@ This repository supports consistent security triage. The expected workflow is:
     - If the user provides a pattern/wildcard, **expand it into concrete repo names** and ask for an explicit confirmation of the expanded list before scanning.
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
+  - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo finding under `## 📋 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
   - **Extract IaC provider versions** from repo scans (Terraform `required_providers` blocks, Pulumi, CloudFormation). Record in `Output/Knowledge/Repos.md`:
     ```markdown
     ## IaC Provider Versions
