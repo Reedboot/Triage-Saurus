@@ -28,3 +28,42 @@ Provide a platform/ops-focused challenge of the proposed finding:
 
 ## Persisted context (optional)
 If you notice reusable platform constraints/standards (e.g., “all build agents are public”, “Private Endpoints are default-off due to DNS”), capture them in `Knowledge/PlatformSkeptic.md` so future triage is faster/more accurate.
+
+## Context Sources
+
+**Before writing Platform Skeptic sections, check:**
+
+1. **IaC Repo Findings** (`Output/Findings/Repo/`)
+   - What platform/shared modules exist (e.g., terraform-platform-modules, terraform-key_vault)?
+   - What security defaults are baked into modules?
+   - What's the intended "golden path" vs reality?
+
+2. **IaC Provider Defaults** (`Output/Knowledge/<Provider>.md` → `## 🏗️ IaC Provider Defaults`)
+   - What does the Terraform/Pulumi provider default to?
+   - Does the finding conflict with IaC defaults (= likely drift)?
+
+3. **Platform Knowledge** (`Output/Knowledge/Repos.md`, `Knowledge/PlatformSkeptic.md`)
+   - Known platform constraints (DNS, networking, CI/CD patterns)
+   - Shared services discovered (WAF, API management, logging)
+
+4. **Data Flow Architecture** (`Output/Knowledge/<Provider>.md` → `## 🔄 Data Flow Architecture`)
+   - What security layers exist in the request path?
+   - Where are the gaps vs intended architecture?
+
+## Examples Referencing Platform Context
+
+**Example 1: Finding conflicts with module defaults**
+> "Our `terraform-storage` module (from terraform-platform-modules scan) sets `min_tls_version = TLS1_2` and `allow_blob_public_access = false` by default. If this finding shows TLS 1.0 or public blob access, this Storage Account is either:
+> 1. Legacy (pre-dates shared modules)
+> 2. Provisioned via Portal/CLI (drift)
+> 3. Explicitly overriding the module defaults (check consumer code)
+> 
+> **Remediation:** Migrate to shared module or update module to enforce (not just default) these settings."
+
+**Example 2: IaC provider default is insecure**
+> "The azurerm v3.85 provider defaults `public_network_access_enabled = true` for Key Vault. Our terraform-key_vault module **does** override this to false, but if teams provision Key Vaults directly (bypassing the module), they get the insecure default.
+> 
+> **Countermeasure:** Azure Policy to deny Key Vaults without private endpoint + drift detection to catch direct provisioning."
+
+**Example 3: Shared service mitigates finding**
+> "Data flow scan shows WAF (via App Gateway) sits in front of 90% of public endpoints. While individual App Services may lack specific controls, the WAF provides defense-in-depth for OWASP Top 10. The 10% gap (legacy App Service) is the actual risk - recommend prioritizing that specific resource."
