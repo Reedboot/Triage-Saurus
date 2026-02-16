@@ -12,22 +12,22 @@ This document provides the session initialization flow for Triage-Saurus. When t
 ## Helper Scripts
 
 Prefer the consolidated workspace scanner (stdout-only):
-- `python3 Skills/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/sample paths
+- `python3 Scripts/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/sample paths
 
 Targeted helpers (stdout-only):
-- `python3 Skills/scan_knowledge_refinement.py`
-- `python3 Skills/scan_findings_files.py`
-- `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
-- `python3 Skills/triage_queue.py` — use after bulk imports to identify common missing context
-- `python3 Skills/get_cwd.py` — suggests repo root path based on current directory
-- `python3 Skills/compare_intake_to_findings.py --intake <path> --findings <path>` — checks for duplicates before bulk processing
+- `python3 Scripts/scan_knowledge_refinement.py`
+- `python3 Scripts/scan_findings_files.py`
+- `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
+- `python3 Scripts/triage_queue.py` — use after bulk imports to identify common missing context
+- `python3 Scripts/get_cwd.py` — suggests repo root path based on current directory
+- `python3 Scripts/compare_intake_to_findings.py --intake <path> --findings <path>` — checks for duplicates before bulk processing
 
 ## Kickoff Flow
 
 ```text
 1. **Load instructions:** Read AGENTS.md and Agents/Instructions.md for operating rules.
 
-2. **Scan workspace:** Run `python3 Skills/scan_workspace.py` to check:
+2. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Sample Findings/ for available triage items
@@ -45,14 +45,14 @@ Targeted helpers (stdout-only):
 
 5. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
-   - Verify folders are non-empty using `python3 Skills/scan_intake_files.py <path>` before offering.
+   - Verify folders are non-empty using `python3 Scripts/scan_intake_files.py <path>` before offering.
    - Common paths in this repo:
      - Intake/Cloud
      - Intake/Code
      - Sample Findings/Cloud
      - Sample Findings/Code
    - Before starting bulk triage, check for duplicates:
-     `python3 Skills/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
+     `python3 Scripts/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
    - If duplicates found: ask to proceed with new items only.
    - If no new items: stop and notify user.
 
@@ -69,7 +69,7 @@ Targeted helpers (stdout-only):
 
 8. **Repo scan initialization:**
    - Check Output/Knowledge/Repos.md for known repo root path(s).
-   - If none recorded: suggest default using `python3 Skills/get_cwd.py`
+   - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
    - Ask which repo(s) to scan (name, list, or wildcard pattern like terraform-*).
    - If wildcard: expand to concrete names and confirm before scanning.
    - Scanner scope defaults to "All" (SAST, SCA, Secrets, IaC).
