@@ -36,13 +36,13 @@ To make this reliable across different CLIs/tooling, avoid shell `find`/recursiv
 - `python3 Skills/scan_workspace.py` (preferred)
 - `python3 Skills/scan_findings_files.py` (targeted)
 
-Then ask me to (numbered options; I should be able to reply with just the number):
-1. **Copy/paste a single issue** to triage
-2. **Provide a path under `Intake/`** to process in bulk
-3. **Import and triage the sample findings**
-4. **Scan a repo**
+Then use the **ask_user tool** with selectable choices:
+- **Copy/paste a single issue to triage**
+- **Provide a path under Intake/ to process in bulk**
+- **Import and triage the sample findings**
+- **Scan a repo**
 
-- If the user chooses option **2** (bulk intake), ask for the folder path using a **selectable** multiple-choice prompt (and allow freeform input for custom paths).
+- If the user chooses bulk intake, ask for the folder path using a **selectable** multiple-choice prompt (and allow freeform input for custom paths).
   - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
 - Suggested bulk paths in this repo:
   - `Intake/Cloud` (your cloud findings)
@@ -98,7 +98,7 @@ Before asking any cloud-provider questions:
   - Promote reusable context from repo scan into `Output/Knowledge/` as Confirmed/Assumptions to support cloud triage.
 
 When asking **multiple-choice** questions, always include a **“Don’t know”** option.
-- In plain chat (non-selectable), present choices as a **numbered list** so I can reply with just the number.
+- In plain chat (non-selectable), present choices as a **numbered bullet list** (e.g., `1. **Option**`) for better readability so I can reply with just the number.
 
 As each kickoff question is answered, check whether it adds new context vs existing `Output/Knowledge/`.
 - If it’s new: record it **immediately** in `Output/Knowledge/` as **Confirmed** (with timestamp).
