@@ -13,7 +13,7 @@
 
 **Before writing Dev Skeptic sections, check:**
 
-1. **Repo Findings** (`Output/Findings/Repo/`)
+1. **Repo Summaries** (`Output/Summary/Repos/`)
    - What dependencies/libraries are used?
    - What authentication patterns (managed identity, service principals)?
    - What data stores/APIs does the code connect to?
