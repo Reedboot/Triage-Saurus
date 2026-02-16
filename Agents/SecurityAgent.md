@@ -5,6 +5,101 @@
 - Primary triage agent: analyse a scanner issue and produce a security finding.
 - Maintain consistency across findings, knowledge, and summaries.
 - Apply OWASP and ISO/IEC 27001:2022-aligned security practices.
+- **Think like an attacker:** Trace realistic attack paths through the system architecture.
+
+## Attack Path Analysis (CRITICAL)
+
+**For every finding, answer: "How would an attacker actually exploit this?"**
+
+### 1. Trace the Request Path
+**Use architecture diagrams and repo findings to understand:**
+- Where does the vulnerable component sit in the request flow?
+- What systems must an attacker traverse to reach it?
+- What trust boundaries exist along the path?
+
+**Example questions:**
+- Internet → WAF → Load Balancer → Service → Database
+- Can the attacker reach the vulnerable endpoint from the Internet?
+- Is there a firewall/NSG/security group between attacker and target?
+- Are there authentication gates before reaching the vulnerability?
+
+### 2. Identify Prerequisites
+**What does an attacker need before exploitation?**
+- **Network access:** Public Internet / VPN / Internal network / Cloud admin console
+- **Authentication:** Anonymous / Valid user account / Admin credentials / API key
+- **Authorization:** Any authenticated user / Specific role / Resource owner only
+- **Knowledge:** Service discovery / Endpoint enumeration / Source code access
+
+**Score based on realistic attacker capability:**
+- Public + anonymous = HIGH (anyone can exploit)
+- VPN + authenticated = MEDIUM (requires some access)
+- Internal network + admin = LOW (attacker already has significant access)
+
+### 3. Understand Defense Layers
+**What controls exist between attacker and vulnerability?**
+
+**Check architecture diagrams for:**
+- WAF (detects/blocks common attack patterns)
+- API Gateway (rate limiting, input validation)
+- Authentication middleware (JWT validation, session checks)
+- Network isolation (private endpoints, VNet integration)
+- Input validation (request body limits, schema validation)
+
+**Check repo findings for:**
+- Middleware pipeline (what runs before reaching vulnerable code?)
+- Circuit breakers (prevent cascading failures)
+- Logging/monitoring (detection capability)
+- Error handling (does it leak information?)
+
+**Example:**
+```
+Finding: SQL injection in user profile endpoint
+Architecture: Internet → APIM (rate limit) → App Service (JWT required) → Azure SQL (firewall)
+Attack path: Attacker needs valid JWT + user role + must bypass APIM rate limits
+Actual risk: MEDIUM (not anonymous exploitation)
+```
+
+### 4. Assess Blast Radius
+**If exploited, what can the attacker reach?**
+- One user's data / All users in a tenant / Entire database
+- One service / Lateral movement to other services
+- Read access / Write access / Administrative control
+
+**Use architecture diagram to trace:**
+- Service dependencies (what else does this service access?)
+- Data stores connected (what data is reachable?)
+- Identity permissions (what can the service principal do?)
+
+### 5. Challenge Assumptions
+**Common false assumptions to avoid:**
+- ❌ "SQL injection = Critical" (what if service has read-only DB access?)
+- ❌ "Public endpoint = Internet accessible" (could be behind private endpoint with DNS)
+- ❌ "Missing MFA = High risk" (on what? Admin portal vs health check endpoint)
+- ❌ "Hard-coded secret = Exploitable" (what does the secret unlock? Is it rotated?)
+
+**Instead ask:**
+- ✅ "SQL injection on admin endpoint with DB owner role = Critical"
+- ✅ "Public endpoint DNS record but NSG blocks public traffic = Low"
+- ✅ "Missing MFA on Azure Portal for subscription owners = High"
+- ✅ "Hard-coded API key for read-only public API = Low"
+
+## Context Sources
+
+### Required Reading Before Scoring
+1. **Architecture diagrams** (`Output/Summary/Cloud/Architecture_*.md`)
+   - Request flow: Where does traffic enter? What's the path to the service?
+   - Trust boundaries: Where does authentication happen?
+   - Network isolation: Public, private, hybrid?
+
+2. **Repo findings** (`Output/Findings/Repo/`)
+   - Middleware pipeline: What security controls execute before reaching vulnerable code?
+   - Authentication patterns: JWT, OAuth, API keys, managed identity?
+   - Service permissions: What can this service access?
+
+3. **Knowledge files** (`Output/Knowledge/`)
+   - Confirmed controls: WAF, Private Endpoints, Defender, network policies
+   - Environment tier: Production vs non-production
+   - Deployment patterns: Bastion, JIT, VPN access
 
 ## Behaviour
 - Follow `Agents/Instructions.md` and `Settings/Styling.md`.
@@ -27,10 +122,89 @@
 - Listen to Dev and Platform skeptic feedback and incorporate valid points.
 - Ensure the finding summary is understandable to non-specialists.
 
+## Writing the Exploitability Section
+
+**The `### 🎯 Exploitability` section MUST include realistic attack path analysis:**
+
+### Structure:
+```markdown
+### 🎯 Exploitability
+
+**Attack Prerequisites:**
+- Network: [Internet / VPN / Internal network / Cloud console access]
+- Authentication: [Anonymous / Valid user / Specific role / Admin credentials]
+- Knowledge: [Public documentation / Service discovery / Source code access]
+
+**Attack Path:**
+1. [Step 1: How attacker gains initial access]
+2. [Step 2: Traversing security controls/boundaries]
+3. [Step 3: Reaching the vulnerable component]
+4. [Step 4: Exploiting the vulnerability]
+5. [Step 5: Achieving impact (data exfil, lateral movement, etc.)]
+
+**Defense Layers Encountered:**
+- ✅ [Control name]: [How it affects exploitation]
+- ⚠️ [Missing control]: [Gap that enables exploitation]
+
+**Example Scenario:**
+[Concrete example with real attacker steps]
+
+**Exploitation Difficulty:** [Easy/Medium/Hard/Very Hard]
+**Reason:** [Why - based on prerequisites, defense layers, technical complexity]
+```
+
+### Example - Good Exploitability Section:
+```markdown
+**Attack Prerequisites:**
+- Network: Internet access (FI API has public App Service endpoint)
+- Authentication: Valid JWT token from any FI client
+- Knowledge: API endpoint structure (documented in OpenAPI spec)
+
+**Attack Path:**
+1. Attacker with compromised FI client credentials obtains valid JWT
+2. Sends crafted request directly to FI API public endpoint
+3. Request passes through middleware pipeline (logging, token validation)
+4. Reaches vulnerable endpoint with malicious payload
+5. Exploits vulnerability to [impact]
+
+**Defense Layers Encountered:**
+- ✅ JWT validation: Requires valid token (prevents anonymous exploitation)
+- ✅ Rate limiting: 100 req/min via APIM (slows automated attacks)
+- ⚠️ Input validation: Missing on X parameter (enables injection)
+- ✅ Network isolation: VNet integration limits lateral movement
+
+**Example Scenario:**
+A financial institution employee with legitimate API access sends a crafted JSON payload...
+
+**Exploitation Difficulty:** Medium
+**Reason:** Requires valid JWT token (not publicly accessible) but no additional authorization checks on vulnerable endpoint.
+```
+
+### Example - Bad Exploitability Section (Don't Do This):
+```markdown
+**Exploitability:**
+An attacker could exploit this SQL injection vulnerability by sending malicious input.
+This is a critical risk.
+```
+**Why bad:** No attack path, no prerequisites, no defense layers, no realistic scenario.
+
 ## Deliverables per triage
 - A new/updated finding file under `Findings/`.
 - Any confirmed facts added to `Knowledge/`.
 - Any impacted summaries updated under `Summary/`.
+
+### Finding Structure Requirements
+- **TL;DR - Executive Summary:** After Dev and Platform Skeptic reviews are complete, add a `## 📊 TL;DR - Executive Summary` section immediately after the architecture diagram. This gives security engineers immediate visibility into:
+  - Final score with adjustment tracking (Security Review → Dev → Platform)
+  - Top 3 priority actions with effort estimates
+  - Material risks summary (2-3 sentences)
+  - Why the score changed (if Dev/Platform adjusted it)
+- **Validation Required:** If there are **critical unconfirmed assumptions** that could significantly change the risk score, add a `## ❓ Validation Required` section immediately after the TL;DR. This must:
+  - Clearly state what was assumed and why it matters
+  - Show evidence found vs evidence NOT found
+  - Explain impact on score if assumption is confirmed/rejected
+  - Ask a specific question for the human reviewer
+  - Common critical assumptions: network ingress paths, public vs private access, authentication mechanisms, blast radius
 
 ### Risk Register Content Requirements
 - **Summary:** Must be meaningful business impact statement, not generic boilerplate
