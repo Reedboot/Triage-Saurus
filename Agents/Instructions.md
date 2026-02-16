@@ -66,6 +66,7 @@ This repository supports consistent security triage. The expected workflow is:
       - If **new items exist**, proceed using only that new-item subset.
       - Candidate paths in this repo: `Intake/Cloud`, `Intake/Code`, `Intake/Sample/Cloud` (if present), `Intake/Sample/Code` (if present)
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
+- **Cloud context survey:** Before starting cloud triage (after provider is confirmed), check if `Output/Knowledge/<Provider>.md` has sufficient environmental context. If sparse/missing, offer: "Would you like to run a cloud context survey first? (~10 questions, builds foundational context for faster triage)" — see `Agents/CloudContextAgent.md` for the survey workflow.
 - If triage type is **Cloud** and the provider is not explicit from the folder path, quickly skim the intake titles and:
   - if they strongly indicate a provider, state it plainly (e.g., “From looking at the items to triage, it looks like you are using Azure.”)
   - then ask a single confirmation question prefixed with `❓` **on its own line**.
@@ -117,6 +118,39 @@ This repository supports consistent security triage. The expected workflow is:
 - **Repo scans:**
   - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
+  - **Scanner scope defaults to "All"** (SAST, SCA, Secrets, IaC) — do not ask unless the user wants to override.
+  - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
+    - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
+    - Look for repo names containing: `*-modules`, `*-platform*`, `terraform-*`, `pulumi-*`, `cloudformation-*`, `infrastructure`, `iac`
+  - **Multi-repo scans:** when scanning multiple repos (e.g., from a wildcard pattern):
+    - **Ask for permission first** before launching parallel scans. Tell the user:
+      - How many repos will be scanned
+      - How many parallel batches (e.g., "3 batches of 5, 5, and 4 repos")
+      - What will be created (repo findings, knowledge updates, audit entries)
+      - Estimated total time
+      - **Note:** No real-time progress bars per repo (task agents run independently); you'll see batch completion summaries
+      - Offer choices: **"Proceed with batched scans"** / **"Scan one at a time"** / **"Cancel"**
+    - Delegate each repo scan to a separate `general-purpose` task agent so each has its own full context window.
+    - **Launch repo scans in parallel batches** using adaptive sizing:
+      - **Start conservative:** First batch = 3 repos
+      - **If batch succeeds (all complete):** Increase next batch (e.g., 5 repos)
+      - **If batch has failures/interruptions:** Reduce next batch (e.g., 2 repos)
+      - This learns the actual system concurrency limits empirically
+    - **Before launching each batch**, tell the user:
+      - Current batch (e.g., "Batch 1/3: scanning 5 repos...")
+      - Estimated time for the batch (roughly 1-3 minutes per repo)
+    - **After each batch completes**, immediately summarize:
+      - Which repos in the batch completed successfully
+      - Any that failed or were interrupted
+      - Progress indicator (e.g., "7/14 repos completed")
+    - **After all scans complete**, run a **consolidation pass**:
+      1. Review all generated findings under `Output/Findings/Repo/`
+      2. Check `Output/Knowledge/` for cross-repo patterns (shared modules, common auth patterns, repeated issues)
+      3. Identify **countermeasures** (controls in one repo that mitigate risks in another)
+      4. Identify **compounding issues** (weaknesses that chain across repos)
+      5. Update finding scores and add cross-references under `## 🔗 Compounding Findings` sections
+      6. Regenerate risk register: `python3 Skills/risk_register.py`
+      7. Update architecture diagrams if cloud provider context is confirmed
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
     - Prefer using the stdout-only helper to avoid guesswork: `python3 Skills/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
@@ -127,6 +161,16 @@ This repository supports consistent security triage. The expected workflow is:
     - If the user provides a pattern/wildcard, **expand it into concrete repo names** and ask for an explicit confirmation of the expanded list before scanning.
     - If many repos match and the user hasn’t expressed a priority: scan shared module repos first (e.g., `*-modules`), then edge networking/security repos (network, firewall, gateway/WAF, DDoS), then identity, then data stores, then app/service repos.
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo finding.
+  - **Extract IaC provider versions** from repo scans (Terraform `required_providers` blocks, Pulumi, CloudFormation). Record in `Output/Knowledge/Repos.md`:
+    ```markdown
+    ## IaC Provider Versions
+    - **Terraform azurerm:** ~> 3.85 (detected in terraform-platform-modules, 16/02/2026)
+    - **Terraform aws:** ~> 5.x (detected in terraform-aws-infra, 16/02/2026)
+    ```
+  - **Look up security-relevant defaults** for detected provider versions and record in `Output/Knowledge/<Provider>.md` under `## 🏗️ IaC Provider Defaults`. Example defaults to capture:
+    - **Azure (azurerm v3.x):** Storage Account public blob access, TLS version, SQL public network access, Key Vault network access, AKS RBAC/policy, ACR admin user
+    - **AWS (aws v5.x):** S3 bucket ACL defaults, RDS public access, EC2 instance metadata defaults, Security Group defaults
+    - Use these defaults during triage to distinguish **intended IaC config** vs **drift/manual changes**
   - If new: append it **immediately** to `Output/Knowledge/` as **Confirmed** with a timestamp.
   - If already captured: don’t duplicate.
   - If Cloud + provider is confirmed: immediately update `Output/Summary/Cloud/Architecture_<Provider>.md`.
@@ -206,6 +250,22 @@ This repository supports consistent security triage. The expected workflow is:
     to include assumed components.
   - If any `✅ Validated` findings still contain title-only boilerplate in `### 🧾 Summary`, refresh them (writes files): `python3 Skills/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
 - While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Output/Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
+- **Cloud resource native defaults:** When triaging findings about specific cloud resources, look up the **native provider default** for that resource type and note it in the finding:
+  - **Azure examples:**
+    - Storage Account: Public network access **enabled by default** (public endpoint)
+    - Azure SQL Server: Public network access **enabled by default** (requires explicit firewall rules)
+    - Key Vault: Public network access **enabled by default**
+    - Cosmos DB: Public network access **enabled by default**
+    - App Service: Public by default (unless deployed into VNET)
+  - **AWS examples:**
+    - S3 Bucket: Block public access **enabled by default** (as of Apr 2023)
+    - RDS Instance: Public accessibility **disabled by default**
+    - EKS Cluster: Public endpoint **enabled by default**
+  - **GCP examples:**
+    - Cloud Storage Bucket: Public access **disabled by default**
+    - Cloud SQL: Public IP **disabled by default** (must opt-in)
+  - Record these in `Output/Knowledge/<Provider>.md` under `## 🏗️ Cloud Resource Native Defaults` as you discover them during triage
+  - Use this context to assess findings: "Finding shows public Storage Account. Azure Storage defaults to public - this is expected **unless** private endpoints are explicitly configured or IaC overrides the default."
 - **Finding content completeness:** ensure all findings have:
   - A clear **Overall Score** with severity and numeric score (e.g., `🔴 High 8/10`)
   - Proper **Summary** section (not generic boilerplate)
