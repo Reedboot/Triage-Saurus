@@ -77,7 +77,7 @@ flowchart TB
 <how an attacker would realistically leverage issues>
 
 ### 🚩 Risks
-- <bullet list of notable risks/issues; link to related cloud/code findings if they exist>
+- <bullet list of notable risks/issues; link to related findings if they exist using clickable markdown links, e.g., `[Finding.md](../Cloud/Finding.md)`>
 
 ### 🔎 Key Evidence (deep dive)
 Mark each deep-dive evidence item:
@@ -158,7 +158,7 @@ Extract downstream dependencies indicated by configuration, e.g.:
 
 ## Compounding Findings
 - **Compounds with:** <finding list or None identified>
-  (use Markdown backlinks, e.g., `Findings/Cloud/Foo.md`)
+  (use clickable markdown links with relative paths from Summary/Repos/, e.g., `[Foo.md](../../Findings/Cloud/Foo.md)`)
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
