@@ -11,7 +11,23 @@
 - **Triage type:** Cloud / Code / Repo scan / Mixed
 - **Provider:** Azure / AWS / GCP / N/A
 - **Intake source:** <path or "Interactive paste">
-- **Scan scope:** SAST / SCA / Secrets / IaC / All / N/A
+- **Scan scope:** SAST / SCA / Secrets / IaC / IaC+SCA / All / N/A
+
+---
+
+## Scan Timing & Tools
+
+### Scan Type: <IaC / SCA / SAST / Secrets>
+- **Duration:** MM:SS or HH:MM:SS
+- **Tools used:** <comma-separated list of tools/commands>
+- **Findings count:** N
+- **Status:** Completed / Failed / Skipped
+
+### Scan Type: <next type>
+- **Duration:** MM:SS or HH:MM:SS
+- **Tools used:** <comma-separated list>
+- **Findings count:** N
+- **Status:** Completed / Failed / Skipped
 
 ---
 
