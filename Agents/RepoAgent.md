@@ -139,6 +139,38 @@ Score based on **actual exploitable damage given proven defenses**, not theoreti
 - Listen to Dev and Platform skeptic feedback and incorporate valid points.
 - Ensure the finding summary is understandable to non-specialists.
 
+## Repo Scan Workflow
+
+### Scan Timing & Tools Tracking
+**CRITICAL:** For every repo scan, track duration and tools used for each scan type:
+
+1. **Record start time** before each scan type (IaC, SCA, SAST, Secrets)
+2. **Record end time** after completion
+3. **Calculate duration** in MM:SS or HH:MM:SS format
+4. **Log tools used** with specific commands/versions
+5. **Update audit log** in `Output/Audit/Session_*.md` under `## Scan Timing & Tools` section
+
+**Example logging:**
+```markdown
+### Scan Type: SCA
+- **Duration:** 02:34
+- **Tools used:** dotnet list package --vulnerable, grep packages.lock.json
+- **Findings count:** 2
+- **Status:** Completed
+```
+
+**Common tools by scan type:**
+- **IaC:** grep (Terraform/Pulumi/CloudFormation patterns), terraform validate
+- **SCA:** dotnet list package --vulnerable, npm audit, pip-audit, go list -m all
+- **SAST:** semgrep, custom grep patterns, language-specific linters
+- **Secrets:** git-secrets, grep for patterns, truffleHog
+
+**Timing benchmarks (for reference):**
+- IaC scan: ~30-90 seconds (depends on file count)
+- SCA scan: ~1-5 minutes (depends on dependency count + network)
+- SAST scan: ~5-30 minutes (depends on codebase size + complexity)
+- Secrets scan: ~1-3 minutes (depends on git history depth)
+
 ## Writing the Exploitability Section
 
 **The `### 🎯 Exploitability` section MUST include realistic attack path analysis:**
