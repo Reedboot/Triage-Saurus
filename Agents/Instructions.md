@@ -130,6 +130,15 @@ This repository supports consistent security triage. The expected workflow is:
     - **Triage type:** Cloud / Code / Repo scan / Mixed
     - **Provider:** Azure / AWS / GCP / N/A
     - **Intake source:** <path or "Interactive paste">
+    - **Scan scope:** IaC+SCA / All / N/A
+    
+    ## Scan Timing & Tools
+    
+    ### Scan Type: <IaC / SCA / SAST / Secrets>
+    - **Duration:** MM:SS or HH:MM:SS
+    - **Tools used:** <comma-separated list of tools/commands>
+    - **Findings count:** N
+    - **Status:** Completed / Failed / Skipped
     
     ## Q&A Log
     
@@ -173,12 +182,13 @@ This repository supports consistent security triage. The expected workflow is:
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
+  - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
   - **After creating findings, automatically run skeptic reviews:** Once repo scan findings are created, immediately run both Dev and Platform skeptic reviews in parallel:
     - Launch `general-purpose` task agent for Dev Skeptic review (follows `Agents/DevSkeptic.md`)
     - Launch `general-purpose` task agent for Platform Skeptic review (follows `Agents/PlatformSkeptic.md`)
     - Both agents should update the `### 🛠️ Dev` and `### 🏗️ Platform` sections respectively
     - Wait for both to complete before presenting final summary to user
-  - **Scanner scope defaults to "All"** (SAST, SCA, Secrets, IaC) — do not ask unless the user wants to override.
+  - **Scanner scope defaults to "IaC + SCA"** (logic discovery + code flow bugs) — SAST is available but not default (more time-intensive, less actionable for initial triage).
   - **Code findings must be fully populated (no FILL placeholders):** Unlike bulk cloud finding generation (which uses FILL for user-provided context), code findings from repo scans must have all sections completed with evidence-backed content. Use the CodeFinding template sections with actual findings from the scan.
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
@@ -237,7 +247,7 @@ This repository supports consistent security triage. The expected workflow is:
     - Application configuration (listening ports, hostnames, base URLs)
     - Middleware/routing code (reverse proxy patterns, forwarding logic)
     - Documentation/README (deployment architecture)
-    - **Record in architecture diagram:** Show the full path from origin (Internet/VPN/Internal) → entry point → service
+    - **Record in architecture diagram:** Show the full path from origin (Internet/VPN/Internal) → entry point → service **as a Mermaid flowchart** in the repo summary's `## 🗺️ Architecture Diagram` section (NOT as text-based flow). Include middleware pipeline, authentication points, logging flows (dotted lines), and service dependencies.
     - **Mark as Assumption if uncertain:** If ingress path is inferred but not explicitly confirmed, mark with dotted border in diagram and capture as assumption in Knowledge
     - **Examples to detect:**
       - Direct public endpoint (App Service with public access)
@@ -288,6 +298,7 @@ This repository supports consistent security triage. The expected workflow is:
     - Material risks summary (2-3 sentences)
     - Why the score changed (if adjustments were made)
     - **Critical:** The TL;DR must be populated by the skeptic review agents, not left as a placeholder. If using task agents for skeptic reviews, instruct them to populate the TL;DR section.
+  - **Overall Score reconciliation:** After Dev and Platform Skeptic reviews are complete, update the top-level `- **Overall Score:**` line to show the full score progression. Format: `<emoji> **X/10** (<severity>) — *Final: Security Y/10 → Dev [✅/⬇️/⬆️]Z/10 → Platform [✅/⬇️/⬆️]X/10*` where X is the final reconciled score. This shows transparency in the decision-making process and which skeptic's recommendation was accepted.
   - **Validation Required:** If there are critical **unconfirmed assumptions** that could significantly change the risk score, add a `## ❓ Validation Required` section immediately after the TL;DR. This must:
     - Clearly state what assumption was made and why it matters
     - Show evidence found vs evidence NOT found
