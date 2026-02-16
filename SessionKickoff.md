@@ -70,9 +70,16 @@ Targeted helpers (stdout-only):
 8. **Repo scan initialization:**
    - Check Output/Knowledge/Repos.md for known repo root path(s).
    - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
-   - Ask which repo(s) to scan (name, list, or wildcard pattern like terraform-*).
-   - If wildcard: expand to concrete names and confirm before scanning.
-   - Scanner scope defaults to "All" (SAST, SCA, Secrets, IaC).
+   - Ask user to confirm the repos root directory path.
+   - Discover available repos: `ls -1 <confirmed_repos_root_path>`
+   - Present repos as selectable choices using ask_user tool:
+     - List all individual repo names as choices
+     - Add special choices like "Scan all terraform-* repos" or "Scan multiple repos (specify pattern)"
+     - Allow freeform input for custom repo names/patterns
+   - If wildcard pattern selected: expand to concrete names and confirm before scanning.
+   - Ask user to select scan scope using ask_user tool:
+     - Choices: "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
+     - Default is "All" but must be explicitly selected by user
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
 9. **Follow operational rules:**
