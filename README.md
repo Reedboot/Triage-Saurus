@@ -5,7 +5,7 @@ Read `AGENTS.md` first for repository-specific agent instructions.
 ## Session kick-off
 - In your CLI, type `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
 - Then provide either a single issue to triage (paste into chat) or a bulk path under `Intake/`.
-- Bulk import note: `Skills/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
+- Bulk import note: `Scripts/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
 
 ## Purpose
 This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
@@ -25,7 +25,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
    context as needed.
 3. The agent creates or updates findings in `Output/Findings/`, updates `Output/Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Output/Summary/`.
 4. After any finding changes, the agent **regenerates**
-   `Output/Summary/Risk Register.xlsx` using `Skills/risk_register.py`.
+   `Output/Summary/Risk Register.xlsx` using `Scripts/risk_register.py`.
    - This spreadsheet is **ExCo/CISO-facing** (no team/status columns); priority/ranking is deterministic from finding scores.
 
 > Note: By default, artifacts under `Output/Findings/`, `Output/Knowledge/`, and `Output/Summary/`
@@ -48,7 +48,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 ## Process sample findings
 
 1. Stage samples into `Intake/`:
-   - `python3 Skills/stage_sample_findings_to_intake.py --type cloud`
+   - `python3 Scripts/stage_sample_findings_to_intake.py --type cloud`
 2. Use your chosen CLI
 3. Provide the bulk path `Intake/Sample/Cloud` (or `Intake/Sample/Code`) for processing.
 
@@ -59,13 +59,13 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 
 **Tools**
 - **Python:** `python3` is required to run:
-  - `Skills/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
-  - `Skills/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
-  - `Skills/validate_findings.py` (validate finding + summary formatting)
-  - `Skills/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
+  - `Scripts/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
+  - `Scripts/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
+  - `Scripts/validate_findings.py` (validate finding + summary formatting)
+  - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **Dependencies:** Uses only the Python standard library; no extra packages required.
-  - Optional helper: `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+  - Optional helper: `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
 
 ## Auto-regenerate risk register
-- Run `python3 Skills/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
-- Use `python3 Skills/watch_risk_register.py --full` to also refresh summaries/descriptions/scores before regenerating.
+- Run `python3 Scripts/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
+- Use `python3 Scripts/watch_risk_register.py --full` to also refresh summaries/descriptions/scores before regenerating.
