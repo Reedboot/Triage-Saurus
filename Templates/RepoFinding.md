@@ -1,6 +1,25 @@
 # 🟣 Repo Scan Template
 
-Use this template for **one file per scanned repo** under `Findings/Repo/`.
+Use this template for **one file per scanned repo** under `Findings/Repo/` and **repo summaries** under `Summary/Repos/`.
+
+## CRITICAL: Architecture Diagrams in Repo Summaries
+
+**MANDATORY:** Every repo summary (`Summary/Repos/<RepoName>.md`) MUST include its own `## 🗺️ Architecture Diagram` as the FIRST section immediately under the document title.
+
+**What to include:**
+- **Request flow** as Mermaid diagram (not text) - show how requests traverse the application
+- **Middleware/pipeline components** in execution order
+- **Authentication/authorization flows**
+- **Service dependencies** (databases, APIs, message queues)
+- **Monitoring/logging integrations**
+- **Internal application architecture** (not infrastructure - that's in Cloud/ diagrams)
+
+**Style requirements:**
+- Use `flowchart TB` (top-down) for request flows
+- NO `style fill:<color>` directives (breaks dark themes - see Settings/Styling.md lines 79-85)
+- Use emojis for visual clarity: 🛡️ 🔐 🗄️ 🌐 🧑‍💻 ⚙️ 📈
+- Use dotted lines `-.->` for async/logging flows
+- Use subgraphs for logical groupings (e.g., middleware pipeline)
 
 ## File Template
 ```md
@@ -9,17 +28,29 @@ Use this template for **one file per scanned repo** under `Findings/Repo/`.
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Dev[<repo-name> repo] --> CI[<CI/CD system>]
-  CI --> Build[Build/Test]
-
-  Build --> IaC[IaC / App]
-  IaC --> Cloud[Cloud Resources]
-  Cloud --> Deps[Service Dependencies]
-
-  CI -. secrets scanning .-> Secrets[Secret scanning]
+  client[👤 Client]
+  
+  subgraph app[" Application "]
+    middleware1[Step 1]
+    middleware2[Step 2]
+    middleware3[Step 3]
+  end
+  
+  backend[🗄️ Backend Service]
+  logs[📊 Logging]
+  
+  client --> middleware1
+  middleware1 --> middleware2
+  middleware2 --> middleware3
+  middleware3 --> backend
+  middleware2 -.->|Async| logs
 ```
 
-- **Overall Score:** <severity emoji + label> <score>/10
+**CRITICAL: Never use `style fill:<color>` in Mermaid diagrams** - breaks dark themes (Settings/Styling.md lines 79-85). Use emojis instead: ✅ ❌ ⚠️ 🔴 🟡 🟢
+
+- **Overall Score:** <severity emoji + label> <score>/10 — *Final after skeptic review: Security X/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
+  - Note: Show score progression through skeptic reviews. Use ✅ if no change, ⬇️ if downgraded, ⬆️ if upgraded.
+  - Example: `🟠 **6/10** (HIGH - Moderate) — *Final: Security 7/10 → Dev ✅7/10 → Platform ⬇️6/10*`
 
 ## 📊 TL;DR - Executive Summary
 *(Add this section after Collaboration is complete for quick reference)*
