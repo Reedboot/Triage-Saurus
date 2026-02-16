@@ -98,7 +98,11 @@ This repository supports consistent security triage. The expected workflow is:
     - Do **not** downgrade based on the optimistic answer.
     - Default to the **worse (more severe) interpretation** and ask a single follow-up question explaining the conflict (e.g., multiple subscriptions/environments, or user uncertainty).
     - If the user answers “Yes — all”, but the finding indicates otherwise, keep severity higher until the scope is reconciled.
-  - If applicability is **No** (confirmed false positive / out of scope), downgrade severity appropriately and rewrite the finding as a drift-prevention / assurance item.
+  - If applicability is **No** (confirmed false positive / out of scope), mark as **FALSE POSITIVE** and handle based on source:
+    - **External scanner source (Snyk, Aikido, Defender, etc.):** Recommendation should be to mark the finding as false positive IN THE TOOL ITSELF (not just document). This prevents repeated alerting and keeps the scanner signal-to-noise ratio high.
+    - **Repo scan source (dotnet list package, npm audit, manual analysis):** No external tool to suppress in, so mark as **FALSE POSITIVE (Informative)** with `- **Overall Score:** 🟢 **FALSE POSITIVE (Informative)**`. Document the rationale for future reference but no remediation action required.
+    - **Key distinction:** Scanner-based findings can be suppressed at source; repo scan findings cannot, so they're documentation only.
+    - **Example false positive scenarios:** CVE applies to different runtime version, vulnerability requires feature not in use, transitive dependency not executed, environment-specific CVE that doesn't apply to this deployment.
 - **Scope discipline:** do **not** create new findings that were not in the original
   input list (e.g., title-only export). It’s fine to:
   - add new environment context to `Output/Knowledge/`, and
