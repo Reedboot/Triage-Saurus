@@ -13,6 +13,7 @@
 - Infer resource types from services listed under `Knowledge/`.
 - Draw diagrams **from the internet inwards** (request flow / access paths).
 - Prefer **top-down** layout for readability on reviews (`flowchart TB`).
+- **Line breaks in node labels:** Use `<br/>` not `\n` for proper rendering.
 - **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
 - **Confirmed vs assumed:**
   - Default: include **confirmed services only** on the diagram.
@@ -32,6 +33,7 @@
   - A Mermaid diagram section showing key resources and access paths.
   - A short notes section for assumptions or gaps.
 - **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and the emoji key from `Settings/Styling.md`.
+- **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Mermaid styling for confirmed components:** use the Mermaid default (solid)
   or explicitly set it, e.g.
   ```mermaid
