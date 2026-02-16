@@ -46,7 +46,7 @@ If you notice reusable platform constraints/standards (e.g., “all build agents
 
 **Before writing Platform Skeptic sections, check:**
 
-1. **IaC Repo Findings** (`Output/Findings/Repo/`)
+1. **IaC Repo Summaries** (`Output/Summary/Repos/`)
    - What platform/shared modules exist (e.g., terraform-platform-modules, terraform-key_vault)?
    - What security defaults are baked into modules?
    - What's the intended "golden path" vs reality?
