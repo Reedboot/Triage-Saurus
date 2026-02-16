@@ -12,6 +12,8 @@ repository.
   - **Purpose:** Template and workflow guidance for cloud findings.
 - **Path:** Templates/CodeFinding.md
   - **Purpose:** Template and workflow guidance for code findings.
+- **Path:** Agents/RepoAgent.md
+  - **Purpose:** Comprehensive guidance for repository scanning (ingress paths, architecture, dependencies, security).
 - **Path:** Agents/DevSkeptic.md
   - **Purpose:** Review approach for developer-focused findings.
 - **Path:** Agents/PlatformSkeptic.md
