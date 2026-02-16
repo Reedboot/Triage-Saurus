@@ -27,23 +27,25 @@ Targeted helpers (stdout-only):
 ```text
 1. **Load instructions:** Read AGENTS.md and Agents/Instructions.md for operating rules.
 
-2. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
+2. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
+
+3. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Sample Findings/ for available triage items
 
-3. **Check for refinement questions:**
+4. **Check for refinement questions:**
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
    - If Knowledge/ is empty (0 knowledge files): treat as first run and say "🦖 Welcome to Triage-Saurus."
 
-4. **Present triage menu** using ask_user tool with selectable choices:
+5. **Present triage menu** using ask_user tool with selectable choices:
    - **Answer questions to build context** (if existing knowledge/findings exist)
    - **Copy/paste a single issue to triage**
    - **Provide a path under Intake/ to process in bulk**
    - **Import and triage the sample findings**
    - **Scan a repo**
 
-5. **Handle bulk intake selection:**
+6. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
    - Verify folders are non-empty using `python3 Scripts/scan_intake_files.py <path>` before offering.
    - Common paths in this repo:
@@ -56,18 +58,18 @@ Targeted helpers (stdout-only):
    - If duplicates found: ask to proceed with new items only.
    - If no new items: stop and notify user.
 
-6. **Infer triage type:**
+7. **Infer triage type:**
    - If folder path implies scope (Intake/Cloud, Intake/Code), use that.
    - Otherwise, ask what to triage (Cloud / Code / Repo scan).
 
-7. **Cloud triage initialization:**
+8. **Cloud triage initialization:**
    - Infer provider from folder name or skim intake titles.
    - If provider strongly indicated, explain reasoning with 🤔 and confirm with ❓.
    - Choices: Azure / AWS / GCP / Don't know
    - See Agents/CloudContextAgent.md for targeted context questions.
    - Create/update: Output/Knowledge/<Provider>.md and Output/Summary/Cloud/Architecture_<Provider>.md
 
-8. **Repo scan initialization:**
+9. **Repo scan initialization:**
    - Check Output/Knowledge/Repos.md for known repo root path(s).
    - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
    - Ask user to confirm the repos root directory path.
@@ -80,9 +82,12 @@ Targeted helpers (stdout-only):
    - Ask user to select scan scope using ask_user tool:
      - Choices: "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
      - Default is "All" but must be explicitly selected by user
+   - **During scan:** Create Output/Summary/Repos/<RepoName>.md FIRST before creating any findings. Use exact repo name as-is (e.g., `fi_api.md` not `Repo_fi_api.md`). This ensures consistency and allows findings to link back to the summary as it's progressively updated.
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
-9. **Follow operational rules:**
+10. **Follow operational rules:**
+   - Log ALL questions, answers, actions, and assumptions to the audit log (append-only)
+   - Update audit Summary section at end of session
    - All detailed triage behavior is in Agents/Instructions.md
    - Question formatting, bulk processing, knowledge recording, cross-cutting questions, etc.
    - Refer to specific agent files (DevSkeptic, PlatformSkeptic, SecurityAgent, etc.) for specialized reviews.
