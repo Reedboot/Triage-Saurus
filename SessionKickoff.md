@@ -37,6 +37,7 @@ To make this reliable across different CLIs/tooling, avoid shell `find`/recursiv
 - `python3 Skills/scan_findings_files.py` (targeted)
 
 Then use the **ask_user tool** with selectable choices:
+- **Answer questions to build context** (if existing knowledge/findings exist)
 - **Copy/paste a single issue to triage**
 - **Provide a path under Intake/ to process in bulk**
 - **Import and triage the sample findings**
