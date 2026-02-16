@@ -247,12 +247,16 @@ This repository supports consistent security triage. The expected workflow is:
     - This is separate from the repo-specific knowledge - extract reusable cloud environment facts that apply across multiple applications
     - **Example:** If repo deploys to Azure App Service, add App Service to both Azure.md and Architecture_Azure.md
   - **Trace request ingress path:** For application/service repos, determine how requests reach the service by examining:
-    - IaC files (load balancers, API gateways, ingress controllers, public IPs)
+    - IaC files (load balancers, API gateways, ingress controllers, public IPs, network configs)
     - Application configuration (listening ports, hostnames, base URLs)
-    - Middleware/routing code (reverse proxy patterns, forwarding logic)
-    - Documentation/README (deployment architecture)
+    - Middleware/routing code (reverse proxy patterns, forwarding logic, HTTP client calls)
+    - README/documentation (deployment architecture, request flow descriptions)
+    - **CRITICAL - Verify direction:** Don't assume! Check if service is BEHIND gateway (inbound: Gateway → Service) or CALLING gateway (outbound: Service → Gateway). Look for:
+      - **Inbound indicators:** Gateway/LB forwards to service, service receives traffic from gateway
+      - **Outbound indicators:** Service makes HTTP calls TO gateway/API, reverse proxy pattern, HTTP client to external API
+      - **README descriptions:** "reverse proxy to...", "routes requests to...", "calls into..."
     - **Record in architecture diagram:** Show the full path from origin (Internet/VPN/Internal) → entry point → service **as a Mermaid flowchart** in the repo summary's `## 🗺️ Architecture Diagram` section (NOT as text-based flow). Include middleware pipeline, authentication points, logging flows (dotted lines), and service dependencies.
-    - **Mark as Assumption if uncertain:** If ingress path is inferred but not explicitly confirmed, mark with dotted border in diagram and capture as assumption in Knowledge
+    - **Mark as Assumption if uncertain:** If ingress path is inferred but not explicitly confirmed, mark with dotted border in diagram (`style node stroke-dasharray: 5 5`) and capture as assumption in Knowledge with validation steps
     - **Examples to detect:**
       - Direct public endpoint (App Service with public access)
       - Behind API Gateway (AWS API Gateway, Azure APIM, Kong)
