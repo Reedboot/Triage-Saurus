@@ -207,7 +207,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
   - **Note:** Repo scans that identify specific code-level security vulnerabilities should extract those as individual findings here
-- **Repo scan summaries:** `Output/Summary/Repos/Repo_<RepoName>.md` (one file per repo; see `Agents/RepoSummaryAgent.md`)
+- **Repo scan summaries:** `Output/Summary/Repos/<RepoName>.md` (one file per repo; see `Agents/RepoSummaryAgent.md`; use exact repo name without prefix)
   - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings`
   - Cloud architecture knowledge from repo scans should be captured in `Output/Knowledge/<Provider>.md` and `Output/Summary/Cloud/Architecture_<Provider>.md`
 - **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
