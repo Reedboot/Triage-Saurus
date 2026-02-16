@@ -15,14 +15,14 @@ This repository supports consistent security triage. The expected workflow is:
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
   - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
-    - `python3 Skills/scan_workspace.py`
+    - `python3 Scripts/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
   - **Targeted helpers (stdout-only):**
-    - **Check `Output/Knowledge/`:** `python3 Skills/scan_knowledge_refinement.py`
+    - **Check `Output/Knowledge/`:** `python3 Scripts/scan_knowledge_refinement.py`
       It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
-    - **Enumerate `Intake/` files:** `python3 Skills/scan_intake_files.py <Intake/Subfolder>`
+    - **Enumerate `Intake/` files:** `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
       It walks the filesystem and lists `.txt` / `.csv` / `.md` reliably (avoid relying on recursive globbing, which can be flaky on some WSL/Windows mounts).
-    - **Check whether `Output/Findings/` has anything in it:** `python3 Skills/scan_findings_files.py`
+    - **Check whether `Output/Findings/` has anything in it:** `python3 Scripts/scan_findings_files.py`
       It walks `Output/Findings/` and lists `.md` files reliably.
   - If `Output/Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - If there are **no refinement questions** *and* the `Output/Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
@@ -31,10 +31,10 @@ This repository supports consistent security triage. The expected workflow is:
     - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
       - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
-        - `python3 Skills/scan_intake_files.py <candidate-path>`
+        - `python3 Scripts/scan_intake_files.py <candidate-path>`
       - Only offer **non-empty** candidates as choices.
     - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
-      - Run (stdout-only): `python3 Skills/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
+      - Run (stdout-only): `python3 Scripts/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
       - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
         - proceed with **new items only** (recommended), or
         - stop and let the user adjust the intake.
@@ -91,11 +91,11 @@ This repository supports consistent security triage. The expected workflow is:
   file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
-  - Prefer using `python3 Skills/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
-    - Prefer using the stdout-only helper to avoid guesswork: `python3 Skills/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
+    - Prefer using the stdout-only helper to avoid guesswork: `python3 Scripts/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
     - Then ask: **"I don’t currently know the root directory for your repos — should I use `<suggested path>`?"** (include **Yes / No / Don’t know**).
   - If the user confirms or provides an alternative, persist it into `Output/Knowledge/Repos.md`.
   - **Only after** at least one repo root is recorded (or the user explicitly confirms **"current repo"**), ask which repo/directory under that root should be scanned.
@@ -147,12 +147,12 @@ This repository supports consistent security triage. The expected workflow is:
     - If single evidence file: show inline
     - If multiple evidence files: format as bullet list
   - If a repo scan finds **Terraform module usage**, automatically:
-    1) extract and classify module dependencies using (stdout-only): `python3 Skills/analyze_terraform_modules.py <repo-path>`
+    1) extract and classify module dependencies using (stdout-only): `python3 Scripts/analyze_terraform_modules.py <repo-path>`
     2) scan any **local-path** modules immediately,
     3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
        - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
-       - use `python3 Skills/scan_repo_quick.py` for the initial scan.
+       - use `python3 Scripts/scan_repo_quick.py` for the initial scan.
     4) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
   - **Terraform module value resolution:** when reviewing Terraform code that calls modules, do not assume a variable/output implies insecure behaviour in the root module.
     - Example: a variable named `secret` or an output named `client_secret` may be passed into a module that stores it in Key Vault and only returns a reference/ID.
@@ -190,11 +190,11 @@ This repository supports consistent security triage. The expected workflow is:
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
 - When a new finding overlaps an existing one, link them under **Compounding Findings**.
 - **Avoid running git commands by default** (e.g., `git status`, `git diff`, `git restore`). Only use git when the user explicitly asks, and explain why it’s needed.
-- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Skills/risk_register.py`), first explain:
+- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/risk_register.py`), first explain:
   - what it does,
   - what files it will write/change,
   - why it’s necessary now.
-  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Skills/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
+  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
 
@@ -208,22 +208,22 @@ This repository supports consistent security triage. The expected workflow is:
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
 - **Repo scans:** `Output/Findings/Repo/Repo_<RepoName>.md` (one file per repo)
 - **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
-- **Risk register:** regenerate via `python3 Skills/risk_register.py`
-- **Optional bulk draft generator (titles → findings):** `python3 Skills/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+- **Risk register:** regenerate via `python3 Scripts/risk_register.py`
+- **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
     `Output/Summary/Risk Register.xlsx`, and appends audit entries under `Output/Audit/`.
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:
-  - `python3 Skills/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
+  - `python3 Scripts/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
-  - `python3 Skills/extract_finding_scores.py Output/Findings/Cloud`
+  - `python3 Scripts/extract_finding_scores.py Output/Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
 
 ## Utility scripts
 - **Clear session artifacts (destructive):**
-  - Dry-run: `python3 Skills/clear_session.py`
-  - Delete: `python3 Skills/clear_session.py --yes`
+  - Dry-run: `python3 Scripts/clear_session.py`
+  - Delete: `python3 Scripts/clear_session.py --yes`
 
 - Ensure each finding includes:
   - `## 🗺️ Architecture Diagram` **directly under the title** (first section, before Overview)
@@ -242,5 +242,5 @@ This repository supports consistent security triage. The expected workflow is:
   - Environment context (production, internet-facing, etc.)
   - Accurate risk scoring based on actual exposure
 - Draft findings typically have placeholder 5/10 Medium scores
-- Use `python3 Skills/check_draft_findings.py` to identify draft findings needing validation
+- Use `python3 Scripts/check_draft_findings.py` to identify draft findings needing validation
 - During session kickoff, prompt users to complete draft findings if >10% are unvalidated
