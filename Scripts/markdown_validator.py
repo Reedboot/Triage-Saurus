@@ -26,8 +26,7 @@ MERMAID_DIRECTIVE_RE = re.compile(
 )
 
 _NODE_SQUARE_LABEL_RE = re.compile(r"(\b[A-Za-z_][A-Za-z0-9_]*\s*)\[(.*?)\]")
-_NODE_QUOTED_LABEL_RE = re.compile(r"(\b[A-Za-z_][A-Za-z0-9_]*\s*)\\[\"(.*?)\"\\]")
-_SUBGRAPH_QUOTED_RE = re.compile(r"(\bsubgraph\b[^\"]*\\[\"(.*?)\"\\])", re.IGNORECASE)
+_NODE_QUOTED_LABEL_RE = re.compile(r'(\b[A-Za-z_][A-Za-z0-9_]*\s*)\["(.*?)"\]')
 
 
 @dataclass

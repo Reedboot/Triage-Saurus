@@ -23,6 +23,7 @@ import argparse
 import datetime as _dt
 import fnmatch
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -30,7 +31,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from output_paths import OUTPUT_AUDIT_DIR, OUTPUT_FINDINGS_DIR, OUTPUT_KNOWLEDGE_DIR, OUTPUT_RENDER_INPUTS_DIR
+from output_paths import (
+    OUTPUT_AUDIT_DIR,
+    OUTPUT_FINDINGS_DIR,
+    OUTPUT_KNOWLEDGE_DIR,
+    OUTPUT_RENDER_INPUTS_DIR,
+    OUTPUT_SUMMARY_DIR,
+)
+
+from markdown_validator import validate_markdown_file
+
+SCORE_RE = re.compile(r"^\s*- \*\*Overall Score:\*\*\s+(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10\s*$")
 
 
 def now_uk() -> str:
@@ -438,6 +449,136 @@ def write_finding(scan: Scan, *, scope: str, update_knowledge: bool) -> Path:
     return out_path
 
 
+def _extract_heading_block(lines: list[str], heading: str, *, max_bullets: int = 8) -> list[str]:
+    """Extract bullet lines under a heading until next heading."""
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == heading)
+    except StopIteration:
+        return []
+
+    out: list[str] = []
+    for l in lines[start + 1 :]:
+        if l.startswith("## ") or l.startswith("### "):
+            break
+        if l.strip().startswith("- "):
+            out.append(l.rstrip())
+            if len(out) >= max_bullets:
+                break
+    return out
+
+
+def refresh_repo_summary(*, repo: Path, finding_path: Path, scope: str) -> Path | None:
+    """Refresh Output/Summary/Repos/<RepoName>.md based on Output/Findings/Repo/Repo_<RepoName>.md."""
+    summary_dir = OUTPUT_SUMMARY_DIR / "Repos"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_path = summary_dir / f"{repo.name}.md"
+    if not finding_path.is_file():
+        return None
+
+    finding_lines = finding_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    score_line = next((l for l in finding_lines if SCORE_RE.match(l)), None)
+
+    dev_block = _extract_heading_block(finding_lines, "### 🛠️ Dev", max_bullets=6)
+    plat_block = _extract_heading_block(finding_lines, "### 🏗️ Platform", max_bullets=6)
+
+    related_line = f"- **Related finding:** [{finding_path.name}](../../Findings/Repo/{finding_path.name})"
+
+    if not summary_path.exists():
+        # Minimal summary if context discovery hasn't been run.
+        overall = score_line or "- **Overall Score:** 🟢 Low 0/10"
+        md: list[str] = [
+            f"# 🟣 Repo {repo.name}",
+            "",
+            "## 🗺️ Architecture Diagram",
+            "```mermaid",
+            "flowchart TB",
+            "  repo[Repo] --> finding[Repo finding]",
+            "```",
+            "",
+            overall,
+            related_line,
+            "",
+            "## 🤔 Skeptic",
+            "### 🛠️ Dev",
+        ]
+        md.extend(dev_block if dev_block else ["- (no dev skeptic notes captured)"])
+        md.extend(["", "### 🏗️ Platform"])
+        md.extend(plat_block if plat_block else ["- (no platform skeptic notes captured)"])
+        md.extend(
+            [
+                "",
+                "## Meta Data",
+                "<!-- Meta Data must remain the final section in the file. -->",
+                f"- **Repo Name:** {repo.name}",
+                f"- **Repo Path:** {repo.resolve()}",
+                f"- **Scan Scope:** {scope}",
+                f"- 🗓️ **Last updated:** {now_uk()}",
+                "",
+            ]
+        )
+        summary_path.write_text("\n".join(md), encoding="utf-8")
+        validate_markdown_file(summary_path, fix=True)
+        return summary_path
+
+    lines = summary_path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    # Update/insert overall score.
+    if score_line:
+        replaced = False
+        for i, l in enumerate(lines):
+            if l.strip().startswith("- **Overall Score:**"):
+                lines[i] = score_line
+                replaced = True
+                break
+        if not replaced:
+            # Insert after the first mermaid block if possible.
+            try:
+                end_fence = next(i for i, l in enumerate(lines) if l.strip() == "```" and i > 0 and "```mermaid" in "\n".join(lines[:i]))
+                insert_at = end_fence + 2 if end_fence + 2 <= len(lines) else len(lines)
+            except StopIteration:
+                insert_at = 2
+            lines.insert(insert_at, score_line)
+
+    # Ensure related finding link.
+    lines = [l for l in lines if not l.strip().startswith("- **Related finding:**")]
+    insert_after = next((i for i, l in enumerate(lines) if l.strip().startswith("- **Overall Score:**")), None)
+    if insert_after is None:
+        lines.insert(2, related_line)
+    else:
+        lines.insert(insert_after + 1, related_line)
+
+    # Replace the skeptic section body.
+    try:
+        sk_i = next(i for i, l in enumerate(lines) if l.strip() == "## 🤔 Skeptic")
+        next_h = next((j for j in range(sk_i + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
+        new_skeptic: list[str] = [
+            "## 🤔 Skeptic",
+            f"> See: [{finding_path.name}](../../Findings/Repo/{finding_path.name})",
+            "",
+            "### 🛠️ Dev",
+            *(dev_block if dev_block else ["- (no dev skeptic notes captured)"]),
+            "",
+            "### 🏗️ Platform",
+            *(plat_block if plat_block else ["- (no platform skeptic notes captured)"]),
+            "",
+        ]
+        lines = lines[:sk_i] + new_skeptic + lines[next_h:]
+    except StopIteration:
+        pass
+
+    # Update meta fields if present.
+    for i, l in enumerate(lines):
+        if l.strip().startswith("- **Scan Scope:**"):
+            lines[i] = f"- **Scan Scope:** {scope}"
+        if l.strip().startswith("- 🗓️ **Last updated:**"):
+            lines[i] = f"- 🗓️ **Last updated:** {now_uk()}"
+
+    summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    validate_markdown_file(summary_path, fix=True)
+    return summary_path
+
+
 def emit_render_json(out_path: Path, scan: Scan, *, scope: str) -> Path:
     """Write a JSON finding-model next to other render inputs (audit/debug only)."""
 
@@ -586,25 +727,29 @@ def main() -> int:
         audit = write_audit(repos, args.scope)
         print(f"Audit updated: {audit}")
 
-    # Validate and auto-fix Mermaid blocks in generated markdown.
-    try:
-        from markdown_validator import validate_markdown_file
+    # Validate and auto-fix Mermaid blocks in generated markdown, then refresh repo summaries.
+    fixed = 0
+    for p in written:
+        before = p.read_text(encoding="utf-8", errors="replace")
+        probs = validate_markdown_file(p, fix=True)
+        after = p.read_text(encoding="utf-8", errors="replace")
+        if after != before:
+            fixed += 1
+        for pr in probs:
+            if pr.level == "ERROR":
+                print(f"ERROR: {p.relative_to(ROOT)}:{pr.line or ''} - {pr.message}")
+                return 1
 
-        fixed = 0
-        for p in written:
-            before = p.read_text(encoding="utf-8", errors="replace")
-            probs = validate_markdown_file(p, fix=True)
-            after = p.read_text(encoding="utf-8", errors="replace")
-            if after != before:
-                fixed += 1
-            for pr in probs:
-                if pr.level == "ERROR":
-                    print(f"ERROR: {p.relative_to(ROOT)}:{pr.line or ''} - {pr.message}")
-                    return 1
-        if fixed:
-            print(f"Auto-fixed Mermaid blocks in {fixed} generated file(s)")
-    except Exception as e:
-        print(f"WARN: Mermaid validation skipped: {e}")
+    if fixed:
+        print(f"Auto-fixed Mermaid blocks in {fixed} generated file(s)")
+
+    for repo, finding_path in zip(repos, written, strict=True):
+        try:
+            refreshed = refresh_repo_summary(repo=repo, finding_path=finding_path, scope=args.scope)
+            if refreshed:
+                print(f"Summary refreshed: {refreshed}")
+        except Exception as e:
+            print(f"WARN: Unable to refresh repo summary for {repo.name}: {e}")
 
     print(f"Wrote {len(written)} finding(s) under {OUTPUT_FINDINGS_DIR / 'Repo'}")
     return 0
