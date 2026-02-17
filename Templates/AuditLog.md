@@ -124,6 +124,32 @@
 
 ---
 
+## Token Usage by Operation
+
+| Operation | Duration | Tokens | Efficiency (tok/sec) | Model |
+|-----------|----------|--------|----------------------|-------|
+| Session kickoff | MM:SS | N | N/A | Sonnet 4.5 |
+| Git history analysis | MM:SS | N | X.X | Sonnet 4.5 |
+| IaC scan | MM:SS | N | X.X | Sonnet 4.5 |
+| SCA scan | MM:SS | N | X.X | Sonnet 4.5 |
+| SAST scan | MM:SS | N | X.X | Sonnet 4.5 |
+| Finding generation | MM:SS | N | X.X | Sonnet 4.5 |
+| Dev Skeptic review | MM:SS | N | X.X | Sonnet 4.5 |
+| Platform Skeptic review | MM:SS | N | X.X | Sonnet 4.5 |
+| Risk register generation | MM:SS | N | X.X | Sonnet 4.5 |
+| **Total** | **HH:MM** | **N** | **Avg: X.X** | - |
+
+### Token Budget
+- **Allocated:** 1,000,000 tokens
+- **Used:** N tokens (X.X%)
+- **Remaining:** N tokens
+
+### Cost Efficiency Notes
+- *Add observations about which operations were most/least token-efficient*
+- *Note any unexpectedly high token consumption for investigation*
+
+---
+
 ## Summary
 - **Session duration:** HH:MM
 - **Total findings created:** N
