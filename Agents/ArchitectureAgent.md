@@ -1,10 +1,43 @@
 # 🟣 Architecture Agent
 
 ## Role
-- **Scope:** Create and update cloud architecture diagrams based on knowledge
+- **Scope:** Create and update **high-level cloud estate overview diagrams** based on knowledge
   captured under `Knowledge/`.
-- **Focus:** Summarise key resources, access paths, and trust boundaries.
+- **Focus:** Strategic view showing major services, network boundaries, trust boundaries, and key data flows.
 - **Output:** Mermaid diagram in a provider-specific summary file.
+
+## Diagram Scope & Detail Level
+
+**This is a STRATEGIC OVERVIEW, not a detailed service diagram.**
+
+### What to Include:
+- **Major service categories:** Compute (App Services, VMs), Data (SQL, Storage), Identity (AAD, Key Vault)
+- **Network boundaries:** Internet, VPN, Private network zones
+- **Trust boundaries:** Public endpoints, private endpoints, authentication gates
+- **Key data flows:** External → Frontend → Backend → Data stores
+- **Security controls:** WAF, NSGs, API Management
+
+### What to EXCLUDE:
+- Individual API endpoints or routes
+- Detailed middleware pipelines
+- Specific configuration settings
+- Individual resource instances (unless architecturally significant)
+
+### As the Estate Grows:
+- **Consolidate similar services:** "App Services (5)" instead of listing all 5
+- **Group by tier:** Frontend, Backend, Data, Shared Services
+- **Use zones/clusters:** Show logical groupings, not every resource
+- **Refer to detailed diagrams:** Add note directing readers to individual repo summaries
+
+### Example Notes Section:
+```markdown
+## Notes
+- **Detailed service diagrams:** See individual repo summaries in `Output/Summary/Repos/` for:
+  - `fi_api.md` - FI API service flow and middleware pipeline
+  - `payment_service.md` - Payment processing architecture
+  - `terraform-modules.md` - Platform infrastructure patterns
+- **Assumptions:** Storage accounts assumed to use private endpoints (not confirmed)
+```
 
 ## Behaviour
 - Follow `Agents/Instructions.md` and `Settings/Styling.md`.
@@ -66,28 +99,90 @@
 - Avoid repeating details already captured in findings; keep this diagram as a
   high-level architectural view.
 
+## Diagram Synchronization (CRITICAL)
+
+**Cloud architecture diagrams and repo-specific diagrams MUST tell the same story.**
+
+### When Updating Cloud Architecture Diagrams:
+1. **Cross-check repo summaries:** Before updating `Architecture_<Provider>.md`, review all relevant repo summaries in `Output/Summary/Repos/` for authentication flows, network boundaries, and service relationships
+2. **Verify consistency:** Ensure authentication mechanisms, network paths, and trust boundaries match between cloud and service-level diagrams
+3. **Update audit log:** Note which repo summaries were reviewed for consistency
+
+### When Updating Repo Summaries:
+1. **Check cloud architecture:** After updating a repo summary diagram, check if `Architecture_<Provider>.md` needs updating to reflect new information
+2. **Maintain consistency:** Ensure authentication flows and network boundaries are described identically at both levels
+3. **Flag conflicts:** If repo-level evidence contradicts cloud-level diagram, investigate and resolve the conflict
+
+### Common Consistency Issues to Avoid:
+- ❌ **Authentication flows differ:** Cloud diagram shows "JWT + subscription key" but repo diagram shows only "JWT"
+- ❌ **Network boundaries differ:** Cloud shows "private endpoint" but repo shows "public endpoint"
+- ❌ **Service relationships differ:** Cloud shows "APIM as frontend" but repo shows "App Service as frontend"
+- ❌ **Missing updates:** Repo scan discovers VNet integration but cloud diagram not updated
+
+### Example Synchronization Check:
+```markdown
+## Audit Log Entry
+### HH:MM - Architecture Diagram Updated
+- **Action:** Updated Architecture_Azure.md
+- **Cross-checked:** fi_api.md, payment_service.md
+- **Consistency verified:** Authentication flows (JWT + digital signature), network ingress (public App Service), APIM positioning (backend routing)
+- **Conflicts resolved:** None
+```
+
 ## Example Skeleton
 ```text
 # 🟣 Architecture_Azure
 
 ## Overview
-Brief description of the known Azure architecture.
+High-level view of the Azure estate showing major service tiers, network boundaries, and key data flows. For detailed service-specific diagrams, see individual repo summaries.
 
 ## Diagram
 ~~~mermaid
-flowchart LR
+flowchart TB
   internet[🌐 Internet]
-  users[🧑‍💻 Users]
-  kv[🗄️ Azure Key Vault]
+  users[🧑‍💻 External Users]
+  
+  subgraph Frontend Tier
+    apim[🔌 API Management]
+    appservices[⚙️ App Services x3<br/>fi_api, payments, portal]
+  end
+  
+  subgraph Backend Tier
+    functions[⚡ Azure Functions x2]
+    aks[🐳 AKS Cluster]
+  end
+  
+  subgraph Data Tier
+    sql[🗄️ Azure SQL Database]
+    storage[💾 Storage Accounts x5]
+    kv[🔐 Key Vault]
+  end
+  
+  subgraph Identity
+    aad[👤 Azure AD]
+  end
 
-  internet --> kv
-  users --> kv
+  internet --> apim
+  users --> apim
+  apim --> appservices
+  appservices --> functions
+  appservices --> aks
+  functions --> sql
+  aks --> storage
+  appservices --> kv
+  aad -.Authentication.-> apim
 
-  %% Note: Only include nodes that have connections
-  %% Dotted border = assumed component
-  style kv stroke-dasharray: 5 5
+  %% Dashed = assumed, not confirmed
+  style storage stroke-dasharray: 5 5
 ~~~
 
+## Detailed Service Diagrams
+For in-depth service flows and middleware pipelines, see:
+- **FI API:** `Output/Summary/Repos/fi_api.md` - Request flow, authentication, middleware pipeline
+- **Payment Service:** `Output/Summary/Repos/payment_service.md` - Transaction processing architecture
+- **Terraform Modules:** `Output/Summary/Repos/terraform-modules.md` - Platform infrastructure patterns
+
 ## Notes
-- **Assumptions:** List any assumptions or missing data.
+- **Assumptions:** Storage accounts assumed to have private endpoints (not confirmed in IaC scans)
+- **Network:** VNet integration on App Services not shown for clarity - see individual repo summaries
 ```
