@@ -116,13 +116,22 @@
     assumed[❓ Assumed Service]
     style assumed stroke-dasharray: 5 5
   ```
-- **Mermaid theme-aware styling:** **NEVER use `style fill:<color>` in diagrams** - background
-  fill colors break on dark themes (Settings/Styling.md lines 79-85). Use **stroke/border styling** or **emojis** for
-  distinction:
-  - Emphasis: `stroke-width:3px`
-  - **Assumptions/unconfirmed:** `style <nodeName> stroke-dasharray: 5 5` (dashed border on specific node)
-  - Status indicators: Use emojis (✅ ❌ ⚠️ 🔴 🟡 🟢 ❓)
-  - **FORBIDDEN:** `style <node> fill:<color>` or `fill:#xxxxxx`
+- **🚨 CRITICAL: NO FILL COLORS - STROKE ONLY 🚨**
+  - ❌ **ABSOLUTELY FORBIDDEN:** `style <node> fill:#xxxxxx` or any `fill:` attribute
+  - ❌ **ABSOLUTELY FORBIDDEN:** Background colors in style blocks (breaks dark themes per Settings/Styling.md lines 79-85)
+  - ✅ **ALLOWED:** `stroke:#xxxxxx,stroke-width:3px` (border styling only)
+  - ✅ **ALLOWED:** Emojis for visual distinction (✅ ❌ ⚠️ 🔴 🟡 🟢 ❓)
+  - ✅ **ALLOWED:** `stroke-dasharray: 5 5` for assumptions/unconfirmed items
+  
+  **Example - CORRECT:**
+  ```
+  style Main stroke:#c92a2a,stroke-width:3px
+  ```
+  
+  **Example - INCORRECT (NEVER DO THIS):**
+  ```
+  style Main fill:#ff6b6b,stroke:#c92a2a    ❌ FORBIDDEN
+  ```
 
 **CRITICAL: Mermaid Syntax Validation (Avoid Parse Errors)**
 Arrow labels MUST follow these rules:
@@ -134,12 +143,21 @@ Arrow labels MUST follow these rules:
 - ✅ **DO use emojis:** `|🔒|` or `|🌐|` ✅
 - ✅ **Replace variables with examples:** Use `prod` instead of `{env}`, or omit the variable entirely
 
+**Node label syntax:**
+- ❌ **NEVER start with `/`** like `Node[/path]` (trapezoid syntax, parse error)
+- ❌ **NEVER use quotes in subgraph names:** `subgraph "Name"` (breaks Mermaid v11+)
+- ✅ **DO add context for paths:** `Node[GET /api/v1]`
+- ✅ **DO use subgraph ID syntax:** `subgraph ID["Name"]` or `subgraph Name`
+- ✅ **DO use line breaks:** `Node[Health<br/>/api/health]`
+
 **Examples:**
 ```mermaid
 flowchart TB
-    Internet -->|🌐 HTTPS:443| AGW    ✅ CORRECT
-    AGW -->|🔒 Internal| APIM          ✅ CORRECT
-    AGW -->|route-{env}| APIM          ❌ PARSE ERROR (curly braces)
+    Internet -->|🌐 HTTPS:443| AGW          ✅ CORRECT
+    AGW -->|🔒 Internal| APIM                ✅ CORRECT
+    API["GET /users"]                        ✅ CORRECT (quoted path)
+    AGW -->|route-{env}| APIM                ❌ PARSE ERROR (curly braces)
+    Route[/api/health]                       ❌ PARSE ERROR (unquoted path)
 ```
 
 **Before outputting any Mermaid diagram:**
@@ -270,6 +288,8 @@ flowchart TB
 
   %% Dashed = assumed, not confirmed
   style storage stroke-dasharray: 5 5
+  
+  %% 🚨 NOTE: NO fill: colors - stroke-only styling for dark theme compatibility
 ~~~
 
 ## Detailed Service Diagrams
@@ -282,3 +302,29 @@ For in-depth service flows and middleware pipelines, see:
 - **Assumptions:** Storage accounts assumed to have private endpoints (not confirmed in IaC scans)
 - **Network:** VNet integration on App Services not shown for clarity - see individual repo summaries
 ```
+
+
+## Pre-Flight Checklist (Before Saving Diagram)
+
+**🚨 MANDATORY: Check every diagram before output 🚨**
+
+Run this mental checklist on EVERY Mermaid diagram:
+1. ❌ Search for `fill:` in all style blocks → If found, REMOVE IT IMMEDIATELY
+2. ✅ Verify only `stroke:` and `stroke-width:` are used for styling
+3. ✅ Verify `stroke-dasharray: 5 5` is used ONLY for assumptions (no fill)
+4. ❌ Check for `subgraph "Name"` with quotes → Change to `subgraph ID["Name"]` or `subgraph Name`
+5. ❌ Check for nodes starting with `/` like `Node[/path]` → Add context: `Node[GET /path]`
+6. ✅ Verify paths have context (HTTP method, descriptor, or line break)
+7. ✅ Check arrow labels have no curly braces `{}`, quotes `"`, or brackets `[]`
+8. ✅ Verify clickable links use relative paths (`../Repos/` or `#section`)
+9. ✅ Confirm emojis used for visual distinction instead of fill colors
+10. ✅ Cross-check with related repo summaries for consistency
+
+**If any check fails, FIX IT before saving the file.**
+
+**Common mistakes to avoid:**
+- ❌ `style node fill:#ff6b6b,stroke:#c92a2a` → ✅ `style node stroke:#c92a2a,stroke-width:3px`
+- ❌ `style node fill:#4dabf7` → ✅ `style node stroke:#1971c2,stroke-width:2px`
+- ❌ `subgraph "Services"` → ✅ `subgraph Services` or `subgraph S["Services"]`
+- ❌ `Node[/api/health]` → ✅ `Node[GET /api/health]`
+- ❌ Any use of `fill:` attribute → ✅ Remove entirely, use stroke or emoji instead
