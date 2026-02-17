@@ -6,6 +6,22 @@ This agent performs **fast, non-security context discovery** of repositories to 
 **What it does:** Learn about the repo
 **What it doesn't do:** Find security issues (that's for IaC/SCA/SAST/Secrets agents)
 
+## Speed Target
+**< 1 minute** for context discovery using parallel explore agents. This is reconnaissance, not deep analysis.
+
+## Execution Strategy
+**USE PARALLEL EXPLORE AGENTS** - Launch 4-6 explore agents simultaneously for:
+1. Purpose & README (what does this repo do?)
+2. Tech stack (languages, frameworks, dependencies)
+3. IaC files (Terraform, Bicep, K8s YAML)
+4. Ingress points (APIs, load balancers, public endpoints, APIM)
+5. Database connections (schemas, connection strings, migrations)
+6. Egress targets (external APIs, third-party services)
+
+Each explore agent returns focused answers <300 words. Synthesize results into context document.
+
+**DO NOT:** Use general-purpose agent, run security scans, or do deep code analysis during context discovery.
+
 ## Outputs
 - `Output/Summary/Repos/<RepoName>.md` with context overview and architecture diagram
 - `Output/Knowledge/Repos.md` updated with repository entry
