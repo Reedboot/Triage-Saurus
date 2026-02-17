@@ -838,9 +838,54 @@ flowchart TB
 
 ## Mermaid Diagram Guidelines
 
-**CRITICAL: Follow Settings/Styling.md:**
-- ❌ NEVER use `style fill:<color>` (breaks dark themes)
-- ✅ Use emojis for status: 🔴 ⚠️ ✅ 🔒 🌐
+**🚨 CRITICAL: NO FILL COLORS - STROKE ONLY 🚨**
+- ❌ **FORBIDDEN:** `style <node> fill:#xxxxxx` or any `fill:` attribute
+- ❌ **FORBIDDEN:** Background colors in style blocks (breaks dark themes)
+- ✅ **ALLOWED:** `stroke:#xxxxxx,stroke-width:3px` (border styling only)
+- ✅ **ALLOWED:** Emojis for visual distinction: 🔴 ⚠️ ✅ 🔒 🌐
+- ✅ **ALLOWED:** `stroke-dasharray: 5 5` for assumed/unconfirmed items
+
+**🚨 CRITICAL: Mermaid Node Syntax Rules 🚨**
+- ❌ **FORBIDDEN:** `Node[/path/with/slashes]` (interpreted as trapezoid shape, causes parse errors)
+- ❌ **FORBIDDEN:** Starting node labels with `/` (conflicts with shape syntax)
+- ✅ **CORRECT:** `Node["GET /path/to/endpoint"]` (quoted text for paths)
+- ✅ **CORRECT:** `Node["Path: /api/v1"]` (prefix with descriptor)
+- ✅ **CORRECT:** `Node[API Endpoint<br/>/api/v1/users]` (path on second line)
+
+**Example - CORRECT node definitions:**
+```mermaid
+flowchart TB
+    API["GET /api/v1/users"]
+    Endpoint["Path: /health"]
+    Route[Health Check<br/>/api/health]
+```
+
+**Example - INCORRECT node definitions (PARSE ERRORS):**
+```mermaid
+flowchart TB
+    API[/api/v1/users]           ❌ TRAPEZOID SYNTAX, NOT TEXT
+    Endpoint[/health]            ❌ PARSE ERROR
+```
+
+**Example - CORRECT styling (no fill):**
+```mermaid
+flowchart TB
+    Main[Main Service]
+    Critical[Critical Component]
+    
+    style Main stroke:#c92a2a,stroke-width:3px
+    style Critical stroke:#fab005,stroke-width:2px
+```
+
+**Example - INCORRECT styling (has fill - FORBIDDEN):**
+```mermaid
+flowchart TB
+    Main[Main Service]
+    
+    style Main fill:#ff6b6b,stroke:#c92a2a    ❌ NEVER USE FILL
+```
+
+**Additional Guidelines:**
 - ✅ Use 🔗 emoji prefix for clickable nodes
 - Use dotted borders `-.->` for assumed/uncertain connections
 - Use solid arrows `-->` for confirmed connections
@@ -851,17 +896,30 @@ Arrow labels MUST follow these rules to avoid parse errors:
 - ❌ **NEVER use quotes** `"` inside labels
 - ❌ **NEVER use pipes** `|` inside the label text itself
 - ❌ **NEVER use brackets** `[]` or parentheses `()` inside labels
+- ❌ **NEVER use quotes in subgraph names:** `subgraph "Name"` (breaks Mermaid v11+)
 - ✅ **DO use descriptive text without variables:** `|🔒 apimanagement-prod|` instead of `|🔒 apimanagement-{env}|`
 - ✅ **DO use emojis and hyphens:** `|🔒 Internal HTTPS|` ✅
 - ✅ **DO keep labels simple:** `|HTTPS:443|` ✅
 - ✅ **DO use spaces:** `|Authenticated Requests|` ✅
+- ✅ **DO use subgraph ID syntax:** `subgraph ID["Name"]` or `subgraph Name`
+
+**CRITICAL: Node Label Syntax**
+- ❌ **NEVER start labels with `/`** like `Node[/path]` (trapezoid syntax, causes parse errors)
+- ✅ **DO add context for paths:** `Node[GET /api/v1/users]` (HTTP method prefix)
+- ✅ **DO use line breaks:** `Node[Health Check<br/>/api/health]`
 
 **Examples of CORRECT syntax:**
 ```mermaid
 flowchart TB
     Internet -->|🌐 HTTPS:443| AGW[App Gateway]
     AGW -->|🔒 Internal| APIM[API Management]
-    APIM -->|🔒 HTTPS| API[API Service]
+    
+    subgraph Backend["Backend Services"]
+        API[GET /api/users]
+        Route[Health: /health]
+    end
+    
+    APIM --> API
 ```
 
 **Examples of INCORRECT syntax (will cause parse errors):**
@@ -869,7 +927,10 @@ flowchart TB
 flowchart TB
     Internet -->|🌐 HTTPS:{port}| AGW    ❌ curly braces
     AGW -->|route-{env}| APIM            ❌ curly braces
-    APIM -->|"quoted label"| API         ❌ quotes
+    
+    subgraph "Backend Services"          ❌ quotes in subgraph (Mermaid v11+)
+        API[/api/users]                  ❌ path without context (trapezoid syntax)
+    end
 ```
 
 **Before outputting any Mermaid diagram:**
@@ -1191,15 +1252,33 @@ Would you like to run security scans on these repos?
 - ✅ Accurate tech stack (languages, frameworks, versions)
 - ✅ Comprehensive service list (from IaC + code)
 - ✅ Valid Mermaid diagram (renders without errors)
+- ✅ **NO FILL COLORS in any Mermaid style blocks** (stroke-only styling)
 - ✅ Useful architecture context for scan decisions
 - ✅ No security findings (that's not our job)
 
 **Discovery is complete when:**
 1. Summary file created at `Summary/Repos/<name>.md`
 2. Knowledge files updated (services added)
-3. Mermaid diagram renders correctly
-4. Audit log updated with timing
-5. User can make informed scan scope decision
+3. Mermaid diagram renders correctly (no syntax errors, no fill colors)
+4. **Pre-flight check passed:** Verified no `fill:` attributes in style blocks
+5. Audit log updated with timing
+6. User can make informed scan scope decision
+
+## Pre-Flight Checklist (Before Saving Summary)
+
+**🚨 MANDATORY: Check every diagram before output 🚨**
+
+Run this mental checklist on EVERY Mermaid diagram:
+1. ❌ Search for `fill:` in all style blocks → If found, REMOVE IT
+2. ✅ Verify only `stroke:` and `stroke-width:` are used for styling
+3. ❌ Check for `subgraph "Name"` with quotes → Change to `subgraph ID["Name"]` or `subgraph Name`
+4. ❌ Check for nodes starting with `/` like `Node[/path]` → Add context: `Node[GET /path]`
+5. ✅ Verify paths in labels have context (HTTP method, descriptor, or line break)
+6. ✅ Check arrow labels have no curly braces `{}`, quotes `"`, or brackets `[]`
+7. ✅ Verify clickable links use relative paths (`../Repos/` or `#section`)
+8. ✅ Confirm emojis used for visual distinction instead of colors
+
+**If any check fails, FIX IT before proceeding.**
 
 ## Anti-Patterns (Don't Do This)
 
@@ -1209,6 +1288,7 @@ Would you like to run security scans on these repos?
 ❌ **Don't run slow tools** - Keep discovery fast (<60s)
 ❌ **Don't create findings** - Only summaries and knowledge
 ❌ **Don't guess** - Mark unclear items as "Unknown"
+❌ **🚨 NEVER use `fill:` in Mermaid styles** - Breaks dark themes (stroke-only styling)
 
 ## Integration with Other Agents
 
