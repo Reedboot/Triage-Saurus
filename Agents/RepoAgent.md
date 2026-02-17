@@ -30,7 +30,7 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
 
 **Output files created:**
 - `Output/Knowledge/Repos.md` - Adds entry for this repository
-- `Output/Summary/Repos/<RepoName>.md` - Creates initial summary (use exact repo name, e.g., `fi_api.md` not `Repo_fi_api.md`)
+- `Output/Summary/Repos/<RepoName>.md` - Creates initial summary (use exact repo name, e.g., `my_api.md` not `Repo_my_api.md`)
 
 **After context discovery completes:** Ask user to select scan scope using ask_user tool:
 - Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
@@ -140,7 +140,7 @@ echo "✅ Repository updated to latest. Proceeding with scan..."
 #### Step 4: Record Sync Status in Audit Log
 ```markdown
 ### 09:01 - Pre-Scan Remote Sync Check
-- **Repository:** fi_api
+- **Repository:** my_api
 - **Branch:** main
 - **Local commit:** fe31e209
 - **Remote commit:** a7b3c4d5
@@ -219,7 +219,7 @@ git --no-pager log --oneline -50 -- terraform/ infra/ .github/ .azure-pipelines.
 #### Recording in Knowledge Base:
 Update `Output/Knowledge/Repos.md`:
 ```markdown
-### fi_api
+### my_api
 
 #### Basic Information
 - **Latest Commit:** fe31e209 (2026-01-22)
@@ -397,7 +397,7 @@ In repo summary (`Output/Summary/Repos/<RepoName>.md`), add metadata section at 
 
 ```bash
 # Read scan history from repo summary
-# Example: grep "Last.*Scan:" Output/Summary/Repos/fi_api.md
+# Example: grep "Last.*Scan:" Output/Summary/Repos/my_api.md
 
 # Determine what user requested vs what's been done
 requested_scans=("IaC" "SCA" "SAST" "Secrets")  # User selected "All"
@@ -560,7 +560,7 @@ Step 1: Check scan history for each requested scan type
 
 **Output to user:**
 ```
-📋 Scan Plan for fi_api:
+📋 Scan Plan for my_api:
 ✅ SAST scan (never run before)
 ✅ Secrets scan (never run before)  
 ✅ SCA scan (dependencies changed since last scan)
