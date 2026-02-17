@@ -1,0 +1,73 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Name of your Azure DevOps Service Connection.
+  azureServiceConnection: ""
+
+  # Set this to the App Service name created by Terraform.
+  webAppName: ""
+  buildConfiguration: Release
+  projectPath: src/SecureWebApp/SecureWebApp.csproj
+
+stages:
+  - stage: build
+    displayName: Build
+    jobs:
+      - job: build
+        displayName: Build & Publish
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Use .NET 8 SDK
+            inputs:
+              packageType: sdk
+              version: "8.x"
+
+          - script: |
+              set -euo pipefail
+              dotnet restore "$(projectPath)"
+              dotnet build "$(projectPath)" -c "$(buildConfiguration)" --no-restore
+              dotnet publish "$(projectPath)" -c "$(buildConfiguration)" -o "$(Build.ArtifactStagingDirectory)/app" --no-build
+            displayName: dotnet restore/build/publish
+
+          - task: ArchiveFiles@2
+            displayName: Archive publish output
+            inputs:
+              rootFolderOrFile: "$(Build.ArtifactStagingDirectory)/app"
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: "$(Build.ArtifactStagingDirectory)/app.zip"
+              replaceExistingArchive: true
+
+          - publish: "$(Build.ArtifactStagingDirectory)/app.zip"
+            artifact: app
+            displayName: Publish app artifact
+
+  - stage: deploy
+    displayName: Deploy
+    dependsOn: build
+    jobs:
+      - deployment: deploy_webapp
+        displayName: Deploy to App Service
+        environment: dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: app
+
+                - task: AzureWebApp@1
+                  displayName: Deploy web app
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    appType: webAppLinux
+                    appName: "$(webAppName)"
+                    package: "$(Pipeline.Workspace)/app/app.zip"
