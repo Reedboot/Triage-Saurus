@@ -184,6 +184,7 @@ This repository supports consistent security triage. The expected workflow is:
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - **Analyze git history for context:** Early in the scan, check recent commits for framework upgrades, security patches, and architectural changes to distinguish intentional design from technical debt. See `Agents/RepoAgent.md` for detailed git history analysis steps.
   - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
@@ -193,6 +194,12 @@ This repository supports consistent security triage. The expected workflow is:
     - Both agents should update the `### 🛠️ Dev` and `### 🏗️ Platform` sections respectively
     - Wait for both to complete before presenting final summary to user
   - **Scanner scope defaults to "IaC + SCA"** (logic discovery + code flow bugs) — SAST is available but not default (more time-intensive, less actionable for initial triage).
+  - **Split scan types into separate task agents:** When a scan includes multiple types (e.g., IaC + SAST, or IaC + SCA + SAST), delegate each scan type to a separate `general-purpose` task agent. This provides:
+    - **Full context per scan type:** IaC focuses on infrastructure/config, SAST on code vulnerabilities, SCA on dependencies, Secrets on credentials
+    - **Parallel execution:** Multiple scan types can run simultaneously
+    - **Specialized analysis:** Each agent analyzes findings with appropriate context (IaC references architecture, SAST references code patterns)
+    - **Example:** For "IaC + SCA + SAST" scope, launch 3 task agents in parallel, each with specific instructions for their scan type
+    - **Consolidation after:** After all scan types complete, consolidate findings, identify cross-cutting issues, and update the repo summary
   - **Code findings must be fully populated (no FILL placeholders):** Unlike bulk cloud finding generation (which uses FILL for user-provided context), code findings from repo scans must have all sections completed with evidence-backed content. Use the CodeFinding template sections with actual findings from the scan.
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
