@@ -10,6 +10,8 @@ This repository supports consistent security triage. The expected workflow is:
    - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Output/Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
 4. Update `Output/Summary/` outputs (cloud resource summaries and risk register).
 
+**Navigation:** For menu structures and user journey flows, see `Templates/Workflows.md`.
+
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
