@@ -14,11 +14,19 @@ This agent provides the workflow, tools, and process for conducting security sca
 
 **When to run:** ALWAYS run this as the first step for new repositories. It populates foundational knowledge that informs all subsequent analysis.
 
-**How to run:** Invoke the ContextDiscoveryAgent (see `Agents/ContextDiscoveryAgent.md`) to:
-- Identify repo purpose and business function
-- Discover tech stack (languages, frameworks, runtime versions)
-- Map services and architecture
-- Identify key dependencies
+**Speed target:** < 1 minute using parallel exploration.
+
+**How to run:** Use 4-6 parallel **explore agents** to discover:
+1. **Purpose & README:** What does this repo do? Read README, RunBook, main docs
+2. **Tech stack:** Languages, frameworks, dependencies (package.json, requirements.txt, *.csproj, go.mod, Dockerfile)
+3. **IaC files:** Find all *.tf, *.bicep, K8s YAML, ARM templates
+4. **Ingress points:** APIs, load balancers, APIM, public endpoints, Kubernetes Ingress
+5. **Databases:** Connection strings, schemas, migrations, Dacpac, EF, SQL scripts
+6. **Egress:** External API calls, third-party services
+
+See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep commands.
+
+**DO NOT:** Use general-purpose agent (too slow), run security scans yet, or do deep code analysis.
 
 **Output files created:**
 - `Output/Knowledge/Repos.md` - Adds entry for this repository
