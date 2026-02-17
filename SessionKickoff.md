@@ -79,11 +79,15 @@ Targeted helpers (stdout-only):
      - Add special choices like "Scan all terraform-* repos" or "Scan multiple repos (specify pattern)"
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
+   - Ask user whether to run context discovery first using ask_user tool:
+     - Choices: "Run context discovery first (Recommended)", "Skip to security scanning"
+     - Context discovery uses ContextDiscoveryAgent.md to understand repo purpose, tech stack, services, and architecture before running security scans
+     - If selected: Invoke ContextDiscoveryAgent to populate Output/Knowledge/Repos.md and create initial Output/Summary/Repos/<RepoName>.md
    - Ask user to select scan scope using ask_user tool:
      - Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
      - Default is "IaC + SCA" for discovering architecture/logic and detecting code flow bugs (auth, injection patterns)
      - SAST available but not default (more time-intensive, less actionable for initial triage)
-   - **During scan:** Create Output/Summary/Repos/<RepoName>.md FIRST before creating any findings. Use exact repo name as-is (e.g., `fi_api.md` not `Repo_fi_api.md`). This ensures consistency and allows findings to link back to the summary as it's progressively updated.
+   - **During scan:** Create Output/Summary/Repos/<RepoName>.md FIRST before creating any findings (or update if context discovery already created it). Use exact repo name as-is (e.g., `fi_api.md` not `Repo_fi_api.md`). This ensures consistency and allows findings to link back to the summary as it's progressively updated.
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
 10. **Follow operational rules:**
