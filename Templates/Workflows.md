@@ -62,7 +62,7 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - **Database schema detection:** Terraform databases, Dacpac, SQL scripts, EF migrations - identifies sensitive data (PII, financial)
 - **WAF protection analysis (CRITICAL):** Detects WAF mode (Detection vs Prevention), flags Detection mode on public services
 - **Cloud architecture diagrams:** If IaC detected, creates/updates `Output/Summary/Cloud/Architecture_<Provider>.md` with **multiple focused diagrams** (Ingress, Routing, Backend, Network) instead of one monolithic diagram
-- **Mermaid diagram links:** Add clickable links to other scanned services/infrastructure for navigation
+- **Mermaid diagram links:** Add clickable links (with 🔗 visual indicator) to other scanned services/infrastructure for navigation
 - No security vulnerability scans at this stage (only context gathering)
 
 ### Step 4: Remote Sync Check
