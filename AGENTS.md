@@ -7,13 +7,20 @@ repository.
 - **Purpose:** Canonical agent operating rules for this repo.
 - **Note:** By default, the agent should avoid running `git` commands and avoid running scripts unless it explains why first (see `Agents/Instructions.md`).
 
+## Session Management
+- **Path:** SessionKickoff.md
+  - **Purpose:** Session initialization flow and kickoff process.
+- **Path:** Templates/Workflows.md
+  - **Purpose:** Navigation flows, menu structures, and user journey definitions.
+
 ## Additional Agent Files
 - **Path:** Templates/CloudFinding.md
   - **Purpose:** Template and workflow guidance for cloud findings.
 - **Path:** Templates/CodeFinding.md
   - **Purpose:** Template and workflow guidance for code findings.
 - **Path:** Agents/ContextDiscoveryAgent.md
-  - **Purpose:** Fast context discovery for repositories (purpose, tech stack, services, architecture) - runs before security scans.
+  - **Purpose:** Fast context discovery for repositories (purpose, tech stack, services, architecture) - runs before security scans. Creates navigable Mermaid diagrams with hyperlinks (🔗 visual indicators) to related services.
+  - **Capabilities:** Multi-cloud (Azure/AWS/GCP), Kubernetes/AKS with Ingress tracking, cross-service configuration detection, Dockerfile/CI-CD analysis, ingress/egress mandatory discovery, **complete APIM routing chains** (Internet → Gateway → Service → APIM → Backend), **database schema detection** (Terraform/Dacpac/EF/SQL), **WAF mode detection** (Detection vs Prevention), **Mermaid diagram hyperlinking with 🔗 indicators**.
 - **Path:** Agents/RepoAgent.md
   - **Purpose:** Comprehensive guidance for repository scanning (ingress paths, architecture, dependencies, security).
 - **Path:** Agents/DevSkeptic.md
@@ -27,7 +34,8 @@ repository.
 - **Path:** Agents/SecurityAgent.md
   - **Purpose:** Review approach for security-focused findings.
 - **Path:** Agents/ArchitectureAgent.md
-  - **Purpose:** Create and update cloud architecture diagrams based on knowledge.
+  - **Purpose:** Create and update cloud architecture diagrams based on knowledge. Creates multi-diagram views with hyperlinks (🔗 visual indicators) between services for interactive navigation.
+  - **Approach:** Multiple focused diagrams (Ingress, Routing, Backend, Network) instead of single monolithic diagram for clarity.
 - **Path:** Agents/CloudSummaryAgent.md
   - **Purpose:** Guidance for summarising cloud findings.
 - **Path:** Agents/RepoSummaryAgent.md
