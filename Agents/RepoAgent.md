@@ -8,6 +8,132 @@ This agent provides the workflow, tools, and process for conducting security sca
 
 ## Repo Scan Workflow
 
+### Pre-Scan: Remote Sync Check (REQUIRED FIRST STEP)
+
+**Purpose:** Ensure we're scanning the latest code by checking for remote updates before analysis begins.
+
+**When to run:** ALWAYS run this before any scan type (full or incremental). This is the first step in the workflow.
+
+#### Step 1: Check Remote Status
+```bash
+# Fetch remote refs without pulling
+cd /path/to/repo
+git fetch --dry-run 2>&1 | grep -q "fatal: not a git repository" && echo "❌ Not a git repo" && exit 1
+
+# Fetch latest remote refs
+git fetch origin --quiet
+
+# Get current branch
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+# Check if branch has upstream
+if ! git rev-parse --abbrev-ref @{upstream} &>/dev/null; then
+  echo "⚠️ No upstream branch configured. Scanning local branch: $current_branch"
+  # Proceed with scan (may be a local-only repo)
+  exit 0
+fi
+
+# Get upstream branch
+upstream_branch=$(git rev-parse --abbrev-ref @{upstream})
+
+# Compare local vs remote
+local_commit=$(git rev-parse HEAD)
+remote_commit=$(git rev-parse @{upstream})
+
+if [ "$local_commit" = "$remote_commit" ]; then
+  echo "✅ Repository is up-to-date with $upstream_branch"
+else
+  # Check if we're ahead, behind, or diverged
+  ahead=$(git rev-list --count @{upstream}..HEAD)
+  behind=$(git rev-list --count HEAD..@{upstream})
+  
+  if [ "$behind" -gt 0 ] && [ "$ahead" -eq 0 ]; then
+    echo "⚠️ Repository is BEHIND remote by $behind commit(s)"
+    echo "Remote has newer changes that aren't in your local copy."
+    # STOP and ask user via ask_user tool
+  elif [ "$ahead" -gt 0 ] && [ "$behind" -eq 0 ]; then
+    echo "ℹ️ Repository is AHEAD of remote by $ahead commit(s)"
+    echo "You have local commits not pushed to remote."
+    # Proceed with scan (we're scanning local work)
+  else
+    echo "⚠️ Repository has DIVERGED from remote"
+    echo "Local is ahead by $ahead, behind by $behind commit(s)"
+    # STOP and ask user via ask_user tool
+  fi
+fi
+```
+
+#### Step 2: Ask User Decision (if behind or diverged)
+
+**Use ask_user tool with choices:**
+- **"Pull latest and scan (Recommended)"** - Performs `git pull` then proceeds
+- **"Scan current local version"** - Proceeds without pulling (may scan outdated code)
+- **"Cancel scan"** - Stops the scan workflow
+
+**Example ask_user prompt:**
+```
+🤔 The repository is 3 commit(s) behind origin/main. 
+
+Would you like to pull the latest changes before scanning?
+
+Choices:
+- Pull latest and scan (Recommended)
+- Scan current local version
+- Cancel scan
+```
+
+#### Step 3: Execute Pull (if user chooses)
+```bash
+# If user selected "Pull latest and scan"
+cd /path/to/repo
+
+# Check for uncommitted changes first
+if ! git diff-index --quiet HEAD --; then
+  echo "⚠️ You have uncommitted changes. Stashing before pull..."
+  git stash save "Auto-stash before security scan $(date +%Y-%m-%d_%H%M%S)"
+  stashed=true
+fi
+
+# Pull latest
+git pull origin $current_branch
+
+# Restore stashed changes if any
+if [ "$stashed" = true ]; then
+  echo "Restoring stashed changes..."
+  git stash pop
+fi
+
+echo "✅ Repository updated to latest. Proceeding with scan..."
+```
+
+#### Step 4: Record Sync Status in Audit Log
+```markdown
+### 09:01 - Pre-Scan Remote Sync Check
+- **Repository:** fi_api
+- **Branch:** main
+- **Local commit:** fe31e209
+- **Remote commit:** a7b3c4d5
+- **Status:** Behind by 3 commits
+- **Action:** User chose to pull latest
+- **New HEAD:** a7b3c4d5
+- **Result:** ✅ Repository synced successfully
+```
+
+### Benefits of Remote Sync Check:
+- ✅ **Prevents stale scans** - Always scan the latest code
+- ✅ **Detects drift** - Alerts when local copy is outdated
+- ✅ **User choice** - Allows intentional scanning of local branches
+- ✅ **Audit trail** - Documents which commit was actually scanned
+
+### Edge Cases Handled:
+- **No upstream configured:** Proceeds (local-only repo)
+- **Detached HEAD:** Warns but proceeds (scanning specific commit)
+- **Uncommitted changes:** Auto-stashes before pull, restores after
+- **Network unavailable:** Fails gracefully with clear error message
+- **Local ahead of remote:** Proceeds (scanning unpushed work-in-progress)
+
+---
+
 ### Git History Analysis (Context Phase)
 
 **Purpose:** Extract historical context to understand architectural decisions, timeline of changes, and distinguish intentional architecture from technical debt.
@@ -202,6 +328,228 @@ After all task agents complete:
 4. **Add cross-references** in `## Compounding Findings` sections using markdown links
 5. **Update repo summary** with consolidated security posture
 6. **Regenerate risk register:** `python3 Scripts/risk_register.py`
+
+## Incremental Scan Optimization (Recommended for Re-scans)
+
+**Purpose:** Speed up subsequent scans by only analyzing what changed since last scan.
+
+**When to use:** 
+- Second+ scan of a repository
+- CI/CD pipeline integration
+- Regular monitoring/re-triage
+
+### Implementation Steps:
+
+#### 1. Record Last Scanned Commit (REQUIRED)
+In repo summary (`Output/Summary/Repos/<RepoName>.md`), add metadata section at the top:
+```markdown
+## 🔍 Scan History
+
+**Track each scan type independently to enable smart re-scanning:**
+
+- **Last IaC Scan:** 2026-02-17 09:08 GMT (Commit: fe31e209) ✅
+- **Last SCA Scan:** 2026-02-17 09:15 GMT (Commit: fe31e209) ✅  
+- **Last SAST Scan:** Never ⏭️
+- **Last Secrets Scan:** Never ⏭️
+
+**Legend:** ✅ = Completed | ⏭️ = Not yet run | ⚠️ = Failed/Incomplete
+```
+
+**IMPORTANT:** Always update this section:
+- On first scan of a repo, initialize all 4 scan types as "Never"
+- After completing a scan type, update its timestamp + commit
+- This enables gap detection: "You scanned IaC+SCA before, now adding Secrets scan"
+
+#### 2. Detect Scan Gaps (Which scan types haven't been run yet?)
+
+**Before checking for file changes, first identify missing scan types:**
+
+```bash
+# Read scan history from repo summary
+# Example: grep "Last.*Scan:" Output/Summary/Repos/fi_api.md
+
+# Determine what user requested vs what's been done
+requested_scans=("IaC" "SCA" "SAST" "Secrets")  # User selected "All"
+completed_scans=("IaC" "SCA")  # From scan history
+missing_scans=("SAST" "Secrets")  # Never run before
+
+if [ ${#missing_scans[@]} -gt 0 ]; then
+  echo "📋 New scan types requested: ${missing_scans[*]}"
+  echo "These will be run regardless of commit changes."
+fi
+```
+
+**Example scenarios:**
+
+| Previous Scan | New Request | What to Run |
+|--------------|-------------|-------------|
+| IaC + SCA | IaC + SCA + Secrets | **Secrets only** (IaC/SCA already done on this commit) |
+| IaC + SCA | All (IaC+SCA+SAST+Secrets) | **SAST + Secrets** (skip IaC/SCA if no changes) |
+| Never scanned | IaC + SCA | **IaC + SCA** (full scan of requested types) |
+| IaC + SCA (commit abc) | IaC + SCA (commit xyz) | **Check file changes** (may skip if no IaC/dependency changes) |
+
+#### 3. Check for Changes on Re-scan (For already-completed scan types)
+
+**Only check file changes for scan types that were previously completed:**
+
+```bash
+# Get current HEAD
+current_commit=$(git -C /path/to/repo rev-parse HEAD)
+last_iac_commit="fe31e209"  # Read from "Last IaC Scan" in repo summary
+last_sca_commit="fe31e209"  # Read from "Last SCA Scan" in repo summary
+
+# If user requested IaC scan and it was already done on this commit
+if [ "$current_commit" = "$last_iac_commit" ]; then
+  echo "⏭️ IaC scan already completed on this commit. Skipping."
+  skip_iac=true
+fi
+
+# If commits differ, check what changed
+if [ "$current_commit" != "$last_iac_commit" ]; then
+  git -C /path/to/repo diff --name-only $last_iac_commit..$current_commit
+fi
+```
+
+#### 4. Selective Scan by File Type (Only for previously-completed scan types)
+
+**IaC Scan - Skip if no IaC changes AND already scanned this commit:**
+```bash
+# Check for IaC file changes
+iac_changes=$(git diff --name-only $last_scan_commit HEAD | grep -E '\.(tf|tfvars|yaml|yml|json)$|terraform/|infra/')
+
+if [ -z "$iac_changes" ]; then
+  echo "✓ No IaC changes detected. Skipping IaC scan."
+else
+  echo "📋 IaC files changed: $(echo $iac_changes | wc -l) files"
+  # Run IaC scan on changed files only
+fi
+```
+
+**SCA Scan - Skip if no dependency changes AND already scanned this commit:**
+```bash
+# Check for dependency manifest changes
+dep_changes=$(git diff --name-only $last_scan_commit HEAD | grep -E 'package\.json|package-lock\.json|requirements\.txt|Pipfile\.lock|go\.mod|go\.sum|\.csproj|packages\.lock\.json|Gemfile\.lock')
+
+if [ -z "$dep_changes" ]; then
+  echo "✓ No dependency changes detected. Skipping SCA scan."
+else
+  echo "📦 Dependency files changed. Running SCA scan."
+fi
+```
+
+**SAST Scan - Analyze only changed code (if previously scanned):**
+```bash
+# Get changed source code files
+code_changes=$(git diff --name-only $last_scan_commit HEAD | grep -E '\.(cs|js|ts|py|go|java|rb)$')
+
+if [ -z "$code_changes" ]; then
+  echo "✓ No code changes detected. Skipping SAST scan."
+else
+  echo "🔍 Code files changed: $(echo $code_changes | wc -l) files"
+  # Run SAST only on changed files
+  while read -r file; do
+    semgrep scan "$file"
+  done <<< "$code_changes"
+fi
+```
+
+**Secrets Scan - Only new commits (if previously scanned):**
+```bash
+# Scan only new commits since last scan
+git log --all --pretty=format:"%H" $last_scan_commit..HEAD | while read commit; do
+  git show $commit | grep -iE '(password|api.?key|secret|token|credentials)'
+done
+```
+
+#### 5. Update Scan History Metadata (CRITICAL - Always do this)
+After completing any scan, **update the specific scan type(s) completed:**
+```markdown
+## 🔍 Scan History
+
+- **Last IaC Scan:** 2026-02-17 09:08 GMT (Commit: fe31e209) ✅
+- **Last SCA Scan:** 2026-02-17 09:15 GMT (Commit: fe31e209) ✅  
+- **Last SAST Scan:** 2026-02-20 14:30 GMT (Commit: a7b3c4d5) ✅ ← UPDATED
+- **Last Secrets Scan:** 2026-02-20 14:35 GMT (Commit: a7b3c4d5) ✅ ← UPDATED
+
+**Latest Scan Details:**
+- **Date:** 2026-02-20 14:30 GMT
+- **Commit:** a7b3c4d5 (12 commits ahead of last scan)
+- **Scan types:** SAST, Secrets (IaC/SCA skipped - no relevant changes)
+- **Changed files:** 8 (6 .cs files, 2 .tf files)
+- **New findings:** 1 (SQL injection in UserController.cs)
+```
+
+**Rule:** Each scan type gets its own timestamp + commit. Never use "Last Full Scan" - track individually!
+
+#### 6. Smart Re-scan Decision Tree
+```
+Step 1: Check scan history for each requested scan type
+│
+├─ Scan type NEVER run before?
+│  └─ ALWAYS RUN (gap-filling scan)
+│
+└─ Scan type previously completed?
+   │
+   ├─ Current commit == last scan commit for this type?
+   │  └─ Ask "No changes. Force re-scan anyway?" → Yes/No
+   │
+   └─ Current commit != last scan commit?
+      │
+      ├─ IaC scan: Check for .tf/.yaml/.json changes → Run if changed
+      ├─ SCA scan: Check for manifest changes → Run if changed  
+      ├─ SAST scan: Check for source code changes → Run if changed
+      └─ Secrets scan: Check for new commits → Run if new commits exist
+```
+
+**Example walkthrough:**
+
+**Scenario:** User previously ran "IaC + SCA" on commit `abc123`, now wants "All" scans on commit `xyz789`
+
+1. **Check scan history:**
+   - IaC: Done on `abc123` ✅
+   - SCA: Done on `abc123` ✅
+   - SAST: Never ⏭️
+   - Secrets: Never ⏭️
+
+2. **Identify gaps:**
+   - Must run: SAST, Secrets (never done before)
+   - Check changes: IaC, SCA (already done, but on old commit)
+
+3. **Check file changes between `abc123` and `xyz789`:**
+   - `.tf` files changed? → Re-run IaC
+   - `package.json` changed? → Re-run SCA
+   - `.cs` files changed? → Already running SAST
+   - New commits? → Already running Secrets
+
+4. **Final decision:**
+   - Run: SAST ✅ (new scan type)
+   - Run: Secrets ✅ (new scan type)
+   - Run: SCA ✅ (manifest changed)
+   - Skip: IaC ⏭️ (no .tf file changes detected)
+
+**Output to user:**
+```
+📋 Scan Plan for fi_api:
+✅ SAST scan (never run before)
+✅ Secrets scan (never run before)  
+✅ SCA scan (dependencies changed since last scan)
+⏭️ IaC scan (no changes to infrastructure files)
+
+Total scans to run: 3/4 (saving ~2 minutes)
+```
+
+### Benefits:
+- **10-50x faster** for repos with minimal changes
+- **Reduced token usage** (only analyze deltas)
+- **CI/CD friendly** (fast feedback on PRs)
+- **Audit trail preserved** (scan history tracks incremental scans)
+
+### Fallback to Full Scan When:
+- First scan of a repository
+- More than 30 days since last scan (drift detection)
+- User explicitly requests full re-scan
+- Last scan was incomplete/failed
+- Major framework/runtime upgrade detected in commits
 
 ## Deliverables per Scan
 
