@@ -197,6 +197,44 @@ def scan_repo_candidates(*, repos_root: str | None) -> None:
 
     print()
 
+
+def scan_sample_repo_candidates() -> None:
+    """List sample repo candidates shipped with this workspace (stdout-only)."""
+    print("== Sample repo candidates ==")
+
+    sample_repos_root = ROOT / "Sample Findings" / "Repos"
+    print(f"sample_repos_root: {sample_repos_root}")
+
+    if not sample_repos_root.exists():
+        print("Sample repos folder not found.")
+        print()
+        return
+
+    if not sample_repos_root.is_dir():
+        print("ERROR: sample_repos_root is not a directory")
+        print()
+        return
+
+    candidates: list[Path] = []
+    try:
+        for entry in sorted(sample_repos_root.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith("."):
+                continue
+            if lrc._looks_like_repo(entry):
+                candidates.append(entry)
+    except OSError as ex:
+        print(f"ERROR: cannot list sample_repos_root: {ex}")
+        print()
+        return
+
+    print(f"candidates: {len(candidates)}")
+    for p in candidates:
+        print(f"- {p.name} — {lrc.classify_repo(p.name)} — {p.relative_to(ROOT)}")
+
+    print()
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Consolidated scan of Knowledge/, Findings/, and Intake/.")
     parser.add_argument(
@@ -304,6 +342,7 @@ def main() -> int:
 
     if not args.skip_repos:
         scan_repo_candidates(repos_root=args.repos_root)
+        scan_sample_repo_candidates()
 
     return 0
 

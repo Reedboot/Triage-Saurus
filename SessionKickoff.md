@@ -42,8 +42,9 @@ Targeted helpers (stdout-only):
    - **Answer questions to build context** (if existing knowledge/findings exist)
    - **Copy/paste a single issue to triage**
    - **Provide a path under Intake/ to process in bulk**
-   - **Import and triage the sample findings**
    - **Scan a repo**
+   - **Scan a sample repo**
+   - **Import and triage the sample findings**
 
 6. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).

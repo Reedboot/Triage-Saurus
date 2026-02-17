@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from output_paths import OUTPUT_KNOWLEDGE_DIR, OUTPUT_SUMMARY_DIR
+from markdown_validator import validate_markdown_file
 
 
 SKIP_DIR_NAMES = {
@@ -162,6 +163,9 @@ def detect_ci(repo: Path) -> str:
     for name, marker in CI_MARKERS:
         if (repo / marker).exists():
             return name
+    # Common Azure Pipelines variants in sample repos.
+    if any(repo.glob("azure-pipelines*.yml")) or any(repo.glob("azure-pipelines*.yaml")):
+        return "Azure Pipelines"
     return "Unknown"
 
 
@@ -219,9 +223,51 @@ def repo_purpose(repo: Path, repo_name: str) -> tuple[str, Evidence | None]:
             for line in lines:
                 s = line.strip()
                 if s and not s.startswith("#"):
+                    if s.startswith("- "):
+                        s = s[2:].strip()
                     return s[:160], Evidence(label="README purpose hint", path=rel(repo, p), line=lines.index(line) + 1, excerpt=s)
             return f"{repo_name} repository", Evidence(label="README present", path=rel(repo, p))
     return f"{repo_name} repository", None
+
+
+TF_RESOURCE_RE = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.IGNORECASE | re.MULTILINE)
+
+
+def detect_terraform_resources(files: list[Path], repo: Path) -> set[str]:
+    types: set[str] = set()
+    for p in files:
+        if p.suffix.lower() != ".tf":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in TF_RESOURCE_RE.finditer(text):
+            types.add(m.group(1))
+    return types
+
+
+DOTNET_ENDPOINT_RE = re.compile(r'\bMap(Get|Post|Put|Delete)\s*\(\s*"([^"]+)"', re.IGNORECASE)
+
+
+def detect_dotnet_endpoints(files: list[Path], repo: Path, *, limit: int = 8) -> list[str]:
+    endpoints: list[str] = []
+    for p in files:
+        if p.suffix.lower() != ".cs":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in DOTNET_ENDPOINT_RE.finditer(text):
+            verb = m.group(1).upper()
+            path = m.group(2).strip()
+            # Avoid Mermaid-incompatible braces in labels.
+            path = re.sub(r"\{[^}]+\}", ":param", path)
+            endpoints.append(f"{verb} {path}")
+            if len(endpoints) >= limit:
+                return endpoints
+    return endpoints
 
 
 def ensure_repos_knowledge(repos_root: Path) -> Path:
@@ -300,21 +346,72 @@ def write_repo_summary(
     provider_line = ", ".join(providers) if providers else "Unknown"
     repo_url = "N/A"
 
-    diagram_deps: list[str] = []
-    for ev in ingress + egress:
-        low = (ev.excerpt or "").lower()
-        if "sql" in low or "postgres" in low or "mysql" in low:
-            diagram_deps.append("db[🗄️ Database]")
-        if "servicebus" in low or "eventhub" in low or "kafka" in low or "rabbit" in low:
-            diagram_deps.append("mq[🛰️ Messaging]")
-        if "azure-api.net" in low or "apimanagement" in low:
-            diagram_deps.append("apim[🛡️ APIM/Gateway]")
-        if "blob.core.windows.net" in low or "s3.amazonaws.com" in low:
-            diagram_deps.append("obj[🗄️ Object Storage]")
-    diagram_deps = sorted(set(diagram_deps))
+    tf_resource_types = detect_terraform_resources(iter_files(repo), repo)
+    endpoints = detect_dotnet_endpoints(iter_files(repo), repo, limit=6)
 
-    dep_edges = "\n".join([f"  app --> {d.split('[')[0]}" for d in diagram_deps])
-    dep_nodes = "\n".join([f"  {d}" for d in diagram_deps])
+    has_kv = "azurerm_key_vault" in tf_resource_types
+    has_sql = any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
+    has_ai = "azurerm_application_insights" in tf_resource_types
+    has_webapp = "azurerm_linux_web_app" in tf_resource_types or "azurerm_windows_web_app" in tf_resource_types
+    has_plan = "azurerm_service_plan" in tf_resource_types or "azurerm_app_service_plan" in tf_resource_types
+    has_state_backend = any(t in tf_resource_types for t in {"azurerm_storage_account", "azurerm_storage_container"})
+
+    # Diagram building: keep labels ASCII and avoid braces/parentheses for renderer compatibility.
+    diagram_lines: list[str] = ["flowchart TB", "  client[Client]"]
+
+    if provider_line == "Azure" or "Azure" in providers:
+        diagram_lines.append("  subgraph azure[Azure]")
+        if has_webapp:
+            diagram_lines.append("    web[App Service Web App]")
+        if has_plan:
+            diagram_lines.append("    plan[App Service Plan]")
+        if has_kv:
+            diagram_lines.append("    kv[Key Vault]")
+        if has_sql:
+            diagram_lines.append("    sql[Azure SQL]")
+        if has_ai:
+            diagram_lines.append("    ai[Application Insights]")
+        if has_state_backend:
+            diagram_lines.append("    tfstate[Terraform state storage]")
+        diagram_lines.append("  end")
+
+        if endpoints:
+            diagram_lines.append("  subgraph api[API routes]")
+            for idx, ep in enumerate(endpoints, start=1):
+                diagram_lines.append(f"    ep{idx}[{ep}]")
+            diagram_lines.append("  end")
+
+        if detect_ci(repo) == "Azure Pipelines":
+            diagram_lines.append("  pipeline[Azure Pipelines]")
+
+        # Basic flows.
+        if has_webapp:
+            diagram_lines.append("  client --> web")
+            if endpoints:
+                diagram_lines.append("  web --> ep1")
+                for idx in range(1, len(endpoints)):
+                    diagram_lines.append(f"  ep{idx} --> ep{idx+1}")
+                if has_sql:
+                    diagram_lines.append(f"  ep{len(endpoints)} --> sql")
+            elif has_sql:
+                diagram_lines.append("  web --> sql")
+
+            if has_kv:
+                diagram_lines.append("  web --> kv")
+            if has_ai:
+                diagram_lines.append("  web -.-> ai")
+            if has_plan:
+                diagram_lines.append("  web --> plan")
+
+        if has_state_backend:
+            # Use dotted line because this is a provisioning/control-plane linkage.
+            if "pipeline" in "\n".join(diagram_lines):
+                diagram_lines.append("  pipeline -.-> tfstate")
+        if "pipeline" in "\n".join(diagram_lines) and has_webapp:
+            diagram_lines.append("  pipeline -.-> web")
+    else:
+        # Fallback: generic service with inferred deps.
+        diagram_lines.extend(["  subgraph appbox[Application]", "    app[Service]", "  end", "  client --> app"])
 
     evidence_lines: list[str] = []
     for ev in (extra_evidence + ingress + egress)[:30]:
@@ -329,14 +426,8 @@ def write_repo_summary(
         f"# 🟣 Repo {repo_name}\n\n"
         "## 🗺️ Architecture Diagram\n"
         "```mermaid\n"
-        "flowchart TB\n"
-        "  client[👤 Client]\n"
-        '  subgraph appbox[" Application "]\n'
-        "    app[⚙️ Service]\n"
-        "  end\n"
-        f"{dep_nodes}\n"
-        "  client --> app\n"
-        f"{dep_edges}\n"
+        + "\n".join(diagram_lines)
+        + "\n"
         "```\n\n"
         f"- **Overall Score:** 🟢 **0/10** (INFO) — *Context discovery only; update after security scans*\n\n"
         "## 🧭 Overview\n"
@@ -385,6 +476,17 @@ def write_repo_summary(
     )
 
     out_path.write_text(content, encoding="utf-8")
+
+    # Validate Mermaid fenced blocks so issues are caught (and safely auto-fixed) before viewing/rendering.
+    probs = validate_markdown_file(out_path, fix=True)
+    errs = [p for p in probs if p.level == "ERROR"]
+    warns = [p for p in probs if p.level == "WARN"]
+    for p in warns:
+        line = f":{p.line}" if p.line else ""
+        print(f"WARN: {out_path}{line} - {p.message}")
+    if errs:
+        raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
+
     return out_path
 
 
@@ -474,4 +576,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

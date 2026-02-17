@@ -12,18 +12,20 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 **Options:**
 1. Copy/paste a single issue to triage
 2. Process bulk intake from Intake/Cloud (N files)
-3. Import and triage sample cloud findings (N files)
-4. Import and triage sample code findings (N files)
-5. Scan a repo
+3. Scan a repo
+4. Scan a sample repo
+5. Import and triage sample cloud findings (N files)
+6. Import and triage sample code findings (N files)
 
 **Allow freeform:** Yes (for custom paths or special requests)
 
 **Navigation:**
 - Option 1 → Single Issue Triage Flow
 - Option 2 → Bulk Cloud Triage Flow
-- Option 3 → Sample Cloud Triage Flow
-- Option 4 → Sample Code Triage Flow
-- Option 5 → Repository Scan Flow
+- Option 3 → Repository Scan Flow
+- Option 4 → Repository Scan Flow (sample repo)
+- Option 5 → Sample Cloud Triage Flow
+- Option 6 → Sample Code Triage Flow
 
 ---
 

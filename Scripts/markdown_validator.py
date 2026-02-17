@@ -25,6 +25,10 @@ MERMAID_DIRECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_NODE_SQUARE_LABEL_RE = re.compile(r"(\b[A-Za-z_][A-Za-z0-9_]*\s*)\[(.*?)\]")
+_NODE_QUOTED_LABEL_RE = re.compile(r"(\b[A-Za-z_][A-Za-z0-9_]*\s*)\\[\"(.*?)\"\\]")
+_SUBGRAPH_QUOTED_RE = re.compile(r"(\bsubgraph\b[^\"]*\\[\"(.*?)\"\\])", re.IGNORECASE)
+
 
 @dataclass
 class Problem:
@@ -72,6 +76,124 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
             if fix:
                 block = [b.replace("\t", "  ") for b in block]
                 changed = True
+
+        # Renderer-compat fixes: replace escaped newlines / HTML breaks in labels.
+        # Some Mermaid renderers reject these; prefer a single-line label for broad compatibility.
+        if any("\\n" in b for b in block) or any(re.search(r"<\s*br\s*/?\s*>", b, re.IGNORECASE) for b in block):
+            for j, b in enumerate(block):
+                if "\\n" in b:
+                    problems.append(
+                        Problem(
+                            Path("."),
+                            "WARN",
+                            r"Mermaid contains a literal '\n' sequence; renderer support varies. Prefer single-line labels for compatibility.",
+                            start_line_no + j,
+                        )
+                    )
+                if re.search(r"<\s*br\s*/?\s*>", b, re.IGNORECASE):
+                    problems.append(
+                        Problem(
+                            Path("."),
+                            "WARN",
+                            "Mermaid contains an HTML <br> tag; renderer support varies. Prefer single-line labels for compatibility.",
+                            start_line_no + j,
+                        )
+                    )
+            if fix:
+                new_block: list[str] = []
+                for b in block:
+                    bb = b.replace("\\n", " - ")
+                    bb2 = re.sub(r"<\s*br\s*/?\s*>", " - ", bb, flags=re.IGNORECASE)
+                    if bb2 != b:
+                        changed = True
+                    new_block.append(bb2)
+                block = new_block
+
+        # Renderer-compat fixes: some renderers reject non-ASCII (e.g., emojis) in Mermaid.
+        # Prefer ASCII-only labels for broadest compatibility.
+        if any(any(ord(ch) > 127 for ch in b) for b in block):
+            for j, b in enumerate(block):
+                if any(ord(ch) > 127 for ch in b):
+                    problems.append(
+                        Problem(
+                            Path("."),
+                            "WARN",
+                            "Mermaid contains non-ASCII characters (e.g., emoji); renderer support varies. Prefer ASCII-only labels for compatibility.",
+                            start_line_no + j,
+                        )
+                    )
+            if fix:
+                new_block2: list[str] = []
+                for b in block:
+                    bb = "".join(ch for ch in b if ord(ch) <= 127)
+                    if bb != b:
+                        changed = True
+                    new_block2.append(bb)
+                block = new_block2
+
+        # Renderer-compat fixes: some parsers reject parentheses in labels inside [] / [""].
+        # Heuristic: warn and (optionally) strip parentheses from label text only.
+        if any("(" in b or ")" in b for b in block):
+            for j, b in enumerate(block):
+                if "(" in b or ")" in b:
+                    problems.append(
+                        Problem(
+                            Path("."),
+                            "WARN",
+                            "Mermaid contains parentheses; some renderers reject parentheses inside labels. Prefer removing parentheses for compatibility.",
+                            start_line_no + j,
+                        )
+                    )
+            if fix:
+                def _strip_parens(s: str) -> str:
+                    return s.replace("(", "").replace(")", "")
+
+                def _fix_square(m: re.Match[str]) -> str:
+                    return f"{m.group(1)}[{_strip_parens(m.group(2))}]"
+
+                def _fix_quoted(m: re.Match[str]) -> str:
+                    return f'{m.group(1)}["{_strip_parens(m.group(2))}"]'
+
+                new_block3: list[str] = []
+                for b in block:
+                    bb = _NODE_QUOTED_LABEL_RE.sub(_fix_quoted, b)
+                    bb = _NODE_SQUARE_LABEL_RE.sub(_fix_square, bb)
+                    # Also handle subgraph titles expressed as ["..."] that don't match node-id patterns.
+                    if bb != b:
+                        changed = True
+                    new_block3.append(bb)
+                block = new_block3
+
+        # Renderer-compat fixes: some parsers reject curly braces in labels (conflicts with Mermaid shape syntax).
+        if any("{" in b or "}" in b for b in block):
+            for j, b in enumerate(block):
+                if "{" in b or "}" in b:
+                    problems.append(
+                        Problem(
+                            Path("."),
+                            "WARN",
+                            "Mermaid contains '{' or '}' in labels; some renderers reject this. Prefer using ':id' style instead of '{id}'.",
+                            start_line_no + j,
+                        )
+                    )
+            if fix:
+                def _strip_braces(s: str) -> str:
+                    return s.replace("{", "").replace("}", "")
+
+                def _fix_square2(m: re.Match[str]) -> str:
+                    return f"{m.group(1)}[{_strip_braces(m.group(2))}]"
+
+                def _fix_quoted2(m: re.Match[str]) -> str:
+                    return f'{m.group(1)}["{_strip_braces(m.group(2))}"]'
+
+                new_block4: list[str] = []
+                for b in block:
+                    bb = _NODE_QUOTED_LABEL_RE.sub(_fix_quoted2, b)
+                    bb = _NODE_SQUARE_LABEL_RE.sub(_fix_square2, bb)
+                    if bb != b:
+                        changed = True
+                    new_block4.append(bb)
+                block = new_block4
 
         # Check for forbidden 'style fill' usage (breaks dark themes).
         for j, b in enumerate(block):
