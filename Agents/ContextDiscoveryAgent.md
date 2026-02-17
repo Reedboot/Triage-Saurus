@@ -1255,14 +1255,16 @@ Would you like to run security scans on these repos?
 - ✅ **NO FILL COLORS in any Mermaid style blocks** (stroke-only styling)
 - ✅ Useful architecture context for scan decisions
 - ✅ No security findings (that's not our job)
+- ✅ **No CVE identification** (versions only, let SCA scan find vulnerabilities)
 
 **Discovery is complete when:**
 1. Summary file created at `Summary/Repos/<name>.md`
 2. Knowledge files updated (services added)
 3. Mermaid diagram renders correctly (no syntax errors, no fill colors)
 4. **Pre-flight check passed:** Verified no `fill:` attributes in style blocks
-5. Audit log updated with timing
-6. User can make informed scan scope decision
+5. **No CVEs mentioned:** Only dependency versions listed, not vulnerabilities
+6. Audit log updated with timing
+7. User can make informed scan scope decision
 
 ## Pre-Flight Checklist (Before Saving Summary)
 
@@ -1283,12 +1285,30 @@ Run this mental checklist on EVERY Mermaid diagram:
 ## Anti-Patterns (Don't Do This)
 
 ❌ **Don't run security scans** - That's for IaC/SCA/SAST/Secrets agents
-❌ **Don't analyze vulnerabilities** - Just note dependency versions
+❌ **Don't analyze vulnerabilities** - Just note dependency versions (e.g., "Newtonsoft.Json 13.0.4"), NOT CVEs
+❌ **Don't identify CVEs** - SCA scan will find vulnerabilities later
 ❌ **Don't score risk** - Context discovery is neutral
 ❌ **Don't run slow tools** - Keep discovery fast (<60s)
 ❌ **Don't create findings** - Only summaries and knowledge
 ❌ **Don't guess** - Mark unclear items as "Unknown"
 ❌ **🚨 NEVER use `fill:` in Mermaid styles** - Breaks dark themes (stroke-only styling)
+
+**Example - CORRECT tech stack discovery:**
+```markdown
+### Key Dependencies
+- Newtonsoft.Json 13.0.4
+- Microsoft.AspNetCore 8.0.0
+- Polly 8.6.4
+
+Note: Run SCA scan to identify vulnerabilities
+```
+
+**Example - INCORRECT (doing security analysis):**
+```markdown
+### Key Dependencies
+- Newtonsoft.Json 13.0.4 ⚠️ CVE-2024-21319    ❌ NO! Don't analyze CVEs
+- Microsoft.AspNetCore 8.0.0 ✅ Up to date      ❌ NO! Don't assess security
+```
 
 ## Integration with Other Agents
 
