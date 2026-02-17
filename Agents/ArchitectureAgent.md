@@ -3,22 +3,42 @@
 ## Role
 - **Scope:** Create and update **high-level cloud estate overview diagrams** based on knowledge
   captured under `Knowledge/`.
-- **Focus:** Strategic view showing major services, network boundaries, trust boundaries, and key data flows.
-- **Output:** Mermaid diagram in a provider-specific summary file.
+- **Focus:** Strategic view showing major services, network boundaries, trust boundaries, key data flows, and **complete routing chains** from Internet to backends.
+- **Output:** Multiple focused Mermaid diagrams in provider-specific summary files.
 
 ## Diagram Scope & Detail Level
 
-**This is a STRATEGIC OVERVIEW, not a detailed service diagram.**
+**Use MULTIPLE FOCUSED DIAGRAMS for clarity - one diagram per architectural concern.**
 
-### What to Include:
-- **Major service categories:** Compute (App Services, VMs), Data (SQL, Storage), Identity (AAD, Key Vault)
+### Recommended Diagram Separation:
+1. **Ingress Flow:** Internet → App Gateway → Backend Services (security layers, WAF policies, **all compute platforms**)
+2. **API/Service Routing:** API Management or Load Balancer routing to backend services (**include complete routing chains**)
+3. **Backend Services & Data:** Internal services → databases/storage/messaging (data layer, **all platforms: ASE/AKS/SF**)
+4. **Network Topology:** Hub-spoke, VNet peering, egress patterns (network architecture)
+
+**CRITICAL for API Management Routing Diagram:**
+- Document **complete routing chains:** Public hostname → App Gateway backend pool → Service → APIM API → Final backend
+- Show which services proxy TO APIM (e.g., fi-api forwards to APIM) vs direct APIM access
+- Include APIM API names, path patterns, and backend service mappings
+- Distinguish external vs internal backends (e.g., Marqeta external, psd2-api.internal)
+
+**Benefits of multiple diagrams:**
+- Easier to understand (each diagram tells one story)
+- Clearer for security review (ingress vs egress vs data flow)
+- Simpler to maintain (update one aspect without redrawing everything)
+- Better for presentations (show relevant diagram for audience)
+
+### What to Include (per diagram):
+- **Major service categories:** Compute (App Services, VMs, AKS, Service Fabric), Data (SQL, Storage), Identity (AAD, Key Vault)
 - **Network boundaries:** Internet, VPN, Private network zones
 - **Trust boundaries:** Public endpoints, private endpoints, authentication gates
 - **Key data flows:** External → Frontend → Backend → Data stores
 - **Security controls:** WAF, NSGs, API Management
+- **Complete routing chains:** For APIM-enabled services, show: Public hostname → Gateway → Service → APIM API → Backend
+- **All compute platforms:** Ensure ASE v3, API Management, AKS (with ingress), and Service Fabric all appear where relevant
 
 ### What to EXCLUDE:
-- Individual API endpoints or routes
+- Individual API endpoints or routes (unless critical to understanding)
 - Detailed middleware pipelines
 - Specific configuration settings
 - Individual resource instances (unless architecturally significant)
@@ -47,6 +67,8 @@
 - Draw diagrams **from the internet inwards** (request flow / access paths).
 - Prefer **top-down** layout for readability on reviews (`flowchart TB`).
 - **Line breaks in node labels:** Use `<br/>` not `\n` for proper rendering.
+- **Diagram key:** Always include a markdown key above the diagram: `**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed`
+- **Label egress flows:** Use emojis on arrows (🔒 for internal, 🌐 for external)
 - **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
 - **Confirmed vs assumed:**
   - Default: include **confirmed services only** on the diagram.
@@ -62,9 +84,18 @@
   provider name).
 - **Structure:**
   - Title header with the provider name.
-  - A short overview section.
-  - A Mermaid diagram section showing key resources and access paths.
-  - A short notes section for assumptions or gaps.
+  - **Multiple diagram sections (one per architectural concern):**
+    1. **Ingress Flow** - Internet → App Gateway/LB → Backend Services (security layers)
+    2. **API/Service Routing** - API Management/ALB/Cloud Load Balancer routing patterns
+    3. **Backend Services & Data** - Internal services → databases/storage/messaging
+    4. **Network Topology** - Hub-spoke, VNet peering, VPC architecture, egress patterns
+  - Each diagram section includes:
+    - **H2 header with emoji:** `## 🗺️ Ingress Flow (Internet → Services)`
+    - **Key:** Emoji legend for the diagram
+    - **Description:** 1-2 sentences explaining what the diagram shows
+    - **Mermaid diagram:** Focused on one architectural aspect
+    - **Components list:** Brief bullet points explaining key elements
+  - **Notes section** at end for assumptions, gaps, references to detailed repo diagrams
 - **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and the emoji key from `Settings/Styling.md`.
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Mermaid styling for confirmed components:** use the Mermaid default (solid)
@@ -92,6 +123,68 @@
   - **Assumptions/unconfirmed:** `style <nodeName> stroke-dasharray: 5 5` (dashed border on specific node)
   - Status indicators: Use emojis (✅ ❌ ⚠️ 🔴 🟡 🟢 ❓)
   - **FORBIDDEN:** `style <node> fill:<color>` or `fill:#xxxxxx`
+
+**CRITICAL: Mermaid Syntax Validation (Avoid Parse Errors)**
+Arrow labels MUST follow these rules:
+- ❌ **NEVER use curly braces** `{}` in labels (e.g., `|route-{env}|` causes parse error)
+- ❌ **NEVER use quotes** `"` inside labels
+- ❌ **NEVER use pipes** `|` inside the label text itself
+- ❌ **NEVER use brackets/parentheses** inside labels
+- ✅ **DO use descriptive static text:** `|🔒 Internal HTTPS|` or `|Route to prod|`
+- ✅ **DO use emojis:** `|🔒|` or `|🌐|` ✅
+- ✅ **Replace variables with examples:** Use `prod` instead of `{env}`, or omit the variable entirely
+
+**Examples:**
+```mermaid
+flowchart TB
+    Internet -->|🌐 HTTPS:443| AGW    ✅ CORRECT
+    AGW -->|🔒 Internal| APIM          ✅ CORRECT
+    AGW -->|route-{env}| APIM          ❌ PARSE ERROR (curly braces)
+```
+
+**Before outputting any Mermaid diagram:**
+1. Check all arrow labels for curly braces, quotes, or special chars
+2. Replace variable placeholders with example values (e.g., `{env}` → `prod` or remove it)
+3. Keep labels simple and descriptive without dynamic content
+4. **Add clickable links** to related services and documentation
+
+## Hyperlinking Diagrams (CRITICAL for Navigation)
+
+**When services connect, add clickable links to their documentation:**
+
+```mermaid
+flowchart TB
+    Internet[🌐 Internet] -->|HTTPS| AGW[Application Gateway]
+    AGW -->|Backend: fiapi| FIAPI[fi-api<br/>ASE v3]
+    AGW -->|Backend: backstage| AKS[AKS]
+    
+    FIAPI -->|Calls| APIM[API Management]
+    APIM -->|Routes to| PSD2[psd2-api]
+    APIM -->|Routes to| BACS[fi-api-bacs]
+    
+    click AGW "../Repos/terraform-app_gateway.md" "View App Gateway config"
+    click FIAPI "../Repos/fi_api.md" "View fi-api service"
+    click AKS "../Repos/terraform-aks.md" "View AKS cluster"
+    click APIM "#-api-management-routing" "View APIM routing section"
+    click PSD2 "../Repos/psd2-api.md" "View PSD2 API service"
+    click BACS "../Repos/fi-api-bacs.md" "View BACS service"
+```
+
+**Linking Rules:**
+- **Service nodes:** Link to their repo summary (`../Repos/service-name.md`)
+- **Shared infrastructure:** Link to relevant cloud architecture section (`#-section-name`)
+- **Use relative paths:**
+  - From Cloud/: `../Repos/service-name.md`
+  - From Repos/: `../Cloud/Architecture_Azure.md#section` OR `other-service.md`
+  - Within same doc: `#section-anchor`
+- **Tooltip text:** Brief description (e.g., "View service details", "See routing config")
+
+**When to add links:**
+1. **Gateway → Backend services:** Link each backend to its repo summary
+2. **Service → Downstream calls:** Link to called services if documented
+3. **APIM APIs → Backend services:** Link to backend service repos
+4. **Shared components:** Link to infrastructure sections
+5. **Cross-diagram references:** Link between Ingress/Routing/Backend diagrams
 
 ## Update Rules
 - Update (or create) the diagram **each time** the relevant provider file under
@@ -137,6 +230,9 @@
 High-level view of the Azure estate showing major service tiers, network boundaries, and key data flows. For detailed service-specific diagrams, see individual repo summaries.
 
 ## Diagram
+
+**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed
+
 ~~~mermaid
 flowchart TB
   internet[🌐 Internet]
@@ -164,12 +260,12 @@ flowchart TB
 
   internet --> apim
   users --> apim
-  apim --> appservices
-  appservices --> functions
-  appservices --> aks
-  functions --> sql
-  aks --> storage
-  appservices --> kv
+  apim -->|🔒| appservices
+  appservices -->|🔒| functions
+  appservices -->|🔒| aks
+  functions -->|🔒| sql
+  aks -->|🔒| storage
+  appservices -->|🔒| kv
   aad -.Authentication.-> apim
 
   %% Dashed = assumed, not confirmed
