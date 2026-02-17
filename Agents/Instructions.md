@@ -169,6 +169,21 @@ This repository supports consistent security triage. The expected workflow is:
     - **Items processed:** <list or "See details below">
     - **Duration:** <if long-running>
     
+    ## Token Usage by Operation
+    
+    | Operation | Duration | Tokens | Efficiency (tok/sec) | Model |
+    |-----------|----------|--------|----------------------|-------|
+    | Session kickoff | MM:SS | N | N/A | Sonnet 4.5 |
+    | Git history analysis | MM:SS | N | X.X | Sonnet 4.5 |
+    | IaC scan | MM:SS | N | X.X | Sonnet 4.5 |
+    | Finding generation | MM:SS | N | X.X | Sonnet 4.5 |
+    | **Total** | **HH:MM** | **N** | **Avg: X.X** | - |
+    
+    ### Token Budget
+    - **Allocated:** 1,000,000 tokens
+    - **Used:** N tokens (X.X%)
+    - **Remaining:** N tokens
+    
     ## Summary
     - **Total findings created:** N
     - **Total findings updated:** N
@@ -177,6 +192,7 @@ This repository supports consistent security triage. The expected workflow is:
     - **Questions asked:** N
     - **Assumptions made:** N (see Knowledge files for details)
     ```
+  - **Token tracking:** Track token consumption deltas for major operations (scan types, finding generation, skeptic reviews) by noting system warnings before/after operations. Calculate efficiency (tokens/second) to identify optimization opportunities.
   - **When to append (not replace):** Always append to the session log, never overwrite previous entries
   - **Audit log size:** for bulk title imports, prefer an audit summary (count + source file path + timestamp). Only include per-item lists when the user explicitly asks or when count is <20 items.
   - **Audit log is append-only:** clearly mark at the top of each audit file as shown above. These logs are for human review and compliance tracking, not for feeding back into context windows.
@@ -184,7 +200,6 @@ This repository supports consistent security triage. The expected workflow is:
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
-  - **Analyze git history for context:** Early in the scan, check recent commits for framework upgrades, security patches, and architectural changes to distinguish intentional design from technical debt. See `Agents/RepoAgent.md` for detailed git history analysis steps.
   - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
@@ -194,12 +209,6 @@ This repository supports consistent security triage. The expected workflow is:
     - Both agents should update the `### 🛠️ Dev` and `### 🏗️ Platform` sections respectively
     - Wait for both to complete before presenting final summary to user
   - **Scanner scope defaults to "IaC + SCA"** (logic discovery + code flow bugs) — SAST is available but not default (more time-intensive, less actionable for initial triage).
-  - **Split scan types into separate task agents:** When a scan includes multiple types (e.g., IaC + SAST, or IaC + SCA + SAST), delegate each scan type to a separate `general-purpose` task agent. This provides:
-    - **Full context per scan type:** IaC focuses on infrastructure/config, SAST on code vulnerabilities, SCA on dependencies, Secrets on credentials
-    - **Parallel execution:** Multiple scan types can run simultaneously
-    - **Specialized analysis:** Each agent analyzes findings with appropriate context (IaC references architecture, SAST references code patterns)
-    - **Example:** For "IaC + SCA + SAST" scope, launch 3 task agents in parallel, each with specific instructions for their scan type
-    - **Consolidation after:** After all scan types complete, consolidate findings, identify cross-cutting issues, and update the repo summary
   - **Code findings must be fully populated (no FILL placeholders):** Unlike bulk cloud finding generation (which uses FILL for user-provided context), code findings from repo scans must have all sections completed with evidence-backed content. Use the CodeFinding template sections with actual findings from the scan.
   - **Prioritise IaC/platform repos first:** When the user has IaC repos (Terraform/Pulumi/CloudFormation) or platform/shared module repos available, **strongly recommend scanning those first** before triaging cloud findings. Explain the value:
     - "Scanning your IaC/platform repos first will help me understand your security defaults, intended architecture, and existing controls. This makes cloud finding triage much more accurate - I'll know which controls are already baked into your platform layer."
@@ -231,8 +240,8 @@ This repository supports consistent security triage. The expected workflow is:
       3. Identify **countermeasures** (controls in one repo that mitigate risks in another)
       4. Identify **compounding issues** (weaknesses that chain across repos)
       5. Update finding scores and add cross-references using clickable markdown links under `## Compounding Findings` sections
-      6. Regenerate risk register: `python3 Scripts/risk_register.py`
-      7. Update architecture diagrams if cloud provider context is confirmed
+      6. **Synchronize diagrams:** Review cloud architecture diagrams (`Output/Summary/Cloud/Architecture_*.md`) and verify consistency with repo-specific diagrams. Check authentication flows, network boundaries, service relationships. Update cloud architecture if new information discovered. See `Agents/ArchitectureAgent.md` for synchronization guidance.
+      7. Regenerate risk register: `python3 Scripts/risk_register.py`
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
     - Prefer using the stdout-only helper to avoid guesswork: `python3 Scripts/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
