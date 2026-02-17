@@ -8,11 +8,34 @@ This agent provides the workflow, tools, and process for conducting security sca
 
 ## Repo Scan Workflow
 
-### Pre-Scan: Remote Sync Check (REQUIRED FIRST STEP)
+### Step 1: Context Discovery (DEFAULT FIRST STEP)
+
+**Purpose:** Understand the repository's purpose, technology stack, services, and architecture before running security scans. This provides essential context for interpreting findings.
+
+**When to run:** ALWAYS run this as the first step for new repositories. It populates foundational knowledge that informs all subsequent analysis.
+
+**How to run:** Invoke the ContextDiscoveryAgent (see `Agents/ContextDiscoveryAgent.md`) to:
+- Identify repo purpose and business function
+- Discover tech stack (languages, frameworks, runtime versions)
+- Map services and architecture
+- Identify key dependencies
+
+**Output files created:**
+- `Output/Knowledge/Repos.md` - Adds entry for this repository
+- `Output/Summary/Repos/<RepoName>.md` - Creates initial summary (use exact repo name, e.g., `fi_api.md` not `Repo_fi_api.md`)
+
+**After context discovery completes:** Ask user to select scan scope using ask_user tool:
+- Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
+- Default is "IaC + SCA" for discovering architecture/logic and detecting code flow bugs (auth, injection patterns)
+- SAST available but not default (more time-intensive, less actionable for initial triage)
+
+---
+
+### Step 2: Pre-Scan Remote Sync Check (REQUIRED BEFORE SCANNING)
 
 **Purpose:** Ensure we're scanning the latest code by checking for remote updates before analysis begins.
 
-**When to run:** ALWAYS run this before any scan type (full or incremental). This is the first step in the workflow.
+**When to run:** ALWAYS run this before any scan type (full or incremental). This runs after context discovery.
 
 #### Step 1: Check Remote Status
 ```bash
