@@ -30,6 +30,7 @@ from pathlib import Path
 import scan_findings_files as sff
 import scan_intake_files as sif
 import scan_knowledge_refinement as skr
+import list_repo_candidates as lrc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,8 +159,56 @@ def scan_intake_paths(
     print()
 
 
+def scan_repo_candidates(*, repos_root: str | None) -> None:
+    """List candidate repos under a repos-root (stdout-only)."""
+    print("== Repo candidates ==")
+
+    default_root = ROOT.parent
+    root = Path(repos_root).expanduser().resolve() if repos_root else default_root
+
+    print(f"repos_root: {root}")
+    print(f"workspace_repo_root: {ROOT}")
+    print()
+
+    if not root.is_dir():
+        print("ERROR: repos_root is not a directory")
+        print()
+        return
+
+    candidates: list[Path] = []
+    try:
+        for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith("."):
+                continue
+            if entry.resolve() == ROOT.resolve():
+                continue
+            if lrc._looks_like_repo(entry):
+                candidates.append(entry)
+    except OSError as ex:
+        print(f"ERROR: cannot list repos_root: {ex}")
+        print()
+        return
+
+    print(f"candidates: {len(candidates)}")
+    for p in candidates:
+        print(f"- {p.name} — {lrc.classify_repo(p.name)} — {p}")
+
+    print()
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Consolidated scan of Knowledge/, Findings/, and Intake/.")
+    parser.add_argument(
+        "--skip-repos",
+        action="store_true",
+        help="Skip repo-candidate listing (default: included).",
+    )
+    parser.add_argument(
+        "--repos-root",
+        default=None,
+        help="Root folder containing repositories for candidate listing (default: parent of this workspace repo).",
+    )
     parser.add_argument(
         "--skip-knowledge",
         action="store_true",
@@ -252,6 +301,9 @@ def main() -> int:
             include_hidden=args.include_hidden,
             absolute=args.absolute,
         )
+
+    if not args.skip_repos:
+        scan_repo_candidates(repos_root=args.repos_root)
 
     return 0
 

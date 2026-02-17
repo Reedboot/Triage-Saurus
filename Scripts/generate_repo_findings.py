@@ -75,7 +75,7 @@ def _extract_section(lines: list[str], header: str, limit: int) -> list[str]:
 
 
 def run_quick_scan(repo: Path) -> Scan:
-    cmd = [sys.executable, str(ROOT / "Skills" / "scan_repo_quick.py"), str(repo.resolve())]
+    cmd = [sys.executable, str(ROOT / "Scripts" / "scan_repo_quick.py"), str(repo.resolve())]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if p.returncode != 0:
         raise SystemExit(f"scan_repo_quick.py failed for {repo}:\n{p.stderr.strip()}")
