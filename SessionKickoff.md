@@ -7,7 +7,7 @@ This document provides the session initialization flow for Triage-Saurus. When t
 3. Check for outstanding refinement questions
 4. Present triage options to the user
 
-**Note:** This file contains only the kickoff flow and menu logic. All detailed operational rules (bulk processing, question formatting, repo scanning, knowledge recording, etc.) are in `Agents/Instructions.md`.
+**Note:** This file contains only the kickoff flow. For detailed navigation flows and menu structures, see `Templates/Workflows.md`. All detailed operational rules (bulk processing, question formatting, repo scanning, knowledge recording, etc.) are in `Agents/Instructions.md`.
 
 ## Helper Scripts
 
@@ -92,5 +92,6 @@ Targeted helpers (stdout-only):
 
 ## See Also
 - **Repo overview + workflow:** README.md
+- **Navigation flows and menus:** Templates/Workflows.md
 - **Canonical operating rules:** Agents/Instructions.md
 - **Agent discovery:** AGENTS.md
