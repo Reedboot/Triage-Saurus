@@ -55,28 +55,60 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - Continue with context discovery (Recommended)
 - Cancel and return to repository selection
 
-### Step 4: Context Discovery
-**Action:** Invoke ContextDiscoveryAgent
-- Creates/updates `Output/Knowledge/Repos.md`
-- Creates `Output/Summary/Repos/<RepoName>.md` with architecture diagram at top
-- **Multi-cloud detection:** Azure, AWS, GCP resources and services
-- **Kubernetes/AKS:** Service ingress/egress, Helm charts, service mesh routing, **Ingress resource definitions**
-- **Cross-service configs:** Detects when gateway/LB repos route to multiple services
-- **Dockerfile analysis:** Base images, exposed ports, environment variables
-- **CI/CD context:** Deployment targets, environments, security scans
-- **Mandatory ingress/egress discovery:** Critical for threat modeling
-- **APIM routing chains:** Detects complete routing: Internet → Gateway → Service → APIM API → Backend
-  - Scans app config files for APIM endpoint URLs (ApiManagerBaseUrl)
-  - Maps which services proxy to APIM vs direct access
-  - Documents APIM APIs, backend services, policies
-- **All compute platforms:** Discovers routing to ASE v3, APIM, AKS, Service Fabric
-- **Database schema detection:** Terraform databases, Dacpac, SQL scripts, EF migrations - identifies sensitive data (PII, financial)
-- **WAF protection analysis (CRITICAL):** Detects WAF mode (Detection vs Prevention), flags Detection mode on public services
-- **Cloud architecture diagrams:** If IaC detected, creates/updates `Output/Summary/Cloud/Architecture_<Provider>.md` with **multiple focused diagrams** (Ingress, Routing, Backend, Network) instead of one monolithic diagram
-- **Mermaid diagram links:** Add clickable links (with 🔗 visual indicator) to other scanned services/infrastructure for navigation
-- No security vulnerability scans at this stage (only context gathering)
+### Step 4: Phase 1 - Automated Context Discovery (~10 seconds)
+**Action:** Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
 
-### Step 5: Remote Sync Check
+**Detects automatically:**
+- Languages & frameworks (C#, F#, TypeScript, Python, Go, Java, Kotlin)
+- IaC & orchestration (Terraform, Bicep, Helm, Kustomize, Skaffold, Tilt, K8s manifests)
+- Container runtime (Dockerfile analysis: base images, ports, user, health checks, multi-stage builds)
+- Network topology (VNets, subnets, NSGs, private endpoints, peerings)
+- Hosting (App Service, AKS, Functions, Container Apps)
+- CI/CD (Azure Pipelines, GitHub Actions, GitLab CI)
+- API routes (MapGet/MapPost, [HttpGet], route mapping JSON files)
+- Authentication methods (JWT, OAuth, APIM keys, mTLS, Digital Signatures)
+- External dependencies (databases with auth method, storage, queues, monitoring, backend APIs via APIM)
+- Ingress patterns (App Gateway, Front Door from code & Terraform)
+- APIM routing (mock vs real backend routing)
+- Backend services (from HttpClient config and route mapping JSON files)
+
+**Output:** `Output/Summary/Repos/<RepoName>.md` with:
+- 🗺️ Architecture Diagram (infrastructure topology, colored borders, clean connections)
+- 📊 TL;DR (Phase 2 TODO markers for security review)
+- 🛡️ Security Observations (detected controls, Phase 2 guidance)
+- 🧭 Overview (purpose, hosting, dependencies, auth, container/network details)
+- 🚦 Traffic Flow (Phase 2 TODO with route mappings table)
+- Updates `Output/Knowledge/Repos.md` and `Output/Knowledge/<Provider>.md`
+
+### Step 5: Phase 2 - Manual Context Analysis
+**Action:** Launch ONE explore agent per repo
+**Purpose:** Complete Phase 2 TODO markers with deep code understanding
+- Trace middleware execution order (numbered steps)
+- Document routing logic (how backend selection works)
+- Explain business purpose and key files
+- Complete Traffic Flow section with full details
+- See `Agents/ContextDiscoveryAgent.md` for Phase 2 prompt template
+
+### Step 6: Phase 3 - Security Review (Manual, Using Gathered Context)
+**Action:** Perform qualitative security review using Phase 1 + Phase 2 context
+- Review authentication/authorization flows for bypass risks
+- Check IaC configurations (public exposure, weak encryption, missing controls)
+- Review routing logic and middleware for security gaps
+- Identify injection risks, insecure deserialization, secrets in code
+- **Invoke Dev Skeptic** - Review from developer perspective
+- **Invoke Platform Skeptic** - Review from platform perspective
+- Document findings in Security Observations section
+- Update TL;DR with final scores and skeptic reasoning
+- Note: This is qualitative code/config review, NOT automated vulnerability scanning
+
+### Step 7: Phase 4 - Cloud Architecture Update (If IaC Detected)
+**Action:** Launch ArchitectureAgent
+- Updates `Output/Summary/Cloud/Architecture_<Provider>.md`
+- Shows where this repo/service fits in overall cloud estate
+- Multiple focused diagrams (Ingress, Routing, Backend, Network)
+- Adds hyperlinks (🔗) between services for navigation
+
+### Step 8: Remote Sync Check
 **Action:** Check if local repo is in sync with remote
 - If up-to-date: Proceed to Step 6
 - If behind/diverged: Ask user whether to pull or scan current version
