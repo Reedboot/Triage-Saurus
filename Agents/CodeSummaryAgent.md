@@ -21,7 +21,6 @@
 - Include a short overall risk statement.
 - First section after the header must be a Mermaid diagram showing high-level
   key interactions of the resource.
-- **Diagram styling:** Use `flowchart TB` (top-bottom). Do NOT use `style fill` commands (theme compatibility). Use `<br/>` for line breaks, not `\n`.
 - Provide a prioritised list of actions with referenced findings.
 - Include a `## Findings` section listing findings for the resource in priority
   order, with severity emoji, label, and numeric score per entry (e.g.,
@@ -35,3 +34,4 @@
 
 ## Output Location
 - Write summaries under `Summary/Cloud/` for each distinct resource type.
+- **After creating/updating summaries:** Run `python3 Scripts/validate_markdown.py --path Summary/Cloud` to verify Mermaid syntax and ensure no `fill:` attributes.
