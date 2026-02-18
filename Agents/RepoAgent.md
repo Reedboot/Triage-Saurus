@@ -21,8 +21,9 @@ This agent provides the workflow, tools, and process for conducting security sca
 2. **Tech stack:** Languages, frameworks, dependencies (package.json, requirements.txt, *.csproj, go.mod, Dockerfile)
 3. **IaC files:** Find all *.tf, *.bicep, K8s YAML, ARM templates
 4. **Ingress points:** APIs, load balancers, APIM, public endpoints, Kubernetes Ingress
-5. **Databases:** Connection strings, schemas, migrations, Dacpac, EF, SQL scripts
-6. **Egress:** External API calls, third-party services
+5. **Traffic flow (MANDATORY):** Complete request path from entry to backend (ports, middleware, routing logic)
+6. **Databases:** Connection strings, schemas, migrations, Dacpac, EF, SQL scripts
+7. **Egress:** External API calls, third-party services
 
 See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep commands.
 
@@ -30,7 +31,18 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
 
 **Output files created:**
 - `Output/Knowledge/Repos.md` - Adds entry for this repository
-- `Output/Summary/Repos/<RepoName>.md` - Creates initial summary (use exact repo name, e.g., `my_api.md` not `Repo_my_api.md`)
+- `Output/Summary/Repos/<RepoName>.md` - Creates comprehensive repo summary with:
+  - 🗺️ Architecture Diagram (Mermaid) at the top
+  - Overall Score with progression (Security → Dev Skeptic → Platform Skeptic)
+  - 📊 TL;DR Executive Summary
+  - 🛡️ Security Observations (Confirmed Controls + Areas for Review)
+  - 🧭 Overview
+  - 🚦 Traffic Flow section (MANDATORY - Mermaid flowchart LR diagrams for sequential flows, colored borders)
+  - 🛡️ Security Review
+  - 🤔 Skeptic Reviews (Dev + Platform - MUST run even without deeper scans)
+  - 🤝 Collaboration
+  - 📚 Assumptions (ALL assumptions with evidence/impact/validation steps)
+  - Tech stack, infrastructure, dependencies, CI/CD, observability
 
 **After context discovery completes:** Ask user to select scan scope using ask_user tool:
 - Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
