@@ -84,17 +84,33 @@ Targeted helpers (stdout-only):
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
-   - **Phase 1 - Fast Context Discovery (<1 min):**
+   - **Phase 1 - Fast Context Discovery (~10 seconds per repo):**
      - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
-     - Script discovers: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
+     - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies
      - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
-       - 🗺️ Architecture Diagram (Mermaid) at the top
-       - 🚦 Traffic Flow section showing complete request path
+       - 🗺️ Architecture Diagram (Mermaid) - infrastructure topology with colored borders
+       - 📊 TL;DR - Executive summary with Phase 2 TODO markers
+       - 🛡️ Security Observations - Detected controls, Phase 2 guidance
+       - 🧭 Overview - Purpose, hosting, dependencies, auth, container/network details
+       - 🚦 Traffic Flow - Phase 2 TODO marker with detected hints and route mappings table
      - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
-     - Review the generated summary before proceeding to security scans
-   - **Phase 2 - Security Scanning (if requested):**
-     - Based on context, decide which scans to run (IaC/SCA/SAST/Secrets)
-     - Can use task agent for long-running scans or run directly
+     - Review the generated summary before proceeding
+   - **Phase 2 - Manual Context Analysis (~30-60 seconds per repo):**
+     - Launch ONE explore agent to complete Phase 2 TODO markers
+     - Agent traces middleware execution order, routing logic, business purpose
+     - Updates Traffic Flow section with complete details
+     - See Agents/ContextDiscoveryAgent.md for Phase 2 prompt template
+   - **Phase 3 - Security Review (manual, based on gathered context):**
+     - Use Phase 1 + Phase 2 context to perform qualitative security review
+     - Check auth flows, IaC configs, routing logic, error handling
+     - Invoke Dev Skeptic and Platform Skeptic for scoring
+     - Update TL;DR and Security Observations sections
+   - **Phase 4 - Cloud Architecture Update (if IaC detected):**
+     - Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`
+     - Shows where this repo/service fits in overall cloud estate
+   - **Optional - Automated Vulnerability Scanning (if requested):**
+     - SCA (dependency vulnerabilities), SAST (code scanning), Secrets, IaC misconfiguration scans
+     - These are separate from the security review above
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
 11. **Follow operational rules:**
