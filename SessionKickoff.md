@@ -27,18 +27,20 @@ Targeted helpers (stdout-only):
 ```text
 1. **Load instructions:** Read AGENTS.md and Agents/Instructions.md for operating rules.
 
-2. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
+2. **Request Output folder permission:** At the start of the session, ask user once to grant write access to the `Output/` folder. This covers all operations (audit logs, findings, knowledge, summaries). Do NOT ask again during the session.
 
-3. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
+3. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
+
+4. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Sample Findings/ for available triage items
 
-4. **Check for refinement questions:**
+5. **Check for refinement questions:**
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
    - If Knowledge/ is empty (0 knowledge files): treat as first run and say "🦖 Welcome to Triage-Saurus."
 
-5. **Present triage menu** using ask_user tool with selectable choices:
+6. **Present triage menu** using ask_user tool with selectable choices:
    - **Answer questions to build context** (if existing knowledge/findings exist)
    - **Copy/paste a single issue to triage**
    - **Provide a path under Intake/ to process in bulk**
@@ -46,7 +48,7 @@ Targeted helpers (stdout-only):
    - **Scan a sample repo**
    - **Import and triage the sample findings**
 
-6. **Handle bulk intake selection:**
+7. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
    - Verify folders are non-empty using `python3 Scripts/scan_intake_files.py <path>` before offering.
    - Common paths in this repo:
@@ -59,30 +61,28 @@ Targeted helpers (stdout-only):
    - If duplicates found: ask to proceed with new items only.
    - If no new items: stop and notify user.
 
-7. **Infer triage type:**
+8. **Infer triage type:**
    - If folder path implies scope (Intake/Cloud, Intake/Code), use that.
    - Otherwise, ask what to triage (Cloud / Code / Repo scan).
 
-8. **Cloud triage initialization:**
+9. **Cloud triage initialization:**
    - Infer provider from folder name or skim intake titles.
    - If provider strongly indicated, explain reasoning with 🤔 and confirm with ❓.
    - Choices: Azure / AWS / GCP / Don't know
    - See Agents/CloudContextAgent.md for targeted context questions.
    - Create/update: Output/Knowledge/<Provider>.md and Output/Summary/Cloud/Architecture_<Provider>.md
 
-9. **Repo scan initialization:**
+10. **Repo scan initialization:**
    - Check Output/Knowledge/Repos.md for known repo root path(s).
    - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
    - Ask user to confirm the repos root directory path.
+   - **Request repos folder access permission:** Before any repo operations, ask user once to grant read access to the repos directory (e.g., `/mnt/c/Repos`). This covers discovery and scanning. Do NOT ask again for individual repos during the session.
    - Discover available repos: `ls -1 <confirmed_repos_root_path>`
    - Present repos as selectable choices using ask_user tool:
      - List all individual repo names as choices
      - Add special choices like "Scan all terraform-* repos" or "Scan multiple repos (specify pattern)"
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
-   - **BEFORE CONTEXT DISCOVERY:**
-     - **Request folder access permission**: If this is the first time accessing the repo directory, ask user to grant folder access permission to avoid multiple parallel prompts.
-     - Use ask_user to confirm: "Ready to scan {repo_name}. This will access {repo_path}. Grant permission?"
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (<1 min):**
      - Run parallel explore agents to discover context (see Agents/ContextDiscoveryAgent.md for discovery targets)
@@ -97,7 +97,7 @@ Targeted helpers (stdout-only):
      - Can use task agent for long-running scans or run directly
    - See Agents/Instructions.md lines 118-240 for detailed repo scan rules.
 
-10. **Follow operational rules:**
+11. **Follow operational rules:**
    - Log ALL questions, answers, actions, and assumptions to the audit log (append-only)
    - Update audit Summary section at end of session
    - All detailed triage behavior is in Agents/Instructions.md
