@@ -80,6 +80,9 @@ Targeted helpers (stdout-only):
      - Add special choices like "Scan all terraform-* repos" or "Scan multiple repos (specify pattern)"
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
+   - **BEFORE CONTEXT DISCOVERY:**
+     - **Request folder access permission**: If this is the first time accessing the repo directory, ask user to grant folder access permission to avoid multiple parallel prompts.
+     - Use ask_user to confirm: "Ready to scan {repo_name}. This will access {repo_path}. Grant permission?"
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (<1 min):**
      - Run parallel explore agents to discover context (see Agents/ContextDiscoveryAgent.md for discovery targets)
