@@ -46,7 +46,16 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - Special patterns: "Scan all terraform-* repos", "Scan multiple repos (specify pattern)"
 - Allow freeform for custom repo names or patterns
 
-### Step 3: Context Discovery
+### Step 3: Pre-Discovery Folder Access
+**Prompt:** "Ready to scan {repo_name}. This will access {repo_path}. Grant permission to proceed?"
+
+**Purpose:** Request folder access permission ONCE before launching parallel agents to avoid multiple permission prompts.
+
+**Options:**
+- Continue with context discovery (Recommended)
+- Cancel and return to repository selection
+
+### Step 4: Context Discovery
 **Action:** Invoke ContextDiscoveryAgent
 - Creates/updates `Output/Knowledge/Repos.md`
 - Creates `Output/Summary/Repos/<RepoName>.md` with architecture diagram at top
@@ -67,13 +76,13 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - **Mermaid diagram links:** Add clickable links (with 🔗 visual indicator) to other scanned services/infrastructure for navigation
 - No security vulnerability scans at this stage (only context gathering)
 
-### Step 4: Remote Sync Check
+### Step 5: Remote Sync Check
 **Action:** Check if local repo is in sync with remote
-- If up-to-date: Proceed to Step 5
+- If up-to-date: Proceed to Step 6
 - If behind/diverged: Ask user whether to pull or scan current version
 - If no remote configured: Proceed with local scan
 
-### Step 5: Post-Context Discovery Menu
+### Step 6: Post-Context Discovery Menu
 **Prompt:** "Context discovery complete for {repo_name}. What would you like to do next?"
 
 **Options:**
