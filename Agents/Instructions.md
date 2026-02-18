@@ -207,7 +207,7 @@ This repository supports consistent security triage. The expected workflow is:
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
-  - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
+  - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `my_api.md` for repo `my_api`, not `Repo_my_api.md` or `Repo_MY_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
   - **After creating findings, automatically run skeptic reviews:** Once repo scan findings are created, immediately run both Dev and Platform skeptic reviews in parallel:
@@ -261,7 +261,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Do not ask for language/ecosystem up-front; infer **languages + frameworks** from repo contents (lockfiles, build files, manifests, imports) and record them in the repo summary.
   - **Extract repository purpose** from README files, package/project metadata, repo name patterns, or inferred from code structure/primary functions. Record in the repo summary under `## 🧭 Overview` and in `Output/Knowledge/Repos.md` where it provides reusable context. Example purposes: "Terraform platform modules for Azure PaaS", "API gateway service", "CI/CD pipeline definitions", "Shared authentication library".
   - **Repository knowledge structure:** 
-    - **Repo summary (CREATED FIRST):** Create `Output/Summary/Repos/<RepoName>.md` following `Templates/RepoFinding.md` structure as the FIRST step of any repo scan. This file tracks architecture diagram, languages/frameworks, security review, skeptic reviews, and recommendations. All subsequent findings should link back to this summary. Use the exact repo name as-is (e.g., `fi_api.md` for repo `fi_api`, not `Repo_fi_api.md` or `Repo_FI_API.md`).
+    - **Repo summary (CREATED FIRST):** Create `Output/Summary/Repos/<RepoName>.md` following `Templates/RepoFinding.md` structure as the FIRST step of any repo scan. This file tracks architecture diagram, languages/frameworks, security review, skeptic reviews, and recommendations. All subsequent findings should link back to this summary. Use the exact repo name as-is (e.g., `my_api.md` for repo `my_api`, not `Repo_my_api.md` or `Repo_MY_API.md`).
     - **Detailed knowledge:** Create `Output/Knowledge/<RepoName>_Repo.md` for tech stack, dependencies, and reusable context
     - **Index:** Update `Output/Knowledge/Repos.md` as an index/summary only
   - **Cloud architecture extraction (MANDATORY for repos with IaC or cloud services):** When a repo scan discovers cloud architecture context (Azure/AWS/GCP services, ingress paths, network patterns, authentication mechanisms), immediately create/update:
@@ -380,6 +380,9 @@ This repository supports consistent security triage. The expected workflow is:
   generate or update the provider architecture diagram under `Output/Summary/Cloud/` (e.g.,
   `Output/Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
   include any newly discovered services.
+  - **CRITICAL SCOPE RULE:** `Architecture_<Provider>.md` is **ALWAYS comprehensive platform-wide**, showing ALL discovered Azure/AWS/GCP services and infrastructure modules. It is **NEVER scoped to a single service or repo**.
+  - **UPDATE, don't replace:** If the architecture file already exists, **update it** to add newly discovered services/modules. Do not replace the entire file with single-service content.
+  - **Structure:** Include multiple focused diagrams (Ingress, Network, Data, Compute, Identity, IaC modules) rather than one monolithic diagram.
   - **Note:** This applies only to cloud findings and cloud-related knowledge. Code-only repo scans do NOT create `Output/Summary/Cloud/` files unless cloud architecture context (ingress paths, Azure/AWS/GCP services) is discovered during the scan.
   - This is a **standing rule throughout the session** (do not wait until session
     kickoff or the end of triage).
@@ -455,6 +458,29 @@ This repository supports consistent security triage. The expected workflow is:
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
   - `python3 Scripts/extract_finding_scores.py Output/Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
+
+## Mermaid diagram validation (MANDATORY)
+- **After creating or updating any file with Mermaid diagrams** (findings, summaries, architecture diagrams, repo summaries), **ALWAYS run:**
+  - `python3 Scripts/validate_markdown.py --path <path-to-file-or-directory>`
+  - This validates Mermaid syntax and ensures **no `fill:` attributes** (which break dark themes)
+- **Critical rule:** NEVER use `fill:#` in Mermaid style blocks. Use `stroke:` and `stroke-width:` instead.
+  - ❌ `style node fill:#ff6b6b,stroke:#c92a2a` → ✅ `style node stroke:#c92a2a,stroke-width:3px`
+- **Traffic Flow Standard (REQUIRED):** Use Mermaid `flowchart LR` diagrams for sequential traffic flows in repo summaries
+  - ✅ Visualize request paths, authentication flows, data flows as Mermaid diagrams
+  - ✅ Apply colored borders to show component types (security, network, identity, data)
+  - ✅ Simple fan-out patterns (e.g., "APIM → 7 backends") can remain text-based lists
+  - ❌ Long text arrow chains (`A → B → C → D → E → F`) are hard to scan - use Mermaid instead
+- **Colored borders (REQUIRED for traffic flows, RECOMMENDED elsewhere):**
+  - Security (red): `#ff6b6b` - Firewalls, WAF, auth services, security controls
+  - Network (blue): `#1971c2` - VNets, subnets, gateways, load balancers, routing
+  - Identity (orange): `#f59f00` - Key Vault, AAD, managed identities, secrets
+  - Data (teal): `#96f2d7` - Databases, storage accounts, data services
+  - Stroke width: 3px for critical components, 2px for secondary
+- **UTF-8 handling:** Emojis are acceptable in Mermaid diagrams (node labels AND subgraph labels)
+  - ✅ **ALWAYS use edit/create tools** for files with emojis or Unicode characters
+  - ❌ **NEVER use bash heredocs** (`cat << 'EOF'`) for UTF-8 content - causes Unicode corruption
+  - Example corruption: `🔗` becomes `��` when using heredocs
+- See `Agents/ArchitectureAgent.md` and `Agents/ContextDiscoveryAgent.md` for complete Mermaid styling rules.
 
 ## Utility scripts
 - **Clear session artifacts (destructive):**
