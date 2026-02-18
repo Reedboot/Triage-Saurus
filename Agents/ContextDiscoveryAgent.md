@@ -15,8 +15,9 @@ This agent performs **fast, non-security context discovery** of repositories to 
 2. Tech stack (languages, frameworks, dependencies)
 3. IaC files (Terraform, Bicep, K8s YAML)
 4. Ingress points (APIs, load balancers, public endpoints, APIM)
-5. Database connections (schemas, connection strings, migrations)
-6. Egress targets (external APIs, third-party services)
+5. **Traffic Flow (MANDATORY)** - Complete request path from entry to backend
+6. Database connections (schemas, connection strings, migrations)
+7. Egress targets (external APIs, third-party services)
 
 Each explore agent returns focused answers <300 words. Synthesize results into context document.
 
@@ -125,6 +126,93 @@ grep -r "ports:\|selector:\|targetPort:" --include="*.yaml" | head -30
   - APIM APIs called (if discoverable from code/config)
   - Subscription keys or authentication methods
 
+### Traffic Flow Discovery (MANDATORY - NEW)
+**Goal:** Document complete request path from entry point to backend, including all middleware and routing layers
+
+**Critical for:** Understanding attack surface, authentication points, and data flow
+
+**For Application Code:**
+```bash
+# Web server/application entry points
+grep -r "app.Run\|app.Listen\|http.ListenAndServe\|Kestrel\|Tomcat\|Uvicorn" --include="*.cs" --include="*.go" --include="*.py" --include="*.java" | head -10
+
+# Middleware pipeline (order matters!)
+grep -r "UseMiddleware\|app.use\|middleware.py\|Filter\|Interceptor" --include="*.cs" --include="*.js" --include="*.py" --include="*.java" | head -20
+
+# Authentication middleware
+grep -r "UseAuthentication\|UseAuthorization\|@RequiresAuth\|authenticate\|authorize" --include="*.cs" --include="*.py" --include="*.java" --include="*.js" | head -15
+
+# Request processing pipeline (ASP.NET Startup.cs, Express app.js, Django settings.py)
+grep -r "Configure\|ConfigureServices\|app = express\|MIDDLEWARE" --include="Startup.cs" --include="Program.cs" --include="*.js" --include="settings.py"
+
+# Routing configuration
+grep -r "MapControllers\|UseRouting\|UseEndpoints\|routes.MapRoute\|app.route" --include="*.cs" --include="*.js" --include="*.py" | head -15
+
+# Reverse proxy / forwarding logic
+grep -r "ProxyPass\|proxy_pass\|HttpClient.*Forward\|ReverseProxy" --include="*.conf" --include="*.cs" --include="*.go" | head -10
+```
+
+**For Load Balancer / Gateway Configuration:**
+```bash
+# Application Gateway backend pools (Azure)
+grep -r "backend_address_pool\|backend_http_settings" --include="*.tf" -A 5
+
+# ALB/NLB target groups (AWS)
+grep -r "aws_lb_target_group\|target_group_arn" --include="*.tf" -A 5
+
+# Nginx/HAProxy config
+grep -r "upstream\|backend\|server.*:.*;" --include="nginx.conf" --include="haproxy.cfg" | head -20
+
+# API Management policies (Azure APIM)
+grep -r "<inbound>\|<backend>\|<outbound>\|forward-request" --include="*.xml" --include="*.json" | head -15
+```
+
+**Capture in Traffic Flow section:**
+
+Follow the structure in Templates/RepoFinding.md exactly:
+
+1. **Request Path Summary:** One sentence with arrows (→) showing complete flow
+   - Example: "Client HTTPS → App Gateway (TLS termination) → Kestrel → Auth middleware → APIM → Backend services"
+
+2. **Components:**
+   - **Entry Point:** Load balancer/gateway/public IP with emoji 🛡️
+     - Include evidence (code/config snippet + file path)
+   - **Service Layer:** 
+     - Web server/runtime with emoji 🔒 (port, protocol)
+     - Middleware pipeline with emoji 🔐 - LIST IN EXECUTION ORDER with file paths:
+       1. Component 1 with purpose + evidence source
+       2. Component 2 with purpose + evidence source
+       3. Component 3 with purpose + evidence source
+     - Route mapping config with emoji 🗺️ + file path
+   - **Backend Gateway:** (if applicable) API Gateway/Service Mesh with emoji 📡
+   - **Backend Services:** List with appropriate emoji from Settings/Styling.md (💰 💳 📊 🔄 etc)
+
+3. **Key Characteristics:**
+   - **Port(s):** All ports with protocol and context (public/internal)
+   - **Protocols:** Show protocol at each hop (Client → Gateway, Gateway → App, etc)
+   - **Authentication:** Method, validation point, resilience patterns (circuit breakers/retries)
+   - **Routing Logic:** How routing is configured with code snippet evidence
+     - Include header enrichment/transformation with code snippets
+   - **State:** Stateless/stateful, caching, persistence details
+
+4. **Route Mappings:** Table of incoming paths → destinations → purpose
+
+5. **External Dependencies:** List each with:
+   - Purpose, protocol, endpoint, resilience patterns
+   - External API call
+
+**Example Traffic Flow Output:**
+```
+Client → Azure App Gateway (HTTPS:443) 
+      → Kestrel (HTTP:80)
+      → [TokenExtractionMiddleware]
+      → [AuthenticationMiddleware → FI Auth Service (via APIM)]
+      → [InstitutionIdMiddleware]
+      → [RouteMappingMiddleware → ApiManagerRouteMappings.json]
+      → Azure APIM (HTTPS)
+      → Backend Services (Accounts, Ledger, BACS, etc.)
+```
+
 ### Egress Discovery (MANDATORY - CRITICAL FOR THREAT MODELING)
 **Goal:** Identify all external connections and data flows
 
@@ -216,6 +304,31 @@ grep -r "kind: NetworkPolicy" --include="*.yaml" -A 20 | grep -E "egress:|to:" |
 find . -name "*.tf" -not -path "*/\.*" | head -20
 grep -r "resource \"" --include="*.tf" | grep -oP 'resource "\K[^"]+' | sort -u
 
+# CRITICAL: Public vs Private Exposure (Check Variables AND Environment Overrides)
+# AKS API Server exposure
+grep -r "private_cluster_enabled\|api_server_authorized_ip_ranges\|private_dns_zone_id" --include="*.tf" -A 3 | head -30
+# Check variable defaults
+grep -A 5 "variable \"private_cluster_enabled\"" --include="*.tf"
+# Check hiera/config overrides (CRITICAL: Default may be private but overridden to public)
+grep -r "private_cluster_enabled:" --include="*.yaml" --include="*.yml" | head -20
+
+# App Gateway / Load Balancer public vs private
+grep -r "sku.*=.*\"WAF\|frontend_ip_configuration\|public_ip_address_id" --include="*.tf" -A 5 | head -30
+grep -r "private_ip_address_allocation\|subnet_id.*frontend" --include="*.tf" -A 3 | head -20
+
+# AKS Node Pools - Check if nodes have public IPs
+grep -r "enable_node_public_ip\|node_public_ip_enabled\|node_public_ip_prefix" --include="*.tf" -A 2 | head -20
+
+# Kubernetes Services - Public LoadBalancer exposure
+grep -r "type:.*LoadBalancer\|service.beta.kubernetes.io/azure-load-balancer-internal" --include="*.yaml" -A 5 | head -30
+grep -r "service.*annotations\|loadBalancerIP\|externalTrafficPolicy" --include="*.yaml" -A 3 | head -20
+
+# Storage accounts - Public blob access
+grep -r "allow_blob_public_access\|public_network_access_enabled\|network_rules" --include="*.tf" -A 5 | head -30
+
+# SQL/Database - Public endpoint exposure
+grep -r "public_network_access_enabled\|firewall_rule.*0.0.0.0" --include="*.tf" -A 3 | head -20
+
 # WAF policies and modes (CRITICAL: Check if in Detection vs Prevention)
 grep -r "azurerm_web_application_firewall_policy\|azurerm_application_gateway" --include="*.tf" -A 10 | grep -E "mode|policy_settings|firewall_mode" | head -30
 grep -ri "mode.*=.*\"Detection\"\|mode.*=.*\"Alert\"\|policy_settings.*Prevention" --include="*.tf" --include="*.yaml" --include="*.json"
@@ -236,12 +349,34 @@ find . -name "Pulumi.yaml"
 # Kubernetes/Helm
 find . -name "Chart.yaml" -o -path "*/k8s/*.yaml"
 
-# Configuration data (Hiera, Helm values, etc.)
+# Configuration data (Hiera, Helm values, etc.) - CRITICAL FOR OVERRIDES
 find . -path "*/hiera/data/*.yaml" -o -path "*/values*.yaml" -o -path "*/config/*.yaml" | head -20
+# Check environment-specific overrides
+find . -path "*/hiera-infrastructure-shared/data/*.yaml" -o -path "*/environments/*.yaml" | head -20
 
 # API Management / API Gateway Terraform resources (CRITICAL)
 grep -r "azurerm_api_management\|aws_api_gateway\|google_api_gateway" --include="*.tf" | head -20
 ```
+
+**CRITICAL: Variable Defaults vs Environment Overrides**
+When assessing privacy/security controls, ALWAYS check BOTH:
+1. **Variable defaults** in `variable.tf` or `variables.tf`
+2. **Environment-specific overrides** in:
+   - Hiera data files (`hiera/data/*.yaml`, `hiera-infrastructure-shared/data/global.yaml`)
+   - Helm values files (`values-prod.yaml`, `values-test.yaml`)
+   - Environment config files (`config/prod.yaml`, `config/test.yaml`)
+   - Terraform tfvars (`prod.tfvars`, `test.tfvars`)
+
+**Example findings to document:**
+- ✅ **ALWAYS PRIVATE:** Variable default is private AND no overrides found making it public
+- ⚠️ **CONDITIONALLY PUBLIC:** Variable default is private BUT `global.yaml` sets it to public (test/preview environments)
+- ❌ **PUBLIC BY DEFAULT:** Variable default is public (requires explicit override to be private)
+
+**When documenting exposure:**
+- DON'T say "Private cluster support" (ambiguous - just means it CAN be private)
+- DO say "Private cluster by default, but global.yaml overrides to public for test/preview environments"
+- DO check if production environments override back to private
+- DO note which environments are public vs private
 
 **For API Management / API Gateway specific discovery:**
 ```bash
@@ -324,7 +459,7 @@ grep -r "host:\|destination:\|service:\|port:" --include="*.yaml" -A 3 | head -3
   - **Operations:** Key operations per API (GET/POST/PUT paths)
 - **Gateway → APIM → Backend routing chains:** For App Gateway repos with APIM backends, trace:
   - Public hostname → Backend pool name → Service → APIM API called → Final backend service
-  - Example: `prod-institution-api.cbinnovation.uk` → `fiapi` pool → fi-api (ASE v3) → calls APIM `fi_authentication` API → routes to internal services
+  - Example: `prod-institution-api.example.com` → `myapi` pool → my-api (ASE v3) → calls APIM `my_authentication` API → routes to internal services
   - Document services that proxy TO APIM vs services accessed directly
   - Check app config files (appsettings.json, web.config) for APIM URLs like `ApiManagerBaseUrl`
 - **Gateway → AKS routing:** If backend pools reference AKS/Kubernetes services, document:
@@ -598,7 +733,7 @@ Use template: `Templates/RepoKnowledge.md`
 ```mermaid
 flowchart TB
     Internet[🌐 Internet] -->|HTTPS| AGW[🔗 Application Gateway]
-    AGW -->|Backend: fiapi| App[🔗 fi-api<br/>ASE v3]
+    AGW -->|Backend: myapi| App[🔗 my-api<br/>ASE v3]
     App -->|🔒 Calls| APIM[🔗 API Management]
     APIM -->|Routes to| Backend[🔗 Backend Services]
     App -->|🔒| KV[Key Vault]
@@ -639,7 +774,7 @@ flowchart TB
 ### WAF Policies & Protection Status
 | Policy Name | Mode | OWASP CRS | Protected Services | Risk Level |
 |-------------|------|-----------|-------------------|------------|
-| institution_api | 🔴 Detection | 3.2 | fi-api (backend: fiapi) | 🔴 CRITICAL - Not blocking attacks |
+| institution_api | 🔴 Detection | 3.2 | my-api (backend: myapi) | 🔴 CRITICAL - Not blocking attacks |
 | public | ✅ Prevention | 3.2 | APIM (backend: apimanagementpublic) | ✅ Active protection |
 | portals | ✅ Prevention | 3.2 | 3 Institution Portals | ✅ Active protection |
 | auth | ✅ Prevention | 3.2 | STS, TOTP, Auth Portal | ✅ Active protection |
@@ -650,7 +785,7 @@ flowchart TB
 - 🔴 **Detection/Alert Mode:** Only logs threats, does NOT block (testing/monitoring only)
 
 **CRITICAL FINDINGS:**
-- ⚠️ **fi-api (public-facing):** WAF in Detection mode - NOT blocking SQL injection, XSS, etc.
+- ⚠️ **my-api (public-facing):** WAF in Detection mode - NOT blocking SQL injection, XSS, etc.
 - ⚠️ **Backstage:** WAF in Detection mode - Developer portal exposed without active protection
 
 **Managed Rule Sets:**
@@ -750,7 +885,7 @@ flowchart TB
 
 | Public Hostname | App Gateway Pool | Service | APIM API | Final Backend |
 |-----------------|------------------|---------|----------|---------------|
-| prod-institution-api-uksouth.cbinnovation.uk | fiapi | fi-api (ASE v3) | fi_authentication | fi-api-bacs, fi-api-accounts, ledger-external |
+| prod-institution-api-uksouth.example.com | myapi | my-api (ASE v3) | my_authentication | my-api-bacs, my-api-accounts, ledger-external |
 | apimanagement-prod.cbinnovation.uk | apimanagementpublic | API Management | thetaray-callbacks, eventgrid-bridge | psd2-api.internal |
 | psd2-bankconnect-prod.private.cbinnovation.uk | apimanagement | API Management | psd2-bankconnect-api | psd2-bankconnect-api.internal |
 | marqeta-prod.cbinnovation.uk | apimanagement | API Management | cards-marqeta | Marqeta API (external) |
@@ -758,7 +893,7 @@ flowchart TB
 | simgreen-schemesimulator.cbinnovation.uk | schemesimulator | Service Fabric | N/A | Scheme Simulator Web/MT/MX |
 
 **Key Insights:**
-- **fi-api** acts as reverse proxy: receives requests from Internet but forwards to APIM for authentication/routing
+- **my-api** acts as reverse proxy: receives requests from Internet but forwards to APIM for authentication/routing
 - **Direct APIM access** via apimanagementpublic pool for external webhooks/callbacks
 - **Private APIM access** for PSD2 BankConnect (internal-only, .private.cbinnovation.uk domain)
 - **Service Fabric** and **AKS** accessed directly without APIM layer
@@ -781,7 +916,7 @@ flowchart TB
 - **Activity Level:** X commits in last 3 months
 - **Primary Contributors:** <name1>, <name2>, <name3>
 ```
-    Users[Users/Internet] --> App[App Service: fi_api]
+    Users[Users/Internet] --> App[App Service: my_api]
     App --> KV[Key Vault: Secrets]
     App --> DB[SQL Database]
     App --> SB[Service Bus: Orders]
@@ -844,6 +979,35 @@ flowchart TB
 - ✅ **ALLOWED:** `stroke:#xxxxxx,stroke-width:3px` (border styling only)
 - ✅ **ALLOWED:** Emojis for visual distinction: 🔴 ⚠️ ✅ 🔒 🌐
 - ✅ **ALLOWED:** `stroke-dasharray: 5 5` for assumed/unconfirmed items
+
+**🚨 NEW STANDARD: Traffic Flow Diagrams 🚨**
+- ✅ **REQUIRED:** Use Mermaid `flowchart LR` diagrams for sequential traffic flows
+- ✅ **REQUIRED:** Apply colored borders to components (security, network, identity)
+- ✅ **ALLOWED:** Simple text-based lists for basic fan-out patterns (e.g., APIM → backends)
+- ❌ **DISCOURAGED:** Long text-based arrow chains (hard to scan)
+
+**Traffic Flow Best Practices:**
+```mermaid
+flowchart LR
+    Client[External Client] --> Gateway[API Gateway<br/>TLS Termination]
+    Gateway --> Auth[Auth Service<br/>JWT Validation]
+    Auth --> Backend[Backend API]
+    
+    style Gateway stroke:#1971c2,stroke-width:2px
+    style Auth stroke:#ff6b6b,stroke-width:3px
+```
+
+**Recommended colored borders (visual hierarchy):**
+- **Security** (red): `style Security stroke:#ff6b6b,stroke-width:3px` - Firewalls, WAF, auth services, security controls
+- **Network** (blue): `style Network stroke:#1971c2,stroke-width:2px` - VNets, subnets, gateways, load balancers, routing
+- **Identity/Secrets** (orange): `style Identity stroke:#f59f00,stroke-width:2px` - Key Vault, AAD, managed identities
+- **Platform/Core** (orange bold): `style Platform stroke:#f59f00,stroke-width:3px` - Critical infrastructure
+- **Data** (teal): `style Data stroke:#96f2d7,stroke-width:3px` - Databases, storage accounts, data services
+- **Assumptions** (gray dashed): `style Assumed stroke:#999,stroke-dasharray:5 5` - Unconfirmed components
+
+**Stroke width:**
+- `stroke-width:3px` - Critical/primary components
+- `stroke-width:2px` - Secondary/supporting components
 
 **🚨 CRITICAL: Mermaid Node Syntax Rules 🚨**
 - ❌ **FORBIDDEN:** `Node[/path/with/slashes]` (interpreted as trapezoid shape, causes parse errors)
@@ -988,7 +1152,7 @@ Create or update `Output/Knowledge/<Provider>.md` with:
 **Add to `## Confirmed` section:**
 ```markdown
 ### Services in Use (from <RepoName>)
-- **App Service:** fi_api (ASE v3, VNet integrated)
+- **App Service:** my_api (ASE v3, VNet integrated)
 - **Key Vault:** <name> (secrets, certificates)
 - **SQL Database:** <name> (<tier>)
 - **Service Bus:** <namespace> (queues: orders, payments)
@@ -1120,7 +1284,7 @@ flowchart TB
   - **Monitoring:** Log Analytics, Application Insights, Dynatrace, ...
 
 ## Repositories Contributing to This Architecture
-- **fi_api** - API Gateway (reverse proxy)
+- **my_api** - API Gateway (reverse proxy)
 - **terraform-aks** - Kubernetes infrastructure
 - **terraform-service_fabric_cluster** - Service Fabric clusters (schesim, shared, fps)
 - **terraform-app_gateway** - Application Gateway with routing to ASE/APIM/AKS/SF
@@ -1139,7 +1303,7 @@ flowchart TB
 ## Repository Inventory
 
 ### Application Repos
-- **fi_api** - Financial Institution API (.NET 8, Azure App Service ASE)
+- **my_api** - My Institution API (.NET 8, Azure App Service ASE)
 - **accounts** - Account Management Service (.NET 8, Azure App Service)
 
 ### Infrastructure Repos
@@ -1260,11 +1424,13 @@ Would you like to run security scans on these repos?
 **Discovery is complete when:**
 1. Summary file created at `Summary/Repos/<name>.md`
 2. Knowledge files updated (services added)
-3. Mermaid diagram renders correctly (no syntax errors, no fill colors)
-4. **Pre-flight check passed:** Verified no `fill:` attributes in style blocks
-5. **No CVEs mentioned:** Only dependency versions listed, not vulnerabilities
-6. Audit log updated with timing
-7. User can make informed scan scope decision
+3. **Architecture diagram updated:** If cloud services were discovered, update `Output/Summary/Cloud/Architecture_<Provider>.md` to include the newly discovered services/infrastructure (UPDATE existing file, don't replace with single-service content)
+4. Mermaid diagram renders correctly (no syntax errors, no fill colors)
+5. **Pre-flight check passed:** Verified no `fill:` attributes in style blocks
+6. **No CVEs mentioned:** Only dependency versions listed, not vulnerabilities
+7. **Validation script run:** Execute `python3 Scripts/validate_markdown.py --path Output/Summary/Repos/<name>.md` to verify Mermaid syntax
+8. Audit log updated with timing
+9. User can make informed scan scope decision
 
 ## Pre-Flight Checklist (Before Saving Summary)
 
@@ -1278,9 +1444,14 @@ Run this mental checklist on EVERY Mermaid diagram:
 5. ✅ Verify paths in labels have context (HTTP method, descriptor, or line break)
 6. ✅ Check arrow labels have no curly braces `{}`, quotes `"`, or brackets `[]`
 7. ✅ Verify clickable links use relative paths (`../Repos/` or `#section`)
-8. ✅ Confirm emojis used for visual distinction instead of colors
+8. ✅ Emojis are acceptable for visual distinction (node labels AND subgraph labels)
 
 **If any check fails, FIX IT before proceeding.**
+
+**🚨 CRITICAL: File Creation for UTF-8 Content**
+- ✅ **ALWAYS use create/edit tools** when creating files with emojis or Unicode
+- ❌ **NEVER use bash heredocs** (`cat << 'EOF'`) for UTF-8 content
+- **Why:** Heredocs cause Unicode corruption (e.g., `🔗` becomes `��`)
 
 ## Anti-Patterns (Don't Do This)
 
@@ -1292,6 +1463,7 @@ Run this mental checklist on EVERY Mermaid diagram:
 ❌ **Don't create findings** - Only summaries and knowledge
 ❌ **Don't guess** - Mark unclear items as "Unknown"
 ❌ **🚨 NEVER use `fill:` in Mermaid styles** - Breaks dark themes (stroke-only styling)
+❌ **🚨 NEVER use bash heredocs for UTF-8 files** - Use create/edit tools to preserve Unicode
 
 **Example - CORRECT tech stack discovery:**
 ```markdown
