@@ -17,6 +17,11 @@ This repository supports consistent security triage. The expected workflow is:
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
   - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
+- **Clear session trigger:** if the user types `clearsession` (case-insensitive), treat it as "run the clear session script".
+  - First run dry-run: `python3 Scripts/clear_session.py` to show what will be deleted
+  - Ask user: "This will delete the listed session artifacts (findings, knowledge, audit logs, summaries). Proceed?"
+  - If confirmed, run: `python3 Scripts/clear_session.py --yes`
+  - This clears all Output/ artifacts (Findings, Knowledge, Summary, Audit) and sample-staged Intake/Sample/ content while preserving Templates/ and user Intake/ files.
     - `python3 Scripts/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
   - **Check for draft findings requiring validation:**
