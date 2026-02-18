@@ -6,6 +6,17 @@
 - **Focus:** Strategic view showing major services, network boundaries, trust boundaries, key data flows, and **complete routing chains** from Internet to backends.
 - **Output:** Multiple focused Mermaid diagrams in provider-specific summary files.
 
+**🚨 CRITICAL SCOPE RULE:**
+- `Architecture_<Provider>.md` (e.g., `Architecture_Azure.md`, `Architecture_AWS.md`) is **ALWAYS comprehensive and platform-wide**
+- Shows **ALL discovered services, infrastructure modules, and architecture patterns** for that cloud provider
+- Is **NEVER scoped to a single service, repo, or application**
+- When new services/repos are scanned, **UPDATE the existing file** to add them - do not replace with single-service content
+- Structure: Multiple focused diagrams (Overview, Ingress, Network, Data, Compute, Identity, IaC) rather than one monolithic diagram
+
+**Scope Examples:**
+- ✅ **CORRECT:** `Architecture_Azure.md` contains diagrams showing AKS, App Services, Storage, SQL, Cosmos DB, Key Vault, networking, firewall, Service Fabric, all terraform modules, etc.
+- ❌ **WRONG:** `Architecture_Azure.md` only shows one service like "my_api" - this loses the platform view and violates the comprehensive scope requirement
+
 ## Diagram Scope & Detail Level
 
 **Use MULTIPLE FOCUSED DIAGRAMS for clarity - one diagram per architectural concern.**
@@ -18,7 +29,7 @@
 
 **CRITICAL for API Management Routing Diagram:**
 - Document **complete routing chains:** Public hostname → App Gateway backend pool → Service → APIM API → Final backend
-- Show which services proxy TO APIM (e.g., fi-api forwards to APIM) vs direct APIM access
+- Show which services proxy TO APIM (e.g., my-api forwards to APIM) vs direct APIM access
 - Include APIM API names, path patterns, and backend service mappings
 - Distinguish external vs internal backends (e.g., Marqeta external, psd2-api.internal)
 
@@ -53,7 +64,7 @@
 ```markdown
 ## Notes
 - **Detailed service diagrams:** See individual repo summaries in `Output/Summary/Repos/` for:
-  - `fi_api.md` - FI API service flow and middleware pipeline
+  - `my_api.md` - My API service flow and middleware pipeline
   - `payment_service.md` - Payment processing architecture
   - `terraform-modules.md` - Platform infrastructure patterns
 - **Assumptions:** Storage accounts assumed to use private endpoints (not confirmed)
@@ -67,8 +78,8 @@
 - Draw diagrams **from the internet inwards** (request flow / access paths).
 - Prefer **top-down** layout for readability on reviews (`flowchart TB`).
 - **Line breaks in node labels:** Use `<br/>` not `\n` for proper rendering.
-- **Diagram key:** Always include a markdown key above the diagram: `**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed`
-- **Label egress flows:** Use emojis on arrows (🔒 for internal, 🌐 for external)
+- **Diagram key:** Always include a markdown key above the diagram using standard emoji from Settings/Styling.md: `**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed`
+- **Label egress flows:** Use standard emoji on arrows (🔒 for internal, 🌐 for external)
 - **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
 - **Confirmed vs assumed:**
   - Default: include **confirmed services only** on the diagram.
@@ -91,13 +102,19 @@
     4. **Network Topology** - Hub-spoke, VNet peering, VPC architecture, egress patterns
   - Each diagram section includes:
     - **H2 header with emoji:** `## 🗺️ Ingress Flow (Internet → Services)`
-    - **Key:** Emoji legend for the diagram
+    - **Key:** Emoji legend using standard emoji from Settings/Styling.md
     - **Description:** 1-2 sentences explaining what the diagram shows
     - **Mermaid diagram:** Focused on one architectural aspect
     - **Components list:** Brief bullet points explaining key elements
   - **Notes section** at end for assumptions, gaps, references to detailed repo diagrams
-- **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and the emoji key from `Settings/Styling.md`.
+- **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and standard emoji from Settings/Styling.md.
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
+- **Colored borders (RECOMMENDED):** Use colored stroke styling to visually distinguish component types:
+  - **Security components** (red): `style Security stroke:#ff6b6b,stroke-width:3px` - Firewalls, WAF, DDoS, security groups
+  - **Network components** (blue): `style Network stroke:#1971c2,stroke-width:2px` - VNets, subnets, routing, load balancers
+  - **Identity/secrets** (orange): `style Identity stroke:#f59f00,stroke-width:2px` - Key Vault, managed identities, AAD, secrets
+  - **Platform/core** (orange bold): `style Platform stroke:#f59f00,stroke-width:3px` - Critical infrastructure, hub resources
+  - Use `stroke-width:3px` for critical/primary components, `stroke-width:2px` for secondary
 - **Mermaid styling for confirmed components:** use the Mermaid default (solid)
   or explicitly set it, e.g.
   ```mermaid
@@ -173,19 +190,19 @@ flowchart TB
 ```mermaid
 flowchart TB
     Internet[🌐 Internet] -->|HTTPS| AGW[Application Gateway]
-    AGW -->|Backend: fiapi| FIAPI[fi-api<br/>ASE v3]
+    AGW -->|Backend: myapi| MYAPI[my-api<br/>ASE v3]
     AGW -->|Backend: backstage| AKS[AKS]
     
-    FIAPI -->|Calls| APIM[API Management]
+    MYAPI -->|Calls| APIM[API Management]
     APIM -->|Routes to| PSD2[psd2-api]
-    APIM -->|Routes to| BACS[fi-api-bacs]
+    APIM -->|Routes to| BACS[my-api-bacs]
     
     click AGW "../Repos/terraform-app_gateway.md" "View App Gateway config"
-    click FIAPI "../Repos/fi_api.md" "View fi-api service"
+    click MYAPI "../Repos/my_api.md" "View my-api service"
     click AKS "../Repos/terraform-aks.md" "View AKS cluster"
     click APIM "#-api-management-routing" "View APIM routing section"
     click PSD2 "../Repos/psd2-api.md" "View PSD2 API service"
-    click BACS "../Repos/fi-api-bacs.md" "View BACS service"
+    click BACS "../Repos/my-api-bacs.md" "View BACS service"
 ```
 
 **Linking Rules:**
@@ -235,7 +252,7 @@ flowchart TB
 ## Audit Log Entry
 ### HH:MM - Architecture Diagram Updated
 - **Action:** Updated Architecture_Azure.md
-- **Cross-checked:** fi_api.md, payment_service.md
+- **Cross-checked:** my_api.md, payment_service.md
 - **Consistency verified:** Authentication flows (JWT + digital signature), network ingress (public App Service), APIM positioning (backend routing)
 - **Conflicts resolved:** None
 ```
@@ -258,7 +275,7 @@ flowchart TB
   
   subgraph Frontend Tier
     apim[🔌 API Management]
-    appservices[⚙️ App Services x3<br/>fi_api, payments, portal]
+    appservices[⚙️ App Services x3<br/>my_api, payments, portal]
   end
   
   subgraph Backend Tier
@@ -294,7 +311,7 @@ flowchart TB
 
 ## Detailed Service Diagrams
 For in-depth service flows and middleware pipelines, see:
-- **FI API:** `Output/Summary/Repos/fi_api.md` - Request flow, authentication, middleware pipeline
+- **My API:** `Output/Summary/Repos/my_api.md` - Request flow, authentication, middleware pipeline
 - **Payment Service:** `Output/Summary/Repos/payment_service.md` - Transaction processing architecture
 - **Terraform Modules:** `Output/Summary/Repos/terraform-modules.md` - Platform infrastructure patterns
 
@@ -317,14 +334,33 @@ Run this mental checklist on EVERY Mermaid diagram:
 6. ✅ Verify paths have context (HTTP method, descriptor, or line break)
 7. ✅ Check arrow labels have no curly braces `{}`, quotes `"`, or brackets `[]`
 8. ✅ Verify clickable links use relative paths (`../Repos/` or `#section`)
-9. ✅ Confirm emojis used for visual distinction instead of fill colors
+9. ✅ Emojis are acceptable for visual distinction (node labels AND subgraph labels)
 10. ✅ Cross-check with related repo summaries for consistency
 
 **If any check fails, FIX IT before saving the file.**
+
+**After saving, ALWAYS run validation:**
+```bash
+python3 Scripts/validate_markdown.py --path <path-to-file>
+```
+This ensures no `fill:` attributes slipped through and Mermaid syntax is valid.
+
+**🚨 CRITICAL: File Creation for UTF-8 Content**
+- ✅ **ALWAYS use edit/create tools** when creating files with emojis or Unicode
+- ❌ **NEVER use bash heredocs** (`cat << 'EOF'` or `cat > file << 'EOF'`) for UTF-8 content
+- **Why:** Heredocs cause Unicode corruption (e.g., `🔗` becomes `��`)
+- **Safe workflow:** Use `create` tool for new files, `edit` tool for updates
 
 **Common mistakes to avoid:**
 - ❌ `style node fill:#ff6b6b,stroke:#c92a2a` → ✅ `style node stroke:#c92a2a,stroke-width:3px`
 - ❌ `style node fill:#4dabf7` → ✅ `style node stroke:#1971c2,stroke-width:2px`
 - ❌ `subgraph "Services"` → ✅ `subgraph Services` or `subgraph S["Services"]`
 - ❌ `Node[/api/health]` → ✅ `Node[GET /api/health]`
-- ❌ Any use of `fill:` attribute → ✅ Remove entirely, use stroke or emoji instead
+- ❌ Any use of `fill:` attribute → ✅ Remove entirely, use stroke styling instead
+
+**Good patterns (colored borders for visual hierarchy):**
+- ✅ Security: `style Security stroke:#ff6b6b,stroke-width:3px` (red, bold)
+- ✅ Network: `style Network stroke:#1971c2,stroke-width:2px` (blue)
+- ✅ Identity: `style Identity stroke:#f59f00,stroke-width:2px` (orange)
+- ✅ Platform: `style Platform stroke:#f59f00,stroke-width:3px` (orange, bold)
+- ✅ Assumptions: `style Assumed stroke:#999,stroke-dasharray:5 5` (gray, dashed)
