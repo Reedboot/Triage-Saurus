@@ -83,8 +83,10 @@ Targeted helpers (stdout-only):
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (<1 min):**
      - Run parallel explore agents to discover context (see Agents/ContextDiscoveryAgent.md for discovery targets)
-     - Use 4-6 parallel explore agents for: purpose/README, tech stack, IaC files, ingress points, databases, architecture
-     - Create `Output/Summary/Repos/<RepoName>.md` with discovered context
+     - Use 4-6 parallel explore agents for: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
+     - Create `Output/Summary/Repos/<RepoName>.md` with discovered context including:
+       - 🗺️ Architecture Diagram (Mermaid) at the top
+       - 🚦 Traffic Flow section showing complete request path
      - Update `Output/Knowledge/Repos.md` with repository entry
      - Generate architecture diagram with findings
    - **Phase 2 - Security Scanning (if requested):**
