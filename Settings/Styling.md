@@ -68,21 +68,87 @@ those tools are added to the repo.
   For cloud findings, use 🛠️ for `Dev Review` and 🏗️ for `Platform Review`.
 - **Mermaid emoji:** Emojis are allowed in Mermaid diagrams if they do not break
   rendering. Use the following emoji consistently:
-  - 🛡️ Security boundary/control
+  
+  **Infrastructure & Security:**
+  - 🛡️ Security boundary/control/gateway
   - 🔐 Identity or authentication
-  - 🗄️ Data store
-  - 🧩 Service or component
-  - 🌐 Internet/public edge
-  - 🧑‍💻 User/operator
+  - 🔒 Internal/private component (VNet, private endpoint)
+  - 🌐 Internet/public edge/external
+  - 🚦 Traffic flow/routing/reverse proxy
+  
+  **Services & Components:**
+  - 🗄️ Data store (database, storage)
+  - 🧩 Service or component (generic)
+  - 📡 API Gateway/API Management
   - ⚙️ Automation or pipeline
-  - 📈 Monitoring/alerts
+  - 🧑‍💻 User/operator
+  
+  **Monitoring & Observability:**
+  - 📈 Monitoring/alerts/telemetry
+  - 📊 Analytics/metrics/dashboards
+  - 📋 Logging
+  
+  **Service Types (when specificity helps):**
+  - 💰 Financial/accounts services
+  - 💳 Payment services
+  - 🔄 Synchronization/orchestration
+  - ⚡ Real-time/streaming services
+  - 💾 Storage/blob services
+  
+  **Flow & State:**
+  - ✅ Success/valid/approved
+  - ❌ Failure/invalid/rejected
+  - ⚠️ Warning/caution
+  - ⛔ Blocked/forbidden
+  - 🎯 Target/destination/backend
 - **Mermaid colors (theme-aware):** **Do not use `style fill`** in Mermaid diagrams.
   Background fill colors (e.g., `fill:#90EE90`, `fill:#FFB6C1`) break on dark themes.
   Use theme-neutral alternatives:
   - **Positive/secure components:** Use thicker borders (`stroke-width:3px`)
   - **Risk/exposure components:** Use dotted/dashed borders (`stroke-dasharray: 5 5`)
-  - **Emphasis:** Use border styling (`stroke-width`, `stroke-dasharray`) or emojis
+  - **Emphasis:** Use border styling (`stroke-width`, `stroke-dasharray`) or emojis from the standard set above
   - **Never use:** `style <node> fill:<color>` (breaks theme compatibility)
+
+## Section Header Emoji Standards
+
+Use consistent emoji for section headers across all documents:
+
+**Finding Headers (all types - Cloud/Code/Repo):**
+- `## 🗺️ Architecture Diagram` (first section after title)
+- `## 🚦 Traffic Flow` (repo findings/summaries only)
+- `## 🛡️ Security Review`
+- `### 🧾 Summary`
+- `### ✅ Applicability`
+- `### 🎯 Exploitability`
+- `### 🚩 Risks`
+- `### 🔎 Key Evidence (deep dive)` (repo findings)
+- `### ✅ Recommendations`
+- `### 📐 Rationale`
+- `## 🤔 Skeptic`
+- `### 🛠️ Dev` (skeptic review)
+- `### 🏗️ Platform` (skeptic review)
+- `## 🤝 Collaboration`
+
+**Summary Headers:**
+- `## 🧭 Overview`
+- `## 🚩 Risk`
+- `## ✅ Actions`
+- `## 📌 Findings`
+- `## 📊 Service Risk Order` (architecture summaries)
+- `## 📝 Notes`
+
+**Knowledge Headers:**
+- `## ✅ Confirmed`
+- `## ❓ Assumptions`
+- `## ❓ Open Questions` (or `## Unknowns`)
+- `## 🛡️ Guardrails and Enforcement`
+- `## 🌐 Network Exposure Defaults`
+
+**Repo Summary Headers:**
+- `## 🗺️ Architecture Diagram` (first section)
+- `## 🚦 Traffic Flow`
+- `## 🔍 Scan History`
+- `## 🛡️ Security Observations`
 
 Last updated: 05/02/2026 21:04
 
