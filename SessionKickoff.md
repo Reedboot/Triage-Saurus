@@ -73,10 +73,10 @@ Targeted helpers (stdout-only):
    - Create/update: Output/Knowledge/<Provider>.md and Output/Summary/Cloud/Architecture_<Provider>.md
 
 10. **Repo scan initialization:**
+   - **FIRST: Request repos folder access permission** — Before checking for repos or doing any repo operations, ask user once to grant read access to the repos directory (e.g., `/mnt/c/Repos` or wherever repos are stored). This covers discovery and scanning. Do NOT ask again for individual repos during the session.
    - Check Output/Knowledge/Repos.md for known repo root path(s).
    - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
    - Ask user to confirm the repos root directory path.
-   - **Request repos folder access permission:** Before any repo operations, ask user once to grant read access to the repos directory (e.g., `/mnt/c/Repos`). This covers discovery and scanning. Do NOT ask again for individual repos during the session.
    - Discover available repos: `ls -1 <confirmed_repos_root_path>`
    - Present repos as selectable choices using ask_user tool:
      - List all individual repo names as choices
