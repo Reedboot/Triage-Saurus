@@ -6,32 +6,163 @@ This agent performs **fast, non-security context discovery** of repositories to 
 **What it does:** Learn about the repo
 **What it doesn't do:** Find security issues (that's for IaC/SCA/SAST/Secrets agents)
 
-## Speed Target
-**< 1 minute** for context discovery using one sequential explore agent per repo. This is reconnaissance, not deep analysis.
+## Two-Phase Approach
 
-## Execution Strategy
-**USE ONE EXPLORE AGENT PER REPO** - Launch a single explore agent that discovers sequentially:
-1. Purpose & README (what does this repo do?)
-2. Tech stack (languages, frameworks, dependencies)
-3. IaC files (Terraform, Bicep, K8s YAML)
-4. Ingress points (APIs, load balancers, public endpoints, APIM)
-5. **Traffic Flow (MANDATORY)** - Complete request path from entry to backend
-6. Database connections (schemas, connection strings, migrations)
-7. Egress targets (external APIs, third-party services)
+### Phase 1: Automated Baseline (Script) - ~10 seconds
+**Tool:** `Scripts/discover_repo_context.py`
+**Method:** Pattern matching, regex, file scanning
 
-The explore agent returns comprehensive findings for all areas. Synthesize results into context document.
+**Run:** `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
 
-**DO NOT:** Use multiple parallel agents, general-purpose agent, run security scans, or do deep code analysis during context discovery.
+**Detects automatically:**
+- **Languages & frameworks** - C#, F#, VB.NET, TypeScript, JavaScript, Python, Go, Java, Kotlin
+- **IaC & orchestration** - Terraform, Bicep, Helm, Kustomize, Skaffold, Tilt, K8s manifests
+- **Container runtime** - Dockerfile analysis (base images, exposed ports, runtime user, health checks, multi-stage builds)
+- **Network topology** - VNets, subnets, NSGs, private endpoints, VNet peerings (from Terraform)
+- **Hosting platform** - App Service (Windows/Linux), AKS, Functions, Container Apps
+- **CI/CD pipelines** - Azure Pipelines, GitHub Actions, GitLab CI with file citations
+- **API routes** - MapGet/MapPost, [HttpGet], route mapping JSON files
+- **Authentication methods** - JWT, OAuth, APIM keys, mTLS, Digital Signatures with implementation details
+- **External dependencies** - Databases (with auth method), storage, queues, monitoring, backend APIs
+- **Ingress patterns** - App Gateway, Front Door, APIM (from code & Terraform)
+- **APIM routing** - Mock vs real backend routing detection
+- **Backend services** - Extracted from HttpClient config and route mapping JSON files
+
+**Output:** Creates baseline `Output/Summary/Repos/<RepoName>.md` with:
+- **Architecture diagram** (Mermaid) - Infrastructure topology with colored borders, clean connections (no numbered steps)
+- **TL;DR Executive Summary** - Score placeholders, Phase 2 TODO markers
+- **Security Observations** - Detected controls for validation, Phase 2 guidance
+- **Overview** - Purpose, hosting, CI/CD, dependencies, authentication, container runtime, network topology
+- **Traffic Flow** - Phase 2 TODO marker with detected hints, route mappings table
+- **Security Review** - Languages, automated scanning status (SCA/SAST/Secrets/IaC pending), grouped evidence
+
+### Phase 2: Intelligent Analysis (Explore Agent) - ~30-60 seconds
+**Tool:** Launch ONE explore agent per repo
+**Method:** Code reading, understanding, synthesis
+
+**The explore agent should:**
+1. **Read Phase 1 output** - Review the baseline summary from the script
+2. **Deep dive for understanding:**
+   - **Purpose & Business Logic** - What problem does this solve? Who uses it?
+   - **Traffic Flow (MANDATORY)** - Trace complete request path with middleware execution order
+   - **Architecture Pattern** - Confirm pattern (API, reverse proxy, event processor, etc.)
+   - **Security Controls** - Which middleware enforces which control? Validation rules?
+   - **Route Logic** - HOW does routing work? Pattern matching? Conditional logic?
+3. **Synthesize & enhance** - Update the summary with deeper insights
+
+**Phase 2 prompt template:**
+```
+You are performing Phase 2 context discovery for <repo_name> at <repo_path>.
+
+Phase 1 (automated script) detected:
+- Languages: [list]
+- Hosting: [platform]
+- Ingress: [detected]
+- Authentication: [methods]
+- Dependencies: [list]
+
+Your task is deeper analysis:
+1. PURPOSE: Read README - what business problem does this solve?
+2. TRAFFIC FLOW (MANDATORY): Trace complete request path including middleware order
+3. ARCHITECTURE: Confirm pattern and explain HOW routing/processing works
+4. SECURITY: Map which components enforce which controls
+5. KEY FILES: Identify the 5-10 most important files that define behavior
+
+Read code as needed. Target: < 2 minutes.
+```
+
+**DO NOT:** Use multiple parallel agents, general-purpose agent, run security scans, or do exhaustive code analysis during context discovery.
+
+## Workflow
+
+### When starting fresh repo analysis:
+1. ✅ **Run Phase 1 script first** - Get automated baseline
+2. ✅ **Review Phase 1 output** - Check what was detected
+3. ✅ **Launch Phase 2 explore agent** - Deep dive for understanding
+4. ✅ **Synthesize results** - Combine into comprehensive summary
+5. ✅ **If IaC detected: Update cloud architecture diagrams** - Launch ArchitectureAgent (see below)
+6. ✅ **Ask user for scan scope** - IaC, SCA, SAST, Secrets, or combinations
+
+### When Phase 1 baseline already exists:
+1. ✅ **Skip script, read existing summary** - Use cached Phase 1 results
+2. ✅ **Launch Phase 2 explore agent** - Fill in understanding gaps
+3. ✅ **Update summary with insights** - Enhance existing document
+4. ✅ **If IaC detected: Update cloud architecture diagrams** - Launch ArchitectureAgent
+
+### After Context Discovery - Update Cloud Architecture (if IaC detected):
+
+**When to trigger:** If Phase 1 detected Terraform/Bicep/K8s or Phase 2 discovered infrastructure
+
+**Action:** Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`
+
+**Agent:** `Agents/ArchitectureAgent.md`
+
+**What it does:**
+- Reads `Knowledge/<Provider>.md` (updated by Phase 1 script)
+- Updates multi-diagram cloud architecture view (Ingress, Routing, Backend, Network)
+- Shows where this repo/service fits in overall cloud estate
+- Creates hyperlinks (🔗) between services for navigation
+- Uses colored borders per `Settings/Styling.md`
+
+**Example prompt:**
+```
+Update the Azure cloud architecture diagrams in Output/Summary/Cloud/Architecture_Azure.md.
+
+New service discovered: fi_api (reverse proxy to APIM)
+- Hosting: Windows App Service
+- Ingress: Application Gateway
+- Routes to: APIM → fiauthentication + backend services
+- Dependencies: Blob Storage, Application Insights
+
+Review Knowledge/Azure.md for all services. Update the existing diagrams to include fi_api:
+1. Ingress diagram - add App Gateway → fi_api flow
+2. API Routing diagram - show fi_api → APIM → backends chain
+3. Backend Services diagram - show backends that fi_api routes to
+
+Use multiple focused diagrams. Add hyperlinks with 🔗 to Output/Summary/Repos/fi_api.md.
+```
+
+### Example Combined Output:
+The final `Output/Summary/Repos/<RepoName>.md` should contain:
+- **Architecture Diagram** (Phase 1) - Infrastructure, services, auth flow with labeled arrows
+- **Overview** (Phase 1) - Languages, hosting, CI/CD, dependencies, authentication
+- **Traffic Flow** (Phase 1 placeholders → Phase 2 completes) - Detected hints + complete middleware execution order
+- **Security Review** (Phase 1) - Detected languages, frameworks, evidence
+- **Key Files** (Phase 2) - Most important files defining behavior
+- **Purpose & Business Context** (Phase 2) - What problem it solves, who uses it
+
+### Phase 2 Traffic Flow Completion:
+The Phase 1 script creates a `## 🚦 Traffic Flow` section with **[PHASE 2 TODO]** marker and detected hints.
+
+**Phase 2 agent should replace this section with:**
+1. **Request Path Summary** - One sentence arrow flow (Client → Gateway → Service → Backend)
+2. **Components breakdown:**
+   - Entry Point (Load Balancer/Gateway with TLS termination)
+   - Service Layer (Web server, middleware pipeline with numbered execution order)
+   - Route Mapping (How routing logic works)
+   - Backend Gateway (APIM, service mesh)
+   - Backend Services (Final destinations)
+3. **Key Characteristics:**
+   - Ports & protocols
+   - Authentication validation points
+   - Routing logic with code evidence
+   - State (stateless/stateful)
+4. **Route Mappings table** - Incoming path → Backend → Purpose
+5. **External Dependencies** - With resilience patterns
+
+See `Templates/RepoFinding.md` for complete Traffic Flow template structure.
 
 ## Outputs
-- `Output/Summary/Repos/<RepoName>.md` with context overview and architecture diagram
+- `Output/Summary/Repos/<RepoName>.md` with comprehensive context (Phase 1 baseline + Phase 2 enhancements)
 - `Output/Knowledge/Repos.md` updated with repository entry
 - If IaC detected:
   - `Output/Knowledge/<Provider>.md` updated with services discovered (Azure/AWS/GCP)
   - `Output/Summary/Cloud/Architecture_<Provider>.md` created/updated with cloud architecture diagram
 - Audit log entries with timing and findings count
 
-## Discovery Scope
+## Discovery Scope Reference
+
+**NOTE:** The patterns below are implemented in the Phase 1 script (`discover_repo_context.py`). The Phase 2 explore agent should focus on UNDERSTANDING the results rather than re-running these searches.
 
 ### Repository Metadata
 **Goal:** Understand repo activity and ownership
