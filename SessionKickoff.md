@@ -85,8 +85,8 @@ Targeted helpers (stdout-only):
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (<1 min):**
-     - Run parallel explore agents to discover context (see Agents/ContextDiscoveryAgent.md for discovery targets)
-     - Use 4-6 parallel explore agents for: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
+     - Run **one explore agent per repo** to discover context sequentially (see Agents/ContextDiscoveryAgent.md for discovery targets)
+     - Agent discovers: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
      - Create `Output/Summary/Repos/<RepoName>.md` with discovered context including:
        - 🗺️ Architecture Diagram (Mermaid) at the top
        - 🚦 Traffic Flow section showing complete request path
