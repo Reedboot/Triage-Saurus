@@ -85,13 +85,13 @@ Targeted helpers (stdout-only):
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (<1 min):**
-     - Run **one explore agent per repo** to discover context sequentially (see Agents/ContextDiscoveryAgent.md for discovery targets)
-     - Agent discovers: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
-     - Create `Output/Summary/Repos/<RepoName>.md` with discovered context including:
+     - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
+     - Script discovers: purpose/README, tech stack, IaC files, ingress points, **traffic flow (MANDATORY)**, databases, architecture
+     - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
        - 🗺️ Architecture Diagram (Mermaid) at the top
        - 🚦 Traffic Flow section showing complete request path
-     - Update `Output/Knowledge/Repos.md` with repository entry
-     - Generate architecture diagram with findings
+     - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
+     - Review the generated summary before proceeding to security scans
    - **Phase 2 - Security Scanning (if requested):**
      - Based on context, decide which scans to run (IaC/SCA/SAST/Secrets)
      - Can use task agent for long-running scans or run directly
