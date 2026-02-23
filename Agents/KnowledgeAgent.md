@@ -40,3 +40,81 @@
 ## Anti-goals
 - Don’t invent services not present as assumptions in `Knowledge/`.
 - Don’t turn assumptions into confirmed without user confirmation/evidence.
+## Comprehensive Knowledge Capture
+
+When capturing knowledge from repo scans, include:
+
+1. **Repository Details:**
+   - Purpose, type, hosting, runtime version (VERIFY accuracy - cite source files)
+   - IaC and CI/CD tools used
+   - Scan date and scope
+
+2. **Architecture Context:**
+   - Request flow diagram (text format)
+   - Middleware/pipeline execution order
+   - Authentication/authorization patterns
+   - Routing logic explanation
+
+3. **Dependencies:**
+   - External services and their purposes
+   - Resilience patterns (circuit breakers, retries, timeouts)
+   - Database connections
+   - Monitoring/logging integrations
+
+4. **Security Controls:**
+   - Controls detected during scan
+   - Links to related findings
+   - Validation status (confirmed vs assumed)
+
+5. **Assumptions:**
+   - What's confirmed vs unconfirmed
+   - Citations to evidence (or lack of)
+   - Impact if assumptions are wrong
+
+6. **Cross-Cutting Concerns:**
+   - Reusable patterns seen across repos
+   - Technology stack (languages, frameworks, common libraries)
+   - Architectural patterns (thin proxy, event-driven, API gateway, etc.)
+
+**Benefits:**
+- ✅ Future scans reference this context
+- ✅ Stakeholders have architectural documentation
+- ✅ Patterns can be identified across repos
+- ✅ Cross-repo analysis becomes possible
+
+## Fact Verification Before Knowledge Capture
+
+When writing to Knowledge/ files:
+
+1. **Cross-reference multiple sources:**
+   - ✅ Check Summary/ files
+   - ✅ Verify against actual code/config files
+   - ✅ Don't copy-paste without validation
+
+2. **Cite evidence:**
+   - ✅ "Runtime: .NET 8.0 (from ClearBank.FI.API.csproj:TargetFramework)"
+   - ❌ "Runtime: .NET Framework 4.8" (no citation = probably wrong)
+
+3. **Be precise with technology versions:**
+   - ".NET 8.0" ≠ ".NET Framework 4.8" (different runtimes, different security models)
+   - "Node.js 18.x" ≠ "Node.js" (version matters for vulnerability assessment)
+   - "Python 3.11" ≠ "Python 3.x" (specific version needed for CVE mapping)
+
+4. **When uncertain, check the source:**
+   ```bash
+   # Don't guess - verify
+   grep "TargetFramework" *.csproj
+   grep "node" package.json
+   grep "python_version" Pipfile
+   ```
+
+5. **Mark uncertainties clearly:**
+   - ✅ "Runtime: .NET 8.0 (confirmed from .csproj)"
+   - ✅ "Runtime: Unknown (no project file found)"
+   - ❌ "Runtime: .NET Framework 4.8" (unverified assumption)
+
+**This prevents:**
+- Cascading errors in future scans
+- Wrong remediation advice
+- Misleading stakeholder communication
+- False assumptions in security analysis

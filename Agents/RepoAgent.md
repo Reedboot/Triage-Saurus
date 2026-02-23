@@ -601,6 +601,38 @@ Total scans to run: 3/4 (saving ~2 minutes)
 - **Knowledge updates:** `Output/Knowledge/Repos.md` (architectural context, tech stack, security observations)
 - **Audit log entries:** `Output/Audit/Session_*.md` (scan timing, tools used, findings count)
 
+## Repo Scan Checklist (Complete All Phases)
+
+When scanning a repository with IaC:
+
+☐ **Phase 1: Automated context discovery** (discover_repo_context.py)
+  - Run script: `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>`
+  - Creates skeleton `Output/Summary/Repos/<RepoName>.md` with [PHASE 2 TODO] markers
+  - Updates `Output/Knowledge/Repos.md` with basic repo info
+
+☐ **Phase 2: Manual context analysis** (explore agent)
+  - Complete TODO markers in repo summary
+  - Add middleware execution order, authentication flow, route mappings
+  - Add security controls matrix
+  - Add Dev Skeptic and Platform Skeptic reviews
+  - **Validation:** Ensure TL;DR has numeric score (not 0/10 INFO)
+  - **Validation:** Run `grep -c "PHASE 2 TODO" Output/Summary/Repos/*.md` → should return 0
+
+☐ **Phase 3: Security review** (create findings, invoke skeptics)
+  - Create individual findings under `Output/Findings/Code/`
+  - Run Dev Skeptic and Platform Skeptic reviews on findings
+  - Update scores based on skeptic feedback
+  - Link findings to repo summary under Compounding Findings
+
+☐ **Phase 4: Cloud architecture update** (ArchitectureAgent) **[MANDATORY if IaC detected]**
+  - Update or create `Output/Summary/Cloud/Architecture_<Provider>.md`
+  - Show where this service fits in overall estate
+  - Include TL;DR section with services scanned/referenced
+  - Link security findings to architecture components
+  - **DO NOT SKIP THIS PHASE** - stakeholders need estate-wide view
+
+**Warning:** Do NOT mark experiment/scan complete until all phases validated.
+
 ## Integration with Other Agents
 
 - **SecurityAgent.md:** Use for attack path analysis, exploitability assessment, and scoring

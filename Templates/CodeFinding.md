@@ -107,6 +107,39 @@ flowchart TB
 ### 📐 Rationale
 <rationale>
 
+## 🧪 Proof of Concept
+**[Include this section for exploitable vulnerabilities]**
+
+**Prerequisites:**
+- [Access needed, tools required]
+
+### Complete Test Script (Copy & Run)
+
+```bash
+#!/bin/bash
+# [What this demonstrates]
+
+# CONFIGURE YOUR ENVIRONMENT
+ENDPOINT="https://[change-this]"
+
+# [Steps with actual commands using real repo endpoints/files]
+echo "=== Testing vulnerability ==="
+[curl/commands]
+
+echo "Expected: [HTTP status/behavior]"
+```
+
+### Verify Impact
+[How to see the exploit worked - logs, database, behavior]
+
+### Test the Fix
+```bash
+# After applying recommended fix
+[Same commands - should now be blocked/secured]
+```
+
+**Expected after fix:** [Secure behavior]
+
 ## 🤔 Skeptic
 > Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
 

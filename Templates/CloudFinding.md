@@ -103,6 +103,41 @@ flowchart TB
 ### 📐 Rationale
 <rationale>
 
+## 🧪 Proof of Concept
+**[Include this section for demonstrable cloud misconfigurations]**
+
+**Prerequisites:**
+- [Azure CLI / AWS CLI / gcloud installed]
+- [Access level needed]
+
+### Demonstrate the Risk
+
+```bash
+#!/bin/bash
+# [What this demonstrates]
+
+# CONFIGURE YOUR ENVIRONMENT
+RESOURCE_NAME="[change-this]"
+RESOURCE_GROUP="[change-this]"
+
+# [Commands using actual Azure/AWS/GCP resources from the scan]
+echo "=== Testing public access ==="
+[az/aws/gcloud commands or curl]
+
+echo "Expected: [What you can access that shouldn't be public]"
+```
+
+### Verify Impact
+[What data/resources can be accessed]
+
+### Test the Fix
+```bash
+# After applying recommended IaC changes
+[Same commands - should now be denied]
+```
+
+**Expected after fix:** [Access denied/403/404]
+
 ## 🤔 Skeptic
 > Purpose: review the **Security Review** above, then add what a security engineer would miss on a first pass.
 
