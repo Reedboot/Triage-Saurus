@@ -135,6 +135,19 @@ When reviewing authentication/authorization vulnerabilities, check what happens 
 - Main attack blocked by compensating control: Score reduced (e.g., 9/10 → 5/10)
 - Pre-validation side effect is exploitable: Note as separate finding or increase score (e.g., 5/10 → 6/10 accounting for log tampering)
 
+**⚠️ CRITICAL: Document First, Filter Later**
+
+**Phase 2 Discovery Rule:**
+- Document ALL security gaps, even with compensating controls
+- Do NOT apply skeptic mindset during discovery phase
+- Defense-in-depth violations are ALWAYS findings
+- Skeptic reviews happen in Phase 3, AFTER findings are documented
+
+**Defense-in-Depth Scoring:**
+- **Without compensating controls:** MEDIUM-HIGH (6-8/10)
+- **With compensating controls:** LOW-MEDIUM (3-5/10)
+- **Example:** JWT signature not verified locally BUT validated by downstream service = 5/10 (still a finding, reduced severity)
+
 **Pre-Validation Checklist**
 
 Before concluding "not exploitable due to compensating control", check:
@@ -144,6 +157,73 @@ Before concluding "not exploitable due to compensating control", check:
 ☐ Can attacker poison logs, metrics, caches, or audit trails?  
 ☐ Are there DoS amplification vectors (expensive operations before validation)?  
 ☐ Does error handling leak information before validation?
+
+**Pre-Validation Side Effect Remediation:**
+
+**⚠️ DO NOT recommend removing logging/monitoring that happens before validation**
+- Logging failed auth attempts is CRITICAL for security monitoring
+- Attack detection requires seeing what attackers try (brute force, credential stuffing)
+- Incident response needs full audit trail of access attempts
+- Compliance often requires logging all requests
+
+**✅ CORRECT remediation for pre-validation logging:**
+1. **Add rate limiting** - Prevent reconnaissance abuse via per-IP throttling
+2. **Implement at edge** - Application Gateway/WAF-level throttling (preferred)
+3. **Add alerting** - Detect patterns of failed auth attempts
+4. **Keep logging** - Maintain security monitoring capability
+
+**❌ INCORRECT remediation:**
+- Moving logging AFTER authentication (loses security visibility)
+- Removing logging entirely (blind to attacks)
+- Treating reconnaissance as binary problem (log vs don't log)
+
+**The trade-off:** Rate limiting addresses volume/abuse. Logging addresses visibility. Both are needed.
+
+## Hardcoded Values: Context Analysis
+
+**⚠️ CRITICAL: Not all hardcoded values are security issues**
+
+Before flagging a hardcoded value as a security finding, analyze:
+
+**1. What is it?**
+- Credential (API key, password, token, private key) → **SECURITY ISSUE**
+- Identifier (subscription ID, tenant ID, account number) → **CONFIG ISSUE**
+- Public metadata (region names, service names) → **NOT AN ISSUE**
+
+**2. What can you do with JUST this value?**
+- ✅ Authenticate to a service → **HIGH/CRITICAL**
+- ✅ Access resources without additional auth → **HIGH/CRITICAL**
+- ✅ Sign/encrypt/decrypt data → **MEDIUM/HIGH**
+- ❌ Requires additional credentials to use → **LOW/INFO**
+- ❌ Publicly visible anyway (URLs, Portal) → **INFO**
+
+**3. Severity Guide:**
+
+| Type | Example | Can Access? | Severity |
+|------|---------|-------------|----------|
+| **Credential** | API key, password, token | YES | 🔴 CRITICAL/HIGH |
+| **Connection string (with creds)** | `Server=x;User=sa;Password=123` | YES | 🔴 HIGH |
+| **Private key/certificate** | RSA private key, PFX with password | YES | 🔴 HIGH |
+| **Connection string (no creds)** | `Server=x` (uses managed identity) | NO | 🟡 MEDIUM |
+| **Architecture metadata** | Endpoint URLs, service names | NO | 🟢 LOW |
+| **Public identifiers** | Subscription ID, tenant ID, account # | NO | ℹ️ INFO |
+
+**4. Real-world examples:**
+
+**🔴 SECURITY FINDING:**
+```terraform
+api_key = "sk-live-a1b2c3d4e5f6"  # Can authenticate to Stripe
+password = "P@ssw0rd123"          # Can authenticate
+```
+
+**ℹ️ CONFIG ISSUE (NOT security):**
+```terraform
+subscription_id = "8be5fe8d-..."  # Just an identifier, needs Azure AD auth
+tenant_id = "12345678-..."        # Public metadata
+account_id = "123456789012"       # AWS account # (public in ARNs)
+```
+
+**The rule:** Hardcoded values are SECURITY findings only if they grant authentication, authorization, or access without additional credentials.
 
 ## Context Sources
 
@@ -430,6 +510,8 @@ When triaging a cloud advisory/recommendation:
 2. **Check for compensating controls:**
    - 3rd party security tools (EDR, SIEM, CSPM, WAF, CDN)
    - Native logging + custom alerting
+   - **IMPORTANT:** Compensating controls reduce severity but DO NOT eliminate the finding
+   - Defense-in-depth violations must still be documented (LOW-MEDIUM with controls, MEDIUM-HIGH without)
    - Network isolation/private endpoints
    - Defense-in-depth layers
 
