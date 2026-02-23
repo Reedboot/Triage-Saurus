@@ -993,7 +993,13 @@ def ensure_repos_knowledge(repos_root: Path, knowledge_dir: Path | None = None) 
 def upsert_repo_inventory(repos_md: Path, *, repo_name: str, repo_type: str, purpose: str, langs: list[str]) -> None:
     text = repos_md.read_text(encoding="utf-8", errors="replace")
     entry_line = f"- **{repo_name}** - {purpose} ({', '.join(langs)})"
+    # Avoid duplicate entries when purpose/language detection changes between runs.
+    # If an entry for this repo already exists, drop it and re-insert the new canonical line.
+    existing_repo_prefix = f"- **{repo_name}** -"
+    lines = [l for l in text.splitlines() if not l.strip().startswith(existing_repo_prefix)]
+    text = "\n".join(lines)
     if entry_line in text:
+        repos_md.write_text(text.rstrip() + "\n", encoding="utf-8")
         return
 
     lines = text.splitlines()
@@ -1015,6 +1021,224 @@ def upsert_repo_inventory(repos_md: Path, *, repo_name: str, repo_type: str, pur
         out.append(entry_line)
 
     repos_md.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+
+
+def _provider_for_architecture(providers: list[str]) -> str | None:
+    for p in providers:
+        if p.lower() in {"azure", "aws", "gcp"}:
+            return p
+    return None
+
+
+def write_experiment_cloud_architecture_summary(
+    *,
+    repo: Path,
+    repo_name: str,
+    providers: list[str],
+    summary_dir: Path,
+    findings_dir: Path | None = None,
+    repo_summary_path: Path | None = None,
+) -> Path | None:
+    """Write an experiment-scoped provider architecture summary with TL;DR.
+
+    This is intentionally *not* platform-wide: it’s scoped to what was inferred from this repo.
+    """
+
+    provider = _provider_for_architecture(providers)
+    if not provider:
+        return None
+
+    provider_title = provider.title()
+
+    files = iter_files(repo)
+    tf_resource_types = detect_terraform_resources(files, repo)
+    hosting_info = detect_hosting_from_terraform(files, repo)
+    ingress_info = detect_ingress_from_code(files, repo)
+    ci_cd_info = parse_ci_cd_details(repo)
+    auth_methods_info = detect_authentication_methods(files, repo)
+
+    has_kv = "azurerm_key_vault" in tf_resource_types if provider_title == "Azure" else False
+    has_sql = (
+        any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
+        if provider_title == "Azure"
+        else False
+    )
+    has_ai = "azurerm_application_insights" in tf_resource_types if provider_title == "Azure" else False
+    has_apim = any(t.startswith("azurerm_api_management") for t in tf_resource_types) if provider_title == "Azure" else False
+    has_appgw = ("azurerm_application_gateway" in tf_resource_types or ingress_info["type"] == "Application Gateway") if provider_title == "Azure" else False
+    has_frontdoor = ("azurerm_frontdoor" in tf_resource_types or ingress_info["type"] == "Azure Front Door") if provider_title == "Azure" else False
+    has_webapp = (
+        hosting_info["type"] in {"Windows App Service", "Linux App Service"}
+        or ("azurerm_linux_web_app" in tf_resource_types or "azurerm_windows_web_app" in tf_resource_types)
+        if provider_title == "Azure"
+        else False
+    )
+    has_state_backend = any(t in tf_resource_types for t in {"azurerm_storage_account", "azurerm_storage_container"}) if provider_title == "Azure" else False
+
+    services: list[str] = []
+    if has_webapp:
+        services.append("App Service")
+    if has_appgw:
+        services.append("Application Gateway")
+    if has_frontdoor:
+        services.append("Front Door")
+    if has_apim:
+        services.append("API Management")
+    if has_sql:
+        services.append("Azure SQL")
+    if has_kv:
+        services.append("Key Vault")
+    if has_ai:
+        services.append("Application Insights")
+    if has_state_backend:
+        services.append("Storage Account")
+    if not services:
+        services.append("(none inferred)")
+
+    cloud_dir = summary_dir / "Cloud"
+    cloud_dir.mkdir(parents=True, exist_ok=True)
+
+    def rel_link(target: Path) -> str:
+        return os.path.relpath(target, cloud_dir).replace(os.sep, "/")
+
+    # Optional: link to one finding if present (keep it simple for experiments).
+    finding_link = "(none yet)"
+    if findings_dir and findings_dir.exists():
+        candidates = list((findings_dir / "Code").glob("*.md")) + list((findings_dir / "Cloud").glob("*.md"))
+        if candidates:
+            link_text = candidates[0].stem.replace("_", " ")
+            finding_link = f"[{link_text}]({rel_link(candidates[0])})"
+
+    repo_summary_link = "(not generated)"
+    if repo_summary_path and repo_summary_path.exists():
+        repo_summary_link = f"[Repo summary: {repo_name}]({rel_link(repo_summary_path)})"
+
+    methods = auth_methods_info.get("methods", [])
+    details = auth_methods_info.get("details", [])
+    if methods:
+        auth_line = ", ".join(methods)
+        if details:
+            auth_line = f"{auth_line} — details: {', '.join(details)}"
+    else:
+        auth_line = "No auth signals detected in quick scan (validate)."
+
+    # Mermaid: keep labels simple (avoid parentheses) for broad renderer compatibility.
+    edge_name = "Edge Gateway"
+    edge_confirmed = False
+    if has_appgw:
+        edge_name = "Application Gateway"
+        edge_confirmed = "azurerm_application_gateway" in tf_resource_types
+    elif has_frontdoor:
+        edge_name = "Front Door"
+        edge_confirmed = "azurerm_frontdoor" in tf_resource_types
+    elif has_apim:
+        edge_name = "API Management"
+        edge_confirmed = any(t.startswith("azurerm_api_management") for t in tf_resource_types)
+
+    edge_assumed = not edge_confirmed
+
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    out_path = cloud_dir / f"Architecture_{provider_title}.md"
+
+    content_lines: list[str] = []
+    content_lines.append(f"# 🗺️ Architecture {provider_title} (Experiment scoped - {repo_name})")
+    content_lines.append("")
+    content_lines.append("```mermaid")
+    content_lines.append("flowchart TB")
+    content_lines.append("  internet[🌐 Internet]")
+    content_lines.append(f"  edge[❓ 🛡️ {edge_name}]")
+    content_lines.append(f"  subgraph cloud[{provider_title}]")
+    if has_webapp:
+        host_label = hosting_info["type"] or "App Service"
+        content_lines.append(f"    app[🧩 {repo_name} - {host_label}]")
+    else:
+        content_lines.append(f"    app[🧩 {repo_name}]")
+    if has_sql:
+        content_lines.append("    sql[🗄️ Azure SQL]")
+    if has_kv:
+        content_lines.append("    kv[🔐 Key Vault]")
+    if has_ai:
+        content_lines.append("    ai[📈 Application Insights]")
+    if has_state_backend:
+        content_lines.append("    sa[💾 Storage Account]")
+    content_lines.append("  end")
+    if ci_cd_info["platform"] != "Unknown":
+        content_lines.append(f"  pipeline[⚙️ {ci_cd_info['platform']}]")
+    else:
+        content_lines.append("  pipeline[⚙️ CI/CD]")
+    content_lines.append("")
+    content_lines.append("  internet -->|🌐 HTTPS| edge")
+    content_lines.append("  edge -->|🚦 Route| app")
+    if has_sql:
+        content_lines.append("  app -->|🔒 Data| sql")
+    if has_kv:
+        content_lines.append("  app -->|🔐 Secrets| kv")
+    if has_ai:
+        content_lines.append("  app -.->|📈 Telemetry| ai")
+    content_lines.append("  pipeline -->|Deploy| app")
+    if has_state_backend:
+        content_lines.append("  pipeline -.->|State and artifacts| sa")
+    content_lines.append("")
+    content_lines.append("  style app stroke:#0066cc,stroke-width:2px")
+    if has_sql:
+        content_lines.append("  style sql stroke:#666666,stroke-width:3px")
+    if has_kv:
+        content_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
+    if has_state_backend:
+        content_lines.append("  style sa stroke:#666666,stroke-width:3px")
+    content_lines.append("  style pipeline stroke:#f59f00,stroke-width:2px")
+    content_lines.append("  style edge stroke:#ff6b6b,stroke-width:3px")
+    if edge_assumed:
+        content_lines.append("  style edge stroke-dasharray: 5 5")
+    content_lines.append("```")
+    content_lines.append("")
+    content_lines.append(
+        "**Key:** 🌐 Internet/public, 🛡️ Edge/security gateway, 🧩 App/service, 🗄️ Data store, 🔐 Secrets/identity, "
+        "📈 Monitoring, ⚙️ CI/CD. Dashed border = assumed/unconfirmed."
+    )
+    content_lines.append("")
+    content_lines.append("## 🧭 Overview")
+    content_lines.append(f"- **Provider:** {provider_title}")
+    content_lines.append(f"- **Scope:** Experiment-scoped (inferred from repo `{repo_name}`; not platform-wide)")
+    content_lines.append(f"- **Auth signals (quick):** {auth_line}")
+    content_lines.append("")
+    content_lines.append("## 📊 TL;DR - Executive Summary")
+    content_lines.append("")
+    content_lines.append("| Aspect | Value |")
+    content_lines.append("|--------|-------|")
+    content_lines.append(f"| **Key services** | {', '.join(services)} |")
+    content_lines.append("| **Top risk** | 🟠 High — validate ingress + authZ/authN enforcement for user/data endpoints |")
+    content_lines.append("| **Primary next step** | Confirm edge enforcement (WAF/Front Door/APIM/App Gateway), then add app-layer authZ |")
+    content_lines.append(f"| **Repo context** | {repo_summary_link} |")
+    content_lines.append(f"| **Related finding** | {finding_link} |")
+    content_lines.append("")
+    content_lines.append("## 📊 Service Risk Order")
+    content_lines.append("1. 🟠 High — ingress and authentication enforcement (edge + app)")
+    if has_sql:
+        content_lines.append("2. 🟠 High — user/data access backed by SQL (PII exposure if unauthenticated)")
+    if has_kv:
+        content_lines.append("3. 🟡 Medium — secrets access model and network restrictions for Key Vault")
+    if has_state_backend:
+        content_lines.append("4. 🟡 Medium — Terraform state and pipeline credential scope")
+    if has_ai:
+        content_lines.append("5. 🟢 Low — telemetry (validate sensitive data logging)")
+    content_lines.append("")
+    content_lines.append("## 📝 Notes")
+    content_lines.append(f"- 🗓️ **Last updated:** {now_uk()}")
+    content_lines.append("- This file is generated for experiment isolation; confirm assumptions before treating as environment fact.")
+
+    out_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
+
+    probs = validate_markdown_file(out_path, fix=True)
+    errs = [p for p in probs if p.level == "ERROR"]
+    warns = [p for p in probs if p.level == "WARN"]
+    for p in warns:
+        line = f":{p.line}" if p.line else ""
+        print(f"WARN: {out_path}{line} - {p.message}")
+    if errs:
+        raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
+
+    return out_path
 
 
 def write_repo_summary(
@@ -1102,7 +1326,8 @@ def write_repo_summary(
             # Show service name, not just hosting platform
             web_label = repo_name.replace("_", "-")
             if hosting_info["type"]:
-                web_label = f"{web_label}<br/>({hosting_info['type']})"
+                # Avoid HTML and parentheses inside Mermaid labels for compatibility across renderers.
+                web_label = f"{web_label} - {hosting_info['type']}"
             diagram_lines.append(f"    web[{web_label}]")
         if has_kv:
             diagram_lines.append("    kv[Key Vault]")
@@ -1244,13 +1469,13 @@ def write_repo_summary(
     # Add colored borders for component types (theme-aware per Settings/Styling.md)
     # Security/Gateway components - thick red border
     if has_appgw:
-        style_lines.append("  style appgw stroke:#ff0000,stroke-width:3px")
+        style_lines.append("  style appgw stroke:#ff6b6b,stroke-width:3px")
     if has_frontdoor:
-        style_lines.append("  style fd stroke:#ff0000,stroke-width:3px")
+        style_lines.append("  style fd stroke:#ff6b6b,stroke-width:3px")
     
-    # API Management - orange border (gateway layer)
+    # API Management - network/gateway layer (distinct from app + data + identity)
     if has_apim or "apim" in "\n".join(diagram_lines):
-        style_lines.append("  style apim stroke:#ff6600,stroke-width:2px")
+        style_lines.append("  style apim stroke:#1971c2,stroke-width:2px")
     
     # Application service - blue border (trusted internal)
     if has_webapp:
@@ -1268,7 +1493,14 @@ def write_repo_summary(
     if has_sql:
         style_lines.append("  style sql stroke:#666666,stroke-width:3px")
     if has_kv:
-        style_lines.append("  style kv stroke:#666666,stroke-width:3px")
+        # Identity/secrets should be consistently highlighted across diagrams.
+        style_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
+
+    # CI/CD + state are part of the main architecture story; keep their borders consistent too.
+    if "pipeline" in "\n".join(diagram_lines):
+        style_lines.append("  style pipeline stroke:#f59f00,stroke-width:2px")
+    if has_state_backend:
+        style_lines.append("  style tfstate stroke:#666666,stroke-width:3px")
     
     if style_lines:
         diagram_lines.append("")
@@ -1619,6 +1851,18 @@ def main() -> int:
         dotnet_info=dotnet_info,
         summary_dir=summary_dir,
     )
+
+    # Experiment isolation: also generate an experiment-scoped provider architecture summary with TL;DR.
+    if args.output_dir:
+        output_base = Path(args.output_dir).expanduser().resolve()
+        _ = write_experiment_cloud_architecture_summary(
+            repo=repo,
+            repo_name=repo_name,
+            providers=providers,
+            summary_dir=summary_dir,
+            findings_dir=output_base / "Findings",
+            repo_summary_path=summary_path,
+        )
 
     print("== Context discovery complete ==")
     print(f"repo: {repo}")

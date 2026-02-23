@@ -21,6 +21,8 @@ import argparse
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +60,67 @@ def compute_agents_version() -> dict:
         "combined_hash": combined,
         "files": hashes,
     }
+
+
+def ensure_default_strategy() -> dict:
+    """Ensure Output/Learning/strategies/default.json exists and return its contents."""
+    STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
+    default_path = STRATEGIES_DIR / "default.json"
+    if not default_path.exists():
+        default_path.write_text(
+            json.dumps(
+                {
+                    "version": "default",
+                    "experiment": {
+                        "auto_phase1_context_discovery": True,
+                        "auto_generate_experiment_architecture": True,
+                        "architecture_requirements": {
+                            "include_tldr": True,
+                            "include_high_level_diagram": True,
+                            "include_risk_level_labels": True,
+                            "keep_diagrams_simple_one_per_service_type": True,
+                            "layout": {
+                                "title_icon": "🗺️",
+                                "diagram_first": True,
+                                "overview_after_diagram": True,
+                                "tldr_after_overview": True,
+                                "omit_diagram_subheader": True,
+                                "include_diagram_key": True,
+                            },
+                        },
+                        "diagram_styling": {
+                            "colors": {
+                                "security_gateway_stroke": "#ff6b6b",
+                                "app_stroke": "#0066cc",
+                                "identity_secrets_stroke": "#f59f00",
+                                "data_stroke": "#666666",
+                                "pipeline_stroke": "#f59f00",
+                                "api_gateway_stroke": "#1971c2",
+                            }
+                        },
+                    },
+                    "repo_inventory": {"dedupe_by_repo_name": True},
+                    "code_finding_conventions": {
+                        "title_no_underscores": True,
+                        "explain_authn_authz": True,
+                        "key_evidence": {
+                            "prefer_snippet_when_concentrated": True,
+                            "show_file_and_approx_lines_outside_fence": True,
+                            "omit_redundant_evidence_pointers": True,
+                        },
+                        "diagram": {"highlight_broken_control_red_border": True},
+                        "include_poc_and_possible_fix": True,
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    try:
+        return json.loads(default_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"version": "default"}
 
 
 def load_state() -> dict:
@@ -319,7 +382,8 @@ def cmd_new(args: argparse.Namespace) -> int:
     )
     
     # Create experiment.json
-    strategy = json.loads((STRATEGIES_DIR / "default.json").read_text()) if (STRATEGIES_DIR / "default.json").exists() else {}
+    strategy = ensure_default_strategy()
+    repos_root = get_repos_root_from_knowledge() or REPO_ROOT.parent
     
     # Prompt for model if not provided
     model = args.model
@@ -351,6 +415,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         "agents_version": agents_version,
         "strategy": strategy,
         "repos": repos,
+        "repos_root": str(repos_root),
         "created_at": datetime.now().isoformat(),
         "started_at": None,
         "completed_at": None,
@@ -482,7 +547,33 @@ def cmd_run(args: argparse.Namespace) -> int:
         config_file.write_text(json.dumps(config, indent=2))
         state["repos_in_scope"] = repos
         db.update_experiment(args.id, repos=repos)
-    
+
+    # Phase 1 automation (local heuristics): seed experiment-scoped summaries/knowledge.
+    strategy = config.get("strategy", {}) or {}
+    auto_phase1 = bool(strategy.get("experiment", {}).get("auto_phase1_context_discovery", False))
+    repos_root = Path(config.get("repos_root") or get_repos_root_from_knowledge() or REPO_ROOT.parent).expanduser().resolve()
+
+    if auto_phase1:
+        print("Running Phase 1 context discovery (writes to experiment folder)...")
+        for r in repos:
+            rp = Path(r).expanduser()
+            if not rp.is_absolute():
+                rp = (repos_root / r).resolve()
+            if not rp.is_dir():
+                print(f"ERROR: repo path not found: {rp}")
+                return 1
+
+            cmd = [
+                sys.executable,
+                str(SCRIPTS_SOURCE / "discover_repo_context.py"),
+                str(rp),
+                "--repos-root",
+                str(repos_root),
+                "--output-dir",
+                str(exp_dir),
+            ]
+            subprocess.run(cmd, check=True)
+
     # Update status
     config["status"] = "running"
     config["started_at"] = datetime.now().isoformat()
