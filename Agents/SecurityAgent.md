@@ -100,6 +100,51 @@ Score based on **actual exploitable damage given proven defenses**, not theoreti
 - ✅ "Missing MFA on Azure Portal for subscription owners = High"
 - ✅ "Hard-coded API key for read-only public API = Low"
 
+## Pre-Validation Side Effects (CRITICAL)
+
+When reviewing authentication/authorization vulnerabilities, check what happens to untrusted data BEFORE validation:
+
+**Common side effects to check:**
+
+1. **Logging** - Is unvalidated user input written to logs?
+   - Log injection: newlines, ANSI codes, fake entries
+   - Information disclosure: sensitive data in logs before validation
+   
+2. **Metrics/Telemetry** - Are metrics recorded with unvalidated data?
+   - Metric poisoning: fake success/failure counts
+   - Cardinality attacks: exhaust metric storage
+   
+3. **Caching** - Is unvalidated data used as cache keys?
+   - Cache poisoning: serve attacker's content to victims
+   - Cache exhaustion: flood cache with fake keys
+   
+4. **Database Writes** - Are audit/tracking records written before validation?
+   - Audit trail corruption
+   - Database bloat attacks
+   
+5. **External Calls** - Are API calls made with unvalidated data?
+   - Upstream service poisoning
+   - Cost amplification (attacker triggers expensive API calls that fail)
+
+**Example from FI_API_001:**
+- TokenExtractionMiddleware logs InstitutionId → Log injection possible
+- AuthenticationMiddleware validates → Main attack blocked
+- **Both are true:** Compensating control works AND log injection works
+
+**Scoring impact:**
+- Main attack blocked by compensating control: Score reduced (e.g., 9/10 → 5/10)
+- Pre-validation side effect is exploitable: Note as separate finding or increase score (e.g., 5/10 → 6/10 accounting for log tampering)
+
+**Pre-Validation Checklist**
+
+Before concluding "not exploitable due to compensating control", check:
+
+☐ What happens to untrusted input BEFORE validation?  
+☐ Is it logged, cached, stored, or sent to external services?  
+☐ Can attacker poison logs, metrics, caches, or audit trails?  
+☐ Are there DoS amplification vectors (expensive operations before validation)?  
+☐ Does error handling leak information before validation?
+
 ## Context Sources
 
 ### Required Reading Before Scoring
@@ -204,6 +249,60 @@ An attacker could exploit this SQL injection vulnerability by sending malicious 
 This is a critical risk.
 ```
 **Why bad:** No attack path, no prerequisites, no defense layers, no realistic scenario.
+
+## Proof of Concept (When Applicable)
+
+**Include a POC for exploitable findings:**
+
+Required elements:
+1. **Single executable script** - Developers should copy/paste and run
+2. **Real endpoints/resources** - Use actual paths from the scanned repo/cloud
+3. **Minimal configuration** - One URL/resource ID to change
+4. **Expected results** - What to see before and after fix
+5. **Verification steps** - How to check logs/database/behavior
+
+**When to include POC:**
+- ✅ Injection attacks (SQL, XSS, command, log)
+- ✅ Auth bypasses (can demonstrate with curl)
+- ✅ Public resources (show download/access)
+- ✅ Network misconfigurations (show connection)
+- ❌ Purely theoretical findings
+- ❌ Requires >10 setup steps
+- ❌ Needs privileged access dev team doesn't have
+
+**POC Template:**
+```markdown
+## 🧪 Proof of Concept
+
+**Prerequisites:**
+- [What's needed: access, tools, endpoints]
+
+### Complete Test Script (Copy & Run)
+
+```bash
+#!/bin/bash
+# [Purpose of this test]
+
+# CONFIGURE YOUR ENVIRONMENT
+RESOURCE_URL="https://[change-this]"
+
+# Step 1: [Action description]
+[commands with actual endpoints/resources]
+
+echo "Expected: [result]"
+```
+
+### Verify Impact
+[How to see the exploit worked - logs, database, behavior]
+
+### Test the Fix
+```bash
+# After applying recommended fix
+[Same commands - should now be blocked/secured]
+```
+
+**Expected after fix:** [Secure behavior]
+```
 
 ## Deliverables per triage
 - A new/updated finding file under `Findings/`.
