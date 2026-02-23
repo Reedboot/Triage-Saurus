@@ -3,9 +3,10 @@
 ## Purpose
 This document provides the session initialization flow for Triage-Saurus. When the user types `sessionkickoff`, the agent should:
 1. Load canonical operating rules from `AGENTS.md` and `Agents/Instructions.md`
-2. Scan the workspace for existing context
-3. Check for outstanding refinement questions
-4. Present triage options to the user
+2. Check for experiment state (for cross-session continuity)
+3. Scan the workspace for existing context
+4. Check for outstanding refinement questions
+5. Present triage options to the user
 
 **Note:** This file contains only the kickoff flow. For detailed navigation flows and menu structures, see `Templates/Workflows.md`. All detailed operational rules (bulk processing, question formatting, repo scanning, knowledge recording, etc.) are in `Agents/Instructions.md`.
 
@@ -13,6 +14,12 @@ This document provides the session initialization flow for Triage-Saurus. When t
 
 Prefer the consolidated workspace scanner (stdout-only):
 - `python3 Scripts/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/sample paths
+
+Experiment management (for self-optimizing triage):
+- `python3 Scripts/triage_experiment.py resume` — check experiment state, continue from last position
+- `python3 Scripts/triage_experiment.py status` — detailed experiment + learning status
+- `python3 Scripts/triage_experiment.py list` — show all experiments with metrics
+- `python3 Scripts/learning_db.py status` — show SQLite learning database status
 
 Targeted helpers (stdout-only):
 - `python3 Scripts/scan_knowledge_refinement.py`
@@ -29,18 +36,26 @@ Targeted helpers (stdout-only):
 
 2. **Request Output folder permission:** At the start of the session, ask user once to grant write access to the `Output/` folder. This covers all operations (audit logs, findings, knowledge, summaries). Do NOT ask again during the session.
 
-3. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
+3. **Check experiment state:** Run `python3 Scripts/triage_experiment.py resume` to check:
+   - If an experiment is in progress → offer to continue it
+   - If experiment awaiting review → prompt for review
+   - If learning pending → offer to apply learnings
+   - If fresh/no experiments → proceed to normal triage flow
 
-4. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
+4. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
+
+5. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Sample Findings/ for available triage items
 
-5. **Check for refinement questions:**
+6. **Check for refinement questions:**
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
    - If Knowledge/ is empty (0 knowledge files): treat as first run and say "🦖 Welcome to Triage-Saurus."
 
-6. **Present triage menu** using ask_user tool with selectable choices:
+7. **Present triage menu** using ask_user tool with selectable choices:
+   - **Continue experiment** (if experiment in progress)
+   - **Start experiment mode** (for self-optimizing triage)
    - **Answer questions to build context** (if existing knowledge/findings exist)
    - **Copy/paste a single issue to triage**
    - **Provide a path under Intake/ to process in bulk**
@@ -48,7 +63,7 @@ Targeted helpers (stdout-only):
    - **Scan a sample repo**
    - **Import and triage the sample findings**
 
-7. **Handle bulk intake selection:**
+8. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
    - Verify folders are non-empty using `python3 Scripts/scan_intake_files.py <path>` before offering.
    - Common paths in this repo:
