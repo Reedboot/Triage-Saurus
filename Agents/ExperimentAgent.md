@@ -314,3 +314,32 @@ If validation fails, log error but don't block experiment completion.
 - `Agents/LearningAgent.md` — Applies learnings from experiments
 - `Agents/Instructions.md` — Canonical operating rules
 - `SessionKickoff.md` — Session initialization
+
+## ⛔ CRITICAL: No Copying Between Experiments
+
+**NEVER copy findings, summaries, or analyses from previous experiments when running a new experiment.**
+
+**Prohibited actions:**
+- ❌ `cp experiments/001_*/Findings/* experiments/004_*/Findings/`
+- ❌ `cp experiments/001_*/Summary/* experiments/004_*/Summary/`
+- ❌ Copy-pasting content from previous experiment files into new ones
+- ❌ Using previous experiment output as a "template" for current experiment
+
+**Why this matters:**
+- Experiments test if improved agents produce better results **independently**
+- Copying defeats the purpose of comparing agent effectiveness
+- Learnings can only be validated if experiments are truly independent
+
+**Correct approach:**
+- ✅ Run each experiment from scratch using only the code/IaC being scanned
+- ✅ Use the experiment's own agent instructions (experiments/<id>/Agents/)
+- ✅ Let agents produce findings independently
+- ✅ Compare results AFTER both experiments complete
+
+**If an experiment needs reference material:**
+- ✅ Reference the actual source code being scanned
+- ✅ Check experiment-specific Knowledge/ for context
+- ❌ Do NOT reference other experiment outputs
+
+**Enforcement:**
+When tasked with completing an experiment phase, if you find yourself about to copy from a previous experiment, **STOP** and complete the analysis from scratch using the source repository.
