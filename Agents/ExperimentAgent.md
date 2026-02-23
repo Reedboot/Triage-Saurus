@@ -46,9 +46,10 @@ When `status = "pending"`:
    **Phase 1: Automated Context Discovery - ~10 seconds**
    ```bash
    python3 Scripts/discover_repo_context.py <repo_path> --repos-root /mnt/c/Repos \
-       --output-dir experiments/001_baseline/Summary/Repos
+       --output-dir Output/Learning/experiments/001_baseline
    ```
-   - Creates baseline summary with architecture diagram
+   - Creates baseline summary with architecture diagram at `experiments/<id>/Summary/Repos/<RepoName>.md`
+   - Creates/updates knowledge at `experiments/<id>/Knowledge/Repos.md`
    - Detects: languages, hosting, auth patterns, ingress/egress, IaC resources
    
    **Phase 2: Deep Context Analysis (explore agent) - ~30-60 seconds**
@@ -76,12 +77,55 @@ When `status = "pending"`:
      - Backend routing logic
 
    **Phase 3: Security Review (using gathered context)**
-   - Use understanding from Phase 1+2 to identify risks
-   - Generate findings based on *logic analysis*, not tool output
-   - Write findings to `experiments/001_baseline/Findings/`
+   Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
    
-   **Phase 4: Skeptic Reviews (findings + code access)**
-   For EACH finding generated:
+   Focus on **logic review**, not just vulnerability scanning:
+   
+   **Authentication Flow Analysis:**
+   - Trace the complete auth flow from request entry to final validation
+   - Identify all auth decision points (middleware, services, APIs)
+   - Look for bypass paths (health checks, webhooks, callbacks that skip auth)
+   - Check fail-open vs fail-closed behaviour
+   
+   **Authorization Logic:**
+   - How are permissions checked?
+   - Can users access resources they shouldn't?
+   - Are role checks consistent across endpoints?
+   
+   **Input Validation:**
+   - Where does user input enter the system?
+   - What validation exists at each layer?
+   - Are there paths where input bypasses validation?
+   
+   **Trust Boundary Analysis:**
+   - What data is trusted vs untrusted?
+   - Are internal service calls properly validated?
+   - Does the system trust headers (X-Forwarded-For, X-User-Id) without verification?
+   
+   Generate **individual finding files** for each issue discovered:
+   - `experiments/001_baseline/Findings/Code/` for code logic issues
+   - `experiments/001_baseline/Findings/Cloud/` for infrastructure issues
+   - Each finding follows template in `Templates/CodeFinding.md` or `Templates/CloudFinding.md`
+   - **DO NOT** run skeptic reviews yet - findings must exist first
+   
+   **Example finding file structure:**
+   ```
+   experiments/001_baseline/Findings/Code/
+   ├── FI_API_001_Auth_Bypass_Health_Endpoint.md
+   ├── FI_API_002_Missing_Role_Check_Admin_Route.md
+   └── FI_API_003_Trusted_Header_Without_Validation.md
+   ```
+   
+   **Phase 4: Skeptic Reviews (review each finding)**
+   
+   **IMPORTANT:** Skeptics review the FINDINGS created in Phase 3, not the code directly.
+   The workflow is:
+   1. Read finding from `experiments/001_baseline/Findings/`
+   2. Understand the security engineer's claim
+   3. Access source code/IaC to verify or challenge the claim
+   4. Update the finding file with skeptic section
+   
+   For EACH finding generated in Phase 3:
    
    - **DevSkeptic Review:**
      - Read the finding from `experiments/001_baseline/Findings/`
@@ -113,7 +157,13 @@ When `status = "pending"`:
    - Knowledge → `experiments/001_baseline/Knowledge/`
    - Summary → `experiments/001_baseline/Summary/`
 
-6. **When done, mark complete:**
+6. **Capture ALL user feedback immediately:**
+   - Every piece of feedback → add to `experiments/<id>/feedback.md`
+   - Don't wait to be prompted - capture as you receive it
+   - Include: what was wrong, what was corrected, what files were updated
+   - This drives learning for future experiments
+
+7. **When done, mark complete:**
    ```bash
    python3 Scripts/triage_experiment.py complete 001
    ```
