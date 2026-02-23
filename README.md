@@ -13,6 +13,36 @@ consistent security triaging. It provides agent instructions, templates, and
 workflows for analysing scanner findings, updating knowledge, producing
 findings, maintaining summaries, and regenerating the risk register.
 
+## Experiment Mode (Self-Optimizing Triage)
+
+Triage-Saurus can run in **experiment mode** to optimize its own effectiveness:
+
+1. **Run baseline**: `triage experiment run` — scans repos with current strategy
+2. **Human review**: `triage experiment review <id>` — mark findings correct/wrong/missed
+3. **Learn**: `triage experiment learn <id>` — system proposes improvements
+4. **Repeat**: System runs optimized experiments until convergence (<5% improvement)
+
+### Key Commands
+| Command | Purpose |
+|---------|---------|
+| `triage resume` | Continue from where last session left off |
+| `triage experiment list` | Show all experiments with metrics |
+| `triage experiment compare <id1> <id2>` | Compare two runs side-by-side |
+| `triage experiment status` | Show current state |
+
+### What Gets Optimized
+- **Scan order**: Which scans yield highest-value findings
+- **Question order**: Which questions impact scores most
+- **File patterns**: Which paths contain security-relevant code
+- **Agent instructions**: Per-experiment tweaks (isolated per run)
+
+### Cross-Session Continuity
+State is stored in `Output/Learning/state.json` — any agent can resume from where the previous session left off. Experiment metrics are stored in SQLite for efficient querying.
+
+See `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md` for full details.
+
+---
+
 ## License
 See `LICENSE` (non-commercial internal use; no redistribution; no warranty).
 
