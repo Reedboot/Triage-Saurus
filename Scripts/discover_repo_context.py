@@ -12,6 +12,11 @@ It performs quick file-based discovery (no network, no git commands by default) 
 Usage:
   python3 Scripts/discover_repo_context.py /abs/path/to/repo
   python3 Scripts/discover_repo_context.py /abs/path/to/repo --repos-root /abs/path/to/repos
+  python3 Scripts/discover_repo_context.py /abs/path/to/repo --output-dir /path/to/experiment/folder
+
+For experiment isolation, use --output-dir to write to the experiment folder:
+  python3 Scripts/discover_repo_context.py /mnt/c/Repos/fi_api --repos-root /mnt/c/Repos \\
+      --output-dir Output/Learning/experiments/001_baseline
 
 Exit codes:
   0 success
@@ -167,6 +172,73 @@ def detect_languages(files: list[Path], repo: Path) -> list[tuple[str, str]]:
     return detected
 
 
+# Regex to extract TargetFramework from .csproj files
+TARGET_FRAMEWORK_RE = re.compile(r'<TargetFramework[s]?>([^<]+)</TargetFramework[s]?>', re.IGNORECASE)
+# Regex to extract dotnet_version from Terraform
+TF_DOTNET_VERSION_RE = re.compile(r'dotnet_version\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+
+def detect_dotnet_version(files: list[Path], repo: Path) -> dict:
+    """Detect .NET version from csproj, global.json, or Terraform.
+    
+    Returns dict with:
+    - version: The detected version (e.g., "net8.0", "v8.0")
+    - source: Where it was detected (e.g., "MyProject.csproj", "terraform/app_service.tf")
+    - all_versions: List of all versions found (if multiple projects)
+    """
+    versions: list[tuple[str, str]] = []  # (version, source)
+    
+    for p in files:
+        rp = rel(repo, p)
+        
+        # Check .csproj files
+        if p.suffix.lower() == ".csproj":
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                matches = TARGET_FRAMEWORK_RE.findall(text)
+                for m in matches:
+                    # Handle multiple targets like "net6.0;net7.0;net8.0"
+                    for v in m.split(";"):
+                        v = v.strip()
+                        if v:
+                            versions.append((v, rp))
+            except OSError:
+                continue
+        
+        # Check global.json for SDK version
+        elif p.name.lower() == "global.json":
+            try:
+                import json
+                data = json.loads(p.read_text(encoding="utf-8"))
+                sdk_version = data.get("sdk", {}).get("version")
+                if sdk_version:
+                    versions.append((f"SDK {sdk_version}", rp))
+            except (OSError, json.JSONDecodeError):
+                continue
+        
+        # Check Terraform for dotnet_version
+        elif p.suffix.lower() == ".tf":
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                for m in TF_DOTNET_VERSION_RE.finditer(text):
+                    versions.append((m.group(1), rp))
+            except OSError:
+                continue
+    
+    if not versions:
+        return {"version": None, "source": None, "all_versions": []}
+    
+    # Deduplicate and sort - prefer highest version
+    unique_versions = list(set(versions))
+    unique_versions.sort(key=lambda x: x[0], reverse=True)
+    
+    return {
+        "version": unique_versions[0][0],
+        "source": unique_versions[0][1],
+        "all_versions": unique_versions,
+    }
+
+
 def detect_ci(repo: Path) -> str:
     """Detect CI/CD platform (simple version)."""
     for name, marker in CI_MARKERS:
@@ -310,6 +382,83 @@ def repo_purpose(repo: Path, repo_name: str) -> tuple[str, Evidence | None]:
 
 
 TF_RESOURCE_RE = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.IGNORECASE | re.MULTILINE)
+
+# Pattern to match Terraform module sources
+TF_MODULE_SOURCE_RE = re.compile(
+    r'^\s*module\s+"([^"]+)"\s*\{[^}]*?source\s*=\s*"([^"]+)"',
+    re.IGNORECASE | re.MULTILINE | re.DOTALL
+)
+
+
+def detect_terraform_module_references(files: list[Path], repo: Path) -> list[dict]:
+    """Detect references to other repos via Terraform module sources.
+    
+    Returns list of:
+    {
+        "repo_name": "terraform-app_gateway",
+        "module_name": "app_gateway",
+        "source": "../terraform-app_gateway" or "git::https://...",
+        "detected_in_file": "terraform/main.tf",
+        "line": 42
+    }
+    """
+    references: list[dict] = []
+    seen_repos: set[str] = set()
+    
+    for p in files:
+        if p.suffix.lower() != ".tf":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        
+        rp = rel(repo, p)
+        
+        for m in TF_MODULE_SOURCE_RE.finditer(text):
+            module_name = m.group(1)
+            source = m.group(2)
+            line = text.count("\n", 0, m.start()) + 1
+            
+            # Extract repo name from various source formats
+            repo_name = None
+            
+            # Local path: source = "../terraform-app_gateway" or "../../terraform-modules//submodule"
+            if source.startswith("../") or source.startswith("./"):
+                # Get the first path component after ../
+                parts = source.replace("//", "/").split("/")
+                for part in parts:
+                    if part and part not in (".", ".."):
+                        repo_name = part.split("//")[0]  # Handle submodule paths
+                        break
+            
+            # Git URL: source = "git::https://github.com/org/terraform-app_gateway.git"
+            elif "git::" in source or source.endswith(".git"):
+                # Extract repo name from URL
+                git_match = re.search(r'/([^/]+?)(?:\.git)?(?:\?|//|$)', source)
+                if git_match:
+                    repo_name = git_match.group(1)
+            
+            # Registry: source = "hashicorp/consul/aws" (skip these - external)
+            elif "/" in source and not source.startswith("."):
+                # Check if it looks like a local org repo reference
+                if re.match(r'^[a-zA-Z0-9_-]+$', source.split("/")[0]):
+                    # Could be "org/repo" - take the second part
+                    parts = source.split("/")
+                    if len(parts) >= 2:
+                        repo_name = parts[1]
+            
+            if repo_name and repo_name not in seen_repos:
+                seen_repos.add(repo_name)
+                references.append({
+                    "repo_name": repo_name,
+                    "module_name": module_name,
+                    "source": source,
+                    "detected_in_file": rp,
+                    "line": line,
+                })
+    
+    return references
 
 
 def detect_terraform_resources(files: list[Path], repo: Path) -> set[str]:
@@ -814,9 +963,10 @@ def detect_external_dependencies(files: list[Path], repo: Path) -> dict[str, lis
     return {k: sorted(v)[:5] for k, v in deps.items()}
 
 
-def ensure_repos_knowledge(repos_root: Path) -> Path:
-    OUTPUT_KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_KNOWLEDGE_DIR / "Repos.md"
+def ensure_repos_knowledge(repos_root: Path, knowledge_dir: Path | None = None) -> Path:
+    kdir = knowledge_dir if knowledge_dir else OUTPUT_KNOWLEDGE_DIR
+    kdir.mkdir(parents=True, exist_ok=True)
+    path = kdir / "Repos.md"
     if path.exists():
         text = path.read_text(encoding="utf-8", errors="replace")
         if "**Repo root directory:**" not in text:
@@ -880,10 +1030,13 @@ def write_repo_summary(
     egress: list[Evidence],
     extra_evidence: list[Evidence],
     scan_scope: str,
+    dotnet_info: dict[str, str | None] = None,
+    summary_dir: Path | None = None,
 ) -> Path:
-    OUTPUT_SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
-    (OUTPUT_SUMMARY_DIR / "Repos").mkdir(parents=True, exist_ok=True)
-    out_path = OUTPUT_SUMMARY_DIR / "Repos" / f"{repo_name}.md"
+    sdir = summary_dir if summary_dir else OUTPUT_SUMMARY_DIR
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "Repos").mkdir(parents=True, exist_ok=True)
+    out_path = sdir / "Repos" / f"{repo_name}.md"
 
     lang_lines = "\n".join([f"- {l} — evidence: `{e}`" for l, e in langs]) if langs else "- (none detected)"
 
@@ -891,6 +1044,7 @@ def write_repo_summary(
     repo_url = "N/A"
 
     tf_resource_types = detect_terraform_resources(iter_files(repo), repo)
+    tf_module_refs = detect_terraform_module_references(iter_files(repo), repo)
     endpoints = detect_dotnet_endpoints(iter_files(repo), repo, limit=6)
     hosting_info = detect_hosting_from_terraform(iter_files(repo), repo)
     ingress_info = detect_ingress_from_code(iter_files(repo), repo)
@@ -1318,6 +1472,20 @@ def write_repo_summary(
         "### Cloud Environment Implications\n"
         f"- **Provider(s) referenced:** {provider_line}\n"
         "- **Note:** If this repo deploys/targets cloud resources, promote reusable facts into `Output/Knowledge/<Provider>.md` once confirmed.\n\n"
+    )
+    
+    # Add Related Repos section if Terraform module references found
+    if tf_module_refs:
+        content += "## 🔗 Related Repos\n"
+        content += "**Detected from Terraform module source references:**\n\n"
+        content += "| Repo | Module | Detected In | Line |\n"
+        content += "|------|--------|-------------|------|\n"
+        for ref in tf_module_refs:
+            content += f"| `{ref['repo_name']}` | `{ref['module_name']}` | `{ref['detected_in_file']}` | L{ref['line']} |\n"
+        content += "\n"
+        content += "⚠️ **Action Required:** These repos may contain infrastructure for components referenced in this codebase. Consider scanning them for complete coverage.\n\n"
+    
+    content += (
         "## 🤔 Skeptic\n"
         "**[PHASE 2 TODO]** After security review, invoke Dev Skeptic and Platform Skeptic agents:\n"
         "1. **Dev Skeptic:** Review from developer perspective (app patterns, mitigations, org conventions)\n"
@@ -1335,6 +1503,7 @@ def write_repo_summary(
         f"- **Repo URL:** {repo_url}\n"
         f"- **Repo Type:** {repo_type}\n"
         f"- **Languages/Frameworks:** {', '.join([l for l, _ in langs]) if langs else 'Unknown'}\n"
+        f"- **Runtime Version:** {(dotnet_info['version'] or 'Unknown') if dotnet_info else 'Unknown'}" + (f" (from `{dotnet_info['source']}`)" if dotnet_info and dotnet_info['source'] else "") + "\n"
         f"- **CI/CD:** {ci}\n"
         f"- **Scan Scope:** {scan_scope}\n"
         "- **Scanner:** Context discovery (local heuristics)\n"
@@ -1364,6 +1533,11 @@ def main() -> int:
         default=None,
         help="Repo root directory to record in Output/Knowledge/Repos.md (default: parent of repo).",
     )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Base output directory for Summary/ and Knowledge/ (default: Output/). Use for experiment isolation.",
+    )
     args = parser.parse_args()
 
     repo = Path(args.repo).expanduser()
@@ -1375,10 +1549,20 @@ def main() -> int:
 
     repo_name = repo.name
     repos_root = Path(args.repos_root).expanduser().resolve() if args.repos_root else repo.parent.resolve()
+    
+    # Determine output directories (support experiment isolation)
+    if args.output_dir:
+        output_base = Path(args.output_dir).expanduser().resolve()
+        summary_dir = output_base / "Summary"
+        knowledge_dir = output_base / "Knowledge"
+    else:
+        summary_dir = OUTPUT_SUMMARY_DIR
+        knowledge_dir = OUTPUT_KNOWLEDGE_DIR
 
     files = iter_files(repo)
     langs = detect_languages(files, repo)
     lang_names = [l for l, _ in langs]
+    dotnet_info = detect_dotnet_version(iter_files(repo), repo)
     rtype = infer_repo_type(lang_names, repo_name)
     purpose, purpose_ev = repo_purpose(repo, repo_name)
     ci = detect_ci(repo)
@@ -1387,6 +1571,8 @@ def main() -> int:
     extra: list[Evidence] = []
     if purpose_ev:
         extra.append(purpose_ev)
+    if dotnet_info["version"]:
+        extra.append(Evidence(label=f".NET Version: {dotnet_info['version']}", path=dotnet_info["source"]))
     if (repo / "Dockerfile").exists():
         extra.append(Evidence(label="Dockerfile present", path="Dockerfile"))
     if (repo / ".github" / "workflows").exists():
@@ -1409,7 +1595,7 @@ def main() -> int:
         if len(ingress) >= 20 and len(egress) >= 20:
             break
 
-    repos_md = ensure_repos_knowledge(repos_root)
+    repos_md = ensure_repos_knowledge(repos_root, knowledge_dir=knowledge_dir)
     upsert_repo_inventory(
         repos_md,
         repo_name=repo_name,
@@ -1430,6 +1616,8 @@ def main() -> int:
         egress=egress,
         extra_evidence=extra,
         scan_scope="Context discovery",
+        dotnet_info=dotnet_info,
+        summary_dir=summary_dir,
     )
 
     print("== Context discovery complete ==")
