@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
+    model TEXT,  -- Model used (e.g., claude-sonnet-4, claude-haiku-4.5)
     strategy_version TEXT,
     repos TEXT,  -- JSON array of repo names
     started_at TIMESTAMP,
@@ -241,15 +242,15 @@ def print_status() -> None:
             print(f"  {row['finding_name']}: {row['fp_count']} times")
 
 
-def create_experiment(exp_id: str, name: str, repos: list[str], strategy: str = "default") -> None:
+def create_experiment(exp_id: str, name: str, repos: list[str], strategy: str = "default", model: str = None) -> None:
     """Create a new experiment record."""
     conn = get_connection()
     conn.execute(
         """
-        INSERT INTO experiments (id, name, status, strategy_version, repos, started_at)
-        VALUES (?, ?, 'pending', ?, ?, ?)
+        INSERT INTO experiments (id, name, status, model, strategy_version, repos, started_at)
+        VALUES (?, ?, 'pending', ?, ?, ?, ?)
         """,
-        (exp_id, name, strategy, json.dumps(repos), datetime.now().isoformat())
+        (exp_id, name, model, strategy, json.dumps(repos), datetime.now().isoformat())
     )
     conn.commit()
     conn.close()
