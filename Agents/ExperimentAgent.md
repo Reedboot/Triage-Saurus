@@ -79,7 +79,31 @@ When `status = "pending"`:
    **Phase 3: Security Review (using gathered context)**
    Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
    
-   Focus on **logic review**, not just vulnerability scanning:
+   **Step 3a: Review repo summary security observations**
+   - Phase 2 has documented security findings in `Summary/Repos/<RepoName>.md`
+   - Review the "Security Observations" section for all identified issues
+   
+   **Step 3b: Extract findings as individual files** (MANDATORY)
+   - For **MEDIUM+ severity** findings documented in repo summary:
+     - Create individual finding file: `experiments/001_baseline/Findings/Code/<RepoName>_<Issue>_<Number>.md`
+     - Include architecture diagram showing attack path
+     - Copy finding details (location, issue, attack vector, mitigations)
+     - Add POC script section (if exploitable - use guidance from SecurityAgent.md)
+     - Leave Skeptic sections blank (filled in Phase 4)
+   - For **LOW/INFO** findings: leave in repo summary only
+   
+   **Example extraction:**
+   ```
+   Repo summary finding:
+   "Pre-Validation Logging Side Effect (MEDIUM) - Request paths logged BEFORE validation"
+   
+   →  Extract to: experiments/001_baseline/Findings/Code/FI_API_001_Pre_Validation_Logging.md
+   →  Include: POC showing path enumeration attack
+   →  Leave blank: Dev Skeptic and Platform Skeptic sections
+   ```
+   
+   **Step 3c: Additional logic review** (if time permits):
+   Focus on **logic review**, not just documented findings:
    
    **Authentication Flow Analysis:**
    - Trace the complete auth flow from request entry to final validation
@@ -102,19 +126,15 @@ When `status = "pending"`:
    - Are internal service calls properly validated?
    - Does the system trust headers (X-Forwarded-For, X-User-Id) without verification?
    
-   Generate **individual finding files** for each issue discovered:
+   Generate **individual finding files** for any NEW issues discovered:
    - `experiments/001_baseline/Findings/Code/` for code logic issues
    - `experiments/001_baseline/Findings/Cloud/` for infrastructure issues
    - Each finding follows template in `Templates/CodeFinding.md` or `Templates/CloudFinding.md`
    - **DO NOT** run skeptic reviews yet - findings must exist first
    
-   **Example finding file structure:**
-   ```
-   experiments/001_baseline/Findings/Code/
-   ├── FI_API_001_Auth_Bypass_Health_Endpoint.md
-   ├── FI_API_002_Missing_Role_Check_Admin_Route.md
-   └── FI_API_003_Trusted_Header_Without_Validation.md
-   ```
+   **Validation:** At end of Phase 3:
+   - `ls experiments/001_baseline/Findings/Code/*.md` → at least 1 file per MEDIUM+ finding
+   - Each file has blank Skeptic sections (not yet filled)
    
    **Phase 4: Skeptic Reviews (review each finding)**
    
