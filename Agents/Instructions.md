@@ -435,6 +435,15 @@ This repository supports consistent security triage. The expected workflow is:
   - **Exception (user-requested automation):** if the user asks for the risk register to auto-regenerate, it is OK to run a watcher in a separate terminal: `python3 Scripts/watch_risk_register.py` (or `--full` to also run the refresh helpers).
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
+- **Terminology Clarity:** When using security jargon, add inline explanation or glossary box for non-technical readers:
+  - Common terms needing explanation: fails open/closed, blast radius, privilege escalation, lateral movement, defense-in-depth
+  - Example glossary box format:
+    ```markdown
+    **Circuit Breaker Behavior Glossary:**
+    - **Fails CLOSED** = Denies requests when downstream service is unavailable ✅ Secure
+    - **Fails OPEN** = Allows requests through when downstream service is unavailable ❌ Insecure
+    ```
+  - Ensure findings are understandable to developers, platform engineers, and business stakeholders
 
 ## Outputs
 
