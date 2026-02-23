@@ -154,11 +154,23 @@ See `Templates/RepoFinding.md` for complete Traffic Flow template structure.
 
 ## Outputs
 - `Output/Summary/Repos/<RepoName>.md` with comprehensive context (Phase 1 baseline + Phase 2 enhancements)
+  - **Phase 2 completes:** Traffic Flow, middleware details, security observations
+  - **Phase 2 does NOT extract findings** - security observations documented inline only
 - `Output/Knowledge/Repos.md` updated with repository entry
 - If IaC detected:
   - `Output/Knowledge/<Provider>.md` updated with services discovered (Azure/AWS/GCP)
   - `Output/Summary/Cloud/Architecture_<Provider>.md` created/updated with cloud architecture diagram
 - Audit log entries with timing and findings count
+
+**IMPORTANT: Context Discovery vs Security Review**
+- **Phase 1 & 2 (This Agent):** Document security observations in repo summary ONLY
+- **Phase 3 (SecurityAgent):** Extract MEDIUM+ findings as individual files with POC scripts
+- **Why separate:** Context discovery focuses on understanding, security review focuses on actionable findings
+
+**After Phase 2 completes:**
+- Repo summary will have "Security Observations" section with inline findings
+- SecurityAgent.md must then extract MEDIUM+ findings as separate files
+- See "Repo Scan Finding Extraction" in SecurityAgent.md for extraction workflow
 
 ## Discovery Scope Reference
 
