@@ -47,9 +47,13 @@ def iter_targets() -> list[Path]:
         targets.append(INTAKE_SAMPLE_DIR)
 
     # Also remove Output/ content (but keep the folders).
+    # IMPORTANT: Exclude Learning/ folder to preserve experiment data, SQLite, and strategies.
     if (ROOT / "Output").exists():
         for folder in (ROOT / "Output").iterdir():
             if folder.name.startswith("."):
+                continue
+            if folder.name == "Learning":
+                # Never clear Learning/ - it contains experiment history and learned strategies
                 continue
             if folder.is_dir():
                 # Remove files under Output/, but keep the folder structure.
