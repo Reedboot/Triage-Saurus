@@ -347,3 +347,54 @@ When triaging a cloud advisory/recommendation:
 > **Compensating Controls:** SQL databases use private endpoints (not internet-accessible), database audit logs feed into SIEM with anomaly detection rules, JIT/Bastion for admin access.
 > 
 > **Actual Severity:** MEDIUM (4/10) - ATP provides SQL-specific anomaly detection, but private networking + monitoring reduce attack surface and provide baseline detection. Nice-to-have for defense-in-depth, not critical.
+
+## Resource-Specific Security Checklists
+
+### Azure Storage Account Checklist
+
+When reviewing storage accounts (especially those containing sensitive data like logs, dumps, backups), check these specific settings:
+
+| Risk | Terraform Setting | Insecure | Secure | Severity if Insecure |
+|------|-------------------|----------|--------|---------------------|
+| **Public blob access** | `allow_blob_public_access` | `true` | `false` | 🔴 Critical |
+| **Anonymous container** | Container access level | `blob`/`container` | `private` | 🔴 Critical |
+| **Storage keys enabled** | `shared_access_key_enabled` | `true` | `false` | 🟠 High |
+| **Network open** | `network_rules.default_action` | `Allow` | `Deny` | 🟠 High |
+| **HTTP allowed** | `enable_https_traffic_only` | `false` | `true` | 🟠 High |
+| **No private endpoint** | `private_endpoint_connection` | missing | configured | 🟠 High |
+| **No retention policy** | `lifecycle_management` | missing | configured | 🟡 Medium |
+| **Soft delete off** | `blob_soft_delete_retention_days` | `0` | `7-365` | 🟡 Medium |
+
+**Access method priority (most to least secure):**
+1. ✅ Managed Identity (no credentials to leak)
+2. 🟡 User delegation SAS (tied to AAD identity)
+3. 🟠 Service SAS (time-limited but leakable)
+4. 🔴 Account SAS (broad access, leakable)
+5. ⛔ Storage account keys (full access, long-lived)
+
+**Red flags for sensitive data storage:**
+- Memory dumps, crash logs → secrets in memory
+- Backup storage → full database contents
+- Log storage → potential PII, tokens in logs
+- Terraform state → secrets in state file
+
+### Azure App Service Checklist
+
+| Risk | Terraform Setting | Insecure | Secure |
+|------|-------------------|----------|--------|
+| **HTTP allowed** | `https_only` | `false` | `true` |
+| **Old TLS** | `minimum_tls_version` | `"1.0"`/`"1.1"` | `"1.2"` |
+| **FTP enabled** | `ftps_state` | `"AllAllowed"` | `"Disabled"` |
+| **No VNet integration** | `vnet_route_all_enabled` | `false` | `true` |
+| **No IP restrictions** | `ip_restriction` | missing | configured |
+| **Managed identity off** | `identity.type` | missing | `"SystemAssigned"` |
+
+### Azure Key Vault Checklist
+
+| Risk | Terraform Setting | Insecure | Secure |
+|------|-------------------|----------|--------|
+| **Public network access** | `public_network_access_enabled` | `true` | `false` |
+| **No private endpoint** | `private_endpoint_connection` | missing | configured |
+| **Soft delete off** | `soft_delete_retention_days` | `0` | `7-90` |
+| **Purge protection off** | `purge_protection_enabled` | `false` | `true` |
+| **RBAC not used** | `enable_rbac_authorization` | `false` | `true` |
