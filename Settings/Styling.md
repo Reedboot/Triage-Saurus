@@ -134,6 +134,7 @@ Use consistent emoji for section headers across all documents:
 - `## 🚩 Risk`
 - `## ✅ Actions`
 - `## 📌 Findings`
+- `## 📊 TL;DR - Executive Summary` (architecture summaries, when used)
 - `## 📊 Service Risk Order` (architecture summaries)
 - `## 📝 Notes`
 
@@ -151,4 +152,3 @@ Use consistent emoji for section headers across all documents:
 - `## 🛡️ Security Observations`
 
 Last updated: 05/02/2026 21:04
-

@@ -109,6 +109,7 @@ Targeted helpers (stdout-only):
        - 🧭 Overview - Purpose, hosting, dependencies, auth, container/network details
        - 🚦 Traffic Flow - Phase 2 TODO marker with detected hints and route mappings table
      - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
+     - When running in **experiment isolation** mode (i.e., `--output-dir Output/Learning/experiments/<id>_<name>`), the script also generates an experiment-scoped provider architecture summary under `Summary/Cloud/Architecture_<Provider>.md`.
      - Review the generated summary before proceeding
    - **Phase 2 - Manual Context Analysis (~30-60 seconds per repo):**
      - Launch ONE explore agent to complete Phase 2 TODO markers

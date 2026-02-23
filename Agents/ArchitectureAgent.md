@@ -128,13 +128,13 @@
   1. **Title header** with map emoji and space: `# 🗺️ Architecture Azure` (not Architecture_Azure)
   2. **Main architecture diagram** (starts immediately after title, no subheading needed):
      - High-level overview showing all major components
-     - Key legend with emoji
+     - Key legend with emoji (place immediately under the Mermaid block)
      - 2-3 sentence description of the overall pattern
-  3. **TL;DR - Executive Summary:** `## 📊 TL;DR - Executive Summary`
+  3. **Overview section** with evidence table
+  4. **TL;DR - Executive Summary:** `## 📊 TL;DR - Executive Summary`
      - Services scanned/referenced table
      - Key architecture pattern
      - Top 3 gaps
-  4. **Overview section** with evidence table
   5. **Multiple focused diagrams** (one per architectural concern):
      - **Ingress Flow** - Internet → App Gateway/LB → Backend Services (security layers)
      - **API/Service Routing** - API Management/ALB/Cloud Load Balancer routing patterns
@@ -142,7 +142,7 @@
      - **Network Topology** - Hub-spoke, VNet peering, VPC architecture, egress patterns
   6. **Notes section** at end for assumptions, gaps, references
   
-  **CRITICAL:** The main architecture diagram MUST appear immediately after the title, BEFORE the TL;DR section. This gives readers an immediate visual understanding before reading details.
+  **CRITICAL:** The main architecture diagram MUST appear immediately after the title. This gives readers an immediate visual understanding before reading details.
   
 - Each diagram section includes:
   - **H2 header with emoji:** `## 🗺️ Ingress Flow (Internet → Services)`
