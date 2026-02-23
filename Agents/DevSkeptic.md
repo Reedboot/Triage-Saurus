@@ -43,6 +43,16 @@
    - User input → SQLi/XSS/RCE → **Directly exploitable** (High/Critical severity)
    - Internal data → SQLi/XSS/RCE → **Requires prior compromise** (Medium severity, compounding issue)
 
+   **Trace ALL data sinks, not just business logic:**
+   
+   When tracing data flow, check where untrusted data goes:
+   - ✅ Backend APIs (check authorization)
+   - ✅ Databases (check injection)
+   - ✅ Logs/telemetry (check injection/tampering)
+   - ✅ Caches (check poisoning)
+   - ✅ External services (check side effects)
+   - ✅ Monitoring/metrics (check poisoning)
+
 3. **Validation/Sanitization Layers**
    Check if input goes through:
    - Input validation middleware/decorators
