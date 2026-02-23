@@ -619,10 +619,26 @@ When scanning a repository with IaC:
   - **Validation:** Run `grep -c "PHASE 2 TODO" Output/Summary/Repos/*.md` → should return 0
 
 ☐ **Phase 3: Security review** (create findings, invoke skeptics)
-  - Create individual findings under `Output/Findings/Code/`
-  - Run Dev Skeptic and Platform Skeptic reviews on findings
-  - Update scores based on skeptic feedback
-  - Link findings to repo summary under Compounding Findings
+  - **Step 3a: Extract findings from repo summary**
+    - Review "Security Observations" section in repo summary
+    - Extract MEDIUM+ severity findings as individual files under `Output/Findings/Code/`
+    - Each finding file should include:
+      - Architecture diagram showing attack path
+      - TL;DR section
+      - Security Review section (from repo summary)
+      - POC script (if exploitable)
+      - Blank Skeptic sections (to be filled in Step 3b)
+  - **Step 3b: Invoke skeptics on extracted findings**
+    - Run Dev Skeptic review on each finding file
+    - Run Platform Skeptic review on each finding file
+    - Update scores based on skeptic feedback
+  - **Step 3c: Link findings**
+    - Link findings to repo summary under Compounding Findings
+    - Update repo summary TL;DR with finding links
+  - **Validation:** 
+    - `ls Output/Findings/Code/*.md` → at least 1 finding file for MEDIUM+ issues
+    - Each finding has completed Skeptic sections
+    - Repo summary links to extracted findings
 
 ☐ **Phase 4: Cloud architecture update** (ArchitectureAgent) **[MANDATORY if IaC detected]**
   - Update or create `Output/Summary/Cloud/Architecture_<Provider>.md`
