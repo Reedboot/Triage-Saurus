@@ -13,6 +13,14 @@ repository.
 - **Path:** Templates/Workflows.md
   - **Purpose:** Navigation flows, menu structures, and user journey definitions.
 
+## Experiment & Learning Agents
+- **Path:** Agents/ExperimentAgent.md
+  - **Purpose:** Orchestrate triage experiments to optimize scan efficiency and accuracy.
+  - **Capabilities:** Create numbered experiment folders, copy agents/scripts per run, coordinate SecurityAgent/DevSkeptic/PlatformSkeptic, capture metrics, maintain cross-session state via `state.json`.
+- **Path:** Agents/LearningAgent.md
+  - **Purpose:** Analyze experiment results and human feedback to improve future runs.
+  - **Capabilities:** Compare experiments, identify patterns, propose agent instruction changes, update strategies, maintain SQLite learning index.
+
 ## Additional Agent Files
 - **Path:** Templates/CloudFinding.md
   - **Purpose:** Template and workflow guidance for cloud findings.
