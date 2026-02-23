@@ -45,8 +45,9 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
   - Tech stack, infrastructure, dependencies, CI/CD, observability
 
 **After context discovery completes:** Ask user to select scan scope using ask_user tool:
-- Choices: "IaC + SCA (Recommended)", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
-- Default is "IaC + SCA" for discovering architecture/logic and detecting code flow bugs (auth, injection patterns)
+- Choices: "Manual analysis only", "IaC scan", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
+- **Default is "Manual analysis only"** for Phase 2 - code review without automated dependency scanning
+- **SCA (CVE scanning)** runs ONLY when explicitly requested or as part of SAST
 - SAST available but not default (more time-intensive, less actionable for initial triage)
 
 ---
@@ -307,6 +308,8 @@ Record timing in audit log under "Scan Type: IaC"
 **SCA Scan Task:**
 ```
 Scan repository <repo_path> for Software Composition Analysis (dependency vulnerabilities).
+
+⚠️ **IMPORTANT:** SCA scans (including CVE checking) should ONLY run when explicitly requested by the user or as part of a SAST scan. Do NOT run during Phase 2 manual analysis unless user specifically requests it.
 
 Follow Agents/Instructions.md and Agents/SecurityAgent.md for scoring and attack path analysis.
 
