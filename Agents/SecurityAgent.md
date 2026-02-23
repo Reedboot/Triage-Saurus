@@ -309,6 +309,41 @@ echo "Expected: [result]"
 - Any confirmed facts added to `Knowledge/`.
 - Any impacted summaries updated under `Summary/`.
 
+### Repo Scan Finding Extraction (MANDATORY)
+
+**When scanning repos, findings are often initially documented in the repo summary's "Security Observations" section. These MUST be extracted as individual finding files.**
+
+**Extraction criteria:**
+- Extract **all MEDIUM+ severity findings** as individual files
+- Extract **HIGH/CRITICAL findings** even if marked as INFO due to mitigations (document both states)
+- Leave **LOW/INFO findings** in repo summary only (unless high business impact)
+
+**Extraction workflow:**
+1. **Review repo summary** `Output/Summary/Repos/<RepoName>.md` → "Security Observations" section
+2. **For each MEDIUM+ finding**, create `Output/Findings/Code/<RepoName>_<Issue>_<Number>.md`:
+   - Copy architecture context from repo summary
+   - Copy finding details (location, issue, attack vector, mitigations)
+   - Add POC script section (if exploitable)
+   - Add blank Skeptic sections
+   - Add metadata (source: repo scan, resource: <RepoName>)
+3. **Run skeptic reviews** on each extracted finding file
+4. **Link findings** back to repo summary under "Compounding Findings"
+
+**Example:**
+```
+Repo summary has: "Pre-Validation Logging Side Effect (MEDIUM)"
+→ Extract to: Output/Findings/Code/FI_API_001_Pre_Validation_Logging.md
+→ Include POC showing path enumeration attack
+→ Run Dev + Platform skeptics
+→ Link in repo summary: [FI_API_001](../../Findings/Code/FI_API_001_Pre_Validation_Logging.md)
+```
+
+**Why this matters:**
+- Individual findings can be tracked in risk register
+- Findings can be linked across repos
+- POC scripts are discoverable per finding
+- Remediation status tracked independently
+
 ### Finding Structure Requirements
 - **TL;DR - Executive Summary:** After Dev and Platform Skeptic reviews are complete, add a `## 📊 TL;DR - Executive Summary` section immediately after the architecture diagram. This gives security engineers immediate visibility into:
   - Final score with adjustment tracking (Security Review → Dev → Platform)
