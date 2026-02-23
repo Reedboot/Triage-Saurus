@@ -5,6 +5,7 @@ Main entry point for the experiment/learning system.
 
 Usage:
     python3 Scripts/triage_experiment.py resume
+    python3 Scripts/triage_experiment.py new <name>                    # prompts for repos interactively
     python3 Scripts/triage_experiment.py new <name> --repos <repo1> <repo2>
     python3 Scripts/triage_experiment.py run <id>
     python3 Scripts/triage_experiment.py list
@@ -17,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from datetime import datetime
@@ -31,6 +33,31 @@ EXPERIMENTS_DIR = LEARNING_DIR / "experiments"
 STRATEGIES_DIR = LEARNING_DIR / "strategies"
 AGENTS_SOURCE = REPO_ROOT / "Agents"
 SCRIPTS_SOURCE = REPO_ROOT / "Scripts"
+
+
+def compute_file_hash(path: Path) -> str:
+    """Compute MD5 hash of a file for version tracking."""
+    return hashlib.md5(path.read_bytes()).hexdigest()[:12]
+
+
+def compute_agents_version() -> dict:
+    """Compute version info for all agent files.
+    
+    Returns dict with:
+    - combined_hash: Single hash representing all agents
+    - files: Dict of filename -> hash for individual tracking
+    """
+    hashes = {}
+    for agent_file in sorted(AGENTS_SOURCE.glob("*.md")):
+        hashes[agent_file.name] = compute_file_hash(agent_file)
+    
+    # Combined hash of all individual hashes
+    combined = hashlib.md5("".join(hashes.values()).encode()).hexdigest()[:12]
+    
+    return {
+        "combined_hash": combined,
+        "files": hashes,
+    }
 
 
 def load_state() -> dict:
@@ -72,6 +99,135 @@ def get_next_experiment_id() -> str:
                 pass
     next_num = max(existing_ids, default=0) + 1
     return f"{next_num:03d}"
+
+
+def discover_repos(repos_root: Path | None = None) -> list[str]:
+    """Discover available repos in the repos root directory."""
+    if repos_root is None:
+        # Try to infer from parent of REPO_ROOT
+        repos_root = REPO_ROOT.parent
+    
+    if not repos_root.exists():
+        return []
+    
+    repos = []
+    for p in sorted(repos_root.iterdir()):
+        if p.is_dir() and not p.name.startswith(".") and (p / ".git").exists():
+            repos.append(p.name)
+    return repos
+
+
+def get_repos_root_from_knowledge() -> Path | None:
+    """Try to read repos root from Knowledge/Repos.md."""
+    knowledge_file = OUTPUT_ROOT / "Knowledge" / "Repos.md"
+    if not knowledge_file.exists():
+        return None
+    
+    text = knowledge_file.read_text(encoding="utf-8", errors="replace")
+    # Look for: **Repo root directory:** `/path/to/repos`
+    import re
+    match = re.search(r"\*\*Repo root directory:\*\*\s*`([^`]+)`", text)
+    if match:
+        return Path(match.group(1))
+    return None
+
+
+def prompt_for_repos_root() -> Path:
+    """Prompt user to confirm or enter repos root directory."""
+    # Try knowledge file first
+    known_root = get_repos_root_from_knowledge()
+    if known_root and known_root.exists():
+        print(f"Repos root from Knowledge/Repos.md: {known_root}")
+        confirm = input("Use this path? [Y/n]: ").strip().lower()
+        if not confirm or confirm == "y":
+            return known_root
+    
+    # Suggest based on parent of current repo
+    suggested = REPO_ROOT.parent
+    print(f"Suggested repos root: {suggested}")
+    user_input = input(f"Enter repos root path (or press Enter to use suggested): ").strip()
+    
+    if user_input:
+        return Path(user_input).expanduser().resolve()
+    return suggested
+
+
+def prompt_for_repos() -> list[str]:
+    """Interactively prompt user to select repos for experiment."""
+    # Get repos root - either from knowledge, suggestion, or user input
+    repos_root = prompt_for_repos_root()
+    
+    if not repos_root.exists():
+        print(f"ERROR: Path does not exist: {repos_root}")
+        return []
+    
+    available = discover_repos(repos_root)
+    if not available:
+        print(f"No git repos found in {repos_root}")
+        print("Enter repo names manually (comma-separated):")
+        user_input = input("> ").strip()
+        if not user_input:
+            return []
+        return [r.strip() for r in user_input.split(",") if r.strip()]
+    
+    print(f"\nAvailable repos in {repos_root}:")
+    print("-" * 40)
+    
+    # Group by type (terraform-* vs others)
+    infra_repos = [r for r in available if r.startswith("terraform-")]
+    app_repos = [r for r in available if not r.startswith("terraform-")]
+    
+    if app_repos:
+        print("\nApplication repos:")
+        for i, repo in enumerate(app_repos, 1):
+            print(f"  {i}. {repo}")
+    
+    if infra_repos:
+        print(f"\nInfrastructure repos ({len(infra_repos)} terraform-* repos):")
+        print(f"  (Enter 'terraform-*' to select all)")
+        for i, repo in enumerate(infra_repos, len(app_repos) + 1):
+            print(f"  {i}. {repo}")
+    
+    print("\n" + "-" * 40)
+    print("Enter repo names or numbers (comma-separated), or 'terraform-*' for all IaC:")
+    user_input = input("> ").strip()
+    
+    if not user_input:
+        return []
+    
+    # Handle special patterns
+    if user_input == "terraform-*":
+        return infra_repos
+    
+    selected = []
+    all_repos = app_repos + infra_repos
+    
+    for item in user_input.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        
+        # Check if it's a number
+        try:
+            idx = int(item) - 1
+            if 0 <= idx < len(all_repos):
+                selected.append(all_repos[idx])
+            else:
+                print(f"Warning: Invalid number {item}, skipping")
+        except ValueError:
+            # It's a name - check if it exists or use as-is
+            if item in available:
+                selected.append(item)
+            elif item.endswith("*"):
+                # Pattern matching (e.g., "fi_*")
+                prefix = item[:-1]
+                matches = [r for r in available if r.startswith(prefix)]
+                selected.extend(matches)
+            else:
+                # Use as-is (might be a repo not in the list)
+                selected.append(item)
+    
+    return list(dict.fromkeys(selected))  # Remove duplicates, preserve order
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -118,6 +274,20 @@ def cmd_new(args: argparse.Namespace) -> int:
     """Create a new experiment."""
     state = load_state()
     
+    # Prompt for repos if not provided
+    repos = args.repos
+    if not repos:
+        print(f"Creating experiment '{args.name}'...")
+        repos = prompt_for_repos()
+        if not repos:
+            print("ERROR: At least one repo is required for an experiment.")
+            return 1
+        print(f"\nSelected repos: {', '.join(repos)}")
+        confirm = input("Proceed? [Y/n]: ").strip().lower()
+        if confirm and confirm != "y":
+            print("Aborted.")
+            return 1
+    
     exp_id = get_next_experiment_id()
     exp_name = f"{exp_id}_{args.name}"
     exp_dir = EXPERIMENTS_DIR / exp_name
@@ -151,13 +321,36 @@ def cmd_new(args: argparse.Namespace) -> int:
     # Create experiment.json
     strategy = json.loads((STRATEGIES_DIR / "default.json").read_text()) if (STRATEGIES_DIR / "default.json").exists() else {}
     
+    # Prompt for model if not provided
+    model = args.model
+    if not model:
+        print("\nAvailable models:")
+        print("  1. claude-sonnet-4 (standard)")
+        print("  2. claude-sonnet-4.5 (standard)")
+        print("  3. claude-haiku-4.5 (fast/cheap)")
+        print("  4. claude-opus-4.5 (premium)")
+        print("  5. Other (enter manually)")
+        model_choice = input("Select model [1]: ").strip() or "1"
+        model_map = {
+            "1": "claude-sonnet-4",
+            "2": "claude-sonnet-4.5", 
+            "3": "claude-haiku-4.5",
+            "4": "claude-opus-4.5",
+        }
+        model = model_map.get(model_choice, model_choice)
+    
+    # Compute agent version info for tracking improvements
+    agents_version = compute_agents_version()
+    
     exp_config = {
         "id": exp_id,
         "name": args.name,
         "full_name": exp_name,
         "status": "pending",
+        "model": model,
+        "agents_version": agents_version,
         "strategy": strategy,
-        "repos": args.repos or [],
+        "repos": repos,
         "created_at": datetime.now().isoformat(),
         "started_at": None,
         "completed_at": None,
@@ -174,16 +367,18 @@ def cmd_new(args: argparse.Namespace) -> int:
     }, indent=2))
     
     # Record in database
-    db.create_experiment(exp_id, args.name, args.repos or [], strategy.get("version", "default"))
+    db.create_experiment(exp_id, args.name, repos, strategy.get("version", "default"), model=model)
     
     # Update state
     state["current_experiment_id"] = exp_id
     state["status"] = "pending"
     state["next_action"] = f"Run 'triage experiment run {exp_id}' to execute the experiment"
-    state["repos_in_scope"] = args.repos or []
+    state["repos_in_scope"] = repos
+    state["model"] = model
     state["experiment_history"].append({
         "id": exp_id,
         "name": args.name,
+        "model": model,
         "status": "pending",
         "created_at": datetime.now().isoformat(),
     })
@@ -191,6 +386,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     save_state(state)
     
     print(f"Created experiment: {exp_name}")
+    print(f"Model: {model}")
     print(f"Directory: {exp_dir}")
     print()
     print("Next steps:")
@@ -266,6 +462,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("Create a new experiment instead.")
         return 1
     
+    # Check if repos are configured - prompt if not
+    repos = config.get("repos", [])
+    if not repos:
+        print(f"Experiment {args.id} has no repos configured.")
+        print("Please select repos to scan:\n")
+        repos = prompt_for_repos()
+        if not repos:
+            print("ERROR: At least one repo is required to run an experiment.")
+            return 1
+        print(f"\nSelected repos: {', '.join(repos)}")
+        confirm = input("Proceed? [Y/n]: ").strip().lower()
+        if confirm and confirm != "y":
+            print("Aborted.")
+            return 1
+        
+        # Update config with selected repos
+        config["repos"] = repos
+        config_file.write_text(json.dumps(config, indent=2))
+        state["repos_in_scope"] = repos
+        db.update_experiment(args.id, repos=repos)
+    
     # Update status
     config["status"] = "running"
     config["started_at"] = datetime.now().isoformat()
@@ -278,7 +495,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     state["handoff_notes"] = f"Experiment {args.id} running."
     save_state(state)
     
+    model = config.get("model", "unknown")
     print(f"Experiment {args.id} marked as running.")
+    print(f"Model: {model}")
+    print(f"Repos to scan: {', '.join(repos)}")
     print()
     print("The actual scanning should be performed by the agent using:")
     print(f"  - Agent instructions from: {exp_dir / 'Agents'}")
@@ -432,6 +652,47 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if len(only_in_2) > 5:
             print(f"  ... and {len(only_in_2) - 5} more")
     
+    # Compare agent versions
+    v1 = config1.get("agents_version", {})
+    v2 = config2.get("agents_version", {})
+    
+    if v1 and v2:
+        print("\n== Agent Version Comparison ==")
+        h1 = v1.get("combined_hash", "unknown")
+        h2 = v2.get("combined_hash", "unknown")
+        
+        if h1 == h2:
+            print(f"Agent versions: IDENTICAL ({h1})")
+        else:
+            print(f"Agent versions: DIFFERENT")
+            print(f"  {args.id1}: {h1}")
+            print(f"  {args.id2}: {h2}")
+            
+            # Show which files changed
+            files1 = v1.get("files", {})
+            files2 = v2.get("files", {})
+            
+            changed_files = []
+            for fname in set(files1.keys()) | set(files2.keys()):
+                fh1 = files1.get(fname, "-")
+                fh2 = files2.get(fname, "-")
+                if fh1 != fh2:
+                    changed_files.append(fname)
+            
+            if changed_files:
+                print(f"\n  Changed agent files ({len(changed_files)}):")
+                for fname in sorted(changed_files):
+                    print(f"    - {fname}")
+                print(f"\n  Check {args.id2}/Agents/changes.md for details")
+    
+    # Compare models
+    model1 = config1.get("model", "unknown")
+    model2 = config2.get("model", "unknown")
+    if model1 != model2:
+        print(f"\n== Model Difference ==")
+        print(f"  {args.id1}: {model1}")
+        print(f"  {args.id2}: {model2}")
+    
     return 0
 
 
@@ -507,6 +768,7 @@ def main() -> int:
     new_parser = subparsers.add_parser("new", help="Create new experiment")
     new_parser.add_argument("name", help="Experiment name (e.g., baseline, optimized_v1)")
     new_parser.add_argument("--repos", nargs="+", default=[], help="Repos to scan")
+    new_parser.add_argument("--model", default=None, help="Model used for experiment (e.g., claude-sonnet-4, claude-haiku-4.5)")
     
     # list
     subparsers.add_parser("list", help="List all experiments")
