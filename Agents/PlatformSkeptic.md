@@ -12,8 +12,19 @@ Provide a platform/ops-focused challenge of the proposed finding:
 - Recommend practical rollout order and blast-radius reduction.
 
 ## How to review
+
+**IMPORTANT: You review FINDINGS, not code/IaC directly.**
+
+The workflow is:
+1. **Read the security finding** from `Output/Learning/experiments/<id>/Findings/`
+2. **Understand the security engineer's claim** - what vulnerability, what evidence, what score
+3. **Access the IaC/config files** referenced in the finding to verify or challenge
+4. **Update the finding file** with your Platform Skeptic section
+
+**You are NOT doing independent IaC review.** You are challenging/validating specific claims made by the Security Engineer.
+
 - Add feedback under `## 🤔 Skeptic` → `### 🏗️ Platform` in the finding.
-- First, read and react to the **Security Review** (don’t restate it).
+- First, read and react to the **Security Review** (don't restate it).
 - **After completing your review, if both Dev and Platform reviews are done, populate the `## 📊 TL;DR - Executive Summary` section.** The TL;DR should include:
   - Final score with adjustment tracking (Security Review → Dev → Platform)
   - Top 3 priority actions with effort estimates
