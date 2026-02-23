@@ -41,12 +41,19 @@
 
 ### What to Include (per diagram):
 - **Major service categories:** Compute (App Services, VMs, AKS, Service Fabric), Data (SQL, Storage), Identity (AAD, Key Vault)
+- **ALL service dependencies:** Check the repo summary's "Dependencies" or "External Dependencies" section and ensure ALL are represented (databases, storage, queues, monitoring, logging)
 - **Network boundaries:** Internet, VPN, Private network zones
 - **Trust boundaries:** Public endpoints, private endpoints, authentication gates
 - **Key data flows:** External → Frontend → Backend → Data stores
 - **Security controls:** WAF, NSGs, API Management
 - **Complete routing chains:** For APIM-enabled services, show: Public hostname → Gateway → Service → APIM API → Backend
 - **All compute platforms:** Ensure ASE v3, API Management, AKS (with ingress), and Service Fabric all appear where relevant
+- **Monitoring/observability:** Application Insights, Log Analytics, Prometheus, Grafana (if present)
+
+**CRITICAL:** Don't just show request flow - show the COMPLETE service architecture including:
+- Where data is stored (Storage Accounts, SQL, Cosmos DB, etc.)
+- Where logs/metrics go (Application Insights, Log Analytics)
+- What the service connects to (all dependencies, not just routing)
 
 ### What to EXCLUDE:
 - Individual API endpoints or routes (unless critical to understanding)
@@ -102,7 +109,7 @@
 ### Security Findings & Questions
 - Always include "Recommended Security Findings to Investigate" table (prioritized: 🔴 High, 🟠 Medium, 🟡 Low)
 - Always include "Questions to Confirm" grouped by stakeholder (Platform, Dev, Security teams)
-- **Diagram key:** Always include a markdown key above the diagram using standard emoji from Settings/Styling.md: `**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed`
+- **Diagram key:** Always include a markdown key above the diagram using standard emoji from Settings/Styling.md: `**Key:** ✅ Confirmed = Verified in IaC/code | ❓ Assumed = Not confirmed | 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet`
 - **Label egress flows:** Use standard emoji on arrows (🔒 for internal, 🌐 for external)
 - **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
 - **Confirmed vs assumed:**
@@ -117,20 +124,32 @@
 - **Location:** `Summary/Cloud/`
 - **Filename:** `Summary/Cloud/Architecture_Azure.md` (replace Azure with the
   provider name).
-- **Structure:**
-  - Title header with the provider name.
-  - **Multiple diagram sections (one per architectural concern):**
-    1. **Ingress Flow** - Internet → App Gateway/LB → Backend Services (security layers)
-    2. **API/Service Routing** - API Management/ALB/Cloud Load Balancer routing patterns
-    3. **Backend Services & Data** - Internal services → databases/storage/messaging
-    4. **Network Topology** - Hub-spoke, VNet peering, VPC architecture, egress patterns
-  - Each diagram section includes:
-    - **H2 header with emoji:** `## 🗺️ Ingress Flow (Internet → Services)`
-    - **Key:** Emoji legend using standard emoji from Settings/Styling.md
-    - **Description:** 1-2 sentences explaining what the diagram shows
-    - **Mermaid diagram:** Focused on one architectural aspect
-    - **Components list:** Brief bullet points explaining key elements
-  - **Notes section** at end for assumptions, gaps, references to detailed repo diagrams
+- **Structure:** **MANDATORY SECTION ORDER**
+  1. **Title header** with map emoji and space: `# 🗺️ Architecture Azure` (not Architecture_Azure)
+  2. **Main architecture diagram** (starts immediately after title, no subheading needed):
+     - High-level overview showing all major components
+     - Key legend with emoji
+     - 2-3 sentence description of the overall pattern
+  3. **TL;DR - Executive Summary:** `## 📊 TL;DR - Executive Summary`
+     - Services scanned/referenced table
+     - Key architecture pattern
+     - Top 3 gaps
+  4. **Overview section** with evidence table
+  5. **Multiple focused diagrams** (one per architectural concern):
+     - **Ingress Flow** - Internet → App Gateway/LB → Backend Services (security layers)
+     - **API/Service Routing** - API Management/ALB/Cloud Load Balancer routing patterns
+     - **Backend Services & Data** - Internal services → databases/storage/messaging
+     - **Network Topology** - Hub-spoke, VNet peering, VPC architecture, egress patterns
+  6. **Notes section** at end for assumptions, gaps, references
+  
+  **CRITICAL:** The main architecture diagram MUST appear immediately after the title, BEFORE the TL;DR section. This gives readers an immediate visual understanding before reading details.
+  
+- Each diagram section includes:
+  - **H2 header with emoji:** `## 🗺️ Ingress Flow (Internet → Services)`
+  - **Key:** Emoji legend using standard emoji from Settings/Styling.md
+  - **Description:** 1-2 sentences explaining what the diagram shows
+  - **Mermaid diagram:** Focused on one architectural aspect
+  - **Components list:** Brief bullet points explaining key elements
 - **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and standard emoji from Settings/Styling.md.
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Colored borders (RECOMMENDED):** Use colored stroke styling to visually distinguish component types:
@@ -283,11 +302,11 @@ flowchart TB
 
 ## Example Skeleton
 ```text
-# 🟣 Architecture_Azure
+# 🗺️ Architecture Azure
 
-## 🗺️ High-Level Architecture
+**Key:** ✅ Confirmed = Verified in IaC/code | ❓ Assumed = Not confirmed | 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet
 
-**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed
+**Description:** Brief 2-3 sentence overview of the overall architecture pattern.
 
 ~~~mermaid
 flowchart TB
@@ -369,7 +388,7 @@ Example format:
 
 ## 🚪 Ingress Flow (Internet → Services)
 
-**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed
+**Key:** ✅ Confirmed = Verified in IaC/code | ❓ Assumed = Not confirmed | 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet
 
 **Description:** Shows how external traffic reaches internal services.
 
