@@ -78,6 +78,30 @@
 - Draw diagrams **from the internet inwards** (request flow / access paths).
 - Prefer **top-down** layout for readability on reviews (`flowchart TB`).
 - **Line breaks in node labels:** Use `<br/>` not `\n` for proper rendering.
+
+## Key Accuracy Rules (from Experiment 001 feedback)
+
+### Be Precise About Evidence
+- ✅ **Correct:** "VNet integration configured for outbound traffic (`vnet_route_all_enabled = true`)"
+- ❌ **Wrong:** "VNet integration means only VNet traffic can reach the service" (conflates inbound/outbound)
+
+### Mark Assumptions Clearly
+- Use ❓ prefix for unconfirmed components in diagrams and prose
+- Use dashed borders (`stroke-dasharray: 5 5`) for assumed components in Mermaid
+- Explicitly state what's NOT confirmed, don't just omit it
+
+### Overview Must Be Descriptive
+- ❌ **Don't:** "High-level view of the Azure estate"
+- ✅ **Do:** Explain WHY each component is detected, whether it's confirmed or assumed, and what needs verification
+
+### Evidence References Table
+- Include a table mapping claims to source files
+- This removes the need for inline links in prose (cleaner reading)
+- Mark unconfirmed items with ❓ in the table
+
+### Security Findings & Questions
+- Always include "Recommended Security Findings to Investigate" table (prioritized: 🔴 High, 🟠 Medium, 🟡 Low)
+- Always include "Questions to Confirm" grouped by stakeholder (Platform, Dev, Security teams)
 - **Diagram key:** Always include a markdown key above the diagram using standard emoji from Settings/Styling.md: `**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed`
 - **Label egress flows:** Use standard emoji on arrows (🔒 for internal, 🌐 for external)
 - **Only include items that connect to other items:** Do not include orphaned/isolated nodes with no relationships. Every node on the diagram must have at least one connection (arrow) to or from another node.
@@ -261,63 +285,145 @@ flowchart TB
 ```text
 # 🟣 Architecture_Azure
 
-## Overview
-High-level view of the Azure estate showing major service tiers, network boundaries, and key data flows. For detailed service-specific diagrams, see individual repo summaries.
-
-## Diagram
+## 🗺️ High-Level Architecture
 
 **Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed
 
 ~~~mermaid
 flowchart TB
-  internet[🌐 Internet]
-  users[🧑‍💻 External Users]
-  
-  subgraph Frontend Tier
-    apim[🔌 API Management]
-    appservices[⚙️ App Services x3<br/>my_api, payments, portal]
-  end
-  
-  subgraph Backend Tier
-    functions[⚡ Azure Functions x2]
-    aks[🐳 AKS Cluster]
-  end
-  
-  subgraph Data Tier
-    sql[🗄️ Azure SQL Database]
-    storage[💾 Storage Accounts x5]
-    kv[🔐 Key Vault]
-  end
-  
-  subgraph Identity
-    aad[👤 Azure AD]
-  end
-
-  internet --> apim
-  users --> apim
-  apim -->|🔒| appservices
-  appservices -->|🔒| functions
-  appservices -->|🔒| aks
-  functions -->|🔒| sql
-  aks -->|🔒| storage
-  appservices -->|🔒| kv
-  aad -.Authentication.-> apim
-
-  %% Dashed = assumed, not confirmed
-  style storage stroke-dasharray: 5 5
-  
-  %% 🚨 NOTE: NO fill: colors - stroke-only styling for dark theme compatibility
+  %% High-level overview diagram here
 ~~~
 
-## Detailed Service Diagrams
-For in-depth service flows and middleware pipelines, see:
-- **My API:** `Output/Summary/Repos/my_api.md` - Request flow, authentication, middleware pipeline
-- **Payment Service:** `Output/Summary/Repos/payment_service.md` - Transaction processing architecture
-- **Terraform Modules:** `Output/Summary/Repos/terraform-modules.md` - Platform infrastructure patterns
+---
+
+## 📊 TL;DR - Executive Summary
+
+| Aspect | Value |
+|--------|-------|
+| **Services Scanned** | N |
+| **Services Referenced** | N (not yet scanned) |
+| **Confirmed Defenses** | List key security controls proven in IaC |
+| **Assumed Components** | List components inferred but not confirmed |
+| **Coverage** | Partial/Complete - note gaps |
+
+**Key Architecture Pattern:** 
+Brief description of the overall architecture pattern.
+
+**Top 3 Gaps:**
+1. Gap 1 - action needed
+2. Gap 2 - action needed
+3. Gap 3 - action needed
+
+---
+
+## Overview
+
+**Descriptive prose explaining the architecture - NOT just "high-level view".**
+
+For each major component, explain:
+- **WHY it's detected** (what evidence led to this conclusion)
+- **Whether it's confirmed or assumed** (use ❓ for assumptions)
+- **What needs verification** (call out gaps explicitly)
+
+Example format:
+> **Azure is the detected cloud provider** based on Terraform resource types (`azurerm_*`).
+> 
+> **Ingress appears to be via Application Gateway** (❓ Assumed) - the codebase references X header suggesting a WAF, but no IaC found. **Requires scanning terraform-app_gateway to confirm.**
+> 
+> **Service X is hosted on App Service** with VNet integration. Outbound traffic routes through VNet. **Inbound access restrictions not confirmed.**
+
+**Last Updated:** DD/MM/YYYY
+**Sources:** List repos scanned
+
+### Evidence References
+| Claim | Source | File | Notes |
+|-------|--------|------|-------|
+| Azure provider | Terraform | `repo/terraform/*.tf` | `azurerm_*` resources |
+| Component X assumed | Code pattern | `file.cs` | Pattern description |
+| Setting Y confirmed | Terraform | `file.tf:20` | Setting value |
+| Setting Z | ❓ Not confirmed | - | What evidence needed |
+
+### 🔴 Recommended Security Findings to Investigate
+
+| Priority | Finding | Risk | Action |
+|----------|---------|------|--------|
+| 🔴 High | Finding 1 | Risk if not addressed | Scan X, check Y |
+| 🟠 Medium | Finding 2 | Risk description | Action needed |
+| 🟡 Low | Finding 3 | Risk description | Action needed |
+
+### ❓ Questions to Confirm
+
+**With Platform/Infra Team:**
+1. Question about infrastructure
+2. Question about networking
+
+**With Development Team:**
+1. Question about code behavior
+2. Question about auth flow
+
+**With Security Team:**
+1. Question about monitoring
+2. Question about policies
+
+---
+
+## 🚪 Ingress Flow (Internet → Services)
+
+**Key:** 🔒 Internal = Within VNet/Private | 🌐 External = Third-party/Internet | ❓ Assumed = Not confirmed
+
+**Description:** Shows how external traffic reaches internal services.
+
+~~~mermaid
+flowchart TB
+  %% Ingress diagram
+~~~
+
+---
+
+## 🔌 API/Service Routing
+
+**Description:** Shows routing between services.
+
+~~~mermaid
+flowchart TB
+  %% Routing diagram
+~~~
+
+---
+
+## 🔐 Network & Security Topology
+
+**Description:** Shows network isolation and security boundaries.
+
+~~~mermaid
+flowchart TB
+  %% Network diagram
+~~~
+
+---
+
+## 📊 Services Inventory
+
+| Service | Type | Status | Repo Summary |
+|---------|------|--------|--------------|
+| service-1 | App Service | ✅ Scanned | [link](../Repos/service.md) |
+| service-2 | Backend | 🔗 Referenced | Not yet scanned |
+| service-3 | Unknown | ❓ Assumed | Needs investigation |
+
+---
+
+## ⚠️ Validation Required
+
+1. **Component 1** - What needs confirming and where
+2. **Component 2** - What needs confirming and where
+
+---
 
 ## Notes
-- **Assumptions:** Storage accounts assumed to have private endpoints (not confirmed in IaC scans)
-- **Network:** VNet integration on App Services not shown for clarity - see individual repo summaries
+
+- Links to detailed repo summaries
+- IaC repos to scan for completeness
+- Assumptions with dashed borders in diagrams
 ```
 
 
