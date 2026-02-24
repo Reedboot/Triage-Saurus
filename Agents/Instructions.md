@@ -12,6 +12,149 @@ This repository supports consistent security triage. The expected workflow is:
 
 **Navigation:** For menu structures and user journey flows, see `Templates/Workflows.md`.
 
+## 🚨 Critical Rule: Production Rigor for ALL Environments
+
+**NEVER reduce assessment rigor based on environment classification (CTF, lab, training, test, dev).**
+
+### The Key Distinction: Environment vs Exploitability
+
+**It's OK to note environment context:**
+- "This is a non-production/lab/test environment (likely no real customer data)"
+- Document intended use (training, development, testing)
+
+**BUT emphasize the REAL RISK:**
+- **"However, the infrastructure CAN BE HACKED"** - technical exploitability is real
+- Score based on attack path viability, not data classification
+- Compromised lab environments enable production pivots
+
+### Requirements
+
+1. ✅ Create findings for ALL security issues regardless of environment label
+2. ✅ Score **inherently critical** vulnerabilities at 9-10/10 (NO reduction for dev/lab - e.g., public storage with credentials, exposed management interfaces)
+3. ✅ Score based on **technical exploitability** (Can it be hacked? What's the blast radius?)
+4. ✅ For **mixed environments** (shared tenant/VNets), score as PRODUCTION (NO reduction)
+5. ✅ Document attack paths showing how infrastructure can be compromised
+6. ✅ Acknowledge environment context BUT emphasize real hack risk
+7. ❌ NEVER reduce scores for **direct credential exposure** (public storage, hardcoded secrets) based on environment
+8. ❌ NEVER skip findings because "just a lab"
+9. ❌ NEVER score INFO/0 because "intentional for training"
+
+### Inherently Critical = NO Environment Reduction
+
+**🔴 ALWAYS score 9-10/10 regardless of dev/test/prod:**
+- Anonymous storage with credentials (public blob with service principal secrets)
+- Direct internet-exposed management (SSH/RDP 0.0.0.0/0)
+- Hardcoded credentials in public repos
+- Databases with no authentication on internet
+- Admin credentials in plaintext
+
+**Why:** These enable IMMEDIATE compromise. Credentials from "dev" often work in prod.
+
+### Mixed Environments = Treat as PRODUCTION
+
+**When dev/test/prod share infrastructure, NO score reduction:**
+- Same cloud tenant/account (Azure tenant, AWS account, GCP project)
+- VNet/VPC peering between environments
+- Service principals with cross-environment permissions
+- Shared secrets management (Key Vault, Secrets Manager)
+
+### Examples
+
+**✅ Correct Approach:**
+```
+Finding: SQL Auditing Disabled (ExpanseAzureLab)
+Score: 8/10 HIGH
+
+Environment: Non-production CTF lab (likely synthetic data)
+Real Risk: Infrastructure is hackable - attacker can compromise SQL server undetected,
+steal credentials from database, pivot to production resources in same Azure tenant.
+Even "lab" credentials can enable real damage.
+```
+
+**❌ Wrong Approach:**
+```
+Finding: SQL Auditing Disabled (ExpanseAzureLab)  
+Score: 0/10 INFO
+
+Rationale: This is a CTF training lab with no real data, so auditing disabled
+is acceptable for learning purposes. Not applicable to production.
+```
+
+**Rationale:** 
+- Lab infrastructure being **compromisable** is the real risk
+- Stolen credentials from "labs" may access production
+- Compromised lab = foothold for production attacks
+- Assessment capabilities must work universally
+
+---
+
+## 📚 Learning Capture
+
+**CRITICAL:** When you discover bugs, patterns, or improvements during triage, capture learnings in the proper location:
+
+### ✅ Correct Location: Output/Learning/
+- **Experiment-specific learnings:** `Output/Learning/experiments/00X/LEARNING_*.md`
+  - Example: `LEARNING_PROVIDER_DETECTION_BUG.md`
+  - Example: `LEARNING_SKEPTIC_DISAGREEMENT_PATTERNS.md`
+- **Cross-experiment insights:** `Output/Learning/insights/` (create if needed)
+- **Strategy updates:** `Output/Learning/strategies/*.json`
+
+### ❌ WRONG Locations (DO NOT USE):
+- `~/.copilot/session-state/*/files/` - Session temp files, NOT persistent learning
+- Agent subprocess contexts - Learnings won't be accessible to future sessions
+- Session plan.md - Only for current task planning, gets archived
+
+### When to Capture Learnings
+
+**Immediate capture (during experiment):**
+- Bugs in scripts/agents (like provider detection)
+- Scoring disagreements between skeptics (patterns to learn from)
+- False negatives/positives discovered during validation
+- Detection techniques that worked particularly well
+
+**Post-experiment capture (after user feedback):**
+- Run LearningAgent to analyze `experiments/00X/validation.json`
+- Compare experiments to identify patterns
+- Update SQLite `triage.db` with effectiveness metrics
+
+### Format for Learning Documents
+
+```markdown
+# LEARNING: [Brief Title]
+
+## Context
+- **Experiment:** 00X_RepoName_scan
+- **Date:** YYYY-MM-DD
+- **Trigger:** What caused this learning (user feedback, bug discovery, etc.)
+
+## Issue Discovered
+[Detailed description of problem]
+
+## Root Cause
+[Technical analysis]
+
+## Recommended Fix
+[Specific implementation steps]
+
+## Impact
+- Affects: [Which agents/scripts/future scans]
+- Priority: P0/P1/P2
+- Effort: [Estimated time]
+
+## Verification
+[How to test the fix works]
+```
+
+### LearningAgent Workflow
+
+See `Agents/LearningAgent.md` for full process. Typical flow:
+1. Human provides feedback on findings (validation.json)
+2. Run: `python3 Scripts/analyze_experiment.py 006`
+3. LearningAgent analyzes patterns, proposes changes
+4. Changes applied to next experiment's Agents/ folder
+
+---
+
 ## Behaviour
 - **Kickoff trigger:** if the user types `sessionkickoff` (case-insensitive), treat it as “run the session kickoff”.
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
