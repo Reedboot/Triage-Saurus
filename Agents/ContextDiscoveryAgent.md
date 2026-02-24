@@ -1643,6 +1643,156 @@ Note: Run SCA scan to identify vulnerabilities
 - Knowledge updates are append-safe
 - Audit log updates are timestamped (merge-safe)
 
+## Data Classification for Security Context
+
+**Critical:** Understanding WHAT DATA is handled determines the true risk of security findings.
+
+### Detection Strategy
+
+**Phase 1: Infrastructure Analysis (Script)**
+- Database naming patterns (`payment_db`, `customer_db`, `patient_db`)
+- Schema analysis in SQL scripts (`email VARCHAR`, `card_number`, `ssn`)
+- Resource tags in Terraform (`data-classification=pii`, `compliance-scope=pci`)
+- Storage container names (`credentials`, `backups`, `logs`)
+
+**Phase 2: Application Code (Explore Agent)**
+- API endpoints collecting data (`POST /api/register` → email, password, name)
+- Payment gateway integrations (Stripe, Braintree, PayPal SDKs)
+- Healthcare APIs (HL7, FHIR libraries)
+- Data models/entities (User class with SSN field)
+
+**Phase 3: Configuration Files**
+- Connection strings revealing database purpose
+- Application settings with compliance flags
+- Environment variables like `PCI_SCOPE=true`
+
+### Data Sensitivity Tiers
+
+```
+🔴 TIER 1: REGULATED DATA (Compliance-Driven)
+   ├── Payment Card Data (PCI-DSS) - PANs, CVV codes
+   ├── Protected Health Information (PHI/HIPAA)
+   ├── Government IDs (SSN, passport numbers)
+   ├── Authentication Credentials (passwords, API keys, tokens)
+   └── Biometric Data
+
+🟠 TIER 2: PERSONAL DATA (Privacy-Driven)  
+   ├── PII/GDPR (email, phone, address, date of birth)
+   ├── Financial Information (bank accounts, salary data)
+   └── Demographic/Behavioral Data (user preferences, activity logs)
+
+🟡 TIER 3: BUSINESS CONFIDENTIAL
+   ├── Trade Secrets, Proprietary Source Code
+   ├── Customer Lists, Contracts, Pricing
+   └── Financial Records, Strategic Plans
+
+🟢 TIER 4: INTERNAL USE
+   └── Employee directories, operational metrics, internal docs
+
+⚪ TIER 5: PUBLIC DATA
+   └── Open source code, synthetic test data, public documentation
+```
+
+### Implementation
+
+**Document in Phase 2 summary:**
+- Identify data tier per resource/service
+- Note evidence (schema files, API endpoints, configuration)
+- Flag compliance scope (GDPR, PCI-DSS, HIPAA, SOX)
+
+**Security implications:**
+- TIER 1/2 data requires CMK (customer-managed keys)
+- TIER 1/2 requires 90+ day audit log retention
+- TIER 1/2 requires encryption in transit (TLS 1.2+)
+- TIER 1 requires breach notification within 72 hours
+
+## Five Pillars Security Assessment (Phase 1 Detection)
+
+**Context:** The Phase 1 script now detects 180+ security patterns across five security pillars. Use this checklist to verify comprehensive detection.
+
+### Pillar 1: Network Security (~40 patterns detected)
+**Script detects:**
+- Network ACLs/firewall rules (Key Vault, Storage, SQL, AKS)
+- Private endpoints and VNet integration
+- NSG rules and associations
+- Public access configurations
+- IP restrictions on App Services/Functions
+
+**Phase 2 validation:**
+- [ ] Confirm which resources have network restrictions
+- [ ] Flag resources WITHOUT network controls as potential findings
+- [ ] Verify private vs public endpoint usage
+
+### Pillar 2: Access Control (~50 patterns detected)
+**Script detects:**
+- Managed Identities (System/User Assigned)
+- AAD/IAM authentication configuration
+- Legacy auth patterns (account keys, passwords, admin users)
+- RBAC/IAM role assignments
+- JIT access policies
+- Service Principal credentials
+
+**Phase 2 validation:**
+- [ ] Confirm modern auth (Managed Identity) vs legacy (keys/passwords)
+- [ ] Check credential expiry policies
+- [ ] Identify hardcoded secrets in code
+- [ ] Flag legacy authentication as findings
+
+### Pillar 3: Audit Logging (~40 patterns detected)
+**Script detects:**
+- Diagnostic settings per resource
+- SQL auditing policies
+- NSG flow logs
+- CloudTrail/Cloud Audit Logs
+- Application Insights integration
+- Log Analytics workspace configuration
+
+**Phase 2 validation:**
+- [ ] Confirm which resources have logging enabled
+- [ ] Check log retention periods (90+ days for compliance)
+- [ ] Flag missing audit logging as findings
+
+### Pillar 4: Log Consumption (~20 patterns detected)
+**Script detects:**
+- Log Analytics Workspace / CloudWatch / Cloud Logging
+- Azure Sentinel / GuardDuty / Security Command Center
+- Monitor alerts and action groups
+- Security Center / Defender for Cloud
+- Config rules and compliance policies
+
+**Phase 2 validation:**
+- [ ] Assess monitoring maturity level (0-4)
+- [ ] Verify logs are consumed (not just collected)
+- [ ] Check alert rules are configured
+- [ ] Create environment-level findings if infrastructure missing
+
+### Pillar 5: Data Protection (~30 patterns detected)
+**Script detects:**
+- Encryption at rest (TDE, disk encryption, CMK)
+- TLS enforcement and minimum versions
+- HTTPS-only configurations
+- Key Vault integration
+- SSL enforcement on databases
+- KMS key usage
+
+**Phase 2 validation:**
+- [ ] Verify encryption matches data classification (TIER 1 needs CMK)
+- [ ] Check TLS versions (flag 1.0/1.1 as CRITICAL)
+- [ ] Confirm HTTPS enforcement
+- [ ] Flag platform-managed keys for regulated data
+
+### Security Coverage Verification
+
+After Phase 1 + Phase 2:
+- [ ] Every detected resource assessed against all 5 pillars
+- [ ] Missing controls flagged as findings
+- [ ] Environment-level findings created (monitoring infrastructure)
+- [ ] Data classification documented per service
+- [ ] Expected finding count: 30-40+ (not 5-10)
+
+**False Negative Prevention:**
+If total findings < 15, revisit systematically - likely missed entire pillar categories.
+
 ## See Also
 - **Repo security scanning:** Agents/RepoAgent.md
 - **Security finding template:** Templates/CodeFinding.md
