@@ -330,6 +330,97 @@ Before completing an experiment, validate all findings match required template s
 
 If validation fails, log error but don't block experiment completion.
 
+## 📚 Learning Capture During Experiments
+
+**CRITICAL:** During experiment execution, capture learnings immediately when discovered.
+
+### When to Capture Learnings
+
+Capture a `LEARNING_*.md` file when you discover:
+
+1. **Script/Agent Bugs**
+   - Detection logic failures (e.g., provider misidentification)
+   - False positives/negatives in automated scans
+   - Performance issues or inefficiencies
+
+2. **Skeptic Disagreement Patterns**
+   - DevSkeptic vs PlatformSkeptic score differences >2 points
+   - Repeated disagreements on specific issue types (e.g., network controls)
+   - New compensating control patterns identified
+
+3. **Detection Gaps**
+   - Security issues missed by automated scans but found manually
+   - IaC patterns not covered by existing detection rules
+   - New attack vectors not in SecurityAgent guidance
+
+4. **Process Improvements**
+   - Phase ordering issues (should Phase X come before Phase Y?)
+   - User workflow friction points
+   - Documentation gaps causing confusion
+
+### Learning File Format
+
+Create: `experiments/<id>/LEARNING_<Topic>.md`
+
+```markdown
+# LEARNING: [Brief Title]
+
+## Context
+- **Experiment:** <id>_<name>
+- **Date:** YYYY-MM-DD
+- **Phase:** [Context Discovery / Security Review / Skeptic Reviews]
+- **Trigger:** [What caused this discovery]
+
+## Issue Discovered
+[Detailed description with evidence]
+
+## Root Cause
+[Technical analysis - why did this happen?]
+
+## Recommended Fix
+[Specific implementation steps with code examples]
+
+## Impact
+- **Affects:** [Which agents/scripts/future scans]
+- **Priority:** P0 (Critical) / P1 (High) / P2 (Medium)
+- **Effort:** [Estimated implementation time]
+
+## Verification
+[How to test the fix works - test cases]
+
+## Related
+- [Link to affected finding if applicable]
+- [Link to agent instruction file]
+```
+
+### Examples from Experiment 006
+
+**Good example:** `LEARNING_PROVIDER_DETECTION_BUG.md`
+- Documented AWS misidentification issue
+- Root cause analysis (regex too broad + alphabetical sort)
+- Specific fix with code snippets
+- Test cases for verification
+- Multi-cloud support recommendation
+
+**What to avoid:**
+- ❌ Storing in `~/.copilot/session-state/*/files/` (not persistent)
+- ❌ Only mentioning in checkpoint/audit log (hard to find later)
+- ❌ Relying on memory across sessions (gets lost)
+
+### Handoff to LearningAgent
+
+After experiment completion and human validation:
+1. LearningAgent reads all `LEARNING_*.md` files in experiment folder
+2. Analyzes `validation.json` for human feedback patterns
+3. Proposes consolidated changes to agent instructions
+4. Updates `triage.db` SQLite with effectiveness metrics
+5. Applies approved changes to next experiment's Agents/
+
+**Your responsibility:** Capture the raw learning during experiment
+**LearningAgent responsibility:** Analyze patterns and propose systematic fixes
+
+---
+
 ## See Also
 - `Agents/LearningAgent.md` — Applies learnings from experiments
 - `Agents/Instructions.md` — Canonical operating rules
