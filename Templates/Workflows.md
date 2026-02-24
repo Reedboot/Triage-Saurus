@@ -79,6 +79,9 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - 🧭 Overview (purpose, hosting, dependencies, auth, container/network details)
 - 🚦 Traffic Flow (Phase 2 TODO with route mappings table)
 - Updates `Output/Knowledge/Repos.md` and `Output/Knowledge/<Provider>.md`
+- Cloud architecture files in `Output/Summary/Cloud/Architecture_*.md` (provider + overview)
+- Kubernetes detail files when AKS/EKS/GKE exists: `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md`
+- Provider resource summaries under `Output/Summary/Cloud/<Provider>/` (top-level `Cloud/` kept for `Architecture_*.md` only)
 
 ### Step 5: Phase 2 - Manual Context Analysis
 **Action:** Launch ONE explore agent per repo

@@ -34,5 +34,6 @@
   - `python3 Scripts/extract_finding_scores.py Findings/Cloud`
 
 ## Output Location
-- Write summaries under `Summary/Cloud/` for each distinct resource type.
+- Write resource summaries under provider folders: `Summary/Cloud/<Provider>/<ResourceType>.md`.
+- Keep top-level `Summary/Cloud/` for `Architecture_*.md` files only.
 - **After creating/updating summaries:** Run `python3 Scripts/validate_markdown.py --path Summary/Code` to verify Mermaid syntax and ensure no `fill:` attributes.

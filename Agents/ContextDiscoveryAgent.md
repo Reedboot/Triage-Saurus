@@ -36,6 +36,13 @@ This agent performs **fast, non-security context discovery** of repositories to 
 - **Traffic Flow** - Phase 2 TODO marker with detected hints, route mappings table
 - **Security Review** - Languages, automated scanning status (SCA/SAST/Secrets/IaC pending), grouped evidence
 
+**Cloud architecture generation rules (permanent):**
+- Treat Terraform **module-defined** infrastructure as **confirmed IaC intent** (solid nodes), not uncertain assumptions.
+- For AKS/EKS/GKE detections, generate a dedicated Kubernetes detail diagram:
+  - `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md`
+  - Include ingress controller, ingress resources, service targets, and LB hints.
+- Add a direct link from `Architecture_<Provider>.md` to the Kubernetes detail diagram.
+
 ### Phase 2: Intelligent Analysis (Explore Agent) - ~30-60 seconds
 **Tool:** Launch ONE explore agent per repo
 **Method:** Code reading, understanding, synthesis

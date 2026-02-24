@@ -710,6 +710,124 @@ def detect_terraform_resources(files: list[Path], repo: Path) -> set[str]:
     return types
 
 
+def has_terraform_module_source(files: list[Path], source_pattern: str) -> bool:
+    """Return True if any Terraform module block references a source matching source_pattern."""
+    source_re = re.compile(source_pattern, re.IGNORECASE)
+    for p in files:
+        if p.suffix.lower() != ".tf":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in TF_MODULE_SOURCE_RE.finditer(text):
+            if source_re.search(m.group(2)):
+                return True
+    return False
+
+
+def extract_kubernetes_topology_signals(
+    files: list[Path],
+    repo: Path,
+    include_path_prefixes: list[str] | None = None,
+) -> dict[str, list[str]]:
+    """Extract Kubernetes ingress/controller/service signals from scoped files."""
+    ingress_names: set[str] = set()
+    service_names: set[str] = set()
+    manifest_secret_names: set[str] = set()
+    ingress_classes: set[str] = set()
+    controller_hints: set[str] = set()
+    lb_hints: set[str] = set()
+    evidence_files: set[str] = set()
+
+    ingress_class_re = re.compile(r"ingressClassName:\s*['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE)
+    aws_lb_type_re = re.compile(r"aws-load-balancer-type:\s*['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE)
+    aws_lb_scheme_re = re.compile(r"aws-load-balancer-scheme:\s*['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE)
+
+    for p in files:
+        rp = rel(repo, p)
+        if include_path_prefixes and not any(rp.startswith(prefix) for prefix in include_path_prefixes):
+            continue
+        if p.name.endswith(".sarif"):
+            continue
+        if p.suffix.lower() not in {".tf", ".yaml", ".yml"}:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        if p.suffix.lower() == ".tf":
+            if re.search(r'resource\s+"helm_release"\s+"ingress_nginx"', text, re.IGNORECASE):
+                controller_hints.add("ingress-nginx")
+                evidence_files.add(rp)
+            if re.search(r"aws-load-balancer-controller", text, re.IGNORECASE):
+                controller_hints.add("aws-load-balancer-controller")
+                evidence_files.add(rp)
+            continue
+
+        current_kind = None
+        in_metadata = False
+        metadata_indent = 0
+        for raw_line in text.splitlines():
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+            if stripped.lower().startswith("kind:"):
+                kind_value = stripped.split(":", 1)[1].strip().strip("'\"")
+                if kind_value.lower() in {"ingress", "service", "secret"}:
+                    current_kind = kind_value.lower()
+                else:
+                    current_kind = None
+                in_metadata = False
+                continue
+
+            if current_kind and stripped.lower().startswith("metadata:"):
+                in_metadata = True
+                metadata_indent = indent
+                continue
+
+            if in_metadata:
+                if indent <= metadata_indent and ":" in stripped:
+                    in_metadata = False
+                elif stripped.lower().startswith("name:"):
+                    name_value = stripped.split(":", 1)[1].strip().strip("'\"")
+                    if name_value:
+                        if current_kind == "ingress":
+                            ingress_names.add(name_value)
+                        elif current_kind == "service":
+                            service_names.add(name_value)
+                        elif current_kind == "secret":
+                            manifest_secret_names.add(name_value)
+                        evidence_files.add(rp)
+                    in_metadata = False
+
+        for m in ingress_class_re.finditer(text):
+            ingress_classes.add(m.group(1))
+            evidence_files.add(rp)
+        for m in aws_lb_type_re.finditer(text):
+            lb_hints.add(f"AWS LB type: {m.group(1)}")
+            evidence_files.add(rp)
+        for m in aws_lb_scheme_re.finditer(text):
+            lb_hints.add(f"AWS LB scheme: {m.group(1)}")
+            evidence_files.add(rp)
+        if "ingress-nginx" in text.lower():
+            controller_hints.add("ingress-nginx")
+            evidence_files.add(rp)
+
+    return {
+        "ingress_names": sorted(ingress_names),
+        "service_names": sorted(service_names),
+        "manifest_secret_names": sorted(manifest_secret_names),
+        "ingress_classes": sorted(ingress_classes),
+        "controller_hints": sorted(controller_hints),
+        "lb_hints": sorted(lb_hints),
+        "evidence_files": sorted(evidence_files),
+    }
+
+
 def detect_hosting_from_terraform(files: list[Path], repo: Path) -> dict[str, any]:
     """Detect where the application is hosted from Terraform resources."""
     hosting: dict[str, any] = {"type": None, "evidence": []}
@@ -1884,6 +2002,10 @@ def write_cloud_resource_summaries(
     """
     generated_files = []
     files = iter_files(repo)
+    provider_key = provider.lower()
+    provider_folder = {"aws": "AWS", "gcp": "GCP", "azure": "Azure"}.get(provider_key, provider.title())
+    provider_summary_dir = summary_dir / provider_folder
+    provider_summary_dir.mkdir(parents=True, exist_ok=True)
     
     # Extract experiment ID for database (summary_dir is .../Summary/Cloud or .../Summary)
     experiment_id = None
@@ -2249,7 +2371,7 @@ def write_cloud_resource_summaries(
             
             # Write file
             sanitized_name = vm_name.replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"VM_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"VM_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated VM summary: {out_path}")
@@ -2427,7 +2549,7 @@ def write_cloud_resource_summaries(
             
             # Write file
             sanitized_name = aks_name.replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"AKS_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"AKS_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated AKS summary: {out_path}")
@@ -2565,7 +2687,7 @@ def write_cloud_resource_summaries(
             
             # Write file
             sanitized_name = sa_name.replace("/", "_").replace("\\", "_").replace(" ", "_")
-            out_path = summary_dir / f"ServiceAccount_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"ServiceAccount_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated Service Account summary: {out_path}")
@@ -2654,7 +2776,7 @@ def write_cloud_resource_summaries(
             summary_lines.append(f"*Generated: {now_uk()}*")
             
             sanitized_name = sql["name"].replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"SQL_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"SQL_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated SQL Server summary: {out_path}")
@@ -2736,7 +2858,7 @@ def write_cloud_resource_summaries(
             summary_lines.append(f"*Generated: {now_uk()}*")
             
             sanitized_name = kv["name"].replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"KeyVault_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"KeyVault_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated Key Vault summary: {out_path}")
@@ -2819,7 +2941,7 @@ def write_cloud_resource_summaries(
             summary_lines.append(f"*Generated: {now_uk()}*")
             
             sanitized_name = sa["name"].replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"Storage_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"Storage_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated Storage Account summary: {out_path}")
@@ -2895,7 +3017,7 @@ def write_cloud_resource_summaries(
             summary_lines.append(f"*Generated: {now_uk()}*")
             
             sanitized_name = app["name"].replace("/", "_").replace("\\", "_")
-            out_path = summary_dir / f"AppService_{sanitized_name}.md"
+            out_path = provider_summary_dir / f"AppService_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated App Service summary: {out_path}")
@@ -3832,10 +3954,13 @@ def write_experiment_cloud_architecture_summary(
     for provider in cloud_providers:
         provider_title = provider.title()
         provider_lower = provider.lower()
+        module_derived_aks = False
+        k8s_arch_path: Path | None = None
 
         classified = classify_terraform_resources(tf_resource_types, provider)
 
         # Detect services per provider
+        sql_names: list[str] = []
         if provider_lower == "azure":
             has_vnet = "azurerm_virtual_network" in tf_resource_types
             vnet_name = None
@@ -3846,6 +3971,14 @@ def write_experiment_cloud_architecture_summary(
             
             has_kv = "azurerm_key_vault" in tf_resource_types
             has_sql = any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
+            sql_names = sorted(
+                set(
+                    extract_resource_names_with_property(files, repo, "azurerm_mssql_server", "name")
+                    + extract_resource_names_with_property(files, repo, "azurerm_sql_server", "name")
+                    + extract_resource_names(files, repo, "azurerm_mssql_server")
+                    + extract_resource_names(files, repo, "azurerm_sql_server")
+                )
+            )
             has_ai = "azurerm_application_insights" in tf_resource_types
             has_apim = any(t.startswith("azurerm_api_management") for t in tf_resource_types)
             has_appgw = "azurerm_application_gateway" in tf_resource_types or ingress_info["type"] == "Application Gateway"
@@ -3859,14 +3992,27 @@ def write_experiment_cloud_architecture_summary(
             has_aks = "azurerm_kubernetes_cluster" in tf_resource_types
             has_nsg = "azurerm_network_security_group" in tf_resource_types
         elif provider_lower == "aws":
-            has_vnet = "aws_vpc" in tf_resource_types
+            aws_has_vpc_resource = "aws_vpc" in tf_resource_types
+            aws_has_vpc_module = has_terraform_module_source(files, r"terraform-aws-modules/vpc/aws")
+            has_vnet = aws_has_vpc_resource or aws_has_vpc_module
             vnet_name = None
             if has_vnet:
                 vpc_names = extract_resource_names_with_property(files, repo, "aws_vpc", "tags")
-                vnet_name = vpc_names[0] if vpc_names else None
+                if vpc_names:
+                    vnet_name = vpc_names[0]
+                elif aws_has_vpc_module:
+                    vnet_name = "module.vpc"
             
             has_kv = "aws_kms_key" in tf_resource_types or "aws_secretsmanager_secret" in tf_resource_types
             has_sql = any(t in tf_resource_types for t in {"aws_db_instance", "aws_rds_cluster"})
+            sql_names = sorted(
+                set(
+                    extract_resource_names_with_property(files, repo, "aws_db_instance", "identifier")
+                    + extract_resource_names_with_property(files, repo, "aws_rds_cluster", "cluster_identifier")
+                    + extract_resource_names(files, repo, "aws_db_instance")
+                    + extract_resource_names(files, repo, "aws_rds_cluster")
+                )
+            )
             has_ai = any(t in tf_resource_types for t in {"aws_cloudwatch_log_group", "aws_cloudwatch_metric_alarm"})
             has_apim = False
             has_appgw = any(t in tf_resource_types for t in {"aws_alb", "aws_elb"})
@@ -3874,7 +4020,10 @@ def write_experiment_cloud_architecture_summary(
             has_webapp = any(t in tf_resource_types for t in {"aws_ecs_service", "aws_lambda_function"})
             has_state_backend = "aws_s3_bucket" in tf_resource_types
             has_vm = "aws_instance" in tf_resource_types
-            has_aks = "aws_eks_cluster" in tf_resource_types
+            aws_has_eks_resource = "aws_eks_cluster" in tf_resource_types
+            aws_has_eks_module = has_terraform_module_source(files, r"terraform-aws-modules/eks/aws")
+            has_aks = aws_has_eks_resource or aws_has_eks_module
+            module_derived_aks = not aws_has_eks_resource and aws_has_eks_module
             has_nsg = "aws_security_group" in tf_resource_types
         elif provider_lower == "gcp":
             has_vnet = "google_compute_network" in tf_resource_types
@@ -3885,6 +4034,12 @@ def write_experiment_cloud_architecture_summary(
             
             has_kv = "google_kms_crypto_key" in tf_resource_types
             has_sql = "google_sql_database_instance" in tf_resource_types
+            sql_names = sorted(
+                set(
+                    extract_resource_names_with_property(files, repo, "google_sql_database_instance", "name")
+                    + extract_resource_names(files, repo, "google_sql_database_instance")
+                )
+            )
             has_ai = any(t in tf_resource_types for t in {"google_logging_project_sink", "google_monitoring_alert_policy"})
             has_apim = False
             has_appgw = False
@@ -3928,11 +4083,11 @@ def write_experiment_cloud_architecture_summary(
             services.append("API Management")
         if has_sql:
             if provider_lower == "azure":
-                services.append("Azure SQL")
+                services.append(f"Azure SQL ({len(sql_names)} servers)" if len(sql_names) > 1 else "Azure SQL")
             elif provider_lower == "aws":
-                services.append("RDS")
+                services.append(f"RDS ({len(sql_names)} clusters/instances)" if len(sql_names) > 1 else "RDS")
             elif provider_lower == "gcp":
-                services.append("Cloud SQL")
+                services.append(f"Cloud SQL ({len(sql_names)} instances)" if len(sql_names) > 1 else "Cloud SQL")
         if has_kv:
             if provider_lower == "azure":
                 services.append("Key Vault")
@@ -3958,6 +4113,152 @@ def write_experiment_cloud_architecture_summary(
             services.append("Storage Account")
         if not services:
             services.append("(none inferred)")
+
+        # Optional provider-scoped Kubernetes ingress/services diagram (AKS/EKS/GKE)
+        if has_aks:
+            if provider_lower == "aws":
+                k8s_prefixes = ["insecure-kubernetes-deployments/"]
+            elif provider_lower == "azure":
+                k8s_prefixes = ["tfscripts/"]
+            else:
+                k8s_prefixes = None
+
+            k8s_signals = extract_kubernetes_topology_signals(files, repo, k8s_prefixes)
+            ingress_names = k8s_signals["ingress_names"][:6]
+            service_names = k8s_signals["service_names"][:10]
+            manifest_secret_names = k8s_signals["manifest_secret_names"]
+            ingress_classes = k8s_signals["ingress_classes"]
+            controller_hints = k8s_signals["controller_hints"]
+            lb_hints = k8s_signals["lb_hints"]
+            evidence_files = k8s_signals["evidence_files"][:8]
+            k8s_secret_names = extract_resource_names(files, repo, "kubernetes_secret_v1")
+            all_k8s_secret_names = sorted(set(k8s_secret_names + manifest_secret_names))
+            if provider_lower == "azure":
+                cluster_names = extract_resource_names(files, repo, "azurerm_kubernetes_cluster")
+                cluster_label = cluster_names[0] if cluster_names else "AKS Cluster"
+            elif provider_lower == "aws":
+                cluster_names = extract_resource_names(files, repo, "aws_eks_cluster")
+                cluster_label = cluster_names[0] if cluster_names else "EKS Cluster"
+            else:
+                cluster_names = extract_resource_names(files, repo, "google_container_cluster")
+                cluster_label = cluster_names[0] if cluster_names else "GKE Cluster"
+
+            if any("ingress-nginx" in hint for hint in controller_hints) or "nginx" in ingress_classes:
+                ingress_controller_label = "NGINX Ingress Controller"
+            elif provider_lower == "aws" and any("aws-load-balancer-controller" in hint for hint in controller_hints):
+                ingress_controller_label = "AWS Load Balancer Controller"
+            else:
+                ingress_controller_label = "Ingress Controller"
+
+            if provider_lower == "aws":
+                lb_label = "Internet-facing NLB/ALB"
+            elif provider_lower == "azure":
+                lb_label = "Internet-facing ingress endpoint"
+            else:
+                lb_label = "Internet-facing ingress endpoint"
+
+            provider_folder = {"aws": "AWS", "gcp": "GCP", "azure": "Azure"}.get(provider_lower, provider_title)
+            provider_cloud_dir = cloud_dir / provider_folder
+            provider_cloud_dir.mkdir(parents=True, exist_ok=True)
+
+            cluster_filename_token = re.sub(r"[^A-Za-z0-9_-]+", "_", cluster_label).strip("_")
+            if not cluster_filename_token:
+                cluster_filename_token = "Cluster"
+            k8s_arch_filename = f"Architecture_{provider_title}_Kubernetes_{cluster_filename_token}.md"
+            k8s_arch_path = provider_cloud_dir / k8s_arch_filename
+            for stale_path in cloud_dir.glob(f"Architecture_{provider_title}_Kubernetes*.md"):
+                if stale_path != k8s_arch_path and stale_path.exists():
+                    try:
+                        stale_path.unlink()
+                    except OSError:
+                        pass
+            for stale_path in provider_cloud_dir.glob(f"Architecture_{provider_title}_Kubernetes*.md"):
+                if stale_path != k8s_arch_path and stale_path.exists():
+                    try:
+                        stale_path.unlink()
+                    except OSError:
+                        pass
+            k8s_lines: list[str] = []
+            k8s_lines.append(f"# 🗺️ Kubernetes Ingress & Services - {provider_title} ({repo_name})")
+            k8s_lines.append("")
+            k8s_lines.append("```mermaid")
+            k8s_lines.append("flowchart TB")
+            k8s_lines.append(f"  cluster[{cluster_label}]")
+            has_ingress_evidence = bool(ingress_names or ingress_classes or controller_hints)
+            if has_ingress_evidence:
+                k8s_lines.append("  internet[Internet]")
+                k8s_lines.append(f"  lb[{lb_label}]")
+                k8s_lines.append(f"  ic[{ingress_controller_label}]")
+                k8s_lines.append("  internet --> lb")
+                k8s_lines.append("  lb --> ic")
+                k8s_lines.append("  ic --> cluster")
+            if ingress_names:
+                for idx, ingress_name in enumerate(ingress_names, start=1):
+                    ingress_node = f"ing{idx}"
+                    k8s_lines.append(f"  {ingress_node}[Ingress: {ingress_name}]")
+                    k8s_lines.append(f"  ic --> {ingress_node}")
+                    if service_names:
+                        svc_idx = min(idx - 1, len(service_names) - 1)
+                        k8s_lines.append(f"  svc{svc_idx + 1}[Service: {service_names[svc_idx]}]")
+                        k8s_lines.append(f"  {ingress_node} --> svc{svc_idx + 1}")
+            elif has_ingress_evidence:
+                k8s_lines.append("  ing[Ingress resources]")
+                k8s_lines.append("  ic --> ing")
+                if service_names:
+                    for idx, service_name in enumerate(service_names[:5], start=1):
+                        k8s_lines.append(f"  svc{idx}[Service: {service_name}]")
+                        k8s_lines.append(f"  ing --> svc{idx}")
+                else:
+                    k8s_lines.append("  svc[Services]")
+                    k8s_lines.append("  ing --> svc")
+            if all_k8s_secret_names:
+                for idx, secret_name in enumerate(all_k8s_secret_names[:8], start=1):
+                    secret_node = f"sec{idx}"
+                    k8s_lines.append(f"  {secret_node}[Secret: {secret_name}]")
+                    k8s_lines.append(f"  cluster --> {secret_node}")
+            k8s_lines.append("")
+            if has_ingress_evidence:
+                k8s_lines.append("  style lb stroke:#ff6b6b,stroke-width:2px")
+                k8s_lines.append("  style ic stroke:#0066cc,stroke-width:2px")
+                k8s_lines.append("  style internet stroke:#ff0000,stroke-width:3px")
+            k8s_lines.append("  style cluster stroke:#0066cc,stroke-width:2px")
+            k8s_lines.append("```")
+            k8s_lines.append("")
+            k8s_lines.append("## 🧾 Summary")
+            k8s_lines.append(f"- **Cluster:** {cluster_label}")
+            if ingress_classes:
+                k8s_lines.append(f"- **Ingress classes:** {', '.join(ingress_classes)}")
+            else:
+                k8s_lines.append("- **Ingress classes:** None detected")
+            if ingress_names:
+                k8s_lines.append(f"- **Ingress resources ({len(ingress_names)} shown):** {', '.join(ingress_names)}")
+            else:
+                k8s_lines.append("- **Ingress resources:** None explicitly detected in scoped manifests")
+            if service_names:
+                k8s_lines.append(f"- **Services ({len(service_names)} shown):** {', '.join(service_names)}")
+            else:
+                k8s_lines.append("- **Services:** None explicitly detected in scoped manifests")
+            if all_k8s_secret_names:
+                k8s_lines.append(f"- **Secret resources:** {', '.join(all_k8s_secret_names[:8])}")
+            if k8s_secret_names:
+                k8s_lines.append(f"- **Terraform secret resources:** kubernetes_secret_v1 ({', '.join(k8s_secret_names[:6])})")
+            if manifest_secret_names:
+                k8s_lines.append(f"- **Manifest secret resources:** kind: Secret ({', '.join(manifest_secret_names[:6])})")
+            if lb_hints:
+                k8s_lines.append(f"- **Load balancer hints:** {', '.join(lb_hints)}")
+            if evidence_files:
+                k8s_lines.append(f"- **Evidence files:** {', '.join(f'`{p}`' for p in evidence_files)}")
+            k8s_lines.append(f"- 🗓️ **Last updated:** {now_uk()}")
+            k8s_arch_path.write_text("\n".join(k8s_lines).rstrip() + "\n", encoding="utf-8")
+
+            probs = validate_markdown_file(k8s_arch_path, fix=True)
+            errs = [p for p in probs if p.level == "ERROR"]
+            warns = [p for p in probs if p.level == "WARN"]
+            for p in warns:
+                line = f":{p.line}" if p.line else ""
+                print(f"WARN: {k8s_arch_path}{line} - {p.message}")
+            if errs:
+                raise SystemExit(f"Mermaid validation failed for {k8s_arch_path}: {errs[0].message}")
         
         # Determine edge
         edge_name = "Edge Gateway"
@@ -4037,7 +4338,10 @@ def write_experiment_cloud_architecture_summary(
             elif len(aks_names) > 3:
                 content_lines.append(f"    aks[{aks_label} Cluster, {len(aks_names)} instances]")
             else:
-                content_lines.append(f"    aks[{aks_label} Cluster]")
+                if module_derived_aks:
+                    content_lines.append(f"    aks[{aks_label} Cluster module-defined]")
+                else:
+                    content_lines.append(f"    aks[{aks_label} Cluster]")
         
         # NSG inside VNet (network-level control)
         if has_nsg:
@@ -4049,7 +4353,26 @@ def write_experiment_cloud_architecture_summary(
         
         # PaaS services subgraph (only if we have PaaS services)
         has_paas = has_webapp or has_sql or has_kv or has_ai or has_state_backend
-        
+        sql_node_ids: list[str] = []
+        sql_server_count = len(sql_names)
+        vm_node_count = len(vm_names) if has_vm and len(vm_names) <= 3 and len(vm_names) > 0 else (1 if has_vm else 0)
+        aks_node_count = len(aks_names) if has_aks and len(aks_names) <= 3 and len(aks_names) > 0 else (1 if has_aks else 0)
+        base_node_count = (
+            (1 if has_webapp else 0)
+            + vm_node_count
+            + aks_node_count
+            + (1 if has_kv else 0)
+            + (1 if has_ai else 0)
+            + (1 if has_state_backend else 0)
+            + (1 if has_nsg else 0)
+        )
+        show_individual_sql = bool(
+            has_sql
+            and sql_server_count > 0
+            and sql_server_count <= 3
+            and (base_node_count + sql_server_count) <= 11
+        )
+
         if has_paas:
             paas_label = "Azure PaaS" if provider_lower == "azure" else ("AWS Managed Services" if provider_lower == "aws" else "GCP Managed Services")
             content_lines.append(f"  subgraph paas[{paas_label}]")
@@ -4060,7 +4383,21 @@ def write_experiment_cloud_architecture_summary(
             
             if has_sql:
                 sql_label = "Azure SQL" if provider_lower == "azure" else ("RDS" if provider_lower == "aws" else "Cloud SQL")
-                content_lines.append(f"    sql[{sql_label}]")
+                if show_individual_sql:
+                    for idx, sql_name in enumerate(sql_names, start=1):
+                        sql_node_id = f"sql{idx}"
+                        content_lines.append(f"    {sql_node_id}[{sql_label}: {sql_name}]")
+                        sql_node_ids.append(sql_node_id)
+                else:
+                    if sql_server_count > 1:
+                        if provider_lower == "azure":
+                            sql_label = f"{sql_label} Servers ({sql_server_count})"
+                        elif provider_lower == "aws":
+                            sql_label = f"{sql_label} Clusters/Instances ({sql_server_count})"
+                        else:
+                            sql_label = f"{sql_label} Instances ({sql_server_count})"
+                    content_lines.append(f"    sql[{sql_label}]")
+                    sql_node_ids.append("sql")
             if has_kv:
                 kv_label = "Key Vault" if provider_lower == "azure" else ("Secrets Manager" if provider_lower == "aws" else "Secret Manager")
                 content_lines.append(f"    kv[{kv_label}]")
@@ -4084,10 +4421,12 @@ def write_experiment_cloud_architecture_summary(
         # Connection logic - depends on if edge exists
         if edge_confirmed:
             content_lines.append("  internet -->|HTTPS| edge")
-            content_lines.append("  edge --> app")
+            if has_webapp:
+                content_lines.append("  edge --> app")
         else:
             # Direct internet to app (no edge gateway detected)
-            content_lines.append("  internet -->|HTTPS| app")
+            if has_webapp:
+                content_lines.append("  internet -->|HTTPS| app")
         
         # Extract NSG associations for VMs first (need this for routing logic)
         nsg_associations = {}
@@ -4143,25 +4482,35 @@ def write_experiment_cloud_architecture_summary(
         
         if has_sql:
             # Internet can access SQL (public endpoint unless private endpoint configured)
-            content_lines.append("  internet --> sql")
-            content_lines.append("  app --> sql")
+            if not sql_node_ids:
+                sql_node_ids = ["sql"]
+            for sql_node_id in sql_node_ids:
+                content_lines.append(f"  internet --> {sql_node_id}")
+            if has_webapp:
+                for sql_node_id in sql_node_ids:
+                    content_lines.append(f"  app --> {sql_node_id}")
             if has_vm:
                 if len(vm_names) <= 3 and len(vm_names) > 0:
                     for vm_name, vm_os, vm_role in vm_names:
-                        content_lines.append(f"  vm_{vm_name} --> sql")
+                        for sql_node_id in sql_node_ids:
+                            content_lines.append(f"  vm_{vm_name} --> {sql_node_id}")
                 else:
-                    content_lines.append("  vm --> sql")
+                    for sql_node_id in sql_node_ids:
+                        content_lines.append(f"  vm --> {sql_node_id}")
             if has_aks:
                 if len(aks_names) <= 3 and len(aks_names) > 0:
                     for cluster_name in aks_names:
-                        content_lines.append(f"  aks_{cluster_name} --> sql")
+                        for sql_node_id in sql_node_ids:
+                            content_lines.append(f"  aks_{cluster_name} --> {sql_node_id}")
                 else:
-                    content_lines.append("  aks --> sql")
+                    for sql_node_id in sql_node_ids:
+                        content_lines.append(f"  aks --> {sql_node_id}")
         
         if has_kv:
             # Internet can access Key Vault (public endpoint unless private endpoint configured)
             content_lines.append("  internet --> kv")
-            content_lines.append("  app --> kv")
+            if has_webapp:
+                content_lines.append("  app --> kv")
             if has_vm:
                 if len(vm_names) <= 3 and len(vm_names) > 0:
                     for vm_name, vm_os, vm_role in vm_names:
@@ -4252,7 +4601,8 @@ def write_experiment_cloud_architecture_summary(
             content_lines.append("  pipeline -.->|State| sa")
         
         content_lines.append("")
-        content_lines.append("  style app stroke:#0066cc,stroke-width:2px")
+        if has_webapp:
+            content_lines.append("  style app stroke:#0066cc,stroke-width:2px")
         if has_vm:
             if len(vm_names) <= 3 and len(vm_names) > 0:
                 for vm_name, vm_os, vm_role in vm_names:
@@ -4266,13 +4616,18 @@ def write_experiment_cloud_architecture_summary(
             else:
                 content_lines.append("  style aks stroke:#0066cc,stroke-width:2px")
         if has_sql:
-            content_lines.append("  style sql stroke:#00aa00,stroke-width:3px")
+            if sql_node_ids:
+                for sql_node_id in sql_node_ids:
+                    content_lines.append(f"  style {sql_node_id} stroke:#00aa00,stroke-width:3px")
+            else:
+                content_lines.append("  style sql stroke:#00aa00,stroke-width:3px")
         if has_kv:
             content_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
         if has_nsg:
             content_lines.append("  style nsg stroke:#ff6b6b,stroke-width:2px")
         if has_state_backend:
             content_lines.append("  style sa stroke:#00aa00,stroke-width:3px")
+        # Module-derived resources are considered confirmed IaC intent and are styled as solid.
         
         # Only style pipeline if it exists
         if backend_uses_storage and has_state_backend:
@@ -4314,21 +4669,20 @@ def write_experiment_cloud_architecture_summary(
             
             # Internet → SQL (then skip internal SQL connections)
             if has_sql:
-                content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-                link_idx += 1
-                
-                # Skip internal sql connections
-                link_idx += 1  # app → sql
+                sql_node_count = len(sql_node_ids) if sql_node_ids else 1
+                for _ in range(sql_node_count):
+                    content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                    link_idx += 1
+
+                # Skip internal SQL connections
+                if has_webapp:
+                    link_idx += sql_node_count
                 if has_vm:
-                    if len(vm_names) <= 3 and len(vm_names) > 0:
-                        link_idx += len(vm_names)
-                    else:
-                        link_idx += 1
+                    vm_source_count = len(vm_names) if len(vm_names) <= 3 and len(vm_names) > 0 else 1
+                    link_idx += vm_source_count * sql_node_count
                 if has_aks:
-                    if len(aks_names) <= 3 and len(aks_names) > 0:
-                        link_idx += len(aks_names)
-                    else:
-                        link_idx += 1
+                    aks_source_count = len(aks_names) if len(aks_names) <= 3 and len(aks_names) > 0 else 1
+                    link_idx += aks_source_count * sql_node_count
             
             # Internet → Key Vault (then skip internal KV connections)
             if has_kv:
@@ -4421,6 +4775,8 @@ def write_experiment_cloud_architecture_summary(
         content_lines.append(f"- 🗓️ **Last updated:** {now_uk()}")
         content_lines.append("- This file is generated for experiment isolation; confirm assumptions before treating as environment fact.")
         content_lines.append("- See individual resource summaries (VM_*.md, SQL_*.md, etc.) for detailed security analysis.")
+        if k8s_arch_path is not None and k8s_arch_path.exists():
+            content_lines.append(f"- Kubernetes ingress/services view: [Kubernetes detail]({rel_link(k8s_arch_path)})")
 
         out_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
 
@@ -4772,10 +5128,27 @@ def write_experiment_cloud_architecture_summary(
             raise SystemExit(f"Mermaid validation failed for {overview_path}: {errs[0].message}")
     
     # Generate per-resource summaries for all cloud providers
+    # Cleanup old top-level resource summaries so Cloud/ contains only Architecture_*.md.
+    stale_patterns = (
+        "VM_*.md",
+        "AKS_*.md",
+        "ServiceAccount_*.md",
+        "SQL_*.md",
+        "KeyVault_*.md",
+        "Storage_*.md",
+        "AppService_*.md",
+    )
+    cloud_summary_dir = summary_dir / "Cloud"
+    cloud_summary_dir.mkdir(parents=True, exist_ok=True)
+    for pattern in stale_patterns:
+        for stale_file in cloud_summary_dir.glob(pattern):
+            try:
+                stale_file.unlink()
+            except OSError:
+                pass
+
     for provider in cloud_providers:
         print(f"Generating resource summaries for {provider}...")
-        cloud_summary_dir = summary_dir / "Cloud"
-        cloud_summary_dir.mkdir(parents=True, exist_ok=True)
         resource_files = write_cloud_resource_summaries(
             repo=repo,
             provider=provider,

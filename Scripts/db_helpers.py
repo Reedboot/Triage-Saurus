@@ -12,11 +12,104 @@ ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "Output/Learning/triage.db"
 
 
+def _ensure_schema(conn: sqlite3.Connection):
+    """Ensure tables used by db_helpers exist on the active database."""
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS repositories (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT NOT NULL,
+      repo_url TEXT,
+      repo_type TEXT,
+      primary_language TEXT,
+      files_scanned INTEGER,
+      iac_files_count INTEGER,
+      code_files_count INTEGER,
+      scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS resources (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      provider TEXT,
+      region TEXT,
+      discovered_by TEXT,
+      discovery_method TEXT,
+      source_file TEXT,
+      source_line_start INTEGER,
+      source_line_end INTEGER,
+      status TEXT DEFAULT 'active',
+      first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_id, resource_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_properties (
+      id INTEGER PRIMARY KEY,
+      resource_id INTEGER NOT NULL,
+      property_key TEXT NOT NULL,
+      property_value TEXT,
+      property_type TEXT,
+      is_security_relevant BOOLEAN DEFAULT 0,
+      UNIQUE(resource_id, property_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_connections (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      source_resource_id INTEGER NOT NULL,
+      target_resource_id INTEGER NOT NULL,
+      is_cross_repo BOOLEAN DEFAULT 0,
+      connection_type TEXT,
+      protocol TEXT,
+      port TEXT,
+      authentication TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS context_questions (
+      id INTEGER PRIMARY KEY,
+      question_key TEXT UNIQUE NOT NULL,
+      question_text TEXT NOT NULL,
+      question_category TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS context_answers (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      question_id INTEGER NOT NULL,
+      answer_value TEXT,
+      answer_confidence TEXT,
+      evidence_source TEXT,
+      evidence_type TEXT,
+      answered_by TEXT,
+      answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
+    # Backward-compatible finding columns used by helper queries/inserts.
+    findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+    if "repo_id" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
+    if "resource_id" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
+    if "category" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
+    if "base_severity" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
+    if "evidence_location" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
+
+
 @contextmanager
 def get_db_connection():
     """Context manager for database connections."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # Access columns by name
+    _ensure_schema(conn)
     try:
         yield conn
         conn.commit()

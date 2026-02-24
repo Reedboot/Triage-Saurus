@@ -415,6 +415,9 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - **Cloud architecture extraction (MANDATORY for repos with IaC or cloud services):** When a repo scan discovers cloud architecture context (Azure/AWS/GCP services, ingress paths, network patterns, authentication mechanisms), immediately create/update:
     - `Output/Knowledge/<Provider>.md` (e.g., Azure.md, AWS.md) - Add discovered services, network topology, authentication patterns under `## Confirmed` or `## Assumptions`
     - `Output/Summary/Cloud/Architecture_<Provider>.md` - Create/update architecture diagram showing discovered services, connections, and security controls (follow `Agents/ArchitectureAgent.md`)
+    - `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md` (when AKS/EKS/GKE detected) - Dedicated ingress/controller/services/secrets topology for that provider's Kubernetes surface
+    - `Output/Summary/Cloud/<Provider>/` - Provider-scoped resource summaries (VM, SQL, Key Vault, Storage, App Service, ServiceAccount, etc.). Keep top-level `Output/Summary/Cloud/` for `Architecture_*.md` files only.
+    - Treat Terraform **module-defined** resources (for example `module "eks"` / `module "vpc"`) as **confirmed IaC intent** in diagrams; use dashed styling only for true unknown assumptions.
     - This is separate from the repo-specific knowledge - extract reusable cloud environment facts that apply across multiple applications
     - **Example:** If repo deploys to Azure App Service, add App Service to both Azure.md and Architecture_Azure.md
   - **Trace request ingress path:** For application/service repos, determine how requests reach the service by examining:
@@ -603,11 +606,14 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - **Cloud architecture knowledge:** When scanning a repo, any cloud architecture knowledge discovered (ingress paths, services used, authentication patterns, network topology) should be immediately captured in:
     - `Output/Knowledge/<Provider>.md` (confirmed services, controls, architecture facts)
     - `Output/Summary/Cloud/Architecture_<Provider>.md` (updated architecture diagrams)
-- **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
+- **Cloud summaries:**
+  - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
+  - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
-  - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
-    `Output/Summary/Risk Register.xlsx`, and appends audit entries under `Output/Audit/`.
+  - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
+    `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
+    and appends audit entries under `Output/Audit/`.
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:

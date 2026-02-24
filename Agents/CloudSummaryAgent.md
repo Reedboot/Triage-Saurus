@@ -33,4 +33,5 @@
   - `python3 Scripts/extract_finding_scores.py Findings/Cloud`
 
 ## Output Location
-- Write summaries under `Summary/Cloud/` for each distinct resource type.
+- Write resource summaries under provider folders: `Summary/Cloud/<Provider>/<ResourceType>.md` (for example `Summary/Cloud/AWS/EKS.md`).
+- Keep top-level `Summary/Cloud/` for `Architecture_*.md` files only.

@@ -172,6 +172,8 @@ This repository supports consistent security triage. The expected workflow is:
   generate or update the provider architecture diagram under `Output/Summary/Cloud/` (e.g.,
   `Output/Summary/Cloud/Architecture_Azure.md`) to reflect the current known state and
   include any newly discovered services.
+  - Generate/update `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md` when AKS/EKS/GKE is detected, and include ingress/services/secrets details when available.
+  - Treat Terraform **module-defined** infrastructure (for example `module "eks"` / `module "vpc"`) as **confirmed IaC intent** in diagrams; use dashed styling only for true unknown assumptions.
   - This is a **standing rule throughout the session** (do not wait until session
     kickoff or the end of triage).
   - Draw the diagram **from the internet inwards** (request flow / access paths).
@@ -210,11 +212,14 @@ This repository supports consistent security triage. The expected workflow is:
 - **Repo scan summaries:** `Output/Summary/Repos/<RepoName>.md` (one file per repo; see `Agents/RepoSummaryAgent.md`; use exact repo name without prefix)
   - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings`
   - Cloud architecture knowledge from repo scans should be captured in `Output/Knowledge/<Provider>.md` and `Output/Summary/Cloud/Architecture_<Provider>.md`
-- **Cloud summaries:** `Output/Summary/Cloud/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
+- **Cloud summaries:**
+  - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
+  - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
-  - With `--update-knowledge`, it also generates `Output/Summary/Cloud/*.md` per-service summaries, regenerates
-    `Output/Summary/Risk Register.xlsx`, and appends audit entries under `Output/Audit/`.
+  - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
+    `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
+    and appends audit entries under `Output/Audit/`.
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:
