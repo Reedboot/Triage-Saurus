@@ -7,6 +7,210 @@
 - Apply OWASP and ISO/IEC 27001:2022-aligned security practices.
 - **Think like an attacker:** Trace realistic attack paths through the system architecture.
 
+## Critical Rule: Scan All Environments with Production Rigor
+
+**NEVER reduce scoring or skip findings based on environment labels (CTF, training, lab, test, dev).**
+
+### The Nuance: Environment vs Exploitability
+
+**✅ Acknowledge environment context:**
+- "This is a non-production/lab/training environment (likely contains no real customer data)"
+- "ExpanseAzureLab is a CTF training environment (intentional attack surface for learning)"
+
+**✅ BUT ALWAYS emphasize the real risk:**
+- "**However, the infrastructure CAN BE HACKED** - real attack paths exist"
+- "An attacker could compromise this environment, pivot to production, or use as foothold"
+- "Technical vulnerabilities are exploitable regardless of data classification"
+
+### Inherently Critical Vulnerabilities (Environment-Agnostic)
+
+**Some vulnerabilities are SO FUNDAMENTALLY BAD that environment doesn't matter:**
+
+**🔴 ALWAYS CRITICAL (9-10/10) - NO environment reduction:**
+- **Anonymous storage with credentials** (e.g., public blob containing service principal secrets)
+- **Direct internet-exposed management interfaces** (e.g., RDP/SSH 0.0.0.0/0 with weak/no auth)
+- **Credential hardcoded in public repositories** (e.g., GitHub public repo with API keys)
+- **Database with no authentication** (e.g., MongoDB/Redis exposed to internet, no password)
+- **Administrative credentials in plaintext** (e.g., connection strings in web.config on public site)
+
+**Why NO reduction:** These enable IMMEDIATE, DIRECT compromise with zero prerequisites. Finding them in "dev" doesn't make them less dangerous - credentials often work across environments.
+
+**Example:**
+```
+Finding: Public Blob Storage with Service Principal Credentials
+Score: 9/10 CRITICAL (NO REDUCTION for dev/lab environment)
+
+Environment: Development/lab environment
+
+Rationale: This is INHERENTLY CRITICAL regardless of environment:
+✅ Zero authentication required (anyone can download)
+✅ Direct credential theft (service principal app_id + secret in plaintext)
+✅ Credentials authenticate to REAL Azure tenant (not scoped to "dev only")
+✅ Immediate compromise capability (no exploitation chain needed)
+✅ Cross-environment risk (dev credentials often have prod access)
+
+Even if this storage account contains "test data only", the CREDENTIALS are real
+and likely work across dev/test/prod boundaries in the same tenant.
+
+NO SCORE REDUCTION. 9/10 CRITICAL regardless of environment label.
+```
+
+### Environment-Sensitive Vulnerabilities (Context Matters)
+
+**These MAY warrant environment consideration for scoring:**
+
+**🟠 Context-Dependent (Consider environment + blast radius):**
+- **Missing encryption at rest** (dev data = less sensitive, but still infrastructure weakness)
+- **Overly permissive RBAC** (dev admin ≠ prod admin impact)
+- **Missing audit logging** (dev = less critical data, but still undetected breaches)
+- **Network segmentation gaps** (dev VNet peering to prod = HIGH, dev isolated = MEDIUM)
+- **Weak password policies** (dev accounts with no MFA = risk depends on access scope)
+
+**Scoring approach:**
+1. **Start with technical severity** (what CAN happen?)
+2. **Consider blast radius** (what WILL an attacker reach?)
+3. **Adjust for environment** (dev isolated = minor reduction, dev→prod path = NO reduction)
+
+**Example:**
+```
+Finding: SQL Database Auditing Disabled
+Base Score: 8/10 HIGH (no detection capability)
+
+Dev Environment (isolated, synthetic data): 
+→ 7/10 HIGH (slight reduction - lower data sensitivity, but still compromisable)
+
+Dev Environment (shared tenant with prod):
+→ 8/10 HIGH (NO reduction - stolen credentials enable prod pivot)
+
+Prod Environment:
+→ 8/10 HIGH (baseline score)
+```
+
+### Mixed Environment Scenarios (CRITICAL)
+
+**When dev/test/prod are in SAME infrastructure, ALWAYS score as PROD:**
+
+**🔴 Treat as PRODUCTION when:**
+- Dev/test resources in **same Azure tenant** as production
+- Dev service principals have **cross-environment permissions**
+- Dev VNets **peered or routed to production** networks
+- Dev Key Vault **accessible from production** identities
+- Shared CI/CD pipelines with **production deployment credentials**
+
+**Why:** Compromised dev = direct path to production. Environment labels are meaningless.
+
+**Example:**
+```
+Finding: Dev VM with SSH Exposed to Internet (Password Auth)
+Environment: Development VM in same Azure tenant as production
+
+Score: 9/10 CRITICAL (NO REDUCTION despite "dev" label)
+
+Rationale:
+✅ Direct internet compromise (0.0.0.0/0 allows SSH)
+✅ Same Azure tenant as production resources
+✅ After VM compromise, attacker can:
+   - Query Azure Metadata Service for managed identity tokens
+   - Access Key Vaults in same tenant
+   - Pivot to production VMs via VNet peering
+   - Enumerate all subscription resources
+
+"Dev" label is IRRELEVANT when infrastructure is shared with production.
+Score: 9/10 CRITICAL.
+```
+
+### Scoring Decision Tree
+
+```
+┌─────────────────────────────────────┐
+│  Is this an INHERENTLY CRITICAL     │
+│  vulnerability?                     │
+│  (anon creds, direct compromise,    │
+│   hardcoded secrets, no auth)       │
+└────────────┬────────────────────────┘
+             │
+        YES  │  NO
+             │
+    ┌────────▼──────────┐          ┌──────────────────┐
+    │  9-10/10 CRITICAL │          │ Assess Blast     │
+    │  NO REDUCTION     │          │ Radius & Paths   │
+    └───────────────────┘          └────────┬─────────┘
+                                            │
+                            ┌───────────────▼────────────────┐
+                            │ Is there a dev→prod path?      │
+                            │ (same tenant, shared VNets,    │
+                            │  cross-env credentials)        │
+                            └───────────┬────────────────────┘
+                                       │
+                                  YES  │  NO
+                                       │
+                        ┌──────────────▼──┐      ┌─────────────────┐
+                        │ Score as PROD   │      │ Consider minor  │
+                        │ NO REDUCTION    │      │ reduction (1-2  │
+                        │                 │      │ points max)     │
+                        └─────────────────┘      └─────────────────┘
+```
+
+**Score based on TECHNICAL EXPLOITABILITY, not data sensitivity:**
+- ✅ **Correct:** "Public blob storage exposes credentials - 9/10 CRITICAL. While this is a lab environment, an attacker can download service principal credentials and compromise the Azure tenant."
+- ✅ **Correct:** "SQL auditing disabled - 8/10 HIGH. Non-production environment but infrastructure is hackable. Attacker could exfiltrate DB contents undetected and use stolen credentials for lateral movement."
+- ❌ **NEVER:** "Public blob storage - 0/10 INFO. This is a lab so no real data at risk."
+- ❌ **NEVER:** "SQL auditing disabled - 2/10 LOW. Test environment so low priority."
+
+### What to Score On
+
+**✅ DO score based on:**
+1. **Attack path viability** - Can an attacker exploit this? (Internet → compromise)
+2. **Infrastructure compromise** - Can they gain control of VMs, databases, Key Vault?
+3. **Lateral movement potential** - Can they pivot to other systems or production?
+4. **Credential theft** - Can they steal service principals, API keys, certificates?
+5. **Blast radius** - What can they reach after initial compromise?
+
+**❌ DON'T reduce scores for:**
+- "No real customer data" (infrastructure is still hackable)
+- "Lab/test environment" (credentials still work in production tenant)
+- "Intentional for training" (technical exploitability remains real)
+
+### Examples from ExpanseAzureLab
+
+**Finding: Public Blob Storage Exposes Credentials**
+```markdown
+Score: 9/10 CRITICAL
+
+Environment Context: ExpanseAzureLab is a CTF training lab (non-production, no real customer data).
+
+Real Risk: However, the infrastructure CAN BE HACKED:
+- Service principal credentials (Alex) are publicly downloadable
+- These credentials authenticate to the REAL Azure tenant
+- Attacker gains access to Key Vault, SQL, VMs in this resource group
+- Potential pivot to production resources in same tenant
+- Even "lab" credentials can enable real damage
+
+Attack Path: Internet → Public blob URL → Download credentials.json → Azure tenant compromise
+```
+
+**Finding: SQL Database Auditing Disabled**
+```markdown
+Score: 8/10 HIGH
+
+Environment Context: Non-production training environment (data likely synthetic).
+
+Real Risk: The infrastructure is exploitable:
+- Attacker can compromise SQL server via multiple paths (see Findings 002, 003, 007)
+- WITHOUT audit logs, breach goes undetected indefinitely
+- Stolen credentials enable lateral movement to production
+- Lab compromise often precedes production attacks (same tenant, same patterns)
+
+Attack Path: Even in "test" environments, undetected breaches enable reconnaissance and credential theft
+```
+
+**Rationale:**
+1. Training/CTF environments often mirror real production misconfigurations
+2. Compromised lab infrastructure = foothold for production attacks
+3. Service principals/credentials from "labs" may have production access
+4. Security scanning capabilities must work universally
+5. **The environment being hackable IS the real risk** - not the data classification
+
 ## Attack Path Analysis (CRITICAL)
 
 **For every finding, answer: "How would an attacker actually exploit this?"**
@@ -614,3 +818,274 @@ When reviewing storage accounts (especially those containing sensitive data like
 | **Soft delete off** | `soft_delete_retention_days` | `0` | `7-90` |
 | **Purge protection off** | `purge_protection_enabled` | `false` | `true` |
 | **RBAC not used** | `enable_rbac_authorization` | `false` | `true` |
+
+---
+
+## The Five Pillars Security Framework
+
+**CRITICAL:** Security assessment MUST systematically check ALL FIVE pillars for EVERY resource. Missing any pillar = incomplete security assessment.
+
+For EVERY IaC resource detected:
+
+1️⃣ **Network Security** - Can they reach it?
+   - Network ACLs / Firewall rules configured?
+   - Private endpoints used?
+   - Public access disabled?
+   
+2️⃣ **Access Control** - Can they authenticate/authorize?
+   - Modern authentication (Managed Identity, AAD, IAM)?
+   - RBAC/IAM least privilege?
+   - Legacy auth disabled (keys, passwords)?
+   - JIT access / credential expiry?
+   
+3️⃣ **Audit Logging** - Are events logged?
+   - Audit logging enabled?
+   - Comprehensive event coverage?
+   - Retention meets compliance (90+ days)?
+   
+4️⃣ **Log Consumption** - Is anyone watching?
+   - Centralized logging infrastructure?
+   - SIEM deployed (Sentinel, GuardDuty, etc)?
+   - Security alerts configured?
+   - Response process defined?
+
+5️⃣ **Data Protection** - Is data encrypted and secure?
+   - Encryption at rest enabled?
+   - TLS/HTTPS enforced (1.2+ minimum)?
+   - Customer-managed keys (CMK) for compliance?
+   - Key rotation configured?
+
+**Security Score = MIN(all five pillars)** - Weakest link determines overall security.
+
+### Pillar 1: Network Security Matrix
+
+| Azure Resource | Network Feature | Property to Check | Default Behavior | Risk if Missing |
+|----------------|-----------------|-------------------|------------------|-----------------|
+| **Key Vault** | Network ACLs | `network_acls.default_action` | Allow | 🟠 HIGH |
+| **Storage Account** | Network rules | `network_rules.default_action` | Allow | 🟠 HIGH |
+| **SQL Server** | Firewall rules | `firewall_rule` | None (blocked) | 🟡 MEDIUM |
+| **AKS** | API server auth IPs | `api_server_authorized_ip_ranges` | All IPs | 🟠 HIGH |
+| **App Service** | IP restrictions | `ip_restriction` | None (open) | 🟠 HIGH |
+| **Virtual Machine** | NSG rules | `network_security_group_id` | None | 🔴 CRITICAL |
+| **PostgreSQL** | Firewall rules | `firewall_rule` | None (blocked) | 🟡 MEDIUM |
+| **MySQL** | Firewall rules | `firewall_rule` | None (blocked) | 🟡 MEDIUM |
+| **Cosmos DB** | IP firewall | `ip_range_filter` | None (open) | 🟠 HIGH |
+| **Redis Cache** | Firewall rules | `firewall_rule` | None (open) | 🟠 HIGH |
+| **Container Registry** | Network rules | `network_rule_set` | Allow all | 🟡 MEDIUM |
+| **Function App** | IP restrictions | `ip_restriction` | None (open) | 🟠 HIGH |
+| **API Management** | Virtual network | `virtual_network_type` | None (external) | 🟡 MEDIUM |
+| **Event Hub** | Network rules | `network_rulesets` | Allow all | 🟡 MEDIUM |
+| **Service Bus** | Network rules | `network_rule_set` | Allow all | 🟡 MEDIUM |
+
+**AWS Equivalent Resources:**
+- S3: `bucket_public_access_block`
+- RDS: `publicly_accessible`
+- EC2: `security_group_rule`
+- Lambda: `vpc_config`
+
+**GCP Equivalent Resources:**
+- Cloud Storage: `uniform_bucket_level_access`
+- Cloud SQL: `ip_configuration.authorized_networks`
+- Compute Engine: `firewall_rule`
+
+### Pillar 2: Access Control Matrix
+
+| Azure Resource | Best Practice Auth | Legacy Auth to Flag | Property to Check | Risk if Legacy |
+|----------------|-------------------|---------------------|-------------------|----------------|
+| **Storage Account** | Managed Identity | Account keys | `shared_access_key_enabled` = true | 🟠 HIGH |
+| **Key Vault** | AAD RBAC | Access policies | `enable_rbac_authorization` = false | 🟡 MEDIUM |
+| **SQL Server** | AAD authentication | SQL logins | `azurerm_mssql_server_aad_administrator` missing | 🟠 HIGH |
+| **AKS** | AAD integration | Basic auth | `azure_active_directory_role_based_access_control` missing | 🟠 HIGH |
+| **Virtual Machine** | SSH keys + AAD | Password auth | `disable_password_authentication` = false | 🔴 CRITICAL |
+| **App Service** | Managed Identity | Connection strings | `identity` block missing | 🟡 MEDIUM |
+| **Service Principal** | Credential expiry | No expiry | `end_date` missing or >> 1 year | 🟠 HIGH |
+| **PostgreSQL** | AAD auth | Password only | `azurerm_postgresql_aad_administrator` missing | 🟡 MEDIUM |
+| **MySQL** | AAD auth | Password only | `azurerm_mysql_aad_administrator` missing | 🟡 MEDIUM |
+| **Cosmos DB** | RBAC | Connection strings | `key_vault_key_id` missing + keys enabled | 🟠 HIGH |
+| **Container Registry** | Managed Identity | Admin user | `admin_enabled` = true | 🟠 HIGH |
+| **API Management** | Subscription + JWT | API keys only | Policy validation | 🟡 MEDIUM |
+| **Virtual Machine** | JIT access | Always open RDP/SSH | `azurerm_security_center_jit` missing | 🔴 CRITICAL |
+| **Function App** | Managed Identity | App keys | `identity` block missing | 🟡 MEDIUM |
+| **Storage Account** | User delegation SAS | Account SAS | SAS policy configuration | 🟡 MEDIUM |
+
+**Authentication Priority (most to least secure):**
+1. ✅ Managed Identity (no credentials)
+2. ✅ AAD + RBAC (centralized, auditable)
+3. 🟡 SSH keys + expiry (time-limited)
+4. 🟠 Connection strings in Key Vault (leakable but protected)
+5. 🔴 Passwords / Account keys (long-lived, leakable)
+6. ⛔ No authentication (anonymous access)
+
+### Pillar 3: Audit Logging Matrix
+
+| Azure Resource | Logging Feature | Property to Check | What's Logged | Retention Requirement |
+|----------------|-----------------|-------------------|---------------|----------------------|
+| **Key Vault** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | Secret access, key ops | 90+ days (compliance) |
+| **Storage Account** | Storage logging | `logging` block | Blob/Queue/Table ops | 90+ days |
+| **SQL Server** | Auditing | `azurerm_mssql_server_extended_auditing_policy` | All DB operations | 90+ days |
+| **AKS** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | K8s API, kubelet logs | 30+ days |
+| **App Service** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | HTTP logs, app logs | 30+ days |
+| **Virtual Machine** | Diagnostic extension | `azurerm_virtual_machine_extension` | System logs, security events | 90+ days |
+| **NSG** | Flow logs | `azurerm_network_watcher_flow_log` | Network traffic patterns | 30+ days |
+| **PostgreSQL** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | Query logs, connection logs | 90+ days |
+| **MySQL** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | Query logs, audit logs | 90+ days |
+| **Cosmos DB** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | Data plane operations | 90+ days |
+| **API Management** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | API calls, gateway logs | 90+ days |
+| **Function App** | Application Insights | `application_insights_connection_string` | Invocations, dependencies | 90+ days |
+| **Subscription** | Activity Log | Automatic (check export) | Management operations | 90+ days |
+| **Virtual Network** | NSG flow logs | `azurerm_network_watcher_flow_log` | Traffic flows | 30+ days |
+| **Firewall** | Diagnostic settings | `azurerm_monitor_diagnostic_setting` | Allowed/denied traffic | 90+ days |
+
+**Critical Configuration:**
+- Logs MUST go to Log Analytics Workspace (centralized)
+- Retention: 90+ days for compliance (GDPR, SOC2, PCI-DSS)
+- Enable ALL log categories (not just errors)
+
+**AWS/GCP Equivalents:**
+- AWS: CloudTrail, VPC Flow Logs, CloudWatch Logs
+- GCP: Cloud Audit Logs, VPC Flow Logs, Cloud Logging
+
+### Pillar 4: Log Consumption & Monitoring Infrastructure
+
+**Environment-Level Assessment (Not per-resource):**
+
+| Component | Azure | AWS | GCP | Risk if Missing |
+|-----------|-------|-----|-----|-----------------|
+| **Central Logging** | Log Analytics Workspace | CloudWatch Logs | Cloud Logging | 🔴 CRITICAL |
+| **SIEM** | Azure Sentinel | Amazon GuardDuty | Security Command Center | 🔴 CRITICAL |
+| **Alerting** | Azure Monitor Alerts | CloudWatch Alarms | Cloud Monitoring | 🟠 HIGH |
+| **Security Dashboards** | Sentinel Workbooks | Security Hub | SCC Dashboards | 🟡 MEDIUM |
+| **Incident Response** | Logic Apps / Playbooks | Lambda + SNS | Cloud Functions | 🟡 MEDIUM |
+
+**Monitoring Maturity Levels:**
+
+- **Level 0 (Blind):** No centralized logging, no SIEM, no alerts
+  - **Risk:** Breaches undetected for months/years
+  - **Finding:** ENV-001 - No Security Monitoring Infrastructure
+
+- **Level 1 (Reactive):** Centralized logging exists, but no one watches
+  - **Risk:** Logs exist but breaches still undetected
+  - **Finding:** ENV-002 - Logs Not Consumed by SIEM
+
+- **Level 2 (Alerted):** SIEM deployed, basic alerts configured
+  - **Risk:** Alert fatigue, false positives
+  - **Finding:** Review alert tuning and response SLAs
+
+- **Level 3 (Responsive):** Alerts tuned, incident response playbooks active
+  - **Risk:** Manual response delays
+  - **Finding:** Validate response times
+
+- **Level 4 (Automated):** Automated response, threat hunting active
+  - **Risk:** Minimal - monitor for gaps
+  - **Finding:** Continuous improvement opportunities
+
+**Red Flags:**
+- Logs going to storage account only (no consumption)
+- Log Analytics workspace empty (no data sources connected)
+- Sentinel deployed but no analytics rules enabled
+- Alerts send to unused email aliases
+- No runbooks or playbooks configured
+
+### Pillar 5: Data Protection Matrix
+
+| Azure Resource | Encryption at Rest | TLS/In-Transit | Key Management | Property to Check |
+|----------------|-------------------|----------------|----------------|-------------------|
+| **SQL Server** | TDE | TLS 1.2+ enforced | Platform-managed vs CMK | `minimum_tls_version`, `transparent_data_encryption` |
+| **Storage Account** | Infrastructure encryption | HTTPS only | Platform vs CMK | `enable_https_traffic_only`, `infrastructure_encryption_enabled` |
+| **Virtual Machine** | Azure Disk Encryption | N/A (disk-level) | Platform vs CMK | `azurerm_disk_encryption_set` |
+| **AKS** | Secrets encryption at rest | Node-to-node TLS | Platform vs CMK | `encryption_at_rest_enabled` |
+| **Key Vault** | Always encrypted | TLS 1.2+ | HSM-backed vs software | `sku_name` (premium vs standard) |
+| **Cosmos DB** | Always encrypted | TLS 1.2+ | Platform vs CMK | `key_vault_key_id` |
+| **PostgreSQL** | Always encrypted | TLS enforced | Platform vs CMK | `ssl_enforcement_enabled`, `ssl_minimal_tls_version_enforced` |
+| **MySQL** | Always encrypted | TLS enforced | Platform vs CMK | `ssl_enforcement_enabled`, `tls_version` |
+| **App Service** | N/A (stateless) | HTTPS only, min TLS | N/A | `https_only`, `minimum_tls_version` |
+| **Function App** | N/A (stateless) | HTTPS only, min TLS | N/A | `https_only`, `minimum_tls_version` |
+| **API Management** | N/A (gateway) | TLS versions | Managed via policies | `minimum_api_version`, SSL policies |
+| **Container Registry** | Always encrypted | TLS 1.2+ | Platform vs CMK | `encryption` block |
+| **Redis Cache** | Always encrypted | TLS enforced | Platform vs CMK | `minimum_tls_version`, `enable_non_ssl_port` = false |
+| **Event Hub** | Always encrypted | TLS 1.2+ | Platform vs CMK | `minimum_tls_version` |
+| **Service Bus** | Always encrypted | TLS 1.2+ | Platform vs CMK | `minimum_tls_version` |
+
+**TLS Version Risk Assessment:**
+- TLS 1.0 / 1.1: ⛔ **CRITICAL** - Deprecated, cryptographically broken (POODLE, BEAST)
+- TLS 1.2: ✅ **SECURE** - Current standard
+- TLS 1.3: ✅ **BEST** - Latest, faster handshake
+
+**Key Management Tiers:**
+1. ✅ Customer-Managed Keys (CMK) in HSM - Compliance requirement (PCI-DSS, HIPAA)
+2. ✅ Customer-Managed Keys (CMK) in Key Vault - Customer control
+3. 🟡 Platform-Managed Keys (PMK) - Microsoft manages, auto-rotation
+4. 🔴 No encryption - Unacceptable for ANY data
+
+**Encryption Finding Categories:**
+- **ENC-001:** Legacy TLS versions allowed (1.0/1.1)
+- **ENC-002:** HTTPS not enforced (HTTP allowed)
+- **ENC-003:** Encryption at rest disabled
+- **ENC-004:** Platform-managed keys for regulated data (should be CMK)
+- **ENC-005:** No key rotation policy configured
+
+### Phase 3: Systematic Five Pillars Security Review
+
+**For EVERY resource type detected in Phase 1/2:**
+
+#### Step 1: Resource Inventory
+- [ ] List all resources from Terraform/IaC
+- [ ] Group by type (Key Vault, Storage, SQL, VMs, AKS, etc.)
+- [ ] Identify data classification per resource (TIER 1-5)
+
+#### Step 2: Network Security (Pillar 1)
+For each resource:
+- [ ] Check Network Security Matrix above
+- [ ] Verify network restrictions configured
+- [ ] Flag missing restrictions as findings (NET-xxx)
+- [ ] Assess public vs private endpoint usage
+
+#### Step 3: Access Control (Pillar 2)
+For each resource:
+- [ ] Check Access Control Matrix above
+- [ ] Verify modern auth (Managed Identity/AAD/IAM)
+- [ ] Flag legacy auth (keys/passwords) as findings (ACC-xxx)
+- [ ] Check RBAC/IAM scope (least privilege?)
+- [ ] Verify JIT/expiry configured for SPNs/keys
+
+#### Step 4: Audit Logging (Pillar 3)
+For each resource:
+- [ ] Check Audit Logging Matrix above
+- [ ] Verify logging enabled (diagnostic settings/auditing)
+- [ ] Check retention period (90+ days for compliance)
+- [ ] Flag missing logging as findings (LOG-xxx)
+
+#### Step 5: Log Consumption (Pillar 4)
+For entire environment:
+- [ ] Detect Log Analytics Workspace / CloudWatch / Cloud Logging
+- [ ] Detect SIEM (Sentinel / GuardDuty / Security Command Center)
+- [ ] Check alert rules configured
+- [ ] Assess monitoring maturity (Level 0-4)
+- [ ] Create environment-level findings (ENV-xxx) if infrastructure missing
+
+#### Step 6: Data Protection (Pillar 5)
+For each resource:
+- [ ] Check Data Protection Matrix above
+- [ ] Verify encryption at rest enabled
+- [ ] Check key management (CMK vs platform-managed)
+- [ ] Verify TLS/HTTPS enforcement
+- [ ] Check minimum TLS version (1.2+ required)
+- [ ] Flag legacy TLS (1.0/1.1) as CRITICAL findings (ENC-xxx)
+- [ ] Match encryption controls to data classification (TIER 1 needs CMK)
+
+#### Step 7: Cross-Reference
+- [ ] Compare findings to architecture diagram (no missing services)
+- [ ] Validate data classification affects severity scoring
+- [ ] Ensure every resource assessed against all 5 pillars
+- [ ] Calculate monitoring maturity level (0-4)
+
+**Expected Output:**
+- 5-10x more findings than ad-hoc approach
+- Systematic coverage (no blind spots)
+- Environment-level findings (monitoring infrastructure)
+- Encryption-specific findings with TLS version checks
+- Data classification context in every finding
+
+---
+
+These matrices enable systematic security assessment. Use them in every Phase 3 security review.
