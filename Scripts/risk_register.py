@@ -15,6 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
 
+# Try database-first approach, fallback to markdown parsing
+USE_DATABASE = True
+try:
+    import sys
+    sys.path.insert(0, str(ROOT / "Scripts"))
+    from db_helpers import get_db_connection, DB_PATH
+    if not DB_PATH.exists():
+        USE_DATABASE = False
+except Exception:
+    USE_DATABASE = False
+
 FINDINGS_DIR = OUTPUT_FINDINGS_DIR
 OUTPUT_PATH = OUTPUT_SUMMARY_DIR / "Risk Register.xlsx"
 
@@ -66,10 +77,15 @@ def iter_finding_files() -> Iterable[Path]:
 def parse_overall_score(lines: list[str], path: Path) -> tuple[str, int]:
     for line in lines:
         if line.strip().startswith("- **Overall Score:**"):
+            # New format: - **Overall Score:** 🔴 **10/10** - Critical
+            match = re.search(r"\*\*(\d+)/10\*\*\s*-\s*(Critical|High|Medium|Low|Informational)", line)
+            if match:
+                return match.group(2), int(match.group(1))
+            # Old format: Critical 10/10
             match = re.search(r"(Critical|High|Medium|Low|Informational)\s+(\d+)/10", line)
-            if not match:
-                raise ValueError(f"Unable to parse overall score in {path}")
-            return match.group(1), int(match.group(2))
+            if match:
+                return match.group(1), int(match.group(2))
+            raise ValueError(f"Unable to parse overall score in {path}: {line}")
     raise ValueError(f"Missing overall score in {path}")
 
 
@@ -615,6 +631,81 @@ def _strip_resource_type_prefix(issue: str, resource_type: str) -> str:
 
 
 def build_rows() -> list[RiskRow]:
+    """Build risk register rows from database if available, else parse markdown."""
+    
+    # Try database first
+    if USE_DATABASE:
+        try:
+            return build_rows_from_database()
+        except Exception as e:
+            print(f"WARN: Database query failed, falling back to markdown: {e}", file=sys.stderr)
+    
+    # Fallback to markdown parsing
+    return build_rows_from_markdown()
+
+
+def build_rows_from_database() -> list[RiskRow]:
+    """Build rows from database (preferred method)."""
+    rows: list[RiskRow] = []
+    
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            SELECT 
+              f.finding_name,
+              f.score,
+              f.base_severity,
+              f.category,
+              f.evidence_location,
+              f.validation_status,
+              r.resource_name,
+              r.resource_type,
+              repo.repo_name
+            FROM findings f
+            LEFT JOIN resources r ON f.resource_id = r.id
+            LEFT JOIN repositories repo ON f.repo_id = repo.id
+            ORDER BY f.score DESC, f.base_severity DESC
+        """)
+        
+        for row in cursor.fetchall():
+            # Convert finding name to issue
+            issue = row['finding_name'].replace('_', ' ').strip()
+            
+            # Map category to business impact
+            impact = f"{row['category']} risk" if row['category'] else "Security risk"
+            
+            # Format file reference
+            if row['repo_name'] and row['evidence_location']:
+                file_ref = f"{row['repo_name']}/{row['evidence_location']}"
+            elif row['evidence_location']:
+                file_ref = row['evidence_location']
+            else:
+                file_ref = "Database entry"
+            
+            # Validation status
+            validation = row['validation_status'] if row['validation_status'] else "⚠️ Draft - Needs Triage"
+            if validation == "Draft":
+                validation = "⚠️ Draft - Needs Triage"
+            elif validation not in ("✅ Validated", "⚠️ Draft - Needs Triage"):
+                validation = "✅ Validated"
+            
+            rows.append(
+                RiskRow(
+                    priority=0,
+                    resource_type=row['resource_type'] or "Unknown",
+                    issue=issue,
+                    risk_score=row['score'],
+                    overall_severity=row['base_severity'],
+                    business_impact=impact,
+                    validation_status=validation,
+                    file_reference=file_ref,
+                )
+            )
+    
+    return rows
+
+
+def build_rows_from_markdown() -> list[RiskRow]:
+    """Build rows from markdown files (fallback method)."""
     rows: list[RiskRow] = []
     for path in iter_finding_files():
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -674,7 +765,7 @@ def build_rows() -> list[RiskRow]:
                 overall_severity=severity,
                 business_impact=impact,
                 validation_status=validation_status,
-                file_reference=str(path.relative_to(ROOT)),
+                file_reference=str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
             )
         )
 

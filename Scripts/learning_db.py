@@ -183,15 +183,19 @@ def get_status() -> dict:
         WHERE status != 'pending'
     """).fetchone()
     
-    # Get false positive patterns
-    fp_patterns = conn.execute("""
-        SELECT finding_name, COUNT(*) as fp_count
-        FROM validations
-        WHERE verdict = 'false_positive'
-        GROUP BY finding_name
-        ORDER BY fp_count DESC
-        LIMIT 5
-    """).fetchall()
+    # Get false positive patterns (if validations table exists)
+    try:
+        fp_patterns = conn.execute("""
+            SELECT finding_name, COUNT(*) as fp_count
+            FROM validations
+            WHERE verdict = 'false_positive'
+            GROUP BY finding_name
+            ORDER BY fp_count DESC
+            LIMIT 5
+        """).fetchall()
+    except sqlite3.OperationalError:
+        # validations table doesn't exist yet
+        fp_patterns = []
     
     conn.close()
     
