@@ -70,6 +70,18 @@ CFG_EXTS = {".yml", ".yaml", ".json", ".toml", ".ini", ".config", ".env"}
 IAC_EXTS = {".tf", ".tfvars", ".bicep"}
 DOC_EXTS = {".md", ".txt"}
 SQL_EXTS = {".sql"}
+K8S_MANIFEST_EXTS = {".yaml", ".yml"}
+
+ATTACK_PATH_PARTS = {
+    "exploit",
+    "exploits",
+    "attack",
+    "attacks",
+    "redteam",
+    "red-team",
+    "poc",
+    "payload",
+}
 
 INGRESS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("HTTP server bind/listen", re.compile(r"\b(Listen|ListenAndServe|app\.Run|http\.ListenAndServe|BindAddress)\b")),
@@ -380,6 +392,18 @@ def rel(repo: Path, p: Path) -> str:
         return p.relative_to(repo).as_posix()
     except ValueError:
         return str(p)
+
+
+def is_attack_artifact_path(repo: Path, p: Path) -> bool:
+    """Return True when a file appears to be in an attack-only artifact path."""
+    rel_path = rel(repo, p)
+    parts = [part.lower() for part in Path(rel_path).parts]
+    for part in parts:
+        if part in ATTACK_PATH_PARTS:
+            return True
+        if part.startswith("cve-"):
+            return True
+    return False
 
 
 def _matches_marker(path_str: str, marker: str) -> bool:
@@ -825,6 +849,203 @@ def extract_kubernetes_topology_signals(
         "controller_hints": sorted(controller_hints),
         "lb_hints": sorted(lb_hints),
         "evidence_files": sorted(evidence_files),
+    }
+
+
+def detect_k8s_vulnerability_signals(files: list[Path], repo: Path) -> dict[str, object]:
+    """Detect Kubernetes risk signals from regular manifests/config (excluding attack artifact paths)."""
+    signals: list[str] = []
+    seen: set[str] = set()
+    k8s_manifest_count = 0
+    workload_manifest_count = 0
+    service_manifest_count = 0
+    has_network_policy = False
+    has_admission_controls = False
+
+    attack_chain_flags = {
+        "public_exposure": False,
+        "weak_rbac": False,
+        "workload_escape": False,
+        "segmentation_gap": False,
+        "admission_gap": False,
+        "exfil_ready": False,
+    }
+
+    def add_signal(message: str) -> None:
+        if message not in seen:
+            seen.add(message)
+            signals.append(message)
+
+    for p in files:
+        if is_attack_artifact_path(repo, p):
+            continue
+        if p.suffix.lower() not in K8S_MANIFEST_EXTS:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        rp = rel(repo, p)
+        lower = text.lower()
+
+        if re.search(
+            r"^\s*kind:\s*(deployment|daemonset|statefulset|service|ingress|pod|job|cronjob|networkpolicy|role|clusterrole|rolebinding|clusterrolebinding|validatingadmissionpolicy|validatingwebhookconfiguration|mutatingwebhookconfiguration)\s*$",
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            k8s_manifest_count += 1
+
+        if re.search(r"^\s*kind:\s*(deployment|daemonset|statefulset|pod|job|cronjob)\s*$", text, re.IGNORECASE | re.MULTILINE):
+            workload_manifest_count += 1
+
+        if re.search(r"^\s*kind:\s*service\s*$", text, re.IGNORECASE | re.MULTILINE):
+            service_manifest_count += 1
+            if re.search(r"^\s*type:\s*loadbalancer\s*$", text, re.IGNORECASE | re.MULTILINE):
+                add_signal(f"⚠️ Public K8s service exposure (`type: LoadBalancer`) detected in `{rp}`")
+                attack_chain_flags["public_exposure"] = True
+            if re.search(r"^\s*type:\s*nodeport\s*$", text, re.IGNORECASE | re.MULTILINE):
+                add_signal(f"⚠️ NodePort service exposure detected in `{rp}`")
+                attack_chain_flags["public_exposure"] = True
+
+        if re.search(r"^\s*kind:\s*networkpolicy\s*$", text, re.IGNORECASE | re.MULTILINE):
+            has_network_policy = True
+
+        if re.search(r"^\s*kind:\s*(validatingadmissionpolicy|validatingwebhookconfiguration|mutatingwebhookconfiguration)\s*$", text, re.IGNORECASE | re.MULTILINE):
+            has_admission_controls = True
+        if "kyverno.io" in lower or "gatekeeper.sh" in lower or "constrainttemplate" in lower:
+            has_admission_controls = True
+
+        if re.search(r"^\s*kind:\s*ingress\s*$", text, re.IGNORECASE | re.MULTILINE):
+            has_auth_annotation = re.search(r"nginx\.ingress\.kubernetes\.io/auth|oauth|auth-url|azure\.ad|oidc", lower)
+            has_rate_limit = re.search(r"nginx\.ingress\.kubernetes\.io/limit|rate-limit", lower)
+            has_ip_restriction = re.search(r"whitelist-source-range|allowlist-source-range", lower)
+            has_tls = re.search(r"^\s*tls:\s*$", text, re.IGNORECASE | re.MULTILINE)
+
+            if not has_auth_annotation:
+                add_signal(f"⚠️ Ingress detected without obvious auth annotations in `{rp}`")
+                attack_chain_flags["public_exposure"] = True
+            if not has_rate_limit:
+                add_signal(f"⚠️ Ingress detected without obvious rate-limiting annotations in `{rp}`")
+            if not has_ip_restriction:
+                add_signal(f"⚠️ Ingress detected without source IP allowlist annotations in `{rp}`")
+            if not has_tls:
+                add_signal(f"⚠️ Ingress detected without explicit TLS block in `{rp}`")
+
+        if re.search(r"^\s*kind:\s*(clusterrole|role)\s*$", text, re.IGNORECASE | re.MULTILINE):
+            has_wildcard_verbs = re.search(r"verbs:\s*\[[^\]]*\"?\*\"?[^\]]*\]", text, re.IGNORECASE | re.DOTALL)
+            has_wildcard_resources = re.search(r"resources:\s*\[[^\]]*\"?\*\"?[^\]]*\]", text, re.IGNORECASE | re.DOTALL)
+            if has_wildcard_verbs or has_wildcard_resources:
+                add_signal(f"⚠️ Wildcard RBAC permissions detected in `{rp}`")
+                attack_chain_flags["weak_rbac"] = True
+
+            has_pod_or_service_resources = (
+                re.search(r"resources:\s*\[[^\]]*(pods|services)[^\]]*\]", lower, re.DOTALL)
+                or (
+                    "resources:" in lower
+                    and ("- pods" in lower or "- services" in lower)
+                )
+            )
+            has_discovery_verbs = (
+                re.search(r"verbs:\s*\[[^\]]*(list|watch|\*)[^\]]*\]", lower, re.DOTALL)
+                or (
+                    "verbs:" in lower
+                    and ("- list" in lower or "- watch" in lower or "- \"*\"" in lower or "- '*'" in lower)
+                )
+            )
+            if has_pod_or_service_resources and has_discovery_verbs:
+                add_signal(f"⚠️ RBAC allows broad pod/service discovery (`list/watch`) in `{rp}`")
+                attack_chain_flags["weak_rbac"] = True
+
+        if re.search(r"^\s*kind:\s*clusterrolebinding\s*$", text, re.IGNORECASE | re.MULTILINE) and re.search(r"cluster-admin", lower):
+            add_signal(f"⚠️ Cluster-admin binding detected in `{rp}`")
+            attack_chain_flags["weak_rbac"] = True
+
+        if re.search(r"\bprivileged:\s*true\b", lower):
+            add_signal(f"⚠️ Privileged container setting detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\bhostnetwork:\s*true\b", lower):
+            add_signal(f"⚠️ `hostNetwork: true` detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\bhostpid:\s*true\b", lower):
+            add_signal(f"⚠️ `hostPID: true` detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\bhostpath:\b", lower):
+            add_signal(f"⚠️ `hostPath` volume usage detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\ballowprivilegeescalation:\s*true\b", lower):
+            add_signal(f"⚠️ `allowPrivilegeEscalation: true` detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\brunasuser:\s*0\b", lower) or re.search(r"\brunasnonroot:\s*false\b", lower):
+            add_signal(f"⚠️ Container likely running as root detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"\bcapabilities:\s*", lower) and re.search(r"\b(sys_admin|net_admin)\b", lower):
+            add_signal(f"⚠️ High-risk Linux capability detected in `{rp}`")
+            attack_chain_flags["workload_escape"] = True
+        if re.search(r"^\s*image:\s*[^\\s]+:latest\s*$", text, re.IGNORECASE | re.MULTILINE):
+            add_signal(f"⚠️ Unpinned container image tag (`:latest`) detected in `{rp}`")
+
+        has_suspicious_loop = re.search(r"(while\s+true|sleep\s+3600|sleep\s+[0-9]{3,})", lower)
+        has_listener_or_callback = re.search(r"(callback|listener|webhook|c2|reverse[_-]?shell)", lower)
+        has_exec_or_shell = re.search(r"(bash\s+-c|sh\s+-c|python\s+listener|nc\s+-l|curl\s+http)", lower)
+        if has_suspicious_loop and (has_listener_or_callback or has_exec_or_shell):
+            add_signal(f"⚠️ Potential exfiltration/persistence command pattern detected in `{rp}`")
+            attack_chain_flags["exfil_ready"] = True
+
+    if k8s_manifest_count >= 3 and not has_network_policy:
+        add_signal("⚠️ No `NetworkPolicy` manifests detected despite multiple Kubernetes workload manifests")
+        attack_chain_flags["segmentation_gap"] = True
+    elif workload_manifest_count > 0 and service_manifest_count > 0 and not has_network_policy:
+        add_signal("⚠️ Workloads and services exist without `NetworkPolicy` segmentation signals")
+        attack_chain_flags["segmentation_gap"] = True
+
+    if workload_manifest_count > 0 and not has_admission_controls:
+        add_signal("⚠️ No admission-control policy signals detected (Kyverno/Gatekeeper/Validating policies)")
+        attack_chain_flags["admission_gap"] = True
+
+    attack_chain_score = 0
+    if attack_chain_flags["public_exposure"]:
+        attack_chain_score += 3
+    if attack_chain_flags["weak_rbac"]:
+        attack_chain_score += 2
+    if attack_chain_flags["workload_escape"]:
+        attack_chain_score += 2
+    if attack_chain_flags["segmentation_gap"]:
+        attack_chain_score += 2
+    if attack_chain_flags["admission_gap"]:
+        attack_chain_score += 1
+    if attack_chain_flags["exfil_ready"]:
+        attack_chain_score += 1
+    attack_chain_score = min(10, attack_chain_score)
+
+    if attack_chain_score >= 8:
+        attack_chain_level = "High"
+    elif attack_chain_score >= 5:
+        attack_chain_level = "Medium"
+    elif attack_chain_score >= 2:
+        attack_chain_level = "Low"
+    else:
+        attack_chain_level = "Minimal"
+
+    attack_chain_reasons: list[str] = []
+    if attack_chain_flags["public_exposure"]:
+        attack_chain_reasons.append("Public/external exposure signals detected")
+    if attack_chain_flags["weak_rbac"]:
+        attack_chain_reasons.append("RBAC permissions may enable broad discovery/abuse")
+    if attack_chain_flags["workload_escape"]:
+        attack_chain_reasons.append("Pod security context increases breakout risk")
+    if attack_chain_flags["segmentation_gap"]:
+        attack_chain_reasons.append("Network segmentation controls are weak/missing")
+    if attack_chain_flags["admission_gap"]:
+        attack_chain_reasons.append("Admission policy guardrails not evident")
+    if attack_chain_flags["exfil_ready"]:
+        attack_chain_reasons.append("Command patterns suggest persistence/exfil capability")
+
+    return {
+        "signals": signals[:12],
+        "attack_chain_score": attack_chain_score,
+        "attack_chain_level": attack_chain_level,
+        "attack_chain_reasons": attack_chain_reasons,
     }
 
 
@@ -5198,6 +5419,8 @@ def write_repo_summary(
     auth_methods = detect_authentication_methods(iter_files(repo), repo)
     dockerfile_info = parse_dockerfiles(repo)
     network_info = detect_network_topology(iter_files(repo), repo)
+    k8s_risk_analysis = detect_k8s_vulnerability_signals(iter_files(repo), repo)
+    k8s_risk_signals = k8s_risk_analysis.get("signals", [])
 
     has_kv = "azurerm_key_vault" in tf_resource_types
     has_sql = any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
@@ -5610,6 +5833,20 @@ def write_repo_summary(
         f"- **CI/CD:** {ci_string}\n"
         + ext_deps_section
     )
+
+    if k8s_risk_signals:
+        content += "### 🚨 Kubernetes Risk Signals (heuristic)\n"
+        content += "_Excludes attack artifact folders (for example `exploits/`) so this reflects deployable config risk._\n"
+        content += (
+            f"- **Attack-chain score:** 🟠 **{k8s_risk_analysis.get('attack_chain_score', 0)}/10** "
+            f"({k8s_risk_analysis.get('attack_chain_level', 'Unknown')})\n"
+        )
+        attack_chain_reasons = k8s_risk_analysis.get("attack_chain_reasons", [])
+        if attack_chain_reasons:
+            content += "- **Attack-chain drivers:** " + "; ".join(str(r) for r in attack_chain_reasons) + "\n"
+        for idx, signal in enumerate(k8s_risk_signals, start=1):
+            content += f"{idx}. {signal}\n"
+        content += "\n"
     
     # Add authentication section if methods detected
     if auth_methods["methods"]:
@@ -5879,6 +6116,7 @@ def main() -> int:
         if p.suffix.lower() in (CODE_EXTS | CFG_EXTS | IAC_EXTS | DOC_EXTS | SQL_EXTS)
         or p.name in {"Dockerfile", "docker-compose.yml"}
     ]
+    text_files = [p for p in text_files if not is_attack_artifact_path(repo, p)]
 
     for p in sorted(text_files)[:500]:
         if len(ingress) < 20:

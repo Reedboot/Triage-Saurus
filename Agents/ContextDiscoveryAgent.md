@@ -27,6 +27,9 @@ This agent performs **fast, non-security context discovery** of repositories to 
 - **Ingress patterns** - App Gateway, Front Door, APIM (from code & Terraform)
 - **APIM routing** - Mock vs real backend routing detection
 - **Backend services** - Extracted from HttpClient config and route mapping JSON files
+- **Kubernetes risk heuristics** - Detects risky deploy patterns (e.g., NodePort/LoadBalancer exposure, wildcard RBAC, broad pod/service discovery RBAC, privileged/hostPath/root containers, missing NetworkPolicy signals, admission-policy gaps, ingress hardening drift)
+  - Produces an **attack-chain score** from correlated signals (exposure + RBAC + pod security + segmentation + admission controls + exfil patterns).
+  - **Important:** Ignore attack artifact paths (for example `exploits/`, `attack/`, `poc/`, `CVE-*`) so detections are based on deployable configuration risk, not red-team sample content.
 
 **Output:** Creates baseline `Output/Summary/Repos/<RepoName>.md` with:
 - **Architecture diagram** (Mermaid) - Infrastructure topology with colored borders, clean connections (no numbered steps)
