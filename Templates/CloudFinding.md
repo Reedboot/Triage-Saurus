@@ -92,6 +92,31 @@ flowchart TB
 ### 🎯 Exploitability
 <exploitability>
 
+**For encryption/TLS findings, include Data Protection Matrix:**
+
+| Check | Expected | Actual | Result |
+|-------|----------|--------|--------|
+| Minimum TLS version | 1.2+ | [actual] | ✅/❌ |
+| HTTPS-only enforced | Yes | [actual] | ✅/❌ |
+| Encryption at rest | Enabled | [actual] | ✅/❌ |
+| Customer-managed key | [Required/Optional based on data tier] | [Platform/Customer/None] | ✅/❌ |
+| Key rotation policy | [Required period] | [actual] | ✅/❌ |
+
+**Data Classification Context:**
+- **Primary Data Type:** [TIER X: Description] - Source: [Schema/API analysis]
+- **Compliance Scope:** [PCI-DSS Req 3/4, GDPR Art 32, HIPAA §164.312]
+- **Severity Multiplier:** TIER 1 + missing encryption = auto-escalate to CRITICAL
+
+**Common TLS Attack Scenarios (if legacy TLS allowed):**
+- BEAST, POODLE, CRIME attacks via downgrade
+- Weak cipher suite exploitation (RC4, 3DES)
+- MitM via network positioning
+
+**Key Management Risks (if platform-managed keys for regulated data):**
+- No customer control over key lifecycle
+- Cannot prove exclusive key access (compliance issue)
+- No break-glass capability
+
 ### ✅ Recommendations
 - [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
 
@@ -118,13 +143,24 @@ flowchart TB
 
 # CONFIGURE YOUR ENVIRONMENT
 RESOURCE_NAME="[change-this]"
-RESOURCE_GROUP="[change-this]"
+RESOURCE_GROUP="[change-this]"  # Azure
+BUCKET_NAME="[change-this]"     # AWS
+PROJECT_ID="[change-this]"      # GCP
 
-# [Commands using actual Azure/AWS/GCP resources from the scan]
+# [Provider-specific commands from scan]
 echo "=== Testing public access ==="
-[az/aws/gcloud commands or curl]
+# Azure: az storage blob list --account-name ...
+# AWS:   aws s3 ls s3://bucket-name --no-sign-request
+# GCP:   curl https://storage.googleapis.com/bucket-name/
 
 echo "Expected: [What you can access that shouldn't be public]"
+```
+
+**For TLS verification (encryption findings):**
+```bash
+# Test legacy TLS (should fail after fix)
+openssl s_client -connect <endpoint>:443 -tls1    # Azure/AWS/GCP
+openssl s_client -connect <endpoint>:443 -tls1_2  # Should succeed
 ```
 
 ### Verify Impact
