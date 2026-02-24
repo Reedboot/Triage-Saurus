@@ -821,6 +821,232 @@ When reviewing storage accounts (especially those containing sensitive data like
 
 ---
 
+## Data Classification Framework
+
+**CRITICAL:** Security findings MUST be assessed with data classification context. The same misconfiguration has vastly different severity based on data sensitivity.
+
+### Data Sensitivity Tiers
+
+```
+🔴 TIER 1: REGULATED DATA (Compliance-Driven)
+├── Payment Card Data (PCI-DSS) - 16-digit PANs, CVV, cardholder name
+├── Protected Health Information (PHI/HIPAA) - Medical records, diagnosis, treatment
+├── Government IDs - SSN, passport numbers, driver's license
+├── Authentication Credentials - Passwords, private keys, API tokens, certificates
+└── Biometric Data - Fingerprints, facial recognition, DNA
+
+🟠 TIER 2: PERSONAL DATA (Privacy-Driven)
+├── Personally Identifiable Information (PII/GDPR) - Email, phone, address, DOB
+├── Financial Information - Bank accounts, salary, credit scores
+├── Demographic Data - Race, religion, political affiliation, sexual orientation
+├── Communication Data - Emails, chat logs, call recordings
+└── Behavioral Data - Browsing history, location tracking, purchase history
+
+🟡 TIER 3: BUSINESS CONFIDENTIAL (Commercial Risk)
+├── Trade Secrets - Algorithms, formulas, source code
+├── Customer Lists - CRM data, contacts, contracts
+├── Financial Records - Revenue, costs, margins, forecasts
+├── Strategic Plans - M&A targets, product roadmaps
+└── Internal Communications - Executive emails, board minutes
+
+🟢 TIER 4: INTERNAL USE (Limited Risk)
+├── Employee Directories - Names, titles, org charts
+├── Operational Metrics - System performance, uptime stats
+├── Public Marketing Material - Whitepapers, blog posts
+└── Aggregate Analytics - Anonymized usage statistics
+
+⚪ TIER 5: PUBLIC DATA (No Risk)
+├── Open Source Code - GitHub public repos
+├── Published Content - Documentation, press releases
+├── Synthetic Test Data - Faker-generated records
+└── Anonymized Datasets - No re-identification risk
+```
+
+### Detection Strategy
+
+**Phase 1: Infrastructure Hints (IaC Analysis)**
+
+Look for data classification signals in Terraform/IaC:
+
+```python
+# Database names
+payment|card|billing|invoice|stripe|checkout|transaction  # → TIER 1 (PCI)
+patient|medical|health|diagnosis|prescription|hipaa        # → TIER 1 (PHI)
+user|customer|account|profile|contact|member|email         # → TIER 2 (PII)
+credential|secret|key|token|password|auth                  # → TIER 1 (Auth)
+
+# Table/Container names in SQL scripts or ARM templates
+CREATE TABLE customers (email, phone, address)             # → TIER 2 (PII)
+CREATE TABLE payments (card_number, cvv, expiry)          # → TIER 1 (PCI)
+CREATE TABLE audit_logs (timestamp, user_id, action)      # → TIER 4 (Internal)
+
+# Azure/AWS/GCP resource tags
+data-classification = "confidential"                       # → TIER 3
+contains-pii = "true"                                      # → TIER 2
+compliance-scope = "pci-dss"                               # → TIER 1
+```
+
+**Phase 2: Code Analysis (Application Review)**
+
+Look for actual data handling patterns:
+
+```javascript
+// API endpoints that collect sensitive data
+POST /api/register → { email, password }                  # → TIER 2 + TIER 1
+POST /api/payment → { card_number, cvv }                  # → TIER 1 (PCI)
+GET /api/health-records → { diagnosis, medications }      # → TIER 1 (PHI)
+
+// Database queries
+INSERT INTO users (email, phone, address)                 # → TIER 2 (PII)
+SELECT * FROM payments WHERE card_number LIKE            # → TIER 1 (PCI)
+```
+
+**Phase 3: Data Flow Mapping**
+
+Trace data from ingress → storage → egress:
+
+```
+Example: E-commerce application
+
+Internet → App Service (collects: email, card_number)
+  ├─ TIER 2: email → SQL Database (users table)
+  └─ TIER 1: card_number → Payment Gateway (Stripe API)
+```
+
+### Severity Modifiers Based on Data Classification
+
+| Data Tier | Base Finding Severity | Modifier | Example |
+|-----------|----------------------|----------|---------|
+| **TIER 1** | Any misconfiguration | Auto-escalate to CRITICAL (9-10/10) | SQL no encryption + PCI data = 10/10 |
+| **TIER 2** | HIGH (7-8) | +1 point | Public blob + PII = 8/10 → 9/10 |
+| **TIER 3** | MEDIUM (5-6) | +0 points | Trade secrets + weak access = 6/10 |
+| **TIER 4** | LOW (3-4) | +0 points | Internal metrics + no auth = 4/10 |
+| **TIER 5** | Any misconfiguration | -2 points (min 3/10) | Public test data + no encryption = 3/10 |
+
+**Compliance Requirements by Data Tier:**
+
+| Data Tier | Required Encryption | Required Logging | Required Network Isolation | Key Management |
+|-----------|-------------------|------------------|---------------------------|----------------|
+| **TIER 1** | ✅ At rest + in transit (TLS 1.2+) | ✅ All operations, 90+ days | ✅ Private endpoints, no public access | ✅ CMK (Customer-Managed Keys) |
+| **TIER 2** | ✅ At rest + in transit (TLS 1.2+) | ✅ All operations, 90+ days | ⚠️ Network restrictions required | 🟡 CMK recommended |
+| **TIER 3** | ✅ At rest + in transit | ✅ Access logs, 30+ days | 🟡 Recommended | 🟡 Platform-managed OK |
+| **TIER 4** | 🟡 Recommended | 🟡 Recommended | ⚪ Not required | ⚪ Any |
+| **TIER 5** | ⚪ Not required | ⚪ Not required | ⚪ Not required | ⚪ Any |
+
+### Applying Data Classification to Findings
+
+**In every finding's Security Review section, include:**
+
+```markdown
+### 🗂️ Data Classification
+
+**Primary Data Type:** TIER 2 - Personal Data (PII)
+- **Detected from:** SQL schema analysis (users table: email, phone, address)
+- **Evidence:** `terraform/sql/init.sql:15-23`
+- **Compliance Scope:** GDPR Article 32 (Security of processing)
+
+**Severity Impact:**
+- Base Score: 6/10 (SQL database with overly broad firewall)
+- Data Classification Modifier: +1 (TIER 2 PII)
+- **Final Score: 7/10 HIGH**
+
+**Rationale:** PII exposure increases breach notification requirements (GDPR Art 33: 72 hours) and potential fines (€20M or 4% revenue).
+```
+
+**For TIER 1 data, always include compliance requirements:**
+
+```markdown
+### 🗂️ Data Classification
+
+**Primary Data Type:** TIER 1 - Payment Card Data (PCI-DSS)
+- **Detected from:** Database table schema (payments: card_number, cvv, expiry)
+- **Evidence:** `terraform/sql/payments_schema.sql:8-12`
+- **Compliance Scope:** PCI-DSS Requirement 3 (Protect stored cardholder data)
+
+**Mandatory Controls for TIER 1:**
+- ✅ Encryption at rest with CMK (PCI Req 3.4)
+- ❌ **MISSING:** TLS 1.2+ enforcement (PCI Req 4.1)
+- ❌ **MISSING:** Access logging enabled (PCI Req 10.2)
+- ❌ **MISSING:** Network segmentation (PCI Req 1.3)
+
+**Severity Impact:**
+- Auto-escalate to CRITICAL: TIER 1 data + missing encryption = **10/10 CRITICAL**
+- Non-compliance penalty: Loss of PCI certification + merchant account termination
+```
+
+### Unknown Data Classification
+
+**When data classification cannot be determined:**
+
+```markdown
+### 🗂️ Data Classification
+
+**Primary Data Type:** UNKNOWN (Validation Required)
+- **Evidence found:** Generic database name "app-db", no schema visible
+- **Assumed:** TIER 3 (Business Confidential) for scoring purposes
+- **Requires validation:** Database schema inspection or application code review
+
+**Impact on Score:**
+- If TIER 1/2: Score could escalate from 6/10 → 8-9/10
+- If TIER 5 (test data): Score could reduce to 4/10
+
+**Validation Required:**
+- [ ] Inspect database schema or sample 10 records
+- [ ] Review application code for data collection patterns
+- [ ] Check for compliance tags (PCI, HIPAA, GDPR)
+```
+
+### Data Classification Decision Tree
+
+```
+Is actual data content visible? (schema, API responses)
+├─ YES → Classify by content
+│   ├─ Contains PCI/PHI/credentials? → TIER 1
+│   ├─ Contains PII (email/phone/address)? → TIER 2
+│   ├─ Contains business confidential? → TIER 3
+│   ├─ Contains internal/operational? → TIER 4
+│   └─ Synthetic/public data? → TIER 5
+│
+└─ NO → Classify by context clues
+    ├─ Resource name contains "payment/card/billing"? → Assume TIER 1
+    ├─ Resource name contains "user/customer/profile"? → Assume TIER 2
+    ├─ Resource tagged "confidential"? → Assume TIER 3
+    ├─ Resource name generic (e.g., "app-db")? → Assume TIER 3 (default)
+    └─ Resource name contains "test/demo/sample"? → Assume TIER 5
+
+If classification uncertain:
+→ Flag in "Validation Required" section
+→ Score using TIER 3 (middle tier) as conservative default
+→ Note how score would change if TIER 1/2 confirmed
+```
+
+### Example: Data Classification in Practice
+
+**Scenario:** ExpanseAzureLab SQL Database
+
+**Evidence:**
+```sql
+-- From terraform/sql/init.sql
+CREATE TABLE users (
+    user_id INT PRIMARY KEY,
+    email VARCHAR(255),        -- TIER 2: PII
+    username VARCHAR(100),      -- TIER 2: PII
+    service_principal_id GUID   -- TIER 1: Credential reference
+);
+```
+
+**Classification:**
+- **Primary:** TIER 2 (PII - emails, usernames)
+- **Secondary:** TIER 1 (Service principal references)
+- **Overall Tier:** TIER 1 (use highest sensitivity)
+
+**Impact on Finding SQL_Firewall_Allows_Azure_Services:**
+- Base Score: 5/10 (overly broad firewall rule)
+- Data Classification: TIER 1 (credentials + PII)
+- **Final Score: 8/10 HIGH** (auto-escalated due to TIER 1)
+
+---
+
 ## The Five Pillars Security Framework
 
 **CRITICAL:** Security assessment MUST systematically check ALL FIVE pillars for EVERY resource. Missing any pillar = incomplete security assessment.
