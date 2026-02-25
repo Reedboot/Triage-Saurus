@@ -5678,15 +5678,16 @@ def main() -> int:
             if exp_num.isdigit():
                 experiment_id = exp_num
     
-    # Register repository in database
-    if DB_AVAILABLE and experiment_id:
+    # Register repository in database (use experiment_id when provided, else fall back to repo name)
+    if DB_AVAILABLE:
         try:
+            exp_for_db = experiment_id if experiment_id else repo.name
             repo_id, db_repo_name = insert_repository(
-                experiment_id=experiment_id,
+                experiment_id=exp_for_db,
                 repo_path=repo,
-                repo_type="Infrastructure"  # Will be refined later
+                repo_type="Infrastructure"
             )
-            print(f"✅ Registered repository in database: {db_repo_name} (experiment {experiment_id})")
+            print(f"✅ Registered repository in database: {db_repo_name} (experiment {exp_for_db})")
         except Exception as e:
             print(f"WARN: Failed to register repository in database: {e}", file=sys.stderr)
 
