@@ -20,7 +20,7 @@
 
 ### File Location
 ```
-rules/
+Rules/
 ├── iac/           # Infrastructure as Code rules
 │   ├── azure-*.yml
 │   ├── terraform-*.yml
@@ -147,7 +147,7 @@ resource "azurerm_key_vault_secret" "test" {
 EOF
 
 # Test rule (when opengrep available)
-opengrep scan --config rules/iac/terraform-hardcoded-keyvault-secret.yml test.tf
+opengrep scan --config Rules/IaC/terraform-hardcoded-keyvault-secret.yml test.tf
 ```
 
 ### Test Case in Rule
@@ -237,7 +237,7 @@ rules:
 
 ## Quick Reference
 
-**Create rule:** `rules/iac/technology-issue.yml`  
+**Create rule:** `Rules/IaC/technology-issue.yml`  
 **Format:** Opengrep/Semgrep YAML  
 **Test:** Manual grep or opengrep scan  
 **Track:** Reference rule-id in findings  
