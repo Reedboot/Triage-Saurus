@@ -84,6 +84,7 @@ All discovered resources (VMs, databases, storage, etc.) with their location.
 | resource_type | TEXT | VM/AKS/SQL/Storage/KeyVault/etc. |
 | provider | TEXT | Azure/AWS/GCP |
 | region | TEXT | Deployment region |
+| parent_resource_id | INTEGER FK | Parent resource (e.g., SQL Server for Database) |
 | source_file | TEXT | Relative path (e.g., "tfscripts/main.tf") |
 | source_line_start | INT | Starting line number |
 | source_line_end | INT | Ending line number |
@@ -95,6 +96,12 @@ All discovered resources (VMs, databases, storage, etc.) with their location.
 - **Generic resource_type** supports any cloud resource (no hardcoded columns)
 - **Split line numbers** track code location drift between experiments
 - **Portable paths** use repo-relative paths, no `/mnt/c/Repos/` prefixes
+- **Parent-child relationships** enable hierarchical queries and attack path analysis:
+  - **Blast radius**: "If SQL Server compromised, what databases are exposed?"
+  - **Lateral movement**: "If blob accessed, what else in storage account?"
+  - **Privilege escalation**: "Parent admin rights → all child resources"
+  - **Compound risk**: Link parent + child findings (e.g., public blob + shared keys)
+  - **Attack surface**: "Show all public children of this parent resource"
 
 ### resource_properties
 Key-value properties for resources (EAV pattern for flexibility).
@@ -229,6 +236,52 @@ WITH RECURSIVE blast_radius AS (
 SELECT DISTINCT r.resource_name, r.resource_type, br.depth
 FROM blast_radius br
 JOIN resources r ON br.target_resource_id = r.id;
+```
+
+### Find attack paths through parent-child hierarchy
+```sql
+-- If attacker compromises a SQL Server, what databases are at risk?
+SELECT 
+  parent.resource_name AS sql_server,
+  child.resource_name AS database,
+  f.title AS vulnerability
+FROM resources parent
+JOIN resources child ON child.parent_resource_id = parent.id
+LEFT JOIN findings f ON f.resource_id = child.id
+WHERE parent.resource_name = 'tycho' 
+  AND parent.resource_type = 'SQLServer';
+
+-- If attacker accesses a public blob, what else in storage account?
+SELECT 
+  parent.resource_name AS storage_account,
+  child.resource_name AS container,
+  grandchild.resource_name AS blob,
+  grandchild_props.property_value AS public_access
+FROM resources parent
+JOIN resources child ON child.parent_resource_id = parent.id
+LEFT JOIN resources grandchild ON grandchild.parent_resource_id = child.id
+LEFT JOIN resource_properties grandchild_props 
+  ON grandchild_props.resource_id = grandchild.id 
+  AND grandchild_props.property_key = 'public_access'
+WHERE parent.resource_type = 'StorageAccount'
+  AND grandchild_props.property_value = 'true';
+```
+
+### Find compound risks (parent + child findings)
+```sql
+-- Storage account issues that compound with container/blob issues
+SELECT 
+  parent.resource_name,
+  parent_finding.title AS parent_risk,
+  child.resource_name,
+  child_finding.title AS child_risk,
+  (parent_finding.severity_score + child_finding.severity_score) AS combined_risk
+FROM findings parent_finding
+JOIN resources parent ON parent_finding.resource_id = parent.id
+JOIN resources child ON child.parent_resource_id = parent.id
+JOIN findings child_finding ON child_finding.resource_id = child.id
+WHERE parent.resource_type IN ('StorageAccount', 'SQLServer', 'AKS')
+ORDER BY combined_risk DESC;
 ```
 
 ### Compare experiments
