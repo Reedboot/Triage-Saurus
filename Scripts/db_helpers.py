@@ -196,9 +196,10 @@ def insert_resource(
     source_file: str,
     source_line: Optional[int] = None,
     source_line_end: Optional[int] = None,
+    parent_resource_id: Optional[int] = None,
     properties: Optional[Dict[str, Any]] = None
 ) -> int:
-    """Insert resource with optional line numbers."""
+    """Insert resource with optional line numbers and parent relationship."""
     with get_db_connection() as conn:
         # Get repo_id
         repo_id = conn.execute("""
@@ -212,11 +213,12 @@ def insert_resource(
         cursor = conn.execute("""
             INSERT OR REPLACE INTO resources 
             (experiment_id, repo_id, resource_name, resource_type, provider, 
-             discovered_by, discovery_method, source_file, source_line_start, source_line_end)
-            VALUES (?, ?, ?, ?, ?, 'ContextDiscoveryAgent', 'Terraform', ?, ?, ?)
+             discovered_by, discovery_method, source_file, source_line_start, source_line_end,
+             parent_resource_id)
+            VALUES (?, ?, ?, ?, ?, 'ContextDiscoveryAgent', 'Terraform', ?, ?, ?, ?)
             RETURNING id
         """, (experiment_id, repo_id[0], resource_name, resource_type, provider, 
-              source_file, source_line, source_line_end))
+              source_file, source_line, source_line_end, parent_resource_id))
         
         resource_id = cursor.fetchone()[0]
         
@@ -237,19 +239,47 @@ def insert_resource(
 def get_resource_id(
     experiment_id: str,
     repo_name: str,
-    resource_name: str
+    resource_name: str,
+    resource_type: Optional[str] = None
 ) -> Optional[int]:
-    """Get resource ID by name."""
+    """Get resource ID by name (and optionally type) for parent relationship resolution."""
     with get_db_connection() as conn:
-        result = conn.execute("""
-            SELECT r.id FROM resources r
-            JOIN repositories repo ON r.repo_id = repo.id
-            WHERE r.experiment_id = ? 
-              AND repo.repo_name = ? 
-              AND r.resource_name = ?
-        """, (experiment_id, repo_name, resource_name)).fetchone()
+        if resource_type:
+            result = conn.execute("""
+                SELECT r.id FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE r.experiment_id = ? AND repo.repo_name = ? 
+                  AND r.resource_name = ? AND r.resource_type = ?
+            """, (experiment_id, repo_name, resource_name, resource_type)).fetchone()
+        else:
+            result = conn.execute("""
+                SELECT r.id FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE r.experiment_id = ? 
+                  AND repo.repo_name = ? 
+                  AND r.resource_name = ?
+            """, (experiment_id, repo_name, resource_name)).fetchone()
         
         return result[0] if result else None
+
+
+def update_resource_parent(
+    experiment_id: str,
+    repo_name: str,
+    resource_name: str,
+    parent_resource_id: int
+):
+    """Update parent_resource_id for a resource (used in second pass after all resources inserted)."""
+    with get_db_connection() as conn:
+        conn.execute("""
+            UPDATE resources 
+            SET parent_resource_id = ?
+            WHERE id IN (
+                SELECT r.id FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE r.experiment_id = ? AND repo.repo_name = ? AND r.resource_name = ?
+            )
+        """, (parent_resource_id, experiment_id, repo_name, resource_name))
 
 
 # ============================================================================

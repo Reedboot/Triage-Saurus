@@ -97,6 +97,7 @@ def init_schema(conn: sqlite3.Connection):
           resource_type TEXT NOT NULL,
           provider TEXT,
           region TEXT,
+          parent_resource_id INTEGER,
           
           discovered_by TEXT,
           discovery_method TEXT,
@@ -110,6 +111,7 @@ def init_schema(conn: sqlite3.Connection):
           
           FOREIGN KEY(experiment_id) REFERENCES experiments(id),
           FOREIGN KEY(repo_id) REFERENCES repositories(id),
+          FOREIGN KEY(parent_resource_id) REFERENCES resources(id),
           UNIQUE(experiment_id, repo_id, resource_name)
         )
     """)

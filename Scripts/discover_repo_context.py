@@ -43,7 +43,9 @@ try:
         insert_repository, 
         insert_resource, 
         insert_connection,
-        update_repository_stats
+        update_repository_stats,
+        get_resource_id,
+        update_resource_parent
     )
     DB_AVAILABLE = True
 except ImportError:
@@ -1806,6 +1808,67 @@ def extract_resource_names_with_property(files: list[Path], repo: Path, resource
                 names.append(name_match.group(1))
     
     return names
+
+
+def extract_parent_references(files: list[Path], repo: Path) -> dict:
+    """Extract parent-child resource relationships from Terraform.
+    
+    Returns dict mapping child resource to parent reference:
+    {
+        ('azurerm_mssql_database', 'mydb'): ('azurerm_mssql_server', 'tycho'),
+        ('azurerm_storage_container', 'mycontainer'): ('azurerm_storage_account', 'mystorage'),
+        ...
+    }
+    """
+    relationships = {}
+    
+    # Parent reference patterns for different resource types
+    patterns = [
+        # Azure SQL Database -> SQL Server
+        (r'resource\s+"azurerm_mssql_database"\s+"([^"]+)"[^}]+?server_id\s*=\s*azurerm_mssql_server\.([^.]+)\.id',
+         'azurerm_mssql_database', 'azurerm_mssql_server'),
+        
+        # Azure Storage Container -> Storage Account  
+        (r'resource\s+"azurerm_storage_container"\s+"([^"]+)"[^}]+?storage_account_name\s*=\s*azurerm_storage_account\.([^.]+)\.name',
+         'azurerm_storage_container', 'azurerm_storage_account'),
+        
+        # Azure Storage Blob -> Storage Container (need to chain to account)
+        (r'resource\s+"azurerm_storage_blob"\s+"([^"]+)"[^}]+?storage_container_name\s*=\s*azurerm_storage_container\.([^.]+)\.name',
+         'azurerm_storage_blob', 'azurerm_storage_container'),
+        
+        # AWS RDS Instance -> RDS Cluster
+        (r'resource\s+"aws_db_instance"\s+"([^"]+)"[^}]+?cluster_identifier\s*=\s*aws_rds_cluster\.([^.]+)\.id',
+         'aws_db_instance', 'aws_rds_cluster'),
+        
+        # AWS S3 Object -> S3 Bucket
+        (r'resource\s+"aws_s3_object"\s+"([^"]+)"[^}]+?bucket\s*=\s*aws_s3_bucket\.([^.]+)\.id',
+         'aws_s3_object', 'aws_s3_bucket'),
+        
+        # GCP SQL Database -> SQL Instance
+        (r'resource\s+"google_sql_database"\s+"([^"]+)"[^}]+?instance\s*=\s*google_sql_database_instance\.([^.]+)\.name',
+         'google_sql_database', 'google_sql_database_instance'),
+        
+        # GCP Storage Object -> Storage Bucket
+        (r'resource\s+"google_storage_bucket_object"\s+"([^"]+)"[^}]+?bucket\s*=\s*google_storage_bucket\.([^.]+)\.name',
+         'google_storage_bucket_object', 'google_storage_bucket'),
+    ]
+    
+    for p in files:
+        if p.suffix.lower() != ".tf":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        
+        for pattern_str, child_type, parent_type in patterns:
+            pattern = re.compile(pattern_str, re.DOTALL | re.MULTILINE)
+            for m in pattern.finditer(text):
+                child_name = m.group(1)
+                parent_name = m.group(2)
+                relationships[(child_type, child_name)] = (parent_type, parent_name)
+    
+    return relationships
 
 
 def extract_resource_names(files: list[Path], repo: Path, resource_type: str) -> list[str]:
@@ -6162,6 +6225,49 @@ def main() -> int:
             findings_dir=output_base / "Findings",
             repo_summary_path=summary_path,
         )
+
+    # Second pass: Resolve parent-child relationships from Terraform
+    if DB_AVAILABLE and experiment_id and providers:
+        try:
+            print("🔗 Resolving parent-child resource relationships...")
+            parent_refs = extract_parent_references(files, repo)
+            
+            if parent_refs:
+                print(f"   Found {len(parent_refs)} parent-child relationships")
+                
+                # Map Terraform resource types to our normalized types
+                type_mapping = {
+                    'azurerm_mssql_server': 'SQLServer',
+                    'azurerm_mssql_database': 'SQLDatabase',
+                    'azurerm_storage_account': 'StorageAccount',
+                    'azurerm_storage_container': 'StorageContainer',
+                    'azurerm_storage_blob': 'StorageBlob',
+                    'aws_rds_cluster': 'RDSCluster',
+                    'aws_db_instance': 'RDSInstance',
+                    'aws_s3_bucket': 'S3Bucket',
+                    'aws_s3_object': 'S3Object',
+                    'google_sql_database_instance': 'SQLInstance',
+                    'google_sql_database': 'SQLDatabase',
+                    'google_storage_bucket': 'StorageBucket',
+                    'google_storage_bucket_object': 'StorageObject',
+                }
+                
+                for (child_tf_type, child_tf_name), (parent_tf_type, parent_tf_name) in parent_refs.items():
+                    # Get normalized types
+                    parent_type = type_mapping.get(parent_tf_type, parent_tf_type)
+                    child_type = type_mapping.get(child_tf_type, child_tf_type)
+                    
+                    # Look up parent resource ID
+                    parent_id = get_resource_id(experiment_id, repo_name, parent_tf_name, parent_type)
+                    
+                    if parent_id:
+                        # Update child with parent reference
+                        update_resource_parent(experiment_id, repo_name, child_tf_name, parent_id)
+                        print(f"   ✅ Linked {child_tf_name} ({child_type}) → {parent_tf_name} ({parent_type})")
+                    else:
+                        print(f"   ⚠️  Parent not found: {parent_tf_name} ({parent_type}) for {child_tf_name}")
+        except Exception as e:
+            print(f"WARN: Failed to resolve parent relationships: {e}", file=sys.stderr)
 
     print("== Context discovery complete ==")
     print(f"repo: {repo}")

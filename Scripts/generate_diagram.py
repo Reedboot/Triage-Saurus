@@ -15,23 +15,40 @@ def sanitize_id(name: str) -> str:
 
 
 def generate_architecture_diagram(experiment_id: str) -> str:
-    """Generate full architecture diagram from database."""
+    """Generate full architecture diagram from database with parent-child hierarchies."""
     
     with get_db_connection() as conn:
-        # Get all resources
+        # Get all resources with parent information
         resources = conn.execute("""
             SELECT 
+              r.id,
               r.resource_name,
               r.resource_type,
               r.provider,
+              r.parent_resource_id,
               repo.repo_name,
-              COALESCE(MAX(f.score), 0) as max_finding_score
+              COALESCE(MAX(f.severity_score), 0) as max_finding_score
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
             LEFT JOIN findings f ON r.id = f.resource_id
             WHERE r.experiment_id = ?
             GROUP BY r.id
             ORDER BY r.resource_type, r.resource_name
+        """, [experiment_id]).fetchall()
+        
+        # Get parent-child relationships
+        hierarchies = conn.execute("""
+            SELECT 
+              parent.id as parent_id,
+              parent.resource_name as parent_name,
+              parent.resource_type as parent_type,
+              child.id as child_id,
+              child.resource_name as child_name,
+              child.resource_type as child_type
+            FROM resources parent
+            JOIN resources child ON child.parent_resource_id = parent.id
+            WHERE parent.experiment_id = ?
+            ORDER BY parent.resource_name, child.resource_name
         """, [experiment_id]).fetchall()
         
         # Get connections
@@ -53,12 +70,25 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     
     lines = ["flowchart TB"]
     
-    # Group resources by type for subgraphs
-    vms = [r for r in resources if r['resource_type'] == 'VM']
-    aks = [r for r in resources if r['resource_type'] == 'AKS']
-    nsgs = [r for r in resources if r['resource_type'] == 'NSG']
-    paas = [r for r in resources if r['resource_type'] in ('SQL', 'KeyVault', 'Storage', 'AppService')]
-    other = [r for r in resources if r not in vms + aks + nsgs + paas]
+    # Build parent-child mapping
+    parent_children: Dict[int, List] = {}
+    child_ids = set()
+    for h in hierarchies:
+        parent_id = h['parent_id']
+        if parent_id not in parent_children:
+            parent_children[parent_id] = []
+        parent_children[parent_id].append(h)
+        child_ids.add(h['child_id'])
+    
+    # Group resources by type (excluding children as they'll be in parent subgraphs)
+    root_resources = [r for r in resources if r['id'] not in child_ids]
+    vms = [r for r in root_resources if r['resource_type'] == 'VM']
+    aks = [r for r in root_resources if r['resource_type'] == 'AKS']
+    sql_servers = [r for r in root_resources if r['resource_type'] in ('SQLServer', 'SQL')]
+    storage_accounts = [r for r in root_resources if r['resource_type'] == 'StorageAccount']
+    nsgs = [r for r in root_resources if r['resource_type'] == 'NSG']
+    paas = [r for r in root_resources if r['resource_type'] in ('KeyVault', 'AppService') and r['id'] not in child_ids]
+    other = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
     # Add Internet node if we have internet connections
     has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
@@ -80,6 +110,45 @@ def generate_architecture_diagram(experiment_id: str) -> str:
         for nsg in nsgs:
             node_id = sanitize_id(nsg['resource_name'])
             lines.append(f"    {node_id}[Network Security Group]")
+        
+        lines.append("  end")
+    
+    # SQL Server hierarchies (parent -> databases)
+    for sql_server in sql_servers:
+        node_id = sanitize_id(sql_server['resource_name'])
+        lines.append(f"  subgraph {node_id}_sg[SQL Server: {sql_server['resource_name']}]")
+        
+        if sql_server['id'] in parent_children:
+            for child in parent_children[sql_server['id']]:
+                child_id = sanitize_id(child['child_name'])
+                lines.append(f"    {child_id}[Database: {child['child_name']}]")
+        else:
+            lines.append(f"    {node_id}[{sql_server['resource_name']}]")
+        
+        lines.append("  end")
+    
+    # Storage Account hierarchies (parent -> containers -> blobs)
+    for storage_account in storage_accounts:
+        node_id = sanitize_id(storage_account['resource_name'])
+        lines.append(f"  subgraph {node_id}_sg[Storage Account: {storage_account['resource_name']}]")
+        
+        if storage_account['id'] in parent_children:
+            for container in parent_children[storage_account['id']]:
+                container_id = sanitize_id(container['child_name'])
+                
+                # Check if container has blob children
+                has_blob_children = container['child_id'] in parent_children
+                
+                if has_blob_children:
+                    lines.append(f"    subgraph {container_id}_sg[Container: {container['child_name']}]")
+                    for blob in parent_children[container['child_id']]:
+                        blob_id = sanitize_id(blob['child_name'])
+                        lines.append(f"      {blob_id}[Blob: {blob['child_name']}]")
+                    lines.append("    end")
+                else:
+                    lines.append(f"    {container_id}[Container: {container['child_name']}]")
+        else:
+            lines.append(f"    {node_id}[{storage_account['resource_name']}]")
         
         lines.append("  end")
     
