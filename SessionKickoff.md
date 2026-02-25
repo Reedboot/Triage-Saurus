@@ -100,6 +100,8 @@ Targeted helpers (stdout-only):
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (~10 seconds per repo):**
+      - Use the Rules/ catalog (Rules/Summary.md) to derive rule-based grep patterns and guide discovery; run programmatic grep checks when opengrep isn't available.
+
      - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
      - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies
      - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
@@ -111,7 +113,7 @@ Targeted helpers (stdout-only):
      - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
      - When running in **experiment isolation** mode (i.e., `--output-dir Output/Learning/experiments/<id>_<name>`), the script also generates an experiment-scoped provider architecture summary under `Summary/Cloud/Architecture_<Provider>.md`.
      - Review the generated summary before proceeding
-   - **Phase 2 - Manual Context Analysis (~30-60 seconds per repo):**
+   - **Phase 2 - Deeper Context Search (~30-60 seconds per repo):**
      - Launch ONE explore agent to complete Phase 2 TODO markers
      - Agent traces middleware execution order, routing logic, business purpose
      - Updates Traffic Flow section with complete details
@@ -131,6 +133,7 @@ Targeted helpers (stdout-only):
 
 11. **Follow operational rules:**
    - Log ALL questions, answers, actions, and assumptions to the audit log (append-only)
+   - After scans and security reviews, run a Post-Scan Rule Assessment: map findings to Rules/ and, if a finding could be rule-detected but no rule exists, create a draft rule under Rules/ with a test case and record it under `Output/Learning/experiments/<id>/proposed_rules/` or `Output/Learning/proposed_rules/`.
    - Update audit Summary section at end of session
    - All detailed triage behavior is in Agents/Instructions.md
    - Question formatting, bulk processing, knowledge recording, cross-cutting questions, etc.

@@ -56,6 +56,9 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - Cancel and return to repository selection
 
 ### Step 4: Phase 1 - Automated Context Discovery (~10 seconds)
+
+**Note:** Phase 1 must use the Rules/ catalog (Rules/Summary.md) to derive rule-based grep patterns to aid discovery when opengrep is unavailable.
+
 **Action:** Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
 
 **Detects automatically:**
@@ -127,7 +130,7 @@ ls Output/Findings/Cloud/*.md | wc -l
 grep "Rule:" Output/Findings/Cloud/*.md | sort -u
 ```
 
-### Step 5: Phase 2 - Manual Context Analysis
+### Step 5: Phase 2 - Deeper Context Search
 **Action:** Launch ONE explore agent per repo
 **Purpose:** Complete Phase 2 TODO markers with deep code understanding
 - Trace middleware execution order (numbered steps)
@@ -208,6 +211,19 @@ grep "Rule:" Output/Findings/Cloud/*.md | sort -u
 5. Return to main menu (→ Main Menu)
 
 **Allow freeform:** No
+
+---
+
+## Post-Scan Rule Assessment
+
+After any scan completes and findings are generated, automatically check whether each finding could have been detected by an existing rule in Rules/:
+
+1. Map each created finding to rule IDs listed in Rules/Summary.md. If a matching rule exists, annotate the finding with the rule ID and evidence.
+2. If a finding appears rule-detectable but no existing rule matches, create a new draft rule in the appropriate Rules/ subfolder (IaC, Kubernetes, Secrets) with metadata (title, description, technology, five_pillars) and a minimal test case under Rules/tests/.
+3. Record the new rule proposal in `Output/Learning/experiments/<experiment>/proposed_rules/` (or `Output/Learning/proposed_rules/` for global runs) with links to the finding and suggested rule file path.
+4. Add an audit log entry documenting mapping results and any new rule files created.
+
+Rationale: Close the detection-feedback loop so manual findings inform future automated detection coverage.
 
 ---
 

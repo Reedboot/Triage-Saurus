@@ -410,6 +410,11 @@ When reviewing authentication/authorization vulnerabilities, check what happens 
 - Defense-in-depth violations are ALWAYS findings
 - Skeptic reviews happen in Phase 3, AFTER findings are documented
 
+**Post-Scan Rule Feedback Loop:**
+- After findings are created (Phase 3 extraction), map each finding to existing Rules/ entries. If a finding could be detected by a rule but no matching rule exists, author a new rule draft in the appropriate Rules/ subfolder with metadata (title, description, technology, five_pillars, severity) and a minimal test case under Rules/tests/.
+- Record proposed rules under `Output/Learning/experiments/<id>/proposed_rules/` for experiments or `Output/Learning/proposed_rules/` for global runs and add an audit log entry.
+- New rules should include: detection pattern, example evidence (file/line), suggested severity and suggested rule ID prefix (e.g., azure-*, terraform-*). Flag these drafts for human review before merging to the main Rules/ catalog.
+
 **Defense-in-Depth Scoring:**
 - **Without compensating controls:** MEDIUM-HIGH (6-8/10)
 - **With compensating controls:** LOW-MEDIUM (3-5/10)

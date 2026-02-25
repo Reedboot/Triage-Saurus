@@ -75,7 +75,7 @@ When `status = "pending"`:
    ```
    - Example output: "tycho (SQLServer): 2 children", "storage_labpallas (StorageAccount): 3 children"
    
-   **Phase 2: Deep Context Analysis (explore agent) - ~30-60 seconds**
+   **Phase 2: Deeper Context Search (explore agent) - ~30-60 seconds**
    Follow `experiments/001_baseline/Agents/ContextDiscoveryAgent.md`:
    
    - **IaC Understanding:** Read Terraform/Bicep to understand:
