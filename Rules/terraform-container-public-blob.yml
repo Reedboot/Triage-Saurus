@@ -1,0 +1,24 @@
+title: "Terraform: azurerm_storage_container public blob access"
+id: "TS-IAC-azure-storage-public-blob"
+description: |
+  Detects Terraform azurerm_storage_container resources where container_access_type is set to "blob" which can indicate public blob access.
+severity: "MEDIUM"
+tags:
+  - iac
+  - terraform
+  - azure
+  - storage
+  - public-access
+patterns:
+  - type: regex
+    regex: 'resource\s+"azurerm_storage_container"\s+"[^"]+"[\s\S]*?container_access_type\s*=\s*"blob"'
+  - type: regex
+    regex: 'container_access_type\s*=\s*"blob"'
+references:
+  - title: "Azure Storage container public access"
+    url: "https://learn.microsoft.com/azure/storage/blobs/storage-manage-access-to-resources"
+notes: |
+  This rule is intended to flag Terraform code that sets container_access_type = "blob"; human review is required to confirm whether the container is unintentionally public. Redaction of secrets is not attempted here; do not store keys in rule outputs.
+tests:
+  - file: "Rules/tests/terraform-container-public-blob-test.tf"
+    should_match: true
