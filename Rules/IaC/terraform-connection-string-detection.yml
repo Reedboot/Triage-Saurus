@@ -1,0 +1,25 @@
+rules:
+  - id: terraform-connection-string-detection
+    message: |
+      Terraform contains connection string usage or assignment (e.g. connection_string, primary_connection_string, storage account connection string).
+      Connection strings often contain credentials or SAS tokens; detect and surface for review so they can be moved to secrets stores (Key Vault) or managed identities.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          - pattern: connection_string = $VAL
+          - pattern: primary_connection_string = $VAL
+          - pattern: "${azurerm_storage_account.$NAME.primary_connection_string}"
+      - metavariable-regex:
+          metavariable: $VAL
+          regex: .*(connection_string|primary_connection_string|AccountKey|AccountName|SAS).*|.*(AccountKey=|AccountName=|SharedAccessSignature=).* 
+    metadata:
+      category: discovery
+      subcategory: [configuration, iaas]
+      cwe: CWE-200
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure, storage]
+    note: |
+      This rule is primarily informational: it helps Phase 1 discover configured services and possible embedded secrets. Use Phase 2/3 to validate whether the value is a secret or a configuration reference (e.g., data source lookup, output reference, or managed identity usage).

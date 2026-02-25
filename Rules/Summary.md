@@ -15,6 +15,7 @@
 - terraform-sensitive-variable-not-marked.yml
 - azure-vm-extension-secrets-in-settings.yml
 - azure-public-blob-sensitive-content.yml
+- terraform-connection-string-detection.yml
 
 **Network Security (Pillar 1):**
 - azure-sql-firewall-all-access.yml
