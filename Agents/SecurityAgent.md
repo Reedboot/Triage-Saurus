@@ -274,6 +274,69 @@ Actual risk: MEDIUM (not anonymous exploitation)
 - Data stores connected (what data is reachable?)
 - Identity permissions (what can the service principal do?)
 
+**Query database for parent-child attack paths:**
+```sql
+-- If attacker compromises a SQL Server, what databases are at risk?
+SELECT 
+  parent.resource_name AS sql_server,
+  child.resource_name AS database,
+  f.title AS vulnerability
+FROM resources parent
+JOIN resources child ON child.parent_resource_id = parent.id
+LEFT JOIN findings f ON f.resource_id = child.id
+WHERE parent.resource_name = 'tycho' 
+  AND parent.resource_type = 'SQLServer';
+
+-- If attacker accesses a public blob, what else in storage account?
+SELECT 
+  parent.resource_name AS storage_account,
+  child.resource_name AS container,
+  grandchild.resource_name AS blob,
+  grandchild_props.property_value AS public_access
+FROM resources parent
+JOIN resources child ON child.parent_resource_id = parent.id
+LEFT JOIN resources grandchild ON grandchild.parent_resource_id = child.id
+LEFT JOIN resource_properties grandchild_props 
+  ON grandchild_props.resource_id = grandchild.id 
+  AND grandchild_props.property_key = 'public_access'
+WHERE parent.resource_type = 'StorageAccount'
+  AND grandchild_props.property_value = 'true';
+```
+
+**Blast radius from parent compromise:**
+- **SQL Server admin → All databases accessible** (auditing/TLS issues on children compound)
+- **Storage Account keys → All containers/blobs accessible** (even "private" blobs)
+- **AKS cluster admin → All namespaces/pods accessible** (RBAC escalation)
+- **RDS cluster credentials → All instances accessible** (AWS)
+- **S3 bucket IAM → All objects accessible** (even if object-level ACLs exist)
+
+### 4a. Compound Risk Analysis (NEW)
+**Query for parent + child findings that compound:**
+```sql
+-- Storage account issues that compound with container/blob issues
+SELECT 
+  parent.resource_name,
+  parent_finding.title AS parent_risk,
+  child.resource_name,
+  child_finding.title AS child_risk,
+  (parent_finding.severity_score + child_finding.severity_score) AS combined_risk
+FROM findings parent_finding
+JOIN resources parent ON parent_finding.resource_id = parent.id
+JOIN resources child ON child.parent_resource_id = parent.id
+JOIN findings child_finding ON child_finding.resource_id = child.id
+WHERE parent.resource_type IN ('StorageAccount', 'SQLServer', 'AKS')
+ORDER BY combined_risk DESC;
+```
+
+**Document compound findings in "Compounding Findings" section:**
+- Example: "If Storage Account shared keys stolen (parent), public blob (child) directly accessible without SAS token"
+- Example: "SQL Server firewall allows 0.0.0.0/0 (parent) + Database auditing disabled (child) = Undetected external data theft"
+- Example: "AKS RBAC disabled (parent) + Privileged pod (child) = Container escape to node access"
+
+**Link parent and child findings:**
+- Create cross-references: "See also: [Storage_Account_Shared_Keys](../Storage_Account_Shared_Keys.md)"
+- Adjust scoring based on compound risk: Parent MEDIUM + Child MEDIUM = Combined HIGH
+
 ### 5. Challenge Assumptions
 **Common false assumptions to avoid:**
 - ❌ "SQL injection = Critical" (what if service has read-only DB access?)

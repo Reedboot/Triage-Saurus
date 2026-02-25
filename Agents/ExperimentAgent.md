@@ -51,6 +51,29 @@ When `status = "pending"`:
    - Creates baseline summary with architecture diagram at `experiments/<id>/Summary/Repos/<RepoName>.md`
    - Creates/updates knowledge at `experiments/<id>/Knowledge/Repos.md`
    - Detects: languages, hosting, auth patterns, ingress/egress, IaC resources
+   - **Captures parent-child hierarchies:** SQL Server → Databases, Storage Account → Containers, AKS → Namespaces
+   - **Populates parent_resource_id in database** for downstream attack path analysis
+   
+   **Validate hierarchies detected:**
+   ```bash
+   python3 -c "
+   import sqlite3
+   conn = sqlite3.connect('Output/Learning/triage.db')
+   cursor = conn.cursor()
+   cursor.execute('''
+     SELECT parent.resource_name, parent.resource_type, 
+            COUNT(child.id) AS child_count
+     FROM resources parent
+     LEFT JOIN resources child ON child.parent_resource_id = parent.id
+     WHERE parent.experiment_id = '001'
+     GROUP BY parent.id
+     HAVING child_count > 0
+   ''')
+   for row in cursor.fetchall():
+       print(f'{row[0]} ({row[1]}): {row[2]} children')
+   "
+   ```
+   - Example output: "tycho (SQLServer): 2 children", "storage_labpallas (StorageAccount): 3 children"
    
    **Phase 2: Deep Context Analysis (explore agent) - ~30-60 seconds**
    Follow `experiments/001_baseline/Agents/ContextDiscoveryAgent.md`:
@@ -98,6 +121,11 @@ When `status = "pending"`:
       - Evidence location (file, line number)
       - Technical severity (from rule metadata)
       - Architecture diagram showing resource context
+   4. **Use hierarchies for targeted rule application:**
+      - Apply SQL TLS rules to all databases with SQL Server parent
+      - Apply blob public access rules to all containers with Storage Account parent
+      - Apply pod security rules to all namespaces with AKS cluster parent
+      - Query database: `SELECT * FROM resources WHERE parent_resource_id = (SELECT id FROM resources WHERE resource_name = 'tycho')`
    4. Leave Skeptic sections BLANK (filled in Phase 5)
    
    **Expected Results:**

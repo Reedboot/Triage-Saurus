@@ -27,6 +27,10 @@ This agent performs **fast, non-security context discovery** of repositories to 
 - **Ingress patterns** - App Gateway, Front Door, APIM (from code & Terraform)
 - **APIM routing** - Mock vs real backend routing detection
 - **Backend services** - Extracted from HttpClient config and route mapping JSON files
+- **Parent-child resource hierarchies** - SQL Server → Databases, Storage Account → Containers → Blobs, AKS → Namespaces, AWS RDS Cluster → Instances, S3 Bucket → Objects
+  - Captures parent references from IaC: `server_id = azurerm_mssql_server.tycho.id` → Database's parent is SQL Server "tycho"
+  - Stores `parent_resource_id` in database for attack path and compound risk analysis
+  - Enables blast radius queries: "If SQL Server compromised, which databases are exposed?"
 - **Kubernetes risk heuristics** - Detects risky deploy patterns (e.g., NodePort/LoadBalancer exposure, wildcard RBAC, broad pod/service discovery RBAC, privileged/hostPath/root containers, missing NetworkPolicy signals, admission-policy gaps, ingress hardening drift)
   - Produces an **attack-chain score** from correlated signals (exposure + RBAC + pod security + segmentation + admission controls + exfil patterns).
   - **Important:** Ignore attack artifact paths (for example `exploits/`, `attack/`, `poc/`, `CVE-*`) so detections are based on deployable configuration risk, not red-team sample content.

@@ -69,18 +69,41 @@
 - **Security controls:** WAF, NSGs, API Management
 - **Complete routing chains:** For APIM-enabled services, show: Public hostname → Gateway → Service → APIM API → Backend
 - **All compute platforms:** Ensure ASE v3, API Management, AKS (with ingress), and Service Fabric all appear where relevant
-- **Resource hierarchies (USE SUBGRAPHS):** Show parent-child relationships clearly:
+- **Resource hierarchies (USE SUBGRAPHS - Query Database):** Show parent-child relationships clearly:
+  - **Query database for parent-child relationships FIRST:**
+    ```sql
+    SELECT child.resource_name, child.resource_type, parent.resource_name AS parent
+    FROM resources child
+    LEFT JOIN resources parent ON child.parent_resource_id = parent.id
+    WHERE child.experiment_id = '015';
+    ```
+  - **Automatically generate subgraph structure from DB results** - No more guessing at hierarchies
   - **SQL Server → Databases:** Use subgraph for SQL Server containing database nodes
-  - **Storage Account → Containers:** Use subgraph for Storage Account containing container nodes
+  - **Storage Account → Container → Blob:** Use nested subgraphs for hierarchy
   - **AKS Cluster → Namespaces/Pods:** Use subgraph for cluster containing workloads
-  - **Example:**
+  - **Resource Group → Resources:** Use subgraph for logical grouping
+  - **Example SQL Server:**
     ```mermaid
     subgraph sqlserver["SQL Server: myserver"]
       db1[Database: mydb]
       db2[Database: anotherdb]
     end
     ```
-  - This makes it clear that databases are children of the server, not separate sibling resources
+  - **Example Storage (nested subgraphs):**
+    ```mermaid
+    subgraph sa["Storage Account: mystorage"]
+      subgraph container1["Container: public"]
+        blob1[Blob: file.txt]
+      end
+      subgraph container2["Container: private"]
+        blob2[Blob: data.json]
+      end
+    end
+    ```
+  - **WRONG:** Showing SQL Server and Database as separate sibling nodes
+  - **WRONG:** Showing Storage Account and Container as separate sibling nodes
+  - **Database is source of truth** - Use parent_resource_id from resources table, not hardcoded patterns
+  - This makes it clear that databases/containers are children of their parent resources, not separate infrastructure
 - **Monitoring/observability:** Application Insights, Log Analytics, Prometheus, Grafana (if present)
 
 **CRITICAL:** Don't just show request flow - show the COMPLETE service architecture including:
@@ -163,6 +186,13 @@
      - High-level overview showing all major components
      - Key legend with emoji (place immediately under the Mermaid block)
      - 2-3 sentence description of the overall pattern
+     - **MUST list ALL findings in priority order with links:**
+       ```markdown
+       **Related Security Findings:**
+       - 🔴 [Unencrypted_Storage_Blob](../Findings/Cloud/Unencrypted_Storage_Blob.md)
+       - 🟠 [Public_SQL_Firewall](../Findings/Cloud/Public_SQL_Firewall.md)
+       - 🟡 [Weak_TLS_Version](../Findings/Cloud/Weak_TLS_Version.md)
+       ```
   3. **Overview section** with evidence table
   4. **TL;DR - Executive Summary:** `## 📊 TL;DR - Executive Summary`
      - Services scanned/referenced table
@@ -349,7 +379,24 @@ flowchart TB
 ~~~mermaid
 flowchart TB
   %% High-level overview diagram here
+  %% CRITICAL: Use subgraphs for hierarchical resources
+  %% Example: SQL Server contains databases
+  subgraph sqlserver["SQL Server: myserver"]
+    db1[Database: mydb]
+  end
+  
+  %% Example: Storage Account contains containers (nested)
+  subgraph storage["Storage Account: mystorage"]
+    subgraph container["Container: data"]
+      blob[Blob: file.txt]
+    end
+  end
 ~~~
+
+**Related Security Findings:**
+- 🔴 [Finding_Name_High](../Findings/Cloud/Finding_Name_High.md)
+- 🟠 [Finding_Name_Medium](../Findings/Cloud/Finding_Name_Medium.md)
+- 🟡 [Finding_Name_Low](../Findings/Cloud/Finding_Name_Low.md)
 
 ---
 
