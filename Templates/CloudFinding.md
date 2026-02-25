@@ -31,10 +31,27 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 ```mermaid
 flowchart TB
   Edge[Internet / Users] --> Svc[<cloud service>]
-  Svc --> Data[<data store>]
+  
+  %% Use subgraphs for hierarchical Azure/AWS/GCP resources
+  %% Example: SQL Server contains databases
+  Svc --> sqlserver
+  subgraph sqlserver["SQL Server: myserver"]
+    db[Database: mydb]
+  end
+  
+  %% Example: Storage Account contains containers (nested)
+  Svc --> storage
+  subgraph storage["Storage Account: mystorage"]
+    subgraph container["Container: data"]
+      blob[Blob: file.txt<br/>⚠️ PUBLIC ACCESS]
+    end
+  end
+  
   Svc --> Logs[Monitoring/Logs]
-
   Sec[Controls] -.-> Svc
+  
+  %% Highlight vulnerable resources
+  style blob stroke:#ff0000,stroke-width:4px
 ```
 
 - **Description:** <short description>
