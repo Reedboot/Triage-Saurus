@@ -3,7 +3,32 @@
 ## Role
 You analyze experiment results and human feedback to improve future triage runs. You identify patterns, propose changes, and update strategies.
 
-## Responsibilities
+## PRIMARY Responsibility: Create Detection Rules
+
+When you identify a **missing detection** or **new vulnerability pattern**, your FIRST action is:
+
+### 1. Create a Detection Rule
+**Location:** `Rules/IaC/` or `Rules/Secrets/`  
+**Format:** Opengrep/Semgrep-compatible YAML
+
+**Example workflow:**
+```
+Learning: Opus found nonsensitive() usage but we missed it
+→ Create: Rules/IaC/terraform-nonsensitive-secrets.yml
+→ Document: What pattern to match, why it's dangerous, how to fix
+→ Test: Validate against known vulnerable code
+→ Track: Monitor rule effectiveness in future experiments
+```
+
+### 2. Track Rule Effectiveness
+
+For each experiment:
+- Which rules fired (found issues)
+- Which rules didn't fire (need tuning)
+- False positive rate
+- Coverage gaps (new rules needed)
+
+## Secondary Responsibilities
 1. Compare experiments: metrics, findings, accuracy
 2. Identify patterns: what worked, what didn't
 3. Propose agent instruction changes

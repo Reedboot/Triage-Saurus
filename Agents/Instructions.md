@@ -9,8 +9,62 @@ This repository supports consistent security triage. The expected workflow is:
      `## Unknowns` headings (avoid ad-hoc extra sections).
    - If you need an append-only audit trail (e.g., bulk imports, Q&A/triage decisions), write it under `Output/Audit/` and clearly mark it as **AUDIT LOG ONLY — do not load into LLM triage context**.
 4. Update `Output/Summary/` outputs (cloud resource summaries and risk register).
+5. **Write security rules** for new detections or missing checks in `Rules/` folder.
 
 **Navigation:** For menu structures and user journey flows, see `Templates/Workflows.md`.
+
+## 📋 Detection Rules Architecture
+
+**Rules as Single Source of Truth:**
+- All security checks MUST be defined as rules in `Rules/` folder
+- Rules are declarative (WHAT to check)
+- Scripts are imperative (HOW to execute checks)
+- Use opengrep/Semgrep-compatible format
+
+### When to Create a Rule
+
+✅ **Create a new rule when:**
+1. You discover a new security issue not covered by existing rules
+2. A scan misses a vulnerability that should be detected
+3. You identify a pattern that should be systematically checked
+4. Learning from external sources (tool output, security research, incidents)
+5. Extracting checks from scripts into declarative format
+
+### Rule Creation Guidelines
+
+**Location:** `Rules/IaC/` or `Rules/Secrets/`
+
+**Format:** Opengrep/Semgrep YAML
+```yaml
+rules:
+  - id: unique-rule-identifier
+    message: |
+      Brief description of the issue and remediation.
+    severity: ERROR | WARNING | INFO
+    languages: [terraform, yaml, etc.]
+    pattern: |
+      code pattern to match
+    metadata:
+      category: security
+      subcategory: [specific area]
+      cwe: CWE-XXX
+      technology: [terraform, azure, kubernetes]
+      five_pillars: Pillar X (if applicable)
+```
+
+**Required Fields:**
+- `id`: Lowercase with hyphens (e.g., `azure-sql-auditing-disabled`)
+- `message`: Clear description + remediation advice
+- `severity`: ERROR (critical), WARNING (high/medium), INFO (low)
+- `metadata.cwe`: CWE reference if applicable
+- `metadata.technology`: What this rule applies to
+
+### Tracking Rule Detection in Findings
+
+All findings MUST reference the rule that detected them:
+- Add `detected_by_rule: rule-id` in finding metadata
+- If manual detection, use `detected_by_rule: manual`
+- This enables tracking rule effectiveness
 
 ## 🚨 Critical Rule: Production Rigor for ALL Environments
 
@@ -354,6 +408,12 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
 
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
+  - **🚨 VALIDATION RULE FOR EXPANSEAZURELAB (NO CHEATING):** The ExpanseAzureLab repo contains validation resources for post-scan comparison:
+    - `attacks/` folder with ground truth vulnerabilities (AzureLabFull.pdf)
+    - `images/` folder with reference architecture diagrams
+    - **DO NOT look at these folders during the scan phase** - only review AFTER completing all findings
+    - Use for post-scan validation to measure True Positives, False Negatives, False Positives
+    - Document validation results in experiment `validation.json` if applicable
   - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `my_api.md` for repo `my_api`, not `Repo_my_api.md` or `Repo_MY_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).

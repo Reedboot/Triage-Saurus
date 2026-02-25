@@ -1,5 +1,26 @@
 # 🟣 Architecture Agent
 
+## File Organization Standards
+
+### Credential Documentation
+**Location:** `Summary/Cloud/{Provider}/`  
+**Naming:** `creds_{Identity_Type}_{Identity_Name}.md`  
+**Purpose:** Document exposed credentials, permissions, and attack chain value
+
+**Examples:**
+- `Summary/Cloud/Azure/creds_Alex_Service_Principal.md`
+- `Summary/Cloud/Azure/creds_Proto_Service_Principal.md`
+- `Summary/Cloud/AWS/creds_IAM_User_Admin.md`
+
+**Required Content:**
+1. Current permissions assessment (what can it access NOW?)
+2. Attack chain credential value analysis (pivot/lateral movement potential)
+3. Public resource cross-check (can it access already-public resources?)
+4. Configuration drift scenarios (what if permissions are added?)
+5. Credential switching examples (compromise A → use creds from A → access B)
+
+---
+
 ## Role
 - **Scope:** Create and update **high-level cloud estate overview diagrams** based on knowledge
   captured under `Knowledge/`.
@@ -48,6 +69,18 @@
 - **Security controls:** WAF, NSGs, API Management
 - **Complete routing chains:** For APIM-enabled services, show: Public hostname → Gateway → Service → APIM API → Backend
 - **All compute platforms:** Ensure ASE v3, API Management, AKS (with ingress), and Service Fabric all appear where relevant
+- **Resource hierarchies (USE SUBGRAPHS):** Show parent-child relationships clearly:
+  - **SQL Server → Databases:** Use subgraph for SQL Server containing database nodes
+  - **Storage Account → Containers:** Use subgraph for Storage Account containing container nodes
+  - **AKS Cluster → Namespaces/Pods:** Use subgraph for cluster containing workloads
+  - **Example:**
+    ```mermaid
+    subgraph sqlserver["SQL Server: myserver"]
+      db1[Database: mydb]
+      db2[Database: anotherdb]
+    end
+    ```
+  - This makes it clear that databases are children of the server, not separate sibling resources
 - **Monitoring/observability:** Application Insights, Log Analytics, Prometheus, Grafana (if present)
 
 **CRITICAL:** Don't just show request flow - show the COMPLETE service architecture including:
@@ -154,6 +187,11 @@
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Colored borders (RECOMMENDED):** Use colored stroke styling to visually distinguish component types:
   - **Security components** (red): `style Security stroke:#ff6b6b,stroke-width:3px` - Firewalls, WAF, DDoS, security groups
+  - **Vulnerable components** (red/orange): Use red/orange borders to highlight security issues:
+    - 🔴 **CRITICAL vulnerabilities** (red): `style VulnerableResource stroke:#ff0000,stroke-width:4px` - Public access, no auth, exposed credentials
+    - 🟠 **HIGH vulnerabilities** (orange): `style VulnerableResource stroke:#ff6600,stroke-width:3px` - Broad network access, missing controls
+    - Add ⚠️ emoji and explicit security labels in node text (e.g., "Container: pallas<br/>⚠️ PUBLIC ACCESS")
+    - **BEST PRACTICE:** Show security vulnerabilities in diagrams, don't hide them - this makes diagrams actionable for security reviews
   - **Network components** (blue): `style Network stroke:#1971c2,stroke-width:2px` - VNets, subnets, routing, load balancers
   - **Identity/secrets** (orange): `style Identity stroke:#f59f00,stroke-width:2px` - Key Vault, managed identities, AAD, secrets
   - **Platform/core** (orange bold): `style Platform stroke:#f59f00,stroke-width:3px` - Critical infrastructure, hub resources

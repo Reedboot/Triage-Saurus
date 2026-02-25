@@ -206,10 +206,80 @@ PENDING → RUNNING → COMPLETED → AWAITING_REVIEW → REVIEWED → LEARNED �
 |-------|-------------|-------------|
 | `pending` | Experiment folder created, ready to run | Run scans |
 | `running` | Scans in progress | Wait for completion |
-| `completed` | Scans finished, findings generated | Human review |
+| `completed` | Scans finished, findings generated | **Post-scan validation** |
 | `awaiting_review` | Waiting for human feedback | `triage experiment review <id>` |
 | `reviewed` | Human feedback recorded | `triage experiment learn <id>` |
 | `learned` | Learning applied, ready for next experiment | Create next experiment |
+
+## Post-Scan Validation (After 'completed')
+
+**🚨 FOR EXPANSEAZURELAB ONLY:** When scanning ExpanseAzureLab, perform validation BEFORE marking as `awaiting_review`.
+
+### Step 1: Check for Ground Truth (ExpanseAzureLab specific)
+ExpanseAzureLab contains validation resources:
+- `attacks/` folder with vulnerability documentation (`AzureLabFull.pdf`)
+- `images/` folder with reference architecture diagrams
+
+**DO NOT look at these during the scan phase** - only check them now for validation.
+
+### Step 2: Create Validation Matrix
+If ground truth exists, create validation comparison:
+
+**File:** `Output/Learning/experiments/00X/validation_comparison.md`
+
+```markdown
+# Experiment {ID} Validation Comparison
+
+## Ground Truth Source
+- **Location:** /path/to/repo/attacks/file.pdf (or attacks.md)
+- **Architecture Reference:** /path/to/repo/images/
+
+## Vulnerability Comparison
+
+| # | Ground Truth Vulnerability | Severity (Actual) | Found? | Finding ID | Notes |
+|---|---------------------------|-------------------|--------|------------|-------|
+| 1 | Public storage with credentials | CRITICAL | ✅ | STORAGE_001 | Correct |
+| 2 | SQL firewall 0.0.0.0 | HIGH | ✅ | SQL_001 | Correct |
+| 3 | Missing DDoS protection | MEDIUM | ❌ | - | **FALSE NEGATIVE** |
+| 4 | ... | ... | ... | ... | ... |
+
+## Architecture Comparison
+
+Compare generated architecture diagrams (`Summary/Repos/`) to reference diagrams (`images/`):
+- ✅ Components identified correctly
+- ❌ Missed: [list components not in diagram]
+- ❌ Incorrect relationships: [list errors]
+
+## Metrics
+
+- **True Positives:** N findings correctly identified
+- **False Negatives:** M vulnerabilities missed
+- **False Positives:** P findings not in ground truth
+- **Accuracy:** TP / (TP + FN + FP)
+
+## False Negatives Analysis
+[Why did we miss these? What needs improvement?]
+
+## False Positives Analysis
+[Were these actually valid findings not in ground truth, or overcautious?]
+```
+
+### Step 3: Update experiment.json
+Add validation metrics to experiment.json:
+```json
+{
+  "validation": {
+    "ground_truth_source": "attacks/AzureLabFull.pdf",
+    "true_positives": 6,
+    "false_negatives": 4,
+    "false_positives": 1,
+    "accuracy": 0.67
+  }
+}
+```
+
+### Step 4: Mark as awaiting_review
+After validation comparison is complete, proceed to human review.
 
 ## Folder Structure
 
