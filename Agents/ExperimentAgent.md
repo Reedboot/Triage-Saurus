@@ -76,20 +76,67 @@ When `status = "pending"`:
      - Auth validation points
      - Backend routing logic
 
-   **Phase 3: Security Review (using gathered context)**
+   **Phase 3: Rules-Based Infrastructure Scanning (~5-10 minutes)**
+   
+   **CRITICAL:** Apply ALL detection rules to achieve complete coverage.
+   
+   **For IaC scanning (Terraform, Bicep, CloudFormation):**
+   ```bash
+   # Run all IaC rules (currently ~42 rules)
+   semgrep --config Rules/IaC/ <repo_path> --json -o findings_iac.json
+   
+   # Verify all rules ran
+   ls -1 Rules/IaC/*.yml | wc -l
+   ```
+   
+   **For each finding from semgrep:**
+   1. Create individual finding document in `experiments/001_baseline/Findings/Cloud/`
+   2. Follow `Templates/CloudFinding.md` template
+   3. Include:
+      - Resource name and type
+      - Rule ID that detected it
+      - Evidence location (file, line number)
+      - Technical severity (from rule metadata)
+      - Architecture diagram showing resource context
+   4. Leave Skeptic sections BLANK (filled in Phase 5)
+   
+   **Expected Results:**
+   - Detection rate: ~80-90% of ground truth vulnerabilities
+   - Time: 5-10 minutes for 40+ rules
+   - Output: Individual finding files ready for skeptic review
+   
+   **Validation checkpoint:**
+   ```bash
+   # Verify findings were created
+   ls experiments/001_baseline/Findings/Cloud/*.md | wc -l
+   
+   # Verify rule coverage
+   grep "Rule:" experiments/001_baseline/Findings/Cloud/*.md | sort -u
+   ```
+   
+   **Key Learning from Experiment 015:**
+   - Selective rule application achieves only 50% detection
+   - Applying ALL rules achieves 86%+ detection
+   - Missing rules for: terraform-hardcoded-keyvault-secret, terraform-nonsensitive-secrets
+   - These gaps are now filled (rules created 2026-02-25)
+
+   **Phase 4: Security Review (using gathered context)**
    Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
    
-   **Step 3a: Review repo summary security observations**
+   **Phase 4: Security Review (using gathered context)**
+   Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
+   
+   **Step 4a: Review repo summary security observations**
    - Phase 2 has documented security findings in `Summary/Repos/<RepoName>.md`
    - Review the "Security Observations" section for all identified issues
    
-   **Step 3b: Extract findings as individual files** (MANDATORY)
+   **Step 4b: Extract findings as individual files** (MANDATORY)
    - For **MEDIUM+ severity** findings documented in repo summary:
      - Create individual finding file: `experiments/001_baseline/Findings/Code/<RepoName>_<Issue>_<Number>.md`
      - Include architecture diagram showing attack path
      - Copy finding details (location, issue, attack vector, mitigations)
      - Add POC script section (if exploitable - use guidance from SecurityAgent.md)
-     - Leave Skeptic sections blank (filled in Phase 4)
+     - Leave Skeptic sections blank (filled in Phase 5)
    - For **LOW/INFO** findings: leave in repo summary only
    
    **Example extraction:**
@@ -102,7 +149,7 @@ When `status = "pending"`:
    →  Leave blank: Dev Skeptic and Platform Skeptic sections
    ```
    
-   **Step 3c: Additional logic review** (if time permits):
+   **Step 4c: Additional logic review** (if time permits):
    Focus on **logic review**, not just documented findings:
    
    **Authentication Flow Analysis:**
@@ -132,20 +179,21 @@ When `status = "pending"`:
    - Each finding follows template in `Templates/CodeFinding.md` or `Templates/CloudFinding.md`
    - **DO NOT** run skeptic reviews yet - findings must exist first
    
-   **Validation:** At end of Phase 3:
+   **Validation:** At end of Phase 4:
    - `ls experiments/001_baseline/Findings/Code/*.md` → at least 1 file per MEDIUM+ finding
+   - `ls experiments/001_baseline/Findings/Cloud/*.md` → findings from Phase 3 rules
    - Each file has blank Skeptic sections (not yet filled)
    
-   **Phase 4: Skeptic Reviews (review each finding)**
+   **Phase 5: Skeptic Reviews (review each finding)**
    
-   **IMPORTANT:** Skeptics review the FINDINGS created in Phase 3, not the code directly.
+   **IMPORTANT:** Skeptics review the FINDINGS created in Phases 3-4, not the code directly.
    The workflow is:
    1. Read finding from `experiments/001_baseline/Findings/`
    2. Understand the security engineer's claim
    3. Access source code/IaC to verify or challenge the claim
    4. Update the finding file with skeptic section
    
-   For EACH finding generated in Phase 3:
+   For EACH finding generated in Phases 3-4:
    
    - **DevSkeptic Review:**
      - Read the finding from `experiments/001_baseline/Findings/`
@@ -163,7 +211,7 @@ When `status = "pending"`:
    
    **Important:** Skeptics need access to BOTH the finding AND the actual source code/IaC to provide meaningful reviews. The finding alone is not sufficient.
 
-   **Phase 5: Capture Metrics**
+   **Phase 6: Capture Metrics**
    - Duration per phase
    - Token usage (if trackable)
    - Findings count and quality scores
