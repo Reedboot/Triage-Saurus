@@ -1,0 +1,28 @@
+rules:
+  - id: azure-storage-encryption-disabled
+    message: |
+      Storage Account does not enforce encryption for blobs/files.
+      Data at rest should always be encrypted. Azure encrypts by default
+      but ensure enable_https_traffic_only = true.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            enable_https_traffic_only = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud]
+      cwe: CWE-311
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 5 (Data Protection)

@@ -1,0 +1,30 @@
+rules:
+  - id: azure-storage-logging-disabled
+    message: |
+      Storage Account does not have logging enabled.
+      Blob/Queue/Table operations will not be audited.
+      Add logging block with enabled = true.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            logging {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [audit-logging, cloud]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 3 (Audit Logging)

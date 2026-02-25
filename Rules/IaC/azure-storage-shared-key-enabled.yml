@@ -1,0 +1,28 @@
+rules:
+  - id: azure-storage-shared-key-enabled
+    message: |
+      Storage Account allows shared access key authentication.
+      Prefer Azure AD authentication with Managed Identity.
+      Set shared_access_key_enabled = false.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            shared_access_key_enabled = false
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, cloud]
+      cwe: CWE-798
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 2 (Access Control)

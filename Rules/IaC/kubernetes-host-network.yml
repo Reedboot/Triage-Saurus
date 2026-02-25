@@ -1,0 +1,19 @@
+rules:
+  - id: kubernetes-host-network
+    message: |
+      Pod uses hostNetwork: true, bypassing network isolation.
+      This allows pod to access host network stack and sniff traffic.
+      Remove hostNetwork or use specific port bindings.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      spec:
+        hostNetwork: true
+    metadata:
+      category: security
+      subcategory: [kubernetes, network]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [kubernetes]

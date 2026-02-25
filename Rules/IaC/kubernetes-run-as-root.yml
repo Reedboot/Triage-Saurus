@@ -1,0 +1,28 @@
+rules:
+  - id: kubernetes-run-as-root
+    message: |
+      Container likely runs as root (runAsUser: 0 or runAsNonRoot: false).
+      Running as root increases privilege escalation risk.
+      Set runAsNonRoot: true or runAsUser to non-zero UID.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              securityContext:
+                ...
+                runAsUser: 0
+                ...
+          - pattern: |
+              securityContext:
+                ...
+                runAsNonRoot: false
+                ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [kubernetes]

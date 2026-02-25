@@ -1,0 +1,27 @@
+rules:
+  - id: azure-nsg-flow-logs-disabled
+    message: |
+      Network Security Group does not have flow logs enabled.
+      Network traffic patterns will not be captured for forensics.
+      Add azurerm_network_watcher_flow_log resource.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_network_security_group" "$NAME" {
+            ...
+          }
+      - pattern-not-inside: |
+          resource "azurerm_network_watcher_flow_log" "..." {
+            network_security_group_id = azurerm_network_security_group.$NAME.id
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [audit-logging, network]
+      cwe: CWE-778
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 3 (Audit Logging)

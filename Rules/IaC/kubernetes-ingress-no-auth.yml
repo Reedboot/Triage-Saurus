@@ -1,0 +1,32 @@
+rules:
+  - id: kubernetes-ingress-no-auth
+    message: |
+      Ingress detected without authentication annotations.
+      Publicly exposed services should have OAuth/OIDC/IP restrictions.
+      Add nginx.ingress.kubernetes.io/auth annotations.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          kind: Ingress
+          ...
+      - pattern-not-inside: |
+          metadata:
+            annotations:
+              ...
+              nginx.ingress.kubernetes.io/auth-url: ...
+              ...
+      - pattern-not-inside: |
+          metadata:
+            annotations:
+              ...
+              nginx.ingress.kubernetes.io/whitelist-source-range: ...
+              ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, authentication]
+      cwe: CWE-306
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes, nginx]

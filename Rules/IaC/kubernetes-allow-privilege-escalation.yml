@@ -1,0 +1,21 @@
+rules:
+  - id: kubernetes-allow-privilege-escalation
+    message: |
+      Container allows privilege escalation (allowPrivilegeEscalation: true).
+      This permits processes to gain more privileges than parent.
+      Set to false unless specifically required.
+    severity: WARNING
+    languages: [yaml]
+    pattern: |
+      securityContext:
+        ...
+        allowPrivilegeEscalation: true
+        ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]

@@ -1,0 +1,25 @@
+rules:
+  - id: kubernetes-ingress-no-tls
+    message: |
+      Ingress detected without TLS configuration.
+      Unencrypted traffic is vulnerable to interception.
+      Add tls block with certificate configuration.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          kind: Ingress
+          ...
+      - pattern-not: |
+          spec:
+            ...
+            tls:
+              ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, encryption]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]

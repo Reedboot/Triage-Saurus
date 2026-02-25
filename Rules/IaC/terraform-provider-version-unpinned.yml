@@ -1,0 +1,34 @@
+rules:
+  - id: terraform-provider-version-unpinned
+    message: |
+      Terraform provider does not have a version constraint. This can cause
+      unexpected behavior when provider versions update. Pin to specific
+      version range (e.g., version = "~> 3.0").
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          terraform {
+            ...
+            required_providers {
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          $PROVIDER = {
+            source = "$SOURCE"
+          }
+      - pattern-not: |
+          $PROVIDER = {
+            source = "$SOURCE"
+            version = "..."
+          }
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: CWE-1104
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform]

@@ -1,0 +1,30 @@
+rules:
+  - id: azure-aks-aad-integration-missing
+    message: |
+      AKS cluster does not have Azure AD RBAC integration.
+      Local accounts bypass centralized identity management.
+      Add azure_active_directory_role_based_access_control block.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            azure_active_directory_role_based_access_control {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, cloud, kubernetes]
+      cwe: CWE-287
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, azure, kubernetes]
+      five_pillars: Pillar 2 (Access Control)

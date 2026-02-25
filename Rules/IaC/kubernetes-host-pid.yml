@@ -1,0 +1,18 @@
+rules:
+  - id: kubernetes-host-pid
+    message: |
+      Pod uses hostPID: true, accessing host process namespace.
+      This allows viewing/killing host processes. Remove hostPID.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      spec:
+        hostPID: true
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [kubernetes]

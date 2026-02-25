@@ -1,0 +1,26 @@
+rules:
+  - id: kubernetes-ingress-no-rate-limit
+    message: |
+      Ingress without rate limiting annotations.
+      Services are vulnerable to DoS/brute force attacks.
+      Add nginx.ingress.kubernetes.io/limit-rps annotation.
+    severity: INFO
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          kind: Ingress
+          ...
+      - pattern-not-inside: |
+          metadata:
+            annotations:
+              ...
+              nginx.ingress.kubernetes.io/limit-rps: ...
+              ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, dos-protection]
+      cwe: CWE-770
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [kubernetes, nginx]

@@ -1,0 +1,28 @@
+rules:
+  - id: kubernetes-dangerous-capabilities
+    message: |
+      Container adds dangerous Linux capabilities (SYS_ADMIN, NET_ADMIN).
+      These capabilities enable container escape and host compromise.
+      Remove or use more specific capabilities.
+    severity: ERROR
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          securityContext:
+            ...
+            capabilities:
+              add:
+                - ...
+                - $CAP
+                - ...
+      - metavariable-regex:
+          metavariable: $CAP
+          regex: (SYS_ADMIN|NET_ADMIN)
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [kubernetes, linux]

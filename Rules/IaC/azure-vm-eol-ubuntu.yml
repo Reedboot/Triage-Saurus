@@ -1,0 +1,25 @@
+rules:
+  - id: azure-vm-eol-ubuntu
+    message: |
+      Virtual machine uses Ubuntu 20.04 LTS which reaches end-of-life in April 2025.
+      Upgrade to Ubuntu 22.04 LTS or newer to receive security updates.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_linux_virtual_machine" "$NAME" {
+        ...
+        source_image_reference {
+          ...
+          sku = "20_04-lts-gen2"
+          ...
+        }
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [patch-management]
+      cwe: CWE-1395
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure]

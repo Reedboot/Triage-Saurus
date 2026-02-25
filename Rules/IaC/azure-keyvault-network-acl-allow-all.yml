@@ -1,0 +1,31 @@
+rules:
+  - id: azure-keyvault-network-acl-allow-all
+    message: |
+      Key Vault network ACLs set to 'Allow' by default.
+      This allows access from any network. Set default_action to 'Deny'
+      and whitelist specific networks/IPs.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_key_vault" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_key_vault" "$NAME" {
+            ...
+            network_acls {
+              default_action = "Deny"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-16
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)

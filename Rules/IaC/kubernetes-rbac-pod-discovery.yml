@@ -1,0 +1,34 @@
+rules:
+  - id: kubernetes-rbac-pod-discovery
+    message: |
+      RBAC role allows broad pod/service discovery (list/watch).
+      This enables reconnaissance for lateral movement.
+      Restrict to specific namespaces/resources.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          rules:
+            - ...
+              resources:
+                - ...
+                - $RESOURCE
+                - ...
+              verbs:
+                - ...
+                - $VERB
+                - ...
+      - metavariable-regex:
+          metavariable: $RESOURCE
+          regex: (pods|services)
+      - metavariable-regex:
+          metavariable: $VERB
+          regex: (list|watch)
+    metadata:
+      category: security
+      subcategory: [kubernetes, iam]
+      cwe: CWE-200
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [kubernetes]

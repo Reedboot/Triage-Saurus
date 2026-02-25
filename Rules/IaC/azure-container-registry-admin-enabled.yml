@@ -1,0 +1,23 @@
+rules:
+  - id: azure-container-registry-admin-enabled
+    message: |
+      Container Registry has admin user enabled.
+      This creates long-lived credentials. Use Managed Identity or
+      service principal with RBAC instead. Set admin_enabled = false.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_container_registry" "$NAME" {
+        ...
+        admin_enabled = true
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [authentication, cloud]
+      cwe: CWE-798
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 2 (Access Control)

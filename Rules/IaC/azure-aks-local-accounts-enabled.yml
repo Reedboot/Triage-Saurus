@@ -1,0 +1,27 @@
+rules:
+  - id: azure-aks-local-accounts-enabled
+    message: |
+      AKS cluster has local_account_disabled = false. Local accounts bypass
+      Azure AD authentication and should be disabled. Use Azure AD integration
+      for centralized identity management.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            local_account_disabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [iam, cloud]
+      cwe: CWE-287
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure, kubernetes]

@@ -1,0 +1,21 @@
+rules:
+  - id: kubernetes-host-path-volume
+    message: |
+      Pod mounts hostPath volume, accessing host filesystem.
+      This allows reading/writing host files, potential container escape.
+      Use persistent volumes instead of hostPath.
+    severity: WARNING
+    languages: [yaml]
+    pattern: |
+      volumes:
+        - ...
+          hostPath:
+            ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-552
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]

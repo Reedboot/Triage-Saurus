@@ -1,0 +1,25 @@
+rules:
+  - id: kubernetes-wildcard-rbac
+    message: |
+      RBAC role uses wildcard (*) for verbs or resources.
+      This grants excessive permissions. Use specific verbs/resources.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              rules:
+                - ...
+                  verbs: ["*"]
+          - pattern: |
+              rules:
+                - ...
+                  resources: ["*"]
+    metadata:
+      category: security
+      subcategory: [kubernetes, iam]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]

@@ -1,0 +1,31 @@
+rules:
+  - id: azure-storage-network-allow-all
+    message: |
+      Storage Account network rules set to 'Allow' by default.
+      This allows public access. Set default_action to 'Deny' and
+      whitelist specific networks.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            network_rules {
+              default_action = "Deny"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-16
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)

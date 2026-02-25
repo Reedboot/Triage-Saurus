@@ -1,0 +1,16 @@
+rules:
+  - id: kubernetes-image-latest-tag
+    message: |
+      Container image uses ':latest' tag. This is unpredictable and
+      violates immutable infrastructure principles. Pin to specific version.
+    severity: INFO
+    languages: [yaml]
+    pattern-regex: 'image:\s*[^\s]+:latest'
+    metadata:
+      category: security
+      subcategory: [kubernetes, supply-chain]
+      cwe: CWE-1104
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [kubernetes, docker]

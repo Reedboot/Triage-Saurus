@@ -1,0 +1,30 @@
+rules:
+  - id: azure-sql-firewall-all-access
+    message: |
+      SQL Server firewall rule allows access from 0.0.0.0 to 0.0.0.0 or
+      255.255.255.255. This allows access from any internet IP address.
+      Restrict to specific IP ranges or use Private Endpoints.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_mssql_firewall_rule" "$NAME" {
+            ...
+            start_ip_address = "$START"
+            end_ip_address = "$END"
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $START
+          regex: 0\.0\.0\.0
+      - metavariable-regex:
+          metavariable: $END
+          regex: (0\.0\.0\.0|255\.255\.255\.255)
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-923
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]

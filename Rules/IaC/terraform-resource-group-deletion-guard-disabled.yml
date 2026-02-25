@@ -1,0 +1,30 @@
+rules:
+  - id: terraform-resource-group-deletion-guard-disabled
+    message: |
+      Azure provider has prevent_deletion_if_contains_resources = false.
+      This allows accidental deletion of resource groups containing resources.
+      Set to true to prevent accidental infrastructure destruction.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      provider "azurerm" {
+        ...
+        features {
+          ...
+          resource_group {
+            ...
+            prevent_deletion_if_contains_resources = false
+            ...
+          }
+          ...
+        }
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [infrastructure]
+      cwe: CWE-404
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+      technology: [terraform, azure]

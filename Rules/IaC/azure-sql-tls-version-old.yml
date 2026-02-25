@@ -1,0 +1,28 @@
+rules:
+  - id: azure-sql-tls-version-old
+    message: |
+      SQL Server allows TLS version < 1.2.
+      TLS 1.0/1.1 are deprecated and vulnerable to attacks.
+      Set minimum_tls_version = "1.2".
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_mssql_server" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_mssql_server" "$NAME" {
+            ...
+            minimum_tls_version = "1.2"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud]
+      cwe: CWE-327
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 5 (Data Protection)

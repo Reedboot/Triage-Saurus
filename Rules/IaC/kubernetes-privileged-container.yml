@@ -1,0 +1,25 @@
+rules:
+  - id: kubernetes-privileged-container
+    message: |
+      Container runs with privileged: true, granting full host access.
+      This allows container escape and host compromise. Remove privileged
+      flag or use specific capabilities instead.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      spec:
+        ...
+        containers:
+          - ...
+            securityContext:
+              ...
+              privileged: true
+              ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [kubernetes]

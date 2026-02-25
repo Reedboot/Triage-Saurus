@@ -1,0 +1,25 @@
+rules:
+  - id: kubernetes-suspicious-command-pattern
+    message: |
+      Container command contains suspicious patterns (while true loop,
+      callback/listener, reverse shell). May indicate backdoor or
+      persistence mechanism. Review command purpose.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          command:
+            - ...
+            - $CMD
+            - ...
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: .*(while\s+true|sleep\s+3600|callback|listener|webhook|reverse.?shell|bash\s+-c|nc\s+-l).*
+    metadata:
+      category: security
+      subcategory: [kubernetes, malware]
+      cwe: CWE-506
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [kubernetes]

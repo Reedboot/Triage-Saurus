@@ -1,0 +1,22 @@
+rules:
+  - id: kubernetes-cluster-admin-binding
+    message: |
+      ClusterRoleBinding grants cluster-admin role.
+      This provides full cluster control. Use least privilege roles instead.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      kind: ClusterRoleBinding
+      ...
+      roleRef:
+        ...
+        name: cluster-admin
+        ...
+    metadata:
+      category: security
+      subcategory: [kubernetes, iam]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [kubernetes]

@@ -1,0 +1,21 @@
+rules:
+  - id: kubernetes-loadbalancer-public-exposure
+    message: |
+      Kubernetes Service uses type: LoadBalancer, exposing service publicly.
+      Ensure this is intentional and add network security controls.
+      Consider using type: ClusterIP with Ingress instead.
+    severity: WARNING
+    languages: [yaml]
+    pattern: |
+      kind: Service
+      ...
+      spec:
+        type: LoadBalancer
+    metadata:
+      category: security
+      subcategory: [kubernetes, network]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [kubernetes]

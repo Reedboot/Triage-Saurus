@@ -1,0 +1,20 @@
+rules:
+  - id: kubernetes-nodeport-exposure
+    message: |
+      Service uses type: NodePort, exposing service on all node IPs.
+      Prefer ClusterIP with Ingress for better security controls.
+    severity: INFO
+    languages: [yaml]
+    pattern: |
+      kind: Service
+      ...
+      spec:
+        type: NodePort
+    metadata:
+      category: security
+      subcategory: [kubernetes, network]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [kubernetes]

@@ -1,0 +1,28 @@
+rules:
+  - id: azure-keyvault-administrator-role
+    message: |
+      User group assigned Key Vault Administrator role. This grants full control
+      over all secrets, keys, and certificates. Use principle of least privilege
+      with specific roles like 'Key Vault Secrets User' instead.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_role_assignment" "$NAME" {
+            ...
+            role_definition_name = "Key Vault Administrator"
+            ...
+            principal_id = $GROUP_ID
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $GROUP_ID
+          regex: .*group.*
+    metadata:
+      category: security
+      subcategory: [iam, cloud]
+      cwe: CWE-269
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [terraform, azure]

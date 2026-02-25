@@ -1,0 +1,26 @@
+rules:
+  - id: terraform-local-backend-unencrypted
+    message: |
+      Terraform state stored locally with 'backend "local"' is unencrypted and
+      not backed up. Use remote backend (Azure Storage, S3, Terraform Cloud)
+      with encryption and locking enabled.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      terraform {
+        ...
+        backend "local" {
+          ...
+        }
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [infrastructure]
+      cwe: CWE-312
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform]
+      references:
+        - https://developer.hashicorp.com/terraform/language/settings/backends/local
