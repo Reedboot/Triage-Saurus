@@ -115,11 +115,11 @@ Each rule includes detection steps for manual grep/checking.
 ### Automated (Future)
 ```bash
 # When opengrep installed:
-opengrep scan --config rules/ /path/to/repo
+opengrep scan --config Rules/ /path/to/repo
 ```
 
 ### Script Integration
-Scripts can read rules/ folder and execute checks programmatically.
+Scripts can read Rules/ folder and execute checks programmatically.
 
 ---
 
