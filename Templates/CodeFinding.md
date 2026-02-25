@@ -80,6 +80,12 @@ flowchart TB
 ---
 
 ## 🛡️ Security Review
+
+### 🔍 Detection
+- **Detected by:** `rule-id` or `manual`
+- **Rule file:** `Rules/IaC/rule-name.yml` (if applicable)
+- **Detection method:** <automated scan / manual review / external tool>
+
 ### 🧾 Summary
 <brief business impact summary: what it means to the business if this isn’t fixed>
 
