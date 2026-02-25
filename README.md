@@ -43,6 +43,56 @@ See `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md` for full details.
 
 ---
 
+## Security Rules Library
+
+Triage-Saurus now includes a **declarative security rules library** in opengrep/Semgrep-compatible format:
+
+### What's Included
+- **50+ production-ready rules** covering:
+  - **Terraform/Azure IaC** (33 rules): Secrets, network security, access control, logging, encryption
+  - **Kubernetes** (17 rules): Container security, RBAC, network policies, privileged access
+  - **Secret Detection** (2 rules): AWS keys, SQL connection strings
+
+### Rules as Single Source of Truth
+- **Rules folder**: `Rules/IaC/` and `Rules/Secrets/` — declarative WHAT to check
+- **Scripts**: Read rules and execute checks — imperative HOW
+- **Findings**: Track which rule detected them via `detected_by_rule` field
+- **Learning**: Create new rules when detection gaps identified
+
+### Key Features
+- ✅ **Opengrep/Semgrep compatible** — Industry standard format
+- ✅ **Comprehensive metadata** — CWE, severity, technology tags, Five Pillars mapping
+- ✅ **Measurable** — Track detection rate per rule in experiments
+- ✅ **Continuously improving** — LearningAgent creates rules for missed detections
+
+### Documentation
+- `Rules/README.md` — Overview and usage
+- `Rules/Summary.md` — Complete catalog of all rules
+- `Rules/CreationGuide.md` — How to create new rules
+- `Agents/Instructions.md` — When and how to create rules
+- Finding templates — Require rule tracking for attribution
+
+### Usage
+
+**Manual Detection** (current):
+```bash
+# Each rule includes pattern examples for manual grep
+grep -r "nonsensitive(" --include="*.tf"
+```
+
+**Automated Scanning** (future):
+```bash
+# When opengrep installed
+opengrep scan --config Rules/ /path/to/repo
+```
+
+**Learning from Gaps**:
+When experiments or external tools find issues we miss → LearningAgent creates rules → Track effectiveness in next run
+
+See `Rules/` folder for complete library and documentation.
+
+---
+
 ## License
 See `LICENSE` (non-commercial internal use; no redistribution; no warranty).
 
