@@ -83,6 +83,50 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 - Kubernetes detail files when AKS/EKS/GKE exists: `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md`
 - Provider resource summaries under `Output/Summary/Cloud/<Provider>/` (top-level `Cloud/` kept for `Architecture_*.md` only)
 
+### Step 5a: Phase 1.5 - Rules-Based IaC Scanning (~5-10 minutes)
+**Action:** If IaC detected (Terraform, Bicep, CloudFormation), run automated rule scanning
+**Purpose:** Detect common misconfigurations before manual review
+
+**CRITICAL:** Apply ALL detection rules for complete coverage.
+
+```bash
+# For Terraform repositories
+semgrep --config Rules/IaC/ <repo_path> --json -o findings_iac.json
+
+# Verify all rules ran (should be ~42 rules as of 2026-02-25)
+ls -1 Rules/IaC/*.yml | wc -l
+```
+
+**For each finding from semgrep:**
+1. Create individual finding document in `Output/Findings/Cloud/`
+2. Follow `Templates/CloudFinding.md` template
+3. Include:
+   - Resource name and type
+   - Rule ID that detected it
+   - Evidence location (file, line number)
+   - Technical severity (from rule metadata)
+   - Architecture diagram showing resource context
+4. Leave Skeptic sections BLANK (filled in Phase 3)
+
+**Expected Results:**
+- Detection rate: ~80-90% of infrastructure vulnerabilities
+- Time: 5-10 minutes for 40+ rules
+- Output: Individual finding files ready for skeptic review
+
+**Key Learning from Experiment 015:**
+- Selective rule application achieves only 50% detection
+- Applying ALL rules achieves 86%+ detection
+- Phase 1.5 reduces manual Phase 3 effort by catching common issues early
+
+**Validation checkpoint:**
+```bash
+# Verify findings were created
+ls Output/Findings/Cloud/*.md | wc -l
+
+# Verify rule coverage
+grep "Rule:" Output/Findings/Cloud/*.md | sort -u
+```
+
 ### Step 5: Phase 2 - Manual Context Analysis
 **Action:** Launch ONE explore agent per repo
 **Purpose:** Complete Phase 2 TODO markers with deep code understanding
