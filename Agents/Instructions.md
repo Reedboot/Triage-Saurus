@@ -21,6 +21,12 @@ This repository supports consistent security triage. The expected workflow is:
 - Scripts are imperative (HOW to execute checks)
 - Use opengrep/Semgrep-compatible format
 
+**Rules + LLM Pattern:**
+- Rules detect patterns and extract relevant data
+- LLM reviews detected items for context-specific assessment
+- Example: Rule detects Ubuntu version → LLM checks if EOL
+- Benefits: Rules stay generic, LLM provides current knowledge
+
 ### When to Create a Rule
 
 ✅ **Create a new rule when:**
@@ -685,6 +691,11 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
 - **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
 - **Code findings:** `Output/Findings/Code/<Titlecase>.md`
   - **Note:** Repo scans that identify specific code-level security vulnerabilities (e.g., SQL injection, XSS, insecure deserialization) should extract those as individual findings under `Output/Findings/Code/` for tracking and remediation.
+- **CRITICAL: One finding per file** — NEVER create consolidated finding files (e.g., `IaC_Findings.md` with all findings). Each security finding MUST be a separate markdown file:
+  - Naming: `<RuleID_or_Title>_<RepoOrResource>.md` (e.g., `SQL_Firewall_All_Access_terraform-database.md`)
+  - Each file follows the CloudFinding or CodeFinding template with TL;DR, Details, Risk, Recommendations, Metadata
+  - This enables linking from architecture diagrams, risk registers, and cross-referencing
+  - When delegating to sub-agents for rule scanning, explicitly instruct them to create individual finding files
 - **Repo scan summaries:** `Output/Summary/Repos/<RepoName>.md` (one file per repo; follows `Templates/RepoFinding.md` structure with architecture diagram, security review, skeptic reviews, and metadata; use exact repo name without prefix)
   - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings` or in relevant finding summaries
   - **Cloud architecture knowledge:** When scanning a repo, any cloud architecture knowledge discovered (ingress paths, services used, authentication patterns, network topology) should be immediately captured in:
@@ -712,22 +723,48 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - This validates Mermaid syntax and ensures **no `fill:` attributes** (which break dark themes)
 - **Critical rule:** NEVER use `fill:#` in Mermaid style blocks. Use `stroke:` and `stroke-width:` instead.
   - ❌ `style node fill:#ff6b6b,stroke:#c92a2a` → ✅ `style node stroke:#c92a2a,stroke-width:3px`
+  - ❌ `classDef error fill:#ffcccc` → ✅ `style node stroke:#ff0000,stroke-width:4px`
+  - ❌ `[("text")]` for non-database nodes → ✅ `["text"]` for rectangles
+- **When delegating diagram tasks to sub-agents:** Include the Mermaid styling rules in the prompt (no fill, stroke-only borders, correct node shapes). Sub-agents don't have visibility into these project rules.
 - **Traffic Flow Standard (REQUIRED):** Use Mermaid `flowchart LR` diagrams for sequential traffic flows in repo summaries
   - ✅ Visualize request paths, authentication flows, data flows as Mermaid diagrams
   - ✅ Apply colored borders to show component types (security, network, identity, data)
   - ✅ Simple fan-out patterns (e.g., "APIM → 7 backends") can remain text-based lists
   - ❌ Long text arrow chains (`A → B → C → D → E → F`) are hard to scan - use Mermaid instead
 - **Colored borders (REQUIRED for traffic flows, RECOMMENDED elsewhere):**
-  - Security (red): `#ff6b6b` - Firewalls, WAF, auth services, security controls
-  - Network (blue): `#1971c2` - VNets, subnets, gateways, load balancers, routing
-  - Identity (orange): `#f59f00` - Key Vault, AAD, managed identities, secrets
-  - Data (teal): `#96f2d7` - Databases, storage accounts, data services
-  - Stroke width: 3px for critical components, 2px for secondary
+  - 🔴 Critical/ERROR (red): `#ff0000` stroke-width:4px - Critical vulnerabilities, public exposure
+  - 🟠 WARNING (orange): `#ff6600` stroke-width:3px - High-risk findings, broad access
+  - 🔴 Security (red): `#ff6b6b` stroke-width:3px - Firewalls, WAF, auth services, security controls
+  - 🔵 Network (blue): `#1971c2` stroke-width:2px - VNets, subnets, gateways, load balancers, routing
+  - 🟠 Identity (orange): `#f59f00` stroke-width:2px - Key Vault, AAD, managed identities, secrets
+  - 🟢 Secure/OK (green): `#40c057` stroke-width:2px - Verified secure configurations
+  - 🔵 Data (teal): `#96f2d7` stroke-width:3px - Databases, storage accounts, data services
+  - **Always include a legend** in diagrams explaining what the border colors mean
+  - **Legend format (inline, one line):** Place immediately after the Mermaid code block:
+    ```markdown
+    **Legend:** 🔵 Blue = Network | 🟢 Green = Secure | 🟠 Orange = WARNING | 🔴 Red = Security
+    ```
 - **UTF-8 handling:** Emojis are acceptable in Mermaid diagrams (node labels AND subgraph labels)
   - ✅ **ALWAYS use edit/create tools** for files with emojis or Unicode characters
   - ❌ **NEVER use bash heredocs** (`cat << 'EOF'`) for UTF-8 content - causes Unicode corruption
   - Example corruption: `🔗` becomes `��` when using heredocs
+- **Reference previous experiments:** Before generating architecture diagrams, check recent successful experiments (e.g., 015, 006) in `Output/Learning/experiments/` for expected format rather than generating from scratch.
 - See `Agents/ArchitectureAgent.md` and `Agents/ContextDiscoveryAgent.md` for complete Mermaid styling rules.
+
+## Sub-agent delegation requirements
+When delegating tasks to sub-agents (via the `task` tool), include ALL relevant constraints in the prompt:
+- **Output file structure:** One finding per file, naming conventions, target directories
+- **Mermaid styling rules:** No fill, stroke-only borders, correct node shapes, inline legend
+- **Template references:** Point to Templates/ files to follow (e.g., `Templates/CloudFinding.md`)
+- **Project rules:** Sub-agents don't have visibility into Instructions.md or agent files
+- **Validation:** Review sub-agent output against project standards before accepting
+
+## Skeptic review updates
+When DevSkeptic/PlatformSkeptic reviews are complete:
+- **Update individual finding files** with severity adjustments and rationale (don't just create a separate Skeptic_Review.md)
+- Add skeptic feedback under `## 🤔 Skeptic` section in each affected finding
+- Update the finding's Overall Score to reflect the final reconciled score
+- The Skeptic_Review.md can exist as a summary, but individual findings must be updated
 
 ## Utility scripts
 - **Clear session artifacts (destructive):**
