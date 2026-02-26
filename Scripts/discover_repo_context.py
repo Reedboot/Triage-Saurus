@@ -36,6 +36,7 @@ from pathlib import Path
 
 from output_paths import OUTPUT_KNOWLEDGE_DIR, OUTPUT_SUMMARY_DIR
 from markdown_validator import validate_markdown_file
+from template_renderer import render_template
 
 # Database integration
 try:
@@ -106,24 +107,6 @@ PROVIDER_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS", re.compile(r'provider\s+"aws"|resource\s+"aws_|data\s+"aws_', re.IGNORECASE)),
     ("GCP", re.compile(r'provider\s+"google"|resource\s+"google_|data\s+"google_', re.IGNORECASE)),
 ]
-
-# Note: NETWORK_SECURITY_PATTERNS removed (unused dead code, 48 lines)
-
-# Note: ACCESS_CONTROL_PATTERNS removed (unused dead code, 60 lines)
-
-# Note: AUDIT_LOGGING_PATTERNS removed (unused dead code, 46 lines)
-
-# Note: MONITORING_INFRASTRUCTURE_PATTERNS removed (unused dead code, 28 lines)
-
-# Note: DATA_PROTECTION_PATTERNS removed (unused dead code, 37 lines)
-
-# Removed patterns section (lines 110-328): 219 lines of unused pattern definitions
-# Total: 102 unused regex patterns deleted (NETWORK_SECURITY: 47, ACCESS_CONTROL: 43, 
-# AUDIT_LOGGING: 45, MONITORING: 27, DATA_PROTECTION: 35)
-# These were never referenced in the code and can be safely deleted.
-#
-# If needed in future, implement via generic resource detection + LLM interpretation
-# following the universal architecture pattern (see llm_resource_interpreter.py).
 
 NETWORK_SECURITY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Azure - Network restrictions
@@ -1963,123 +1946,174 @@ def check_os_support_status(os_string: str) -> tuple[str, str]:
 
 
 def extract_vm_names_with_os(files: list[Path], repo: Path, provider: str) -> list[tuple[str, str, str]]:
-    """Extract VM names with OS type and role using generic pattern + LLM interpretation.
-    Returns list of (name, os, role) tuples. Role can be: 'Bastion', 'Jumpbox', or '' for regular VMs.
-    
-    Uses universal architecture: structure extraction + LLM interpretation."""
-    
-    # Import LLM interpreter (lazy import to avoid dependency issues)
-    try:
-        from llm_resource_interpreter import interpret_compute_os
-    except ImportError:
-        # Fallback to simple detection if LLM interpreter not available
-        interpret_compute_os = None
-    
+    """Extract VM names with OS type and role. Returns list of (name, os, role) tuples.
+    Role can be: 'Bastion', 'Jumpbox', or '' for regular VMs."""
     vms = []
+    
+    # Keywords to identify bastion/jumpbox VMs
     bastion_keywords = ['bastion', 'jump', 'jumpbox', 'jump-box', 'jumper']
     
-    # Generic compute patterns for all providers
-    compute_patterns = {
-        "azure": [
-            (r'resource\s+"azurerm_linux_virtual_machine"\s+"([^"]+)".*?'
-             r'source_image_reference\s*\{[^}]*offer\s*=\s*"([^"]+)"[^}]*sku\s*=\s*"([^"]+)"',
-             "azurerm_linux_virtual_machine"),
-            (r'resource\s+"azurerm_windows_virtual_machine"\s+"([^"]+)".*?'
-             r'source_image_reference\s*\{[^}]*offer\s*=\s*"([^"]+)"[^}]*sku\s*=\s*"([^"]+)"',
-             "azurerm_windows_virtual_machine"),
-            (r'resource\s+"azurerm_virtual_machine"\s+"([^"]+)"',
-             "azurerm_virtual_machine"),
-        ],
-        "aws": [
-            (r'resource\s+"aws_instance"\s+"([^"]+)"', "aws_instance"),
-        ],
-        "gcp": [
-            (r'resource\s+"google_compute_instance"\s+"([^"]+)"', "google_compute_instance"),
-        ],
-    }
-    
-    if provider not in compute_patterns:
-        return vms
-    
-    for p in files:
-        if p.suffix.lower() not in {".tf"}:
-            continue
-        try:
-            text = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        
-        for pattern_str, resource_type in compute_patterns[provider]:
-            pattern = re.compile(pattern_str, re.DOTALL | re.IGNORECASE)
+    if provider == "azure":
+        # Parse each Linux VM to get detailed OS info
+        for p in files:
+            if not p.suffix.lower() in {".tf"}:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
             
-            for match in pattern.finditer(text):
+            # Find Linux VMs with their image details
+            linux_vm_pattern = re.compile(
+                r'resource\s+"azurerm_linux_virtual_machine"\s+"([^"]+)".*?source_image_reference\s*\{[^}]*offer\s*=\s*"([^"]+)"[^}]*sku\s*=\s*"([^"]+)"',
+                re.DOTALL | re.IGNORECASE
+            )
+            for match in linux_vm_pattern.finditer(text):
                 vm_name = match.group(1)
+                offer = match.group(2)
+                sku = match.group(3)
                 
                 # Detect role (bastion/jumpbox)
                 role = ''
                 vm_name_lower = vm_name.lower()
                 if any(keyword in vm_name_lower for keyword in bastion_keywords):
-                    role = 'Bastion' if 'bastion' in vm_name_lower else 'Jumpbox'
+                    if 'bastion' in vm_name_lower:
+                        role = 'Bastion'
+                    else:
+                        role = 'Jumpbox'
                 
-                # Extract image reference if available
-                if len(match.groups()) >= 3:
-                    offer = match.group(2)
-                    sku = match.group(3)
-                    image_reference = f"{offer}:{sku}"
+                # Parse common offers to friendly OS names
+                if "ubuntu" in offer.lower():
+                    if "20_04" in sku or "20.04" in sku:
+                        os_name = "OS: Ubuntu 20.04"
+                    elif "22_04" in sku or "22.04" in sku:
+                        os_name = "OS: Ubuntu 22.04"
+                    elif "18_04" in sku or "18.04" in sku:
+                        os_name = "OS: Ubuntu 18.04"
+                    else:
+                        os_name = "OS: Ubuntu"
+                elif "centos" in offer.lower():
+                    if "7" in sku:
+                        os_name = "OS: CentOS 7"
+                    elif "8" in sku:
+                        os_name = "OS: CentOS 8"
+                    else:
+                        os_name = "OS: CentOS"
+                elif "rhel" in offer.lower() or "red-hat" in offer.lower():
+                    os_name = f"OS: RHEL {sku.split('_')[0] if '_' in sku else ''}"
                 else:
-                    # Try to extract from surrounding text
-                    context = text[max(0, match.start()-200):match.end()+200]
-                    image_match = re.search(r'(?:ami|image|offer|publisher)\s*=\s*"([^"]+)"', context)
-                    image_reference = image_match.group(1) if image_match else ""
-                
-                # Use LLM to interpret OS if available
-                if interpret_compute_os and image_reference:
-                    os_name = interpret_compute_os(resource_type, image_reference, provider)
-                else:
-                    # Simple fallback detection
-                    os_name = _simple_os_detection(resource_type, image_reference)
+                    os_name = "OS: Linux"
                 
                 vms.append((vm_name, os_name, role))
+            
+            # Find Windows VMs
+            windows_vm_pattern = re.compile(
+                r'resource\s+"azurerm_windows_virtual_machine"\s+"([^"]+)".*?source_image_reference\s*\{[^}]*offer\s*=\s*"([^"]+)"[^}]*sku\s*=\s*"([^"]+)"',
+                re.DOTALL | re.IGNORECASE
+            )
+            for match in windows_vm_pattern.finditer(text):
+                vm_name = match.group(1)
+                offer = match.group(2)
+                sku = match.group(3)
+                
+                # Detect role (bastion/jumpbox)
+                role = ''
+                vm_name_lower = vm_name.lower()
+                if any(keyword in vm_name_lower for keyword in bastion_keywords):
+                    if 'bastion' in vm_name_lower:
+                        role = 'Bastion'
+                    else:
+                        role = 'Jumpbox'
+                
+                # Parse Windows SKUs
+                if "2022" in sku:
+                    os_name = "OS: Windows Server 2022"
+                elif "2019" in sku:
+                    os_name = "OS: Windows Server 2019"
+                elif "2016" in sku:
+                    os_name = "OS: Windows Server 2016"
+                elif "win11" in sku.lower() or "windows-11" in sku.lower():
+                    os_name = "OS: Windows 11"
+                elif "win10" in sku.lower() or "windows-10" in sku.lower():
+                    os_name = "OS: Windows 10"
+                else:
+                    os_name = "OS: Windows"
+                
+                vms.append((vm_name, os_name, role))
+            
+            # Generic VMs without detailed image info
+            generic_pattern = re.compile(r'resource\s+"azurerm_virtual_machine"\s+"([^"]+)"', re.IGNORECASE)
+            for match in generic_pattern.finditer(text):
+                vm_name = match.group(1)
+                if vm_name not in [v[0] for v in vms]:
+                    role = ''
+                    vm_name_lower = vm_name.lower()
+                    if any(keyword in vm_name_lower for keyword in bastion_keywords):
+                        role = 'Bastion' if 'bastion' in vm_name_lower else 'Jumpbox'
+                    vms.append((vm_name, "OS: Unknown", role))
+    
+    elif provider == "aws":
+        # AWS instances - try to detect from AMI
+        for p in files:
+            if not p.suffix.lower() in {".tf"}:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            
+            instance_pattern = re.compile(r'resource\s+"aws_instance"\s+"([^"]+)"', re.IGNORECASE)
+            for match in instance_pattern.finditer(text):
+                name = match.group(1)
+                
+                # Detect role
+                role = ''
+                name_lower = name.lower()
+                if any(keyword in name_lower for keyword in bastion_keywords):
+                    role = 'Bastion' if 'bastion' in name_lower else 'Jumpbox'
+                
+                # Try to infer OS from AMI or tags
+                if "ubuntu" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Ubuntu"
+                elif "amazon-linux" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Amazon Linux"
+                elif "windows" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Windows"
+                else:
+                    os_name = "OS: Linux"
+                vms.append((name, os_name, role))
+    
+    elif provider == "gcp":
+        for p in files:
+            if not p.suffix.lower() in {".tf"}:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            
+            instance_pattern = re.compile(r'resource\s+"google_compute_instance"\s+"([^"]+)"', re.IGNORECASE)
+            for match in instance_pattern.finditer(text):
+                name = match.group(1)
+                
+                # Detect role
+                role = ''
+                name_lower = name.lower()
+                if any(keyword in name_lower for keyword in bastion_keywords):
+                    role = 'Bastion' if 'bastion' in name_lower else 'Jumpbox'
+                
+                # Try to infer from image family
+                if "ubuntu" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Ubuntu"
+                elif "debian" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Debian"
+                elif "windows" in text[match.start():match.end()+500].lower():
+                    os_name = "OS: Windows"
+                else:
+                    os_name = "OS: Linux"
+                vms.append((name, os_name, role))
     
     return vms
-
-
-def _simple_os_detection(resource_type: str, image_reference: str) -> str:
-    """Simple OS detection fallback when LLM not available."""
-    ref_lower = image_reference.lower()
-    
-    # Check resource type hints
-    if "linux" in resource_type:
-        if "ubuntu" in ref_lower:
-            if "22_04" in ref_lower or "22.04" in ref_lower:
-                return "OS: Ubuntu 22.04 LTS"
-            elif "20_04" in ref_lower or "20.04" in ref_lower:
-                return "OS: Ubuntu 20.04 LTS"
-            return "OS: Ubuntu"
-        elif "centos" in ref_lower:
-            return "OS: CentOS"
-        elif "rhel" in ref_lower or "redhat" in ref_lower:
-            return "OS: Red Hat Enterprise Linux"
-        return "OS: Linux"
-    
-    if "windows" in resource_type:
-        if "2022" in ref_lower:
-            return "OS: Windows Server 2022"
-        elif "2019" in ref_lower:
-            return "OS: Windows Server 2019"
-        return "OS: Windows"
-    
-    # Generic detection from image reference
-    if "ubuntu" in ref_lower:
-        return "OS: Ubuntu"
-    elif "windows" in ref_lower:
-        return "OS: Windows"
-    elif "amazon" in ref_lower or "amzn" in ref_lower:
-        return "OS: Amazon Linux"
-    elif "debian" in ref_lower:
-        return "OS: Debian"
-    
-    return "OS: Unknown"
 
 
 def extract_nsg_associations(files: list[Path], repo: Path, provider: str, vm_names: list[tuple[str, str, str]]) -> dict[str, bool]:
@@ -4144,517 +4178,6 @@ def _extract_service_accounts(files: list[Path], repo: Path, provider: str) -> d
     return service_accounts
 
 
-def _build_architecture_mermaid(
-    *,
-    provider_lower: str,
-    provider_title: str,
-    repo_name: str,
-    edge_name: str,
-    edge_confirmed: bool,
-    vnet_name: str | None,
-    has_webapp: bool,
-    has_vm: bool,
-    has_aks: bool,
-    has_nsg: bool,
-    has_sql: bool,
-    has_kv: bool,
-    has_ai: bool,
-    has_state_backend: bool,
-    has_apim: bool,
-    vm_names: list[tuple[str, str, str]],
-    aks_names: list[str],
-    sql_names: list[str],
-    hosting_info: dict,
-    module_derived_aks: bool,
-    backend_uses_storage: bool,
-    nsg_associations: dict,
-    files,
-    repo: Path,
-) -> str:
-    """Build the Mermaid architecture diagram as a string."""
-    lines: list[str] = []
-    lines.append("flowchart TB")
-    lines.append("  internet[Internet]")
-    
-    # Only add edge gateway if detected
-    if edge_confirmed:
-        lines.append(f"  edge[{edge_name}]")
-    
-    # Use VNet/VPC name for subgraph if available
-    if vnet_name:
-        subgraph_label = f"VNet: {vnet_name}" if provider_lower == "azure" else (f"VPC: {vnet_name}" if provider_lower == "aws" else f"Network: {vnet_name}")
-        lines.append(f"  subgraph cloud[{subgraph_label}]")
-    else:
-        lines.append(f"  subgraph cloud[{provider_title}]")
-    
-    # Inside VNet: VMs and AKS only
-    if has_vm and vm_names:
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                os_label = vm_os
-                if vm_role:
-                    vm_line = f"    vm_{vm_name}[{vm_name} {vm_role}, {os_label}]"
-                else:
-                    vm_line = f"    vm_{vm_name}[{vm_name} VM, {os_label}]"
-                lines.append(vm_line)
-        elif len(vm_names) > 3:
-            lines.append(f"    vm[💻 Virtual Machines ({len(vm_names)})]")
-        else:
-            lines.append(f"    vm[💻 Virtual Machines]")
-    
-    # AKS/EKS/GKE
-    if has_aks:
-        aks_label = "AKS" if provider_lower == "azure" else ("EKS" if provider_lower == "aws" else "GKE")
-        if len(aks_names) <= 3 and len(aks_names) > 0:
-            for cluster_name in aks_names:
-                lines.append(f"    aks_{cluster_name}[{cluster_name} {aks_label}]")
-        elif len(aks_names) > 3:
-            lines.append(f"    aks[{aks_label} Cluster, {len(aks_names)} instances]")
-        else:
-            if module_derived_aks:
-                lines.append(f"    aks[{aks_label} Cluster module-defined]")
-            else:
-                lines.append(f"    aks[{aks_label} Cluster]")
-    
-    # NSG inside VNet
-    if has_nsg:
-        nsg_label = "Network Security Group" if provider_lower == "azure" else ("Security Groups" if provider_lower == "aws" else "Firewall Rules")
-        lines.append(f"    nsg[{nsg_label}]")
-    
-    lines.append("  end")
-    
-    # PaaS services subgraph
-    has_paas = has_webapp or has_sql or has_kv or has_ai or has_state_backend
-    sql_node_ids: list[str] = []
-    if has_paas:
-        paas_label = "Azure PaaS" if provider_lower == "azure" else ("AWS Managed Services" if provider_lower == "aws" else "GCP Managed Services")
-        lines.append(f"  subgraph paas[{paas_label}]")
-        
-        if has_webapp:
-            host_label = hosting_info.get("type") or "App Service"
-            lines.append(f"    app[{repo_name} App Service, {host_label}]")
-        
-        if has_sql:
-            sql_label = "Azure SQL" if provider_lower == "azure" else ("RDS" if provider_lower == "aws" else "Cloud SQL")
-            sql_server_count = len(sql_names)
-            vm_node_count = len(vm_names) if has_vm and len(vm_names) <= 3 and len(vm_names) > 0 else (1 if has_vm else 0)
-            aks_node_count = len(aks_names) if has_aks and len(aks_names) <= 3 and len(aks_names) > 0 else (1 if has_aks else 0)
-            base_node_count = (
-                (1 if has_webapp else 0)
-                + vm_node_count
-                + aks_node_count
-                + (1 if has_kv else 0)
-                + (1 if has_ai else 0)
-                + (1 if has_state_backend else 0)
-                + (1 if has_nsg else 0)
-            )
-            show_individual_sql = bool(
-                has_sql
-                and sql_server_count > 0
-                and sql_server_count <= 3
-                and (base_node_count + sql_server_count) <= 11
-            )
-            
-            if show_individual_sql:
-                for i, sql_name in enumerate(sql_names):
-                    sql_node_id = f"sql{i+1}"
-                    sql_node_ids.append(sql_node_id)
-                    lines.append(f"    {sql_node_id}[{sql_label}: {sql_name}]")
-            else:
-                if sql_server_count > 1:
-                    lines.append(f"    sql[{sql_label} ({sql_server_count} servers)]")
-                else:
-                    lines.append(f"    sql[{sql_label}]")
-        
-        if has_kv:
-            kv_label = "Key Vault" if provider_lower == "azure" else ("KMS/Secrets Manager" if provider_lower == "aws" else "KMS")
-            lines.append(f"    kv[{kv_label}]")
-        
-        if has_ai:
-            ai_label = "Application Insights" if provider_lower == "azure" else ("CloudWatch" if provider_lower == "aws" else "Cloud Logging")
-            lines.append(f"    ai[{ai_label}]")
-        
-        if has_state_backend:
-            lines.append(f"    sa[Storage Account]")
-        
-        lines.append("  end")
-    
-    # CI/CD pipeline
-    if backend_uses_storage and has_state_backend:
-        lines.append(f"  pipeline[⚙️ CI/CD]")
-    
-    lines.append("")
-    
-    # Connections
-    if edge_confirmed:
-        lines.append("  internet -->|HTTPS| edge")
-        if has_webapp:
-            lines.append("  edge --> app")
-        if has_aks and len(aks_names) > 0:
-            if len(aks_names) <= 3:
-                for cluster_name in aks_names:
-                    lines.append(f"  edge --> aks_{cluster_name}")
-            else:
-                lines.append("  edge --> aks")
-    else:
-        # Direct internet exposure
-        if has_webapp:
-            lines.append("  internet -->|HTTPS| app")
-        if has_aks and len(aks_names) > 0:
-            if len(aks_names) <= 3:
-                for cluster_name in aks_names:
-                    lines.append(f"  internet --> aks_{cluster_name}")
-            else:
-                lines.append("  internet --> aks")
-        if has_sql:
-            if sql_node_ids:
-                for sql_node_id in sql_node_ids:
-                    lines.append(f"  internet --> {sql_node_id}")
-            else:
-                lines.append("  internet --> sql")
-        if has_kv:
-            lines.append("  internet --> kv")
-        if has_state_backend:
-            lines.append("  internet --> sa")
-    
-    # Internal connections - SQL
-    if has_webapp and has_sql:
-        if sql_node_ids:
-            for sql_node_id in sql_node_ids:
-                lines.append(f"  app --> {sql_node_id}")
-        else:
-            lines.append("  app --> sql")
-    
-    if has_vm and has_sql:
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                if sql_node_ids:
-                    for sql_node_id in sql_node_ids:
-                        lines.append(f"  vm_{vm_name} --> {sql_node_id}")
-                else:
-                    lines.append(f"  vm_{vm_name} --> sql")
-        else:
-            if sql_node_ids:
-                for sql_node_id in sql_node_ids:
-                    lines.append(f"  vm --> {sql_node_id}")
-            else:
-                lines.append("  vm --> sql")
-    
-    if has_aks and has_sql:
-        if len(aks_names) <= 3 and len(aks_names) > 0:
-            for cluster_name in aks_names:
-                if sql_node_ids:
-                    for sql_node_id in sql_node_ids:
-                        lines.append(f"  aks_{cluster_name} --> {sql_node_id}")
-                else:
-                    lines.append(f"  aks_{cluster_name} --> sql")
-        else:
-            if sql_node_ids:
-                for sql_node_id in sql_node_ids:
-                    lines.append(f"  aks --> {sql_node_id}")
-            else:
-                lines.append("  aks --> sql")
-    
-    # Key Vault connections
-    if has_webapp and has_kv:
-        lines.append("  app --> kv")
-    if has_vm and has_kv:
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                lines.append(f"  vm_{vm_name} --> kv")
-        else:
-            lines.append("  vm --> kv")
-    if has_aks and has_kv:
-        if len(aks_names) <= 3 and len(aks_names) > 0:
-            for cluster_name in aks_names:
-                lines.append(f"  aks_{cluster_name} --> kv")
-        else:
-            lines.append("  aks --> kv")
-    
-    # Storage Account connections
-    if has_webapp and has_state_backend:
-        lines.append("  app --> sa")
-    if has_vm and has_state_backend:
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                lines.append(f"  vm_{vm_name} --> sa")
-        else:
-            lines.append("  vm --> sa")
-    
-    # NSG routing
-    if has_nsg and has_vm and any(nsg_associations.values()):
-        nsg_protocols = _extract_nsg_allowed_protocols(files, repo)
-        if edge_confirmed:
-            if nsg_protocols:
-                lines.append(f"  edge -->|{nsg_protocols}| nsg")
-            else:
-                lines.append("  edge --> nsg")
-        else:
-            if nsg_protocols:
-                lines.append(f"  internet -->|{nsg_protocols}| nsg")
-            else:
-                lines.append("  internet --> nsg")
-        
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                if nsg_associations.get(vm_name, False):
-                    lines.append(f"  nsg --> vm_{vm_name}")
-        else:
-            lines.append("  nsg --> vm")
-    
-    # CI/CD pipeline connection
-    if backend_uses_storage and has_state_backend:
-        lines.append("  pipeline -.->|State| sa")
-    
-    # Application Insights connections
-    if has_ai:
-        if has_webapp:
-            lines.append("  app -.->|Telemetry| ai")
-        if has_vm:
-            if len(vm_names) <= 3 and len(vm_names) > 0:
-                for vm_name, vm_os, vm_role in vm_names:
-                    lines.append(f"  vm_{vm_name} -.->|Telemetry| ai")
-            else:
-                lines.append("  vm -.->|Telemetry| ai")
-        if has_aks:
-            if len(aks_names) <= 3 and len(aks_names) > 0:
-                for cluster_name in aks_names:
-                    lines.append(f"  aks_{cluster_name} -.->|Telemetry| ai")
-            else:
-                lines.append("  aks -.->|Telemetry| ai")
-    
-    lines.append("")
-    
-    # Styling - Blue for apps
-    if has_webapp:
-        lines.append("  style app stroke:#0066cc,stroke-width:2px")
-    if has_vm:
-        if len(vm_names) <= 3 and len(vm_names) > 0:
-            for vm_name, vm_os, vm_role in vm_names:
-                lines.append(f"  style vm_{vm_name} stroke:#0066cc,stroke-width:2px")
-        else:
-            lines.append("  style vm stroke:#0066cc,stroke-width:2px")
-    if has_aks:
-        if len(aks_names) <= 3 and len(aks_names) > 0:
-            for cluster_name in aks_names:
-                lines.append(f"  style aks_{cluster_name} stroke:#0066cc,stroke-width:2px")
-        else:
-            lines.append("  style aks stroke:#0066cc,stroke-width:2px")
-    
-    # Green for data stores
-    if has_sql:
-        if sql_node_ids:
-            for sql_node_id in sql_node_ids:
-                lines.append(f"  style {sql_node_id} stroke:#00aa00,stroke-width:3px")
-        else:
-            lines.append("  style sql stroke:#00aa00,stroke-width:3px")
-    if has_state_backend:
-        lines.append("  style sa stroke:#00aa00,stroke-width:3px")
-    
-    # Orange for identity/secrets/pipeline
-    if has_kv:
-        lines.append("  style kv stroke:#f59f00,stroke-width:2px")
-    if backend_uses_storage and has_state_backend:
-        lines.append("  style pipeline stroke:#f59f00,stroke-width:2px")
-    
-    # Red for security controls
-    if has_nsg:
-        lines.append("  style nsg stroke:#ff6b6b,stroke-width:2px")
-    lines.append("  style internet stroke:#ff0000,stroke-width:3px")
-    if edge_confirmed:
-        lines.append("  style edge stroke:#ff6b6b,stroke-width:3px")
-    
-    # Style internet-facing connections as red
-    if not edge_confirmed:
-        link_idx = 0
-        if has_webapp:
-            lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-            link_idx += 1
-        if has_aks and len(aks_names) > 0:
-            conn_count = len(aks_names) if len(aks_names) <= 3 else 1
-            for _ in range(conn_count):
-                lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-                link_idx += 1
-        if has_sql:
-            sql_node_count = len(sql_node_ids) if sql_node_ids else 1
-            for _ in range(sql_node_count):
-                lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-                link_idx += 1
-            # Skip internal SQL connections
-            if has_webapp:
-                link_idx += sql_node_count
-            if has_vm:
-                vm_source_count = len(vm_names) if len(vm_names) <= 3 and len(vm_names) > 0 else 1
-                link_idx += vm_source_count * sql_node_count
-            if has_aks:
-                aks_source_count = len(aks_names) if len(aks_names) <= 3 and len(aks_names) > 0 else 1
-                link_idx += aks_source_count * sql_node_count
-        if has_kv:
-            lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-            link_idx += 1
-            link_idx += 1  # app → kv
-            if has_vm:
-                link_idx += len(vm_names) if len(vm_names) <= 3 and len(vm_names) > 0 else 1
-            if has_aks:
-                link_idx += len(aks_names) if len(aks_names) <= 3 and len(aks_names) > 0 else 1
-        if has_state_backend:
-            lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-            link_idx += 1
-            link_idx += 1  # app → sa
-            if has_vm:
-                link_idx += len(vm_names) if len(vm_names) <= 3 and len(vm_names) > 0 else 1
-        if has_nsg and any(nsg_associations.values()):
-            lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
-    
-    return "\n".join(lines)
-
-
-def _build_resource_inventory_section(
-    *,
-    provider_lower: str,
-    classified: dict,
-) -> str:
-    """Build the Resource Inventory section."""
-    lines: list[str] = []
-    
-    for category, resources in classified.items():
-        if resources:
-            lines.append(f"### {category}")
-            lines.append("")
-            for resource_type in sorted(resources):
-                lines.append(f"- `{resource_type}`")
-            lines.append("")
-    
-    if not lines:
-        lines.append("No resources detected in quick scan.")
-        lines.append("")
-    
-    return "\n".join(lines)
-
-
-def _build_security_controls_section(
-    *,
-    has_nsg: bool,
-    has_kv: bool,
-    has_ai: bool,
-    edge_name: str,
-    edge_confirmed: bool,
-    provider_lower: str,
-) -> str:
-    """Build the Security Controls section."""
-    lines: list[str] = []
-    
-    if edge_confirmed:
-        lines.append(f"### ✅ Edge Gateway: {edge_name}")
-        lines.append("")
-        lines.append(f"- **Purpose:** Ingress protection and routing")
-        lines.append(f"- **Risk:** Validate WAF rules and authentication enforcement")
-        lines.append("")
-    
-    if has_nsg:
-        nsg_label = "Network Security Group" if provider_lower == "azure" else ("Security Groups" if provider_lower == "aws" else "Firewall Rules")
-        lines.append(f"### ✅ Network Controls: {nsg_label}")
-        lines.append("")
-        lines.append(f"- **Purpose:** Network-level firewall rules")
-        lines.append(f"- **Risk:** Validate port restrictions and source IP filtering")
-        lines.append("")
-    
-    if has_kv:
-        kv_label = "Key Vault" if provider_lower == "azure" else ("KMS/Secrets Manager" if provider_lower == "aws" else "KMS")
-        lines.append(f"### ✅ Secrets Management: {kv_label}")
-        lines.append("")
-        lines.append(f"- **Purpose:** Centralized secrets storage")
-        lines.append(f"- **Risk:** Validate access policies and network restrictions")
-        lines.append("")
-    
-    if has_ai:
-        ai_label = "Application Insights" if provider_lower == "azure" else ("CloudWatch" if provider_lower == "aws" else "Cloud Logging")
-        lines.append(f"### ✅ Monitoring: {ai_label}")
-        lines.append("")
-        lines.append(f"- **Purpose:** Telemetry and logging")
-        lines.append(f"- **Risk:** Validate sensitive data is not logged")
-        lines.append("")
-    
-    if not lines:
-        lines.append("⚠️ No security controls detected in quick scan - recommend adding WAF, network security groups, and secrets management.")
-        lines.append("")
-    
-    return "\n".join(lines)
-
-
-def _build_recommendations_section(
-    *,
-    edge_confirmed: bool,
-    edge_name: str,
-    has_nsg: bool,
-    has_kv: bool,
-    has_sql: bool,
-    has_aks: bool,
-    has_vm: bool,
-    provider_lower: str,
-) -> str:
-    """Build the Recommendations section."""
-    lines: list[str] = []
-    
-    if not edge_confirmed:
-        lines.append("### 🔴 CRITICAL: Add Edge Gateway")
-        lines.append("")
-        lines.append("No edge gateway detected. Direct internet exposure to applications/VMs/databases creates significant risk.")
-        lines.append("")
-        lines.append("**Recommendation:** Add Application Gateway (Azure), ALB (AWS), or Cloud Load Balancing (GCP) with WAF enabled.")
-        lines.append("")
-    else:
-        lines.append(f"### 🟠 Validate {edge_name} Configuration")
-        lines.append("")
-        lines.append(f"- Enable WAF rules (OWASP Top 10)")
-        lines.append(f"- Enforce HTTPS only")
-        lines.append(f"- Configure rate limiting and IP filtering")
-        lines.append("")
-    
-    if has_sql:
-        lines.append("### 🟠 Database Security")
-        lines.append("")
-        lines.append("- Validate authentication is enforced (no anonymous access)")
-        lines.append("- Enable encryption at rest and in transit")
-        lines.append("- Restrict network access to private endpoints only")
-        lines.append("- Enable auditing and threat detection")
-        lines.append("")
-    
-    if has_aks:
-        lines.append("### 🟠 Kubernetes Security")
-        lines.append("")
-        lines.append("- Enable RBAC and pod security policies")
-        lines.append("- Configure network policies to restrict pod-to-pod traffic")
-        lines.append("- Use managed identities for pod authentication")
-        lines.append("- Enable container image scanning")
-        lines.append("")
-    
-    if has_vm:
-        lines.append("### 🟠 Virtual Machine Security")
-        lines.append("")
-        lines.append("- Disable public IP addresses where possible")
-        lines.append("- Enable disk encryption")
-        lines.append("- Configure OS patching automation")
-        lines.append("- Use bastion hosts for admin access")
-        lines.append("")
-    
-    if not has_nsg:
-        lines.append("### 🟡 Add Network Security Groups")
-        lines.append("")
-        nsg_label = "Network Security Groups" if provider_lower == "azure" else ("Security Groups" if provider_lower == "aws" else "Firewall Rules")
-        lines.append(f"No {nsg_label} detected. Add network-level firewall rules to restrict traffic.")
-        lines.append("")
-    
-    if not has_kv:
-        lines.append("### 🟡 Add Secrets Management")
-        lines.append("")
-        kv_label = "Key Vault" if provider_lower == "azure" else ("KMS/Secrets Manager" if provider_lower == "aws" else "Secret Manager")
-        lines.append(f"No {kv_label} detected. Store secrets centrally instead of in code/config files.")
-        lines.append("")
-    
-    return "\n".join(lines)
-
-
 def write_experiment_cloud_architecture_summary(
     *,
     repo: Path,
@@ -5039,113 +4562,508 @@ def write_experiment_cloud_architecture_summary(
 
         out_path = cloud_dir / f"Architecture_{provider_title}.md"
 
-        # Extract VM names with OS
+        content_lines: list[str] = []
+        content_lines.append(f"# 🗺️ Architecture {provider_title} (Experiment scoped - {repo_name})")
+        content_lines.append("")
+        content_lines.append("```mermaid")
+        content_lines.append("flowchart TB")
+        content_lines.append("  internet[Internet]")
+        
+        # Only add edge gateway if detected
+        if edge_confirmed:
+            content_lines.append(f"  edge[{edge_name}]")
+        
+        # Use VNet/VPC name for subgraph if available - only include compute resources
+        if vnet_name:
+            subgraph_label = f"VNet: {vnet_name}" if provider_lower == "azure" else (f"VPC: {vnet_name}" if provider_lower == "aws" else f"Network: {vnet_name}")
+            content_lines.append(f"  subgraph cloud[{subgraph_label}]")
+        else:
+            content_lines.append(f"  subgraph cloud[{provider_title}]")
+        
+        # Inside VNet: VMs and AKS only (compute resources with NICs in subnets)
+        
+        # Extract individual VM names with OS
         vm_names = []
         if has_vm:
             vm_names = extract_vm_names_with_os(files, repo, provider_lower)
+            
+            # Show individual VMs if 3 or fewer, otherwise show count
+            if len(vm_names) <= 3 and len(vm_names) > 0:
+                for vm_name, vm_os, vm_role in vm_names:
+                    # Just show OS without EOL info (details in per-resource summary)
+                    os_label = vm_os
+                    
+                    if vm_role:
+                        vm_line = f"    vm_{vm_name}[{vm_name} {vm_role}, {os_label}]"
+                    else:
+                        vm_line = f"    vm_{vm_name}[{vm_name} VM, {os_label}]"
+                    print(f"DEBUG: Adding VM line: {repr(vm_line)}")
+                    content_lines.append(vm_line)
+            elif len(vm_names) > 3:
+                content_lines.append(f"    vm[💻 Virtual Machines ({len(vm_names)})]")
+            else:
+                content_lines.append(f"    vm[💻 Virtual Machines]")
         
         # Extract AKS/EKS/GKE cluster names
         aks_names = []
         if has_aks:
             if provider_lower == "azure":
                 aks_names = extract_resource_names(files, repo, "azurerm_kubernetes_cluster")
+                aks_label = "AKS"
             elif provider_lower == "aws":
                 aks_names = extract_resource_names(files, repo, "aws_eks_cluster")
+                aks_label = "EKS"
             elif provider_lower == "gcp":
                 aks_names = extract_resource_names(files, repo, "google_container_cluster")
+                aks_label = "GKE"
+            
+            if len(aks_names) <= 3 and len(aks_names) > 0:
+                for cluster_name in aks_names:
+                    content_lines.append(f"    aks_{cluster_name}[{cluster_name} AKS, Kubernetes {aks_label}]")
+            elif len(aks_names) > 3:
+                content_lines.append(f"    aks[{aks_label} Cluster, {len(aks_names)} instances]")
+            else:
+                if module_derived_aks:
+                    content_lines.append(f"    aks[{aks_label} Cluster module-defined]")
+                else:
+                    content_lines.append(f"    aks[{aks_label} Cluster]")
         
-        # Extract NSG associations for VMs
+        # NSG inside VNet (network-level control)
+        if has_nsg:
+            nsg_label = "Network Security Group" if provider_lower == "azure" else ("Security Groups" if provider_lower == "aws" else "Firewall Rules")
+            content_lines.append(f"    nsg[{nsg_label}]")
+        
+        # Close VNet subgraph
+        content_lines.append("  end")
+        
+        # PaaS services subgraph (only if we have PaaS services)
+        has_paas = has_webapp or has_sql or has_kv or has_ai or has_state_backend
+        sql_node_ids: list[str] = []
+        sql_server_count = len(sql_names)
+        vm_node_count = len(vm_names) if has_vm and len(vm_names) <= 3 and len(vm_names) > 0 else (1 if has_vm else 0)
+        aks_node_count = len(aks_names) if has_aks and len(aks_names) <= 3 and len(aks_names) > 0 else (1 if has_aks else 0)
+        base_node_count = (
+            (1 if has_webapp else 0)
+            + vm_node_count
+            + aks_node_count
+            + (1 if has_kv else 0)
+            + (1 if has_ai else 0)
+            + (1 if has_state_backend else 0)
+            + (1 if has_nsg else 0)
+        )
+        show_individual_sql = bool(
+            has_sql
+            and sql_server_count > 0
+            and sql_server_count <= 3
+            and (base_node_count + sql_server_count) <= 11
+        )
+
+        if has_paas:
+            paas_label = "Azure PaaS" if provider_lower == "azure" else ("AWS Managed Services" if provider_lower == "aws" else "GCP Managed Services")
+            content_lines.append(f"  subgraph paas[{paas_label}]")
+            
+            if has_webapp:
+                host_label = hosting_info["type"] or "App Service"
+                content_lines.append(f"    app[{repo_name} App Service, {host_label}]")
+            
+            if has_sql:
+                sql_label = "Azure SQL" if provider_lower == "azure" else ("RDS" if provider_lower == "aws" else "Cloud SQL")
+                if show_individual_sql:
+                    for idx, sql_name in enumerate(sql_names, start=1):
+                        sql_node_id = f"sql{idx}"
+                        content_lines.append(f"    {sql_node_id}[{sql_label}: {sql_name}]")
+                        sql_node_ids.append(sql_node_id)
+                else:
+                    if sql_server_count > 1:
+                        if provider_lower == "azure":
+                            sql_label = f"{sql_label} Servers ({sql_server_count})"
+                        elif provider_lower == "aws":
+                            sql_label = f"{sql_label} Clusters/Instances ({sql_server_count})"
+                        else:
+                            sql_label = f"{sql_label} Instances ({sql_server_count})"
+                    content_lines.append(f"    sql[{sql_label}]")
+                    sql_node_ids.append("sql")
+            if has_kv:
+                kv_label = "Key Vault" if provider_lower == "azure" else ("Secrets Manager" if provider_lower == "aws" else "Secret Manager")
+                content_lines.append(f"    kv[{kv_label}]")
+            if has_ai:
+                ai_label = "Application Insights" if provider_lower == "azure" else ("CloudWatch" if provider_lower == "aws" else "Cloud Logging")
+                content_lines.append(f"    ai[{ai_label}]")
+            if has_state_backend:
+                content_lines.append(f"    sa[Storage Account]")
+            
+            content_lines.append("  end")
+        
+        # Only show CI/CD pipeline if it has connections (i.e., remote backend)
+        if backend_uses_storage and has_state_backend:
+            if ci_cd_info["platform"] != "Unknown":
+                content_lines.append(f"  pipeline[⚙️ {ci_cd_info['platform']}]")
+            else:
+                content_lines.append(f"  pipeline[⚙️ CI/CD]")
+        
+        content_lines.append("")
+        
+        # Connection logic - depends on if edge exists
+        if edge_confirmed:
+            content_lines.append("  internet -->|HTTPS| edge")
+            if has_webapp:
+                content_lines.append("  edge --> app")
+        else:
+            # Direct internet to app (no edge gateway detected)
+            if has_webapp:
+                content_lines.append("  internet -->|HTTPS| app")
+        
+        # Extract NSG associations for VMs first (need this for routing logic)
         nsg_associations = {}
         if has_nsg and has_vm:
             nsg_associations = extract_nsg_associations(files, repo, provider_lower, vm_names)
+            print(f"DEBUG: NSG associations detected: {nsg_associations}")
         
-        # Build Mermaid diagram
-        architecture_diagram = _build_architecture_mermaid(
-            provider_lower=provider_lower,
-            provider_title=provider_title,
-            repo_name=repo_name,
-            edge_name=edge_name,
-            edge_confirmed=edge_confirmed,
-            vnet_name=vnet_name,
-            has_webapp=has_webapp,
-            has_vm=has_vm,
-            has_aks=has_aks,
-            has_nsg=has_nsg,
-            has_sql=has_sql,
-            has_kv=has_kv,
-            has_ai=has_ai,
-            has_state_backend=has_state_backend,
-            has_apim=has_apim,
-            vm_names=vm_names,
-            aks_names=aks_names,
-            sql_names=sql_names,
-            hosting_info=hosting_info,
-            module_derived_aks=module_derived_aks,
-            backend_uses_storage=backend_uses_storage,
-            nsg_associations=nsg_associations,
-            files=files,
-            repo=repo,
-        )
+        # Connect to individual VMs or generic VM node
+        # If NSG protects VM, route through NSG; otherwise direct connection
+        if has_vm:
+            if len(vm_names) <= 3 and len(vm_names) > 0:
+                for vm_name, vm_os, vm_role in vm_names:
+                    has_nsg_protection = nsg_associations.get(vm_name, False)
+                    
+                    if edge_confirmed:
+                        if has_nsg_protection:
+                            # Edge → NSG handled separately, NSG → VM below
+                            pass
+                        else:
+                            content_lines.append(f"  edge --> vm_{vm_name}")
+                    else:
+                        # No edge gateway
+                        if has_nsg_protection:
+                            # Internet → NSG → VM (NSG acts as entry point)
+                            # Internet → NSG connection added below
+                            pass
+                        else:
+                            # Direct internet exposure (no NSG protection)
+                            content_lines.append(f"  internet --> vm_{vm_name}")
+            else:
+                if edge_confirmed:
+                    content_lines.append("  edge --> vm")
+                else:
+                    content_lines.append("  internet --> vm")
         
-        # Build sections
-        resource_inventory = _build_resource_inventory_section(
-            provider_lower=provider_lower,
-            classified=classified,
-        )
+        # Connect to individual AKS clusters or generic AKS node
+        if has_aks:
+            if len(aks_names) <= 3 and len(aks_names) > 0:
+                for cluster_name in aks_names:
+                    if edge_confirmed:
+                        content_lines.append(f"  edge --> aks_{cluster_name}")
+                    else:
+                        content_lines.append(f"  internet --> aks_{cluster_name}")
+            else:
+                if edge_confirmed:
+                    content_lines.append("  edge --> aks")
+                else:
+                    content_lines.append("  internet --> aks")
         
-        security_controls = _build_security_controls_section(
-            has_nsg=has_nsg,
-            has_kv=has_kv,
-            has_ai=has_ai,
-            edge_name=edge_name,
-            edge_confirmed=edge_confirmed,
-            provider_lower=provider_lower,
-        )
+        # PaaS services are publicly accessible by default (unless private endpoints configured)
+        # Show internet connections to PaaS services to highlight attack surface
+        # TODO: Detect private endpoints and skip these connections if configured
         
-        recommendations = _build_recommendations_section(
-            edge_confirmed=edge_confirmed,
-            edge_name=edge_name,
-            has_nsg=has_nsg,
-            has_kv=has_kv,
-            has_sql=has_sql,
-            has_aks=has_aks,
-            has_vm=has_vm,
-            provider_lower=provider_lower,
-        )
+        if has_sql:
+            # Internet can access SQL (public endpoint unless private endpoint configured)
+            if not sql_node_ids:
+                sql_node_ids = ["sql"]
+            for sql_node_id in sql_node_ids:
+                content_lines.append(f"  internet --> {sql_node_id}")
+            if has_webapp:
+                for sql_node_id in sql_node_ids:
+                    content_lines.append(f"  app --> {sql_node_id}")
+            if has_vm:
+                if len(vm_names) <= 3 and len(vm_names) > 0:
+                    for vm_name, vm_os, vm_role in vm_names:
+                        for sql_node_id in sql_node_ids:
+                            content_lines.append(f"  vm_{vm_name} --> {sql_node_id}")
+                else:
+                    for sql_node_id in sql_node_ids:
+                        content_lines.append(f"  vm --> {sql_node_id}")
+            if has_aks:
+                if len(aks_names) <= 3 and len(aks_names) > 0:
+                    for cluster_name in aks_names:
+                        for sql_node_id in sql_node_ids:
+                            content_lines.append(f"  aks_{cluster_name} --> {sql_node_id}")
+                else:
+                    for sql_node_id in sql_node_ids:
+                        content_lines.append(f"  aks --> {sql_node_id}")
         
-        # Determine values for template
+        if has_kv:
+            # Internet can access Key Vault (public endpoint unless private endpoint configured)
+            content_lines.append("  internet --> kv")
+            if has_webapp:
+                content_lines.append("  app --> kv")
+            if has_vm:
+                if len(vm_names) <= 3 and len(vm_names) > 0:
+                    for vm_name, vm_os, vm_role in vm_names:
+                        content_lines.append(f"  vm_{vm_name} --> kv")
+                else:
+                    content_lines.append("  vm --> kv")
+            if has_aks:
+                if len(aks_names) <= 3 and len(aks_names) > 0:
+                    for cluster_name in aks_names:
+                        content_lines.append(f"  aks_{cluster_name} --> kv")
+                else:
+                    content_lines.append("  aks --> kv")
+        
+        # Storage Account connections (for deployment packages, scripts, etc.)
+        if has_state_backend:
+            # Internet can access Storage Account (public endpoint)
+            content_lines.append("  internet --> sa")
+            # App Service may use storage for deployment packages
+            if has_webapp:
+                content_lines.append("  app --> sa")
+            # VMs may download scripts/packages from storage
+            if has_vm:
+                if len(vm_names) <= 3 and len(vm_names) > 0:
+                    for vm_name, vm_os, vm_role in vm_names:
+                        content_lines.append(f"  vm_{vm_name} --> sa")
+                else:
+                    content_lines.append("  vm --> sa")
+        
+        
+        # Remove duplicate NSG extraction (already done above for routing)
+        # nsg_associations already populated
+        
+        if has_ai:
+            content_lines.append("  app -.->|Telemetry| ai")
+            if has_vm:
+                if len(vm_names) <= 3 and len(vm_names) > 0:
+                    for vm_name, vm_os, vm_role in vm_names:
+                        content_lines.append(f"  vm_{vm_name} -.->|Telemetry| ai")
+                else:
+                    content_lines.append("  vm -.->|Telemetry| ai")
+            if has_aks:
+                if len(aks_names) <= 3 and len(aks_names) > 0:
+                    for cluster_name in aks_names:
+                        content_lines.append(f"  aks_{cluster_name} -.->|Telemetry| ai")
+                else:
+                    content_lines.append("  aks -.->|Telemetry| ai")
+        
+        # Show NSG routing: Internet/Edge → NSG → VMs
+        # NSG acts as the entry point for protected VMs
+        if has_nsg and has_vm:
+            print(f"DEBUG: Checking NSG arrows - has_nsg={has_nsg}, has_vm={has_vm}, vm_count={len(vm_names)}")
+            
+            # Check if any VMs have NSG protection
+            any_protected = any(nsg_associations.values())
+            
+            if any_protected:
+                # Extract NSG protocols for the arrow label
+                nsg_protocols = _extract_nsg_allowed_protocols(files, repo)
+                
+                # Add internet/edge → NSG connection with protocol label
+                if edge_confirmed:
+                    if nsg_protocols:
+                        content_lines.append(f"  edge -->|{nsg_protocols}| nsg")
+                    else:
+                        content_lines.append("  edge --> nsg")
+                else:
+                    if nsg_protocols:
+                        content_lines.append(f"  internet -->|{nsg_protocols}| nsg")
+                    else:
+                        content_lines.append("  internet --> nsg")
+            
+            # Add NSG → VM connections for protected VMs
+            if len(vm_names) <= 3 and len(vm_names) > 0:
+                for vm_name, vm_os, vm_role in vm_names:
+                    has_association = nsg_associations.get(vm_name, False)
+                    print(f"DEBUG: VM {vm_name} has NSG association: {has_association}")
+                    if has_association:
+                        arrow_line = f"  nsg --> vm_{vm_name}"
+                        print(f"DEBUG: Adding NSG arrow: {arrow_line}")
+                        content_lines.append(arrow_line)
+            else:
+                # If more than 3 VMs, show generic protection if any have NSG
+                if any(nsg_associations.values()):
+                    content_lines.append("  nsg --> vm")
+        
+        # Only show CI/CD → Storage connection if backend actually uses remote storage
+        if backend_uses_storage and has_state_backend:
+            content_lines.append("  pipeline -.->|State| sa")
+        
+        content_lines.append("")
+        if has_webapp:
+            content_lines.append("  style app stroke:#0066cc,stroke-width:2px")
+        if has_vm:
+            if len(vm_names) <= 3 and len(vm_names) > 0:
+                for vm_name, vm_os, vm_role in vm_names:
+                    content_lines.append(f"  style vm_{vm_name} stroke:#0066cc,stroke-width:2px")
+            else:
+                content_lines.append("  style vm stroke:#0066cc,stroke-width:2px")
+        if has_aks:
+            if len(aks_names) <= 3 and len(aks_names) > 0:
+                for cluster_name in aks_names:
+                    content_lines.append(f"  style aks_{cluster_name} stroke:#0066cc,stroke-width:2px")
+            else:
+                content_lines.append("  style aks stroke:#0066cc,stroke-width:2px")
+        if has_sql:
+            if sql_node_ids:
+                for sql_node_id in sql_node_ids:
+                    content_lines.append(f"  style {sql_node_id} stroke:#00aa00,stroke-width:3px")
+            else:
+                content_lines.append("  style sql stroke:#00aa00,stroke-width:3px")
+        if has_kv:
+            content_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
+        if has_nsg:
+            content_lines.append("  style nsg stroke:#ff6b6b,stroke-width:2px")
+        if has_state_backend:
+            content_lines.append("  style sa stroke:#00aa00,stroke-width:3px")
+        # Module-derived resources are considered confirmed IaC intent and are styled as solid.
+        
+        # Only style pipeline if it exists
+        if backend_uses_storage and has_state_backend:
+            content_lines.append("  style pipeline stroke:#f59f00,stroke-width:2px")
+        
+        # Style Internet node as red (attack surface source)
+        content_lines.append("  style internet stroke:#ff0000,stroke-width:3px")
+        
+        # Only style edge if it exists
+        if edge_confirmed:
+            content_lines.append("  style edge stroke:#ff6b6b,stroke-width:3px")
+        
+        # Style internet-facing connections as red (attack surface)
         if not edge_confirmed:
-            attack_surface = "🔴 HIGH - Direct internet exposure (no edge gateway)"
-            next_step = f"⚠️ Add edge gateway (WAF/Front Door/App Gateway) for ingress protection"
-            top_risk = "🔴 Critical — NO EDGE GATEWAY - direct internet exposure to resources"
-        else:
-            attack_surface = f"🟡 MEDIUM - {edge_name} provides edge protection"
-            next_step = f"Validate {edge_name} configuration and add app-layer authZ"
-            top_risk = "🟠 High — validate ingress + authZ/authN enforcement for user/data endpoints"
-        
-        # Build template context
-        context = {
-            "provider": provider_lower,
-            "provider_title": provider_title,
-            "repo_name": repo_name,
-            "timestamp": now_uk(),
-            "auth_signals": auth_line,
-            "services": ", ".join(services),
-            "top_risk": top_risk,
-            "next_step": next_step,
-            "attack_surface": attack_surface,
-            "edge_gateway": edge_name if edge_confirmed else "(none detected)",
-            "architecture_diagram": architecture_diagram,
-            "resource_inventory": resource_inventory,
-            "security_controls": security_controls,
-            "recommendations": recommendations,
-        }
-        
-        # Render template and write file
-        content = render_template("CloudArchitectureSummary.md", context)
-        out_path.write_text(content, encoding="utf-8")
+            # The connections are added in this exact order:
+            # 1. internet → app (if webapp)
+            # 2. internet → aks (if aks)
+            # 3. internet → sql (if sql) <-- THEN internal sql connections
+            # 4. internet → kv (if kv) <-- THEN internal kv connections  
+            # 5. internet → sa (if storage) <-- THEN internal sa connections
+            # 6. internet → nsg (if nsg protects VMs)
+            
+            link_idx = 0
+            
+            # Internet → App Service
+            if has_webapp:
+                content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                link_idx += 1
+            
+            # Internet → AKS (direct exposure)
+            if has_aks and len(aks_names) > 0:
+                if len(aks_names) <= 3:
+                    for cluster_name in aks_names:
+                        content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                        link_idx += 1
+                else:
+                    content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                    link_idx += 1
+            
+            # Internet → SQL (then skip internal SQL connections)
+            if has_sql:
+                sql_node_count = len(sql_node_ids) if sql_node_ids else 1
+                for _ in range(sql_node_count):
+                    content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                    link_idx += 1
 
-        probs = validate_markdown_file(out_path, fix=True)
+                # Skip internal SQL connections
+                if has_webapp:
+                    link_idx += sql_node_count
+                if has_vm:
+                    vm_source_count = len(vm_names) if len(vm_names) <= 3 and len(vm_names) > 0 else 1
+                    link_idx += vm_source_count * sql_node_count
+                if has_aks:
+                    aks_source_count = len(aks_names) if len(aks_names) <= 3 and len(aks_names) > 0 else 1
+                    link_idx += aks_source_count * sql_node_count
+            
+            # Internet → Key Vault (then skip internal KV connections)
+            if has_kv:
+                content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                link_idx += 1
+                
+                # Skip internal kv connections
+                link_idx += 1  # app → kv
+                if has_vm:
+                    if len(vm_names) <= 3 and len(vm_names) > 0:
+                        link_idx += len(vm_names)
+                    else:
+                        link_idx += 1
+                if has_aks:
+                    if len(aks_names) <= 3 and len(aks_names) > 0:
+                        link_idx += len(aks_names)
+                    else:
+                        link_idx += 1
+            
+            # Internet → Storage Account (then skip internal SA connections)
+            if has_state_backend:
+                content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                link_idx += 1
+                
+                # Skip internal sa connections
+                link_idx += 1  # app → sa
+                if has_vm:
+                    if len(vm_names) <= 3 and len(vm_names) > 0:
+                        link_idx += len(vm_names)
+                    else:
+                        link_idx += 1
+            
+            # Internet → NSG
+            if has_nsg and any(nsg_associations.values()):
+                content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                link_idx += 1
+        
+        content_lines.append("```")
+        content_lines.append("")
+        content_lines.append("**Legend:**")
+        content_lines.append("- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🔴 Red = Security/Network Controls")
+        content_lines.append("- **Line Styles:** Solid = direct dependency | Dashed = protection/monitoring")
+        content_lines.append("- **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)")
+        content_lines.append("- **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)")
+        content_lines.append("")
+        content_lines.append("## 🧭 Overview")
+        content_lines.append(f"- **Provider:** {provider_title}")
+        content_lines.append(f"- **Scope:** Experiment-scoped (inferred from repo `{repo_name}`; not platform-wide)")
+        content_lines.append(f"- **Auth signals (quick):** {auth_line}")
+        content_lines.append("")
+        content_lines.append("## 📊 TL;DR - Executive Summary")
+        content_lines.append("")
+        content_lines.append("| Aspect | Value |")
+        content_lines.append("|--------|-------|")
+        content_lines.append(f"| **Key services** | {', '.join(services)} |")
+        content_lines.append("| **Top risk** | 🟠 High — validate ingress + authZ/authN enforcement for user/data endpoints |")
+        
+        # Update next step based on whether edge exists
+        if edge_confirmed:
+            content_lines.append(f"| **Primary next step** | Validate {edge_name} configuration and add app-layer authZ |")
+        else:
+            content_lines.append("| **Primary next step** | ⚠️ No edge gateway detected - consider adding WAF/Front Door/App Gateway for ingress protection |")
+        
+        content_lines.append(f"| **Repo context** | {repo_summary_link} |")
+        content_lines.append(f"| **Related finding** | {finding_link} |")
+        content_lines.append("")
+        content_lines.append("## 📊 Service Risk Order")
+        
+        # Update risk order based on edge presence
+        if edge_confirmed:
+            content_lines.append(f"1. 🟠 High — ingress and authentication enforcement ({edge_name} + app)")
+        else:
+            content_lines.append("1. 🔴 Critical — NO EDGE GATEWAY - direct internet exposure to app/VMs/AKS")
+        if has_vm:
+            content_lines.append("2. 🟠 High — VM access controls and network isolation")
+        if has_aks:
+            content_lines.append("3. 🟠 High — Kubernetes RBAC and network policies")
+        if has_sql:
+            content_lines.append("4. 🟠 High — user/data access backed by SQL (PII exposure if unauthenticated)")
+        if has_nsg:
+            content_lines.append("5. 🟡 Medium — network security group rules and port restrictions")
+        if has_kv:
+            content_lines.append("6. 🟡 Medium — secrets access model and network restrictions")
+        if has_state_backend:
+            content_lines.append("7. 🟡 Medium — Terraform state and pipeline credential scope")
+        if has_ai:
+            content_lines.append("8. 🟢 Low — telemetry (validate sensitive data logging)")
+        content_lines.append("")
+        content_lines.append("## 📝 Notes")
+        content_lines.append(f"- 🗓️ **Last updated:** {now_uk()}")
+        content_lines.append("- This file is generated for experiment isolation; confirm assumptions before treating as environment fact.")
+        content_lines.append("- See individual resource summaries (VM_*.md, SQL_*.md, etc.) for detailed security analysis.")
+        if k8s_arch_path is not None and k8s_arch_path.exists():
+            content_lines.append(f"- Kubernetes ingress/services view: [Kubernetes detail]({rel_link(k8s_arch_path)})")
+
+        out_path.write_text("\n".join(content_lines).rstrip() + "\n", encoding="utf-8")
 
         probs = validate_markdown_file(out_path, fix=True)
         errs = [p for p in probs if p.level == "ERROR"]
@@ -5542,19 +5460,15 @@ def write_repo_summary(
     dotnet_info: dict[str, str | None] = None,
     summary_dir: Path | None = None,
 ) -> Path:
+    """Write repository summary using template_renderer."""
     sdir = summary_dir if summary_dir else OUTPUT_SUMMARY_DIR
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "Repos").mkdir(parents=True, exist_ok=True)
     out_path = sdir / "Repos" / f"{repo_name}.md"
 
-    lang_lines = "\n".join([f"- {l} — evidence: `{e}`" for l, e in langs]) if langs else "- (none detected)"
-
+    # Data preparation - keep all detect_* calls
     provider_line = ", ".join(providers) if providers else "Unknown"
-    repo_url = "N/A"
-
     tf_resource_types = detect_terraform_resources(iter_files(repo), repo)
-    tf_module_refs = detect_terraform_module_references(iter_files(repo), repo)
-    endpoints = detect_dotnet_endpoints(iter_files(repo), repo, limit=6)
     hosting_info = detect_hosting_from_terraform(iter_files(repo), repo)
     ingress_info = detect_ingress_from_code(iter_files(repo), repo)
     apim_routing = detect_apim_routing_config(iter_files(repo), repo)
@@ -5563,609 +5477,143 @@ def write_repo_summary(
     backend_services = backend_result["backends"]
     external_deps = detect_external_dependencies(iter_files(repo), repo)
     auth_methods = detect_authentication_methods(iter_files(repo), repo)
-    dockerfile_info = parse_dockerfiles(repo)
     network_info = detect_network_topology(iter_files(repo), repo)
-    k8s_risk_analysis = detect_k8s_vulnerability_signals(iter_files(repo), repo)
-    k8s_risk_signals = k8s_risk_analysis.get("signals", [])
+    ci_cd_info = parse_ci_cd_details(repo)
 
+    # Build architecture diagram (simplified)
     has_kv = "azurerm_key_vault" in tf_resource_types
     has_sql = any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
-    has_ai = "azurerm_application_insights" in tf_resource_types
-    has_apim = any(t.startswith("azurerm_api_management") for t in tf_resource_types)
-    has_appgw = "azurerm_application_gateway" in tf_resource_types or ingress_info["type"] == "Application Gateway"
-    has_frontdoor = "azurerm_frontdoor" in tf_resource_types or ingress_info["type"] == "Azure Front Door"
     has_webapp = hosting_info["type"] in {"Windows App Service", "Linux App Service"} or "azurerm_linux_web_app" in tf_resource_types or "azurerm_windows_web_app" in tf_resource_types
-    has_plan = "azurerm_service_plan" in tf_resource_types or "azurerm_app_service_plan" in tf_resource_types
-    has_state_backend = any(t in tf_resource_types for t in {"azurerm_storage_account", "azurerm_storage_container"})
-    has_vms = any("virtual_machine" in t for t in tf_resource_types)
-    has_aks = "azurerm_kubernetes_cluster" in tf_resource_types
-    has_nsg = "azurerm_network_security_group" in tf_resource_types
-    has_storage = "azurerm_storage_account" in tf_resource_types and not has_state_backend  # General storage, not just terraform state
+    has_appgw = "azurerm_application_gateway" in tf_resource_types or ingress_info["type"] == "Application Gateway"
+    has_apim = any(t.startswith("azurerm_api_management") for t in tf_resource_types)
     
-    # Extract detailed resources for comprehensive diagram
-    vm_list = []
-    aks_list = []
-    nsg_protocol_label = ""
-    if provider_line == "Azure" or "Azure" in providers:
-        if has_vms:
-            vm_list = extract_vm_names_with_os(iter_files(repo), repo, "azure")
-        if has_aks:
-            aks_list = extract_resource_names_with_property(iter_files(repo), repo, "azurerm_kubernetes_cluster", "name")
-        if has_nsg:
-            # Check for permissive NSG rules - just detect "All Ports" pattern
-            try:
-                nsg_protocol_label = _extract_nsg_allowed_protocols(iter_files(repo), repo)
-            except Exception:
-                nsg_protocol_label = ""
-
-    # Diagram building: keep labels ASCII and avoid braces/parentheses for renderer compatibility.
-    diagram_lines: list[str] = ["flowchart TB"]
+    diagram_lines = ["flowchart TB", "  subgraph azure[Azure]"]
+    if has_appgw:
+        diagram_lines.append("    appgw[Application Gateway]")
+    if has_apim:
+        diagram_lines.append("    apim[API Management]")
+    if has_webapp:
+        web_label = repo_name.replace("_", "-")
+        if hosting_info["type"]:
+            web_label = f"{web_label} - {hosting_info['type']}"
+        diagram_lines.append(f"    web[{web_label}]")
+    if has_kv:
+        diagram_lines.append("    kv[Key Vault]")
+    if has_sql:
+        diagram_lines.append("    sql[Azure SQL]")
+    if auth_service:
+        diagram_lines.append(f"    auth[{auth_service}]")
+    if backend_services:
+        diagram_lines.append("    subgraph backends[Backend Services]")
+        for idx, svc in enumerate(backend_services, start=1):
+            diagram_lines.append(f"      backend{idx}[{svc}]")
+        diagram_lines.append("    end")
+    diagram_lines.append("  end")
     
-    # Add internet node for attack surface visualization
-    if provider_line == "Azure" or "Azure" in providers:
-        has_internet_exposure = has_webapp or has_aks or has_vms or has_sql or has_kv or has_storage
-        if has_internet_exposure:
-            diagram_lines.append("  internet[Internet]")
+    # Add connections
+    if has_appgw and has_webapp:
+        diagram_lines.append("  internet[Internet] --> appgw")
+        diagram_lines.append("  appgw --> web")
+    elif has_webapp:
+        diagram_lines.append("  internet[Internet] --> web")
+    if has_webapp and has_sql:
+        diagram_lines.append("  web --> sql")
+    if has_webapp and has_kv:
+        diagram_lines.append("  web --> kv")
+    if has_webapp and has_apim and auth_service:
+        diagram_lines.append("  web --> apim")
+        diagram_lines.append("  apim --> auth")
+    if has_apim and backend_services:
+        for idx in range(1, len(backend_services) + 1):
+            diagram_lines.append(f"  apim --> backend{idx}")
+
+    architecture_diagram = "\n".join(diagram_lines)
+
+    # Build context dict for template
+    lang_list = [f"{l} (evidence: `{e}`)" for l, e in langs] if langs else ["none detected"]
+    languages = ", ".join(lang_list[:3])
     
-    # Track assumptions for dashed borders
-    assumptions: list[str] = []
-
-    if provider_line == "Azure" or "Azure" in providers:
-        # Check if we have VNet topology (VMs/AKS need VNet subgraph)
-        has_vnet_resources = has_vms or has_aks or has_nsg
-        
-        if has_vnet_resources:
-            # VNet subgraph for compute resources
-            vnet_name = "VNet"
-            if network_info and isinstance(network_info, dict) and network_info.get("vnets"):
-                vnet_name = network_info["vnets"][0].get("name", "VNet") if isinstance(network_info["vnets"][0], dict) else "VNet"
-            diagram_lines.append(f"  subgraph vnet[{vnet_name}]")
-            
-            # Add VMs
-            for vm_name, os_info, _ in vm_list:
-                os_short = os_info.replace("OS: ", "")
-                diagram_lines.append(f"    vm_{vm_name}[{vm_name} VM, {os_short}]")
-            
-            # Add AKS
-            for aks_name in aks_list:
-                diagram_lines.append(f"    aks_{aks_name}[{aks_name} AKS]")
-            
-            # Add NSG
-            if has_nsg:
-                diagram_lines.append("    nsg[Network Security Group]")
-            
-            diagram_lines.append("  end")
-            
-            # PaaS subgraph
-            has_paas = has_webapp or has_sql or has_kv or has_storage
-            if has_paas:
-                diagram_lines.append("  subgraph paas[Azure PaaS]")
-        else:
-            # No VNet, just Azure subgraph
-            diagram_lines.append("  subgraph azure[Azure]")
-        
-        # Add ingress layer (App Gateway, Front Door)
-        if has_appgw:
-            diagram_lines.append("    appgw[Application Gateway]")
-            if ingress_info["type"] == "Application Gateway" and "azurerm_application_gateway" not in tf_resource_types:
-                assumptions.append("appgw")
-        elif has_frontdoor:
-            diagram_lines.append("    fd[Front Door]")
-            if ingress_info["type"] == "Azure Front Door" and "azurerm_frontdoor" not in tf_resource_types:
-                assumptions.append("fd")
-        
-        # Add APIM if present and has routing
-        if has_apim and apim_routing["has_routing"]:
-            diagram_lines.append("    apim[API Management]")
-        elif has_apim:
-            # APIM exists but routing config not in this repo
-            # If backend services detected via code, APIM is used for routing (even if Terraform only shows mocks)
-            if backend_services:
-                diagram_lines.append("    apim[API Management]")
-            else:
-                diagram_lines.append("    apim[API Management - Mock Only]")
-                assumptions.append("apim")
-        
-        if has_webapp:
-            # Show service name, not just hosting platform
-            web_label = repo_name.replace("_", "-")
-            if hosting_info["type"]:
-                # Avoid HTML and parentheses inside Mermaid labels for compatibility across renderers.
-                web_label = f"{web_label} - {hosting_info['type']}"
-            diagram_lines.append(f"    web[{web_label}]")
-        if has_kv:
-            diagram_lines.append("    kv[Key Vault]")
-        if has_sql:
-            diagram_lines.append("    sql[Azure SQL]")
-        if has_storage and not has_state_backend:
-            diagram_lines.append("    sa[Storage Account]")
-        if has_ai:
-            diagram_lines.append("    ai[Application Insights]")
-        
-        # Add authentication service if detected (separate from other backends)
-        if auth_service:
-            diagram_lines.append(f"    auth[{auth_service}]")
-        
-        # Add backend services if detected (typically via APIM)
-        if backend_services:
-            diagram_lines.append("    subgraph backends[Backend Services]")
-            for idx, svc in enumerate(backend_services, start=1):
-                diagram_lines.append(f"      backend{idx}[{svc}]")
-            diagram_lines.append("    end")
-        
-        if has_state_backend:
-            diagram_lines.append("    tfstate[Terraform state storage]")
-        
-        # Close PaaS or Azure subgraph
-        diagram_lines.append("  end")
-
-        if detect_ci(repo) == "Azure Pipelines":
-            diagram_lines.append("  pipeline[Azure Pipelines]")
-
-        # Connection flows - start with internet exposure (attack surface)
-        internet_connections = []
-        
-        # Internet to App Service
-        if has_webapp:
-            if has_appgw:
-                diagram_lines.append("  internet --> appgw")
-                diagram_lines.append("  appgw --> web")
-                internet_connections.append(0)  # Track for red styling
-            elif has_frontdoor:
-                diagram_lines.append("  internet --> fd")
-                diagram_lines.append("  fd --> web")
-                internet_connections.append(0)
-            else:
-                diagram_lines.append("  internet -->|HTTPS| web")
-                internet_connections.append(len(diagram_lines) - 5)  # Offset for TB declaration + internet node
-        
-        # Internet to AKS
-        for aks_name in aks_list:
-            diagram_lines.append(f"  internet --> aks_{aks_name}")
-            internet_connections.append(len(diagram_lines) - 5)
-        
-        # Internet to PaaS (public endpoints)
-        if has_sql:
-            diagram_lines.append("  internet --> sql")
-            internet_connections.append(len(diagram_lines) - 5)
-        if has_kv:
-            diagram_lines.append("  internet --> kv")
-            internet_connections.append(len(diagram_lines) - 5)
-        if has_storage and not has_state_backend:
-            diagram_lines.append("  internet --> sa")
-            internet_connections.append(len(diagram_lines) - 5)
-        
-        # Internet to NSG (protects VMs)
-        if has_nsg and vm_list:
-            if nsg_protocol_label:
-                diagram_lines.append(f"  internet -->|{nsg_protocol_label}| nsg")
-            else:
-                diagram_lines.append("  internet --> nsg")
-            internet_connections.append(len(diagram_lines) - 5)
-        
-        # NSG to VMs
-        if has_nsg:
-            for vm_name, _, _ in vm_list:
-                diagram_lines.append(f"  nsg --> vm_{vm_name}")
-        
-        # App Service connections to data stores
-        if has_webapp:
-            if has_sql:
-                diagram_lines.append("  web --> sql")
-            if has_kv:
-                diagram_lines.append("  web --> kv")
-            if has_storage and not has_state_backend:
-                diagram_lines.append("  web --> sa")
-            if has_ai:
-                diagram_lines.append("  web -.-> ai")
-            
-            # Add authentication flow if auth service detected (simple connections, no numbered steps)
-            if auth_service and has_apim:
-                diagram_lines.append("  web --> apim")
-                diagram_lines.append("  apim --> auth")
-            
-            # Add connections to backend services
-            # If app calls APIM which routes to backends (reverse proxy pattern)
-            if backend_services and has_apim:
-                # APIM routes to backends (simple connections)
-                if not auth_service:
-                    diagram_lines.append("  web --> apim")
-                for idx in range(1, len(backend_services) + 1):
-                    diagram_lines.append(f"  apim --> backend{idx}")
-            elif backend_services:
-                # Direct calls to backends (no APIM in middle)
-                for idx in range(1, len(backend_services) + 1):
-                    diagram_lines.append(f"  web -.-> backend{idx}")
-        
-        # VM connections to PaaS
-        for vm_name, _, _ in vm_list:
-            if has_sql:
-                diagram_lines.append(f"  vm_{vm_name} --> sql")
-            if has_kv:
-                diagram_lines.append(f"  vm_{vm_name} --> kv")
-            if has_storage and not has_state_backend:
-                diagram_lines.append(f"  vm_{vm_name} --> sa")
-        
-        # AKS connections to PaaS
-        for aks_name in aks_list:
-            if has_sql:
-                diagram_lines.append(f"  aks_{aks_name} --> sql")
-            if has_kv:
-                diagram_lines.append(f"  aks_{aks_name} --> kv")
-            if has_storage and not has_state_backend:
-                diagram_lines.append(f"  aks_{aks_name} --> sa")
-
-        if has_state_backend:
-            # Use dotted line because this is a provisioning/control-plane linkage.
-            if "pipeline" in "\n".join(diagram_lines):
-                diagram_lines.append("  pipeline -.-> tfstate")
-        if "pipeline" in "\n".join(diagram_lines) and has_webapp:
-            diagram_lines.append("  pipeline -.-> web")
-    else:
-        # Fallback: generic service with inferred deps.
-        diagram_lines.extend(["  subgraph appbox[Application]", "    app[Service]", "  end", "  client --> app"])
-
-    # Group evidence by label to reduce noise
-    def group_evidence(evidence_list: list) -> list[str]:
-        """Group evidence items by label, showing count if multiple."""
-        grouped: dict[str, list] = {}
-        for ev in evidence_list:
-            grouped.setdefault(ev.label, []).append(ev)
-        
-        result = []
-        for label, items in grouped.items():
-            if len(items) == 1:
-                # Single item - show full detail
-                result.append(items[0].fmt())
-            else:
-                # Multiple items - show count and first example
-                first_path = items[0].path.split(":")[0] if ":" in items[0].path else items[0].path
-                result.append(f"- 💡 {label} — {len(items)} files (e.g., `{first_path}`)")
-        return result
-    
-    evidence_lines: list[str] = group_evidence((extra_evidence + ingress + egress)[:30])
-    if not evidence_lines:
-        evidence_lines.append("- 💡 (no notable evidence captured)")
-
-    ingress_lines = "\n".join(group_evidence(ingress)) if ingress else "- (no ingress signals detected in quick scan)"
-    egress_lines = "\n".join(group_evidence(egress)) if egress else "- (no egress signals detected in quick scan)"
-    
-    # Get CI/CD details
-    ci_cd_info = parse_ci_cd_details(repo)
-    ci_string = ci_cd_info["platform"]
-    if ci_cd_info["files"]:
-        ci_string += f" ({', '.join(ci_cd_info['files'])})"
-    
-    # Build hosting string
     hosting_string = hosting_info["type"] if hosting_info["type"] else "Unknown"
     if hosting_info["evidence"]:
         hosting_string += f" (Terraform: {', '.join(hosting_info['evidence'][:2])})"
     
-    # Build external dependencies string
-    ext_deps_lines = []
-    if backend_services:
-        ext_deps_lines.append(f"  - **Backend APIs (via APIM):** {', '.join(backend_services)}")
-    if external_deps["databases"]:
-        ext_deps_lines.append(f"  - **Databases:** {', '.join(external_deps['databases'])}")
-    if external_deps["storage"]:
-        ext_deps_lines.append(f"  - **Storage:** {', '.join(external_deps['storage'])}")
-    if external_deps["queues"]:
-        ext_deps_lines.append(f"  - **Messaging:** {', '.join(external_deps['queues'])}")
-    if external_deps["monitoring"]:
-        ext_deps_lines.append(f"  - **Monitoring:** {', '.join(external_deps['monitoring'])}")
-    if external_deps["external_apis"]:
-        ext_deps_lines.append(f"  - **External APIs:** {', '.join(external_deps['external_apis'])}")
+    ci_string = ci_cd_info["platform"]
+    if ci_cd_info["files"]:
+        ci_string += f" ({', '.join(ci_cd_info['files'])})"
     
-    ext_deps_section = ""
-    if ext_deps_lines:
-        ext_deps_section = "\n- **External Dependencies:**\n" + "\n".join(ext_deps_lines) + "\n"
+    framework = ", ".join([l for l, _ in langs[:2]]) if langs else "Unknown"
     
-    # Add styling for assumptions (dashed borders)
-    style_lines = []
-    if assumptions:
-        for node in assumptions:
-            style_lines.append(f"  style {node} stroke-dasharray: 5 5")
+    # Auth summary
+    auth_summary = "No authentication mechanisms detected." if not auth_methods["methods"] else \
+        f"Detected methods: {', '.join(list(auth_methods['methods'])[:5])}"
     
-    # Add colored borders for component types (theme-aware per Settings/Styling.md)
-    # Security/Gateway components - thick red border
-    if has_appgw:
-        style_lines.append("  style appgw stroke:#ff6b6b,stroke-width:3px")
-    if has_frontdoor:
-        style_lines.append("  style fd stroke:#ff6b6b,stroke-width:3px")
+    # Network summary
+    network_summary = "No network topology detected." if not (network_info["vnets"] or network_info["nsgs"]) else \
+        f"VNets: {len(network_info['vnets'])}, NSGs: {len(network_info['nsgs'])}, Private Endpoints: {len(network_info['private_endpoints'])}"
     
-    # API Management - network/gateway layer (distinct from app + data + identity)
-    if has_apim or "apim" in "\n".join(diagram_lines):
-        style_lines.append("  style apim stroke:#1971c2,stroke-width:2px")
-    
-    # Application service - blue border (trusted internal)
-    if has_webapp:
-        style_lines.append("  style web stroke:#0066cc,stroke-width:2px")
-    
-    # Authentication service - green border (security control)
-    if auth_service:
-        style_lines.append("  style auth stroke:#00cc00,stroke-width:3px")
-    
-    # Backend services - purple border
-    for idx in range(1, len(backend_services) + 1):
-        style_lines.append(f"  style backend{idx} stroke:#9966cc,stroke-width:2px")
-    
-    # Data/infrastructure - green thicker border (stands out better than gray)
-    if has_sql:
-        style_lines.append("  style sql stroke:#00aa00,stroke-width:3px")
-    if has_kv:
-        # Identity/secrets should be consistently highlighted across diagrams.
-        style_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
-
-    # CI/CD + state are part of the main architecture story; keep their borders consistent too.
-    if "pipeline" in "\n".join(diagram_lines):
-        style_lines.append("  style pipeline stroke:#f59f00,stroke-width:2px")
-    if has_state_backend:
-        style_lines.append("  style tfstate stroke:#00aa00,stroke-width:3px")
-    
-    if style_lines:
-        diagram_lines.append("")
-        diagram_lines.append("  %% Styling")
-        diagram_lines.extend(style_lines)
-
-    # Check if detailed cloud architecture exists
-    cloud_arch_ref = ""
-    cloud_arch_path = sdir / "Cloud" / f"Architecture_{providers[0]}.md" if providers else None
-    if cloud_arch_path and cloud_arch_path.exists():
-        cloud_arch_ref = f"📋 **[View Detailed Cloud Architecture](Cloud/Architecture_{providers[0]}.md)** - Complete network topology with all resources, NSG rules, and connections.\n\n"
-    
-    content = (
-        f"# 🟣 Repo {repo_name}\n\n"
-        "## 🗺️ Architecture Diagram\n\n"
-        + cloud_arch_ref
-        + "```mermaid\n"
-        + "\n".join(diagram_lines)
-        + "\n"
-        "```\n\n"
-        + ("**Legend:** \n"
-           "- Border colors: 🔴 Security gateway | 🟠 API gateway | 🔵 Application | 🟢 Auth service | 🟣 Backend | ⚫ Data\n"
-           "- Dashed borders = assumptions (not confirmed by infrastructure config)\n\n" if assumptions 
-           else "**Legend:** Border colors indicate component type: 🔴 Security gateway | 🟠 API gateway | 🔵 Application | 🟢 Auth service | 🟣 Backend | ⚫ Data\n\n")
-        + f"- **Overall Score:** 🟢 **0/10** (INFO) — *Phase 1 complete; awaiting Phase 2 analysis and security review*\n\n"
-        "## 📊 TL;DR - Executive Summary\n\n"
-        "| Aspect | Value |\n"
-        "|--------|-------|\n"
-        "| **Final Score** | 🟢 **0/10** (INFO - Awaiting Security Review) |\n"
-        "| **Initial Score** | Phase 1 context discovery complete |\n"
-        "| **Adjustments** | Pending: Security review → Dev Skeptic → Platform Skeptic |\n"
-        "| **Key Takeaway** | **[PHASE 2 TODO]** Populate after explore agent completes |\n\n"
-        "**Top 3 Actions:**\n"
-        "1. **[PHASE 2 TODO]** - Complete after security review\n"
-        "2. **[PHASE 2 TODO]** - Complete after security review\n"
-        "3. **[PHASE 2 TODO]** - Complete after security review\n\n"
-        "**Material Risks:** \n"
-        "**[PHASE 2 TODO]** Complete after security review using gathered context.\n\n"
-        "**Why Score Changed/Stayed:** \n"
-        "**[PHASE 2 TODO]** Document security review → Dev Skeptic → Platform Skeptic reasoning.\n\n"
-        "---\n\n"
-        "## 🛡️ Security Observations\n\n"
-        "**[PHASE 2 TODO]** After Phase 2 explore agent completes, perform security review based on gathered context:\n"
-        "- Review authentication/authorization flows for bypass risks\n"
-        "- Check IaC configurations for misconfigurations (public exposure, weak encryption, missing network controls)\n"
-        "- Review routing logic and middleware for security gaps\n"
-        "- Identify injection risks, insecure deserialization, secrets in code\n"
-        "- Review error handling and logging for information disclosure\n\n"
-        "Then invoke Dev Skeptic and Platform Skeptic for scoring adjustments.\n\n"
-        "### ✅ Confirmed Security Controls\n"
-        "*Phase 1 detected (validate during Phase 2 review):*\n"
-    )
-    
-    # Add detected security-relevant controls
-    if auth_methods["methods"]:
-        content += f"1. **Authentication mechanisms detected** 🔐 - {', '.join(list(auth_methods['methods'])[:3])}\n"
-    if has_kv:
-        content += "2. **Key Vault usage** 🔒 - Secrets management infrastructure present\n"
-    if network_info["nsgs"]:
-        content += f"3. **Network Security Groups** 🛡️ - {len(network_info['nsgs'])} NSG(s) configured\n"
-    if network_info["private_endpoints"]:
-        content += f"4. **Private Endpoints** 🔒 - {len(network_info['private_endpoints'])} configured for network isolation\n"
-    
-    if not (auth_methods["methods"] or has_kv or network_info["nsgs"] or network_info["private_endpoints"]):
-        content += "1. *No security controls detected in Phase 1 scan - review during Phase 2*\n"
-    
-    content += (
-        "\n### ⚠️ Areas for Security Review\n"
-        "**[PHASE 2 TODO]** Document findings from security review here.\n\n"
-        "---\n\n"
-        "## 🧭 Overview\n"
-        f"- **Purpose:** {purpose}\n"
-        f"- **Repo type:** {repo_type}\n"
-        f"- **Hosting:** {hosting_string}\n"
-        f"- **Cloud provider(s) referenced:** {provider_line}\n"
-        f"- **CI/CD:** {ci_string}\n"
-        + ext_deps_section
-    )
-
-    if k8s_risk_signals:
-        content += "### 🚨 Kubernetes Risk Signals (heuristic)\n"
-        content += "_Excludes attack artifact folders (for example `exploits/`) so this reflects deployable config risk._\n"
-        content += (
-            f"- **Attack-chain score:** 🟠 **{k8s_risk_analysis.get('attack_chain_score', 0)}/10** "
-            f"({k8s_risk_analysis.get('attack_chain_level', 'Unknown')})\n"
-        )
-        attack_chain_reasons = k8s_risk_analysis.get("attack_chain_reasons", [])
-        if attack_chain_reasons:
-            content += "- **Attack-chain drivers:** " + "; ".join(str(r) for r in attack_chain_reasons) + "\n"
-        for idx, signal in enumerate(k8s_risk_signals, start=1):
-            content += f"{idx}. {signal}\n"
-        content += "\n"
-    
-    # Add authentication section if methods detected
-    if auth_methods["methods"]:
-        content += "\n- **Authentication:**\n"
-        for method in auth_methods["methods"]:
-            content += f"  - {method}\n"
-        if auth_methods["details"]:
-            for detail in auth_methods["details"]:
-                content += f"  - _{detail}_\n"
-    
-    # Add Dockerfile section if containers detected
-    if dockerfile_info["base_images"]:
-        content += "\n- **Container Runtime:**\n"
-        for image in dockerfile_info["base_images"][:3]:  # Limit to 3
-            content += f"  - Base image: `{image}`\n"
-        if dockerfile_info["multi_stage"]:
-            content += "  - Multi-stage build detected\n"
-        if dockerfile_info["exposed_ports"]:
-            ports_str = ", ".join(dockerfile_info["exposed_ports"])
-            content += f"  - Exposed ports: {ports_str}\n"
-        if dockerfile_info["user"]:
-            user_str = dockerfile_info["user"]
-            security_note = " ⚠️ (security risk)" if user_str.lower() in {"root", "0"} else " ✅"
-            content += f"  - Runtime user: `{user_str}`{security_note}\n"
-        elif dockerfile_info["evidence"]:
-            content += "  - Runtime user: `root` ⚠️ (no USER directive found)\n"
-        if dockerfile_info["healthcheck"]:
-            content += "  - Health check: ✅ configured\n"
-    
-    # Add network topology if detected
-    if network_info["vnets"] or network_info["subnets"] or network_info["nsgs"]:
-        content += "\n- **Network Topology:**\n"
-        if network_info["vnets"]:
-            content += f"  - VNets: {', '.join(network_info['vnets'][:3])}\n"
-            if len(network_info["vnets"]) > 3:
-                content += f"    _(+{len(network_info['vnets'])-3} more)_\n"
-        if network_info["subnets"]:
-            content += f"  - Subnets: {len(network_info['subnets'])} detected\n"
-        if network_info["nsgs"]:
-            content += f"  - NSGs: {len(network_info['nsgs'])} configured\n"
-        if network_info["private_endpoints"]:
-            content += f"  - Private Endpoints: {len(network_info['private_endpoints'])} configured\n"
-        if network_info["peerings"]:
-            content += f"  - VNet Peerings: {len(network_info['peerings'])} configured\n"
-    
-    content += (
-        "\n"
-        "## 🚦 Traffic Flow\n\n"
-        "**[PHASE 2 TODO]:** Complete this section using an explore agent to trace the actual request path.\n\n"
-        "**Phase 1 (Script) detected:**\n"
-    )
-    
-    # Add detected ingress/egress as hints for Phase 2
-    if has_appgw:
-        content += f"- **Ingress:** Application Gateway detected (from {'Terraform' if 'azurerm_application_gateway' in tf_resource_types else 'code patterns'})\n"
-    elif has_frontdoor:
-        content += f"- **Ingress:** Azure Front Door detected (from {'Terraform' if 'azurerm_frontdoor' in tf_resource_types else 'code patterns'})\n"
-    
-    if auth_methods["methods"]:
-        content += f"- **Authentication methods:** {', '.join(auth_methods['methods'][:3])}\n"
-    
-    if backend_services or auth_service:
-        services = ([auth_service] if auth_service else []) + backend_services
-        content += f"- **Backend services:** {', '.join(services[:5])}\n"
-    
-    if endpoints:
-        content += f"- **Routes detected:** {len(endpoints)} endpoint(s) - see Traffic Flow section below\n"
-    
-    content += (
-        "\n**Phase 2 agent should document:**\n"
-        "1. Complete request path with middleware execution order\n"
-        "2. Authentication/authorization validation points\n"
-        "3. Routing logic (how backend is selected)\n"
-        "4. Header transformations\n"
-        "5. External service calls and resilience patterns\n\n"
-    )
-    
-    # Add Route Mappings table if endpoints detected
-    if endpoints:
-        content += (
-            "### Route Mappings\n\n"
-            "| Incoming Path | Backend Destination | Notes |\n"
-            "|---------------|---------------------|-------|\n"
-        )
-        for ep in endpoints:
-            # Parse endpoint format: "GET /path" or "PROXY /path → /backend"
-            if "PROXY" in ep:
-                # Format: "PROXY /incoming/path → /backend/path" or "PROXY /incoming  /backend"
-                ep_clean = ep.replace("PROXY ", "")
-                if "→" in ep_clean:
-                    parts = ep_clean.split("→")
-                else:
-                    parts = ep_clean.split("  ")  # Two spaces
-                
-                if len(parts) >= 2:
-                    incoming = parts[0].strip()
-                    backend = parts[1].strip()
-                    content += f"| `{incoming}` | `{backend}` | Proxied via APIM |\n"
-                else:
-                    content += f"| `{ep}` | - | - |\n"
+    # Ingress summary
+    def group_evidence(evidence_list: list) -> list[str]:
+        grouped: dict[str, list] = {}
+        for ev in evidence_list:
+            grouped.setdefault(ev.label, []).append(ev)
+        result = []
+        for label, items in grouped.items():
+            if len(items) == 1:
+                result.append(items[0].fmt())
             else:
-                # Format: "GET /path" or "POST /path"
-                content += f"| `{ep}` | Internal | - |\n"
-        content += "\n"
+                first_path = items[0].path.split(":")[0] if ":" in items[0].path else items[0].path
+                result.append(f"- 💡 {label} — {len(items)} files (e.g., `{first_path}`)")
+        return result
     
-    content += (
-        "## 🛡️ Security Review\n"
-        "### Languages & Frameworks (extracted)\n"
-        f"{lang_lines}\n\n"
-        "### 🧾 Summary\n"
-        "**Phase 1 (Script) complete:** Context and architecture baseline established.\n\n"
-        "**Phase 2 (Manual Review) pending:** Code review, security analysis, and skeptic reviews.\n\n"
-        "**Automated Scanning Status:**\n"
-        "- ❌ **SCA (Software Composition Analysis):** Not performed - dependency vulnerability scanning pending\n"
-        "- ❌ **SAST (Static Application Security Testing):** Not performed - automated code scanning pending\n"
-        "- ❌ **Secrets Scanning:** Not performed - credential detection pending\n"
-        "- ❌ **IaC Scanning:** Not performed - infrastructure misconfiguration detection pending\n\n"
-        "### ✅ Applicability\n"
-        "**[PHASE 2 TODO]** Determine after security review.\n\n"
-        "### ⚠️ Assumptions\n"
-        "- This summary is based on Phase 1 file-based heuristics; validate during Phase 2 review.\n"
-        "- Dashed borders in diagram indicate assumptions (not confirmed by infrastructure config).\n\n"
-        "### 🔎 Key Evidence (deep dive)\n"
-        + "\n".join(evidence_lines)
-        + "\n\n"
-        "### Ingress Signals (quick)\n"
-        f"{ingress_lines}\n\n"
-        "### Egress Signals (quick)\n"
-        f"{egress_lines}\n\n"
-        "### Cloud Environment Implications\n"
-        f"- **Provider(s) referenced:** {provider_line}\n"
-        "- **Note:** If this repo deploys/targets cloud resources, promote reusable facts into `Output/Knowledge/<Provider>.md` once confirmed.\n\n"
-    )
+    ingress_summary = "\n".join(group_evidence(ingress)) if ingress else "No ingress signals detected in quick scan."
+    egress_summary = "\n".join(group_evidence(egress)) if egress else "No egress signals detected in quick scan."
     
-    # Add Related Repos section if Terraform module references found
-    if tf_module_refs:
-        content += "## 🔗 Related Repos\n"
-        content += "**Detected from Terraform module source references:**\n\n"
-        content += "| Repo | Module | Detected In | Line |\n"
-        content += "|------|--------|-------------|------|\n"
-        for ref in tf_module_refs:
-            content += f"| `{ref['repo_name']}` | `{ref['module_name']}` | `{ref['detected_in_file']}` | L{ref['line']} |\n"
-        content += "\n"
-        content += "⚠️ **Action Required:** These repos may contain infrastructure for components referenced in this codebase. Consider scanning them for complete coverage.\n\n"
+    # External dependencies
+    ext_deps_parts = []
+    if backend_services:
+        ext_deps_parts.append(f"- Backend APIs: {', '.join(backend_services)}")
+    if external_deps["databases"]:
+        ext_deps_parts.append(f"- Databases: {', '.join(external_deps['databases'])}")
+    if external_deps["storage"]:
+        ext_deps_parts.append(f"- Storage: {', '.join(external_deps['storage'])}")
+    if external_deps["external_apis"]:
+        ext_deps_parts.append(f"- External APIs: {', '.join(external_deps['external_apis'])}")
+    external_deps_str = "\n".join(ext_deps_parts) if ext_deps_parts else "None detected."
     
-    content += (
-        "## 🤔 Skeptic\n"
-        "**[PHASE 2 TODO]** After security review, invoke Dev Skeptic and Platform Skeptic agents:\n"
-        "1. **Dev Skeptic:** Review from developer perspective (app patterns, mitigations, org conventions)\n"
-        "2. **Platform Skeptic:** Review from platform perspective (networking, CI/CD, guardrails, rollout realities)\n"
-        "3. Document scoring adjustments and reasoning in TL;DR section.\n\n"
-        "## 🤝 Collaboration\n"
-        "- **Outcome:** Context discovery created/updated repo summary.\n"
-        "- **Next step:** Choose scan types (IaC/SCA/SAST/Secrets).\n\n"
-        "## Compounding Findings\n"
-        "- **Compounds with:** None identified (context discovery only)\n\n"
-        "## Meta Data\n"
-        "<!-- Meta Data must remain the final section in the file. -->\n"
-        f"- **Repo Name:** {repo_name}\n"
-        f"- **Repo Path:** {repo.resolve()}\n"
-        f"- **Repo URL:** {repo_url}\n"
-        f"- **Repo Type:** {repo_type}\n"
-        f"- **Languages/Frameworks:** {', '.join([l for l, _ in langs]) if langs else 'Unknown'}\n"
-        f"- **Runtime Version:** {(dotnet_info['version'] or 'Unknown') if dotnet_info else 'Unknown'}" + (f" (from `{dotnet_info['source']}`)" if dotnet_info and dotnet_info['source'] else "") + "\n"
-        f"- **CI/CD:** {ci}\n"
-        f"- **Scan Scope:** {scan_scope}\n"
-        "- **Scanner:** Context discovery (local heuristics)\n"
-        f"- 🗓️ **Last updated:** {now_uk()}\n"
-    )
-
+    # Evidence list
+    evidence_lines = group_evidence((extra_evidence + ingress + egress)[:30])
+    if not evidence_lines:
+        evidence_lines = ["- 💡 (no notable evidence captured)"]
+    evidence_list = "\n".join(evidence_lines)
+    
+    # Notes
+    notes = f"Repository type: {repo_type}. Purpose: {purpose}."
+    
+    # Build context
+    context = {
+        "repo_name": repo_name,
+        "repo_type": repo_type,
+        "timestamp": now_uk(),
+        "languages": languages,
+        "hosting": hosting_string,
+        "ci_cd": ci_string,
+        "providers": provider_line,
+        "framework": framework,
+        "architecture_diagram": architecture_diagram,
+        "auth_summary": auth_summary,
+        "network_summary": network_summary,
+        "ingress_summary": ingress_summary,
+        "egress_summary": egress_summary,
+        "external_deps": external_deps_str,
+        "evidence_list": evidence_list,
+        "notes": notes,
+    }
+    
+    # Render template
+    content = render_template("RepoSummary.md", context)
+    
+    # Write and validate
     out_path.write_text(content, encoding="utf-8")
-
-    # Validate Mermaid fenced blocks so issues are caught (and safely auto-fixed) before viewing/rendering.
     probs = validate_markdown_file(out_path, fix=True)
     errs = [p for p in probs if p.level == "ERROR"]
     warns = [p for p in probs if p.level == "WARN"]
@@ -6174,190 +5622,8 @@ def write_repo_summary(
         print(f"WARN: {out_path}{line} - {p.message}")
     if errs:
         raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
-
+    
     return out_path
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Fast, non-security context discovery for a local repo.")
-    parser.add_argument("repo", help="Absolute or relative path to the repo to discover.")
-    parser.add_argument(
-        "--repos-root",
-        default=None,
-        help="Repo root directory to record in Output/Knowledge/Repos.md (default: parent of repo).",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Base output directory for Summary/ and Knowledge/ (default: Output/). Use for experiment isolation.",
-    )
-    args = parser.parse_args()
-
-    repo = Path(args.repo).expanduser()
-    if not repo.is_absolute():
-        repo = repo.resolve()
-    if not repo.is_dir():
-        print(f"ERROR: repo path not found: {repo}")
-        return 2
-
-    repo_name = repo.name
-    repos_root = Path(args.repos_root).expanduser().resolve() if args.repos_root else repo.parent.resolve()
-    
-    # Determine output directories (support experiment isolation)
-    if args.output_dir:
-        output_base = Path(args.output_dir).expanduser().resolve()
-        summary_dir = output_base / "Summary"
-        knowledge_dir = output_base / "Knowledge"
-    else:
-        output_base = None
-        summary_dir = OUTPUT_SUMMARY_DIR
-        knowledge_dir = OUTPUT_KNOWLEDGE_DIR
-    
-    # Extract experiment ID from output directory (e.g., "008_Resource_Summaries_Test" -> "008")
-    experiment_id = None
-    if output_base:
-        experiment_id = output_base.name
-        # Clean up experiment ID (remove descriptive suffix if present)
-        if '_' in experiment_id:
-            exp_num = experiment_id.split('_')[0]
-            if exp_num.isdigit():
-                experiment_id = exp_num
-    
-    # Register repository in database
-    if DB_AVAILABLE and experiment_id:
-        try:
-            repo_id, db_repo_name = insert_repository(
-                experiment_id=experiment_id,
-                repo_path=repo,
-                repo_type="Infrastructure"  # Will be refined later
-            )
-            print(f"✅ Registered repository in database: {db_repo_name} (experiment {experiment_id})")
-        except Exception as e:
-            print(f"WARN: Failed to register repository in database: {e}", file=sys.stderr)
-
-    files = iter_files(repo)
-    langs = detect_languages(files, repo)
-    lang_names = [l for l, _ in langs]
-    dotnet_info = detect_dotnet_version(iter_files(repo), repo)
-    rtype = infer_repo_type(lang_names, repo_name)
-    purpose, purpose_ev = repo_purpose(repo, repo_name)
-    ci = detect_ci(repo)
-    providers = detect_cloud_provider(files, repo)
-
-    extra: list[Evidence] = []
-    if purpose_ev:
-        extra.append(purpose_ev)
-    if dotnet_info["version"]:
-        extra.append(Evidence(label=f".NET Version: {dotnet_info['version']}", path=dotnet_info["source"]))
-    if (repo / "Dockerfile").exists():
-        extra.append(Evidence(label="Dockerfile present", path="Dockerfile"))
-    if (repo / ".github" / "workflows").exists():
-        extra.append(Evidence(label="GitHub Actions workflows present", path=".github/workflows"))
-
-    ingress: list[Evidence] = []
-    egress: list[Evidence] = []
-    text_files = [
-        p
-        for p in files
-        if p.suffix.lower() in (CODE_EXTS | CFG_EXTS | IAC_EXTS | DOC_EXTS | SQL_EXTS)
-        or p.name in {"Dockerfile", "docker-compose.yml"}
-    ]
-    text_files = [p for p in text_files if not is_attack_artifact_path(repo, p)]
-
-    for p in sorted(text_files)[:500]:
-        if len(ingress) < 20:
-            ingress.extend(_scan_text_file(repo, p, INGRESS_PATTERNS, limit=20 - len(ingress)))
-        if len(egress) < 20:
-            egress.extend(_scan_text_file(repo, p, EGRESS_PATTERNS, limit=20 - len(egress)))
-        if len(ingress) >= 20 and len(egress) >= 20:
-            break
-
-    repos_md = ensure_repos_knowledge(repos_root, knowledge_dir=knowledge_dir)
-    upsert_repo_inventory(
-        repos_md,
-        repo_name=repo_name,
-        repo_type=rtype,
-        purpose=purpose,
-        langs=lang_names or ["Unknown"],
-    )
-
-    summary_path = write_repo_summary(
-        repo=repo,
-        repo_name=repo_name,
-        repo_type=rtype,
-        purpose=purpose,
-        langs=langs,
-        ci=ci,
-        providers=providers,
-        ingress=ingress,
-        egress=egress,
-        extra_evidence=extra,
-        scan_scope="Context discovery",
-        dotnet_info=dotnet_info,
-        summary_dir=summary_dir,
-    )
-
-    # Experiment isolation: also generate an experiment-scoped provider architecture summary with TL;DR.
-    if args.output_dir:
-        output_base = Path(args.output_dir).expanduser().resolve()
-        _ = write_experiment_cloud_architecture_summary(
-            repo=repo,
-            repo_name=repo_name,
-            providers=providers,
-            summary_dir=summary_dir,
-            findings_dir=output_base / "Findings",
-            repo_summary_path=summary_path,
-        )
-
-    # Second pass: Resolve parent-child relationships from Terraform
-    if DB_AVAILABLE and experiment_id and providers:
-        try:
-            print("🔗 Resolving parent-child resource relationships...")
-            parent_refs = extract_parent_references(files, repo)
-            
-            if parent_refs:
-                print(f"   Found {len(parent_refs)} parent-child relationships")
-                
-                # Map Terraform resource types to our normalized types
-                type_mapping = {
-                    'azurerm_mssql_server': 'SQLServer',
-                    'azurerm_mssql_database': 'SQLDatabase',
-                    'azurerm_storage_account': 'StorageAccount',
-                    'azurerm_storage_container': 'StorageContainer',
-                    'azurerm_storage_blob': 'StorageBlob',
-                    'aws_rds_cluster': 'RDSCluster',
-                    'aws_db_instance': 'RDSInstance',
-                    'aws_s3_bucket': 'S3Bucket',
-                    'aws_s3_object': 'S3Object',
-                    'google_sql_database_instance': 'SQLInstance',
-                    'google_sql_database': 'SQLDatabase',
-                    'google_storage_bucket': 'StorageBucket',
-                    'google_storage_bucket_object': 'StorageObject',
-                }
-                
-                for (child_tf_type, child_tf_name), (parent_tf_type, parent_tf_name) in parent_refs.items():
-                    # Get normalized types
-                    parent_type = type_mapping.get(parent_tf_type, parent_tf_type)
-                    child_type = type_mapping.get(child_tf_type, child_tf_type)
-                    
-                    # Look up parent resource ID
-                    parent_id = get_resource_id(experiment_id, repo_name, parent_tf_name, parent_type)
-                    
-                    if parent_id:
-                        # Update child with parent reference
-                        update_resource_parent(experiment_id, repo_name, child_tf_name, parent_id)
-                        print(f"   ✅ Linked {child_tf_name} ({child_type}) → {parent_tf_name} ({parent_type})")
-                    else:
-                        print(f"   ⚠️  Parent not found: {parent_tf_name} ({parent_type}) for {child_tf_name}")
-        except Exception as e:
-            print(f"WARN: Failed to resolve parent relationships: {e}", file=sys.stderr)
-
-    print("== Context discovery complete ==")
-    print(f"repo: {repo}")
-    print(f"summary: {summary_path}")
-    print(f"knowledge: {repos_md}")
-    print(f"timestamp: {now_uk()}")
-    return 0
 
 
 def main() -> int:
