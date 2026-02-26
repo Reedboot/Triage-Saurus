@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -356,6 +357,16 @@ def cmd_new(args: argparse.Namespace) -> int:
     exp_name = f"{exp_id}_{args.name}"
     exp_dir = EXPERIMENTS_DIR / exp_name
     
+    # Validate path to prevent directory traversal
+    base_dir = Path(EXPERIMENTS_DIR).resolve()
+    exp_dir_resolved = (EXPERIMENTS_DIR / exp_name).resolve()
+    try:
+        exp_dir_resolved.relative_to(base_dir)
+    except ValueError:
+        print(f"ERROR: Invalid experiment name")
+        return 1
+    exp_dir = exp_dir_resolved
+    
     if exp_dir.exists():
         print(f"ERROR: Experiment directory already exists: {exp_dir}")
         return 1
@@ -386,23 +397,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     strategy = ensure_default_strategy()
     repos_root = get_repos_root_from_knowledge() or REPO_ROOT.parent
     
-    # Prompt for model if not provided
-    model = args.model
-    if not model:
-        print("\nAvailable models:")
-        print("  1. claude-sonnet-4 (standard)")
-        print("  2. claude-sonnet-4.5 (standard)")
-        print("  3. claude-haiku-4.5 (fast/cheap)")
-        print("  4. claude-opus-4.5 (premium)")
-        print("  5. Other (enter manually)")
-        model_choice = input("Select model [1]: ").strip() or "1"
-        model_map = {
-            "1": "claude-sonnet-4",
-            "2": "claude-sonnet-4.5", 
-            "3": "claude-haiku-4.5",
-            "4": "claude-opus-4.5",
-        }
-        model = model_map.get(model_choice, model_choice)
+    # Model tracking removed per CLI-agnostic requirement
     
     # Compute agent version info for tracking improvements
     agents_version = compute_agents_version()
@@ -412,7 +407,6 @@ def cmd_new(args: argparse.Namespace) -> int:
         "name": args.name,
         "full_name": exp_name,
         "status": "pending",
-        "model": model,
         "agents_version": agents_version,
         "strategy": strategy,
         "repos": repos,
@@ -433,18 +427,16 @@ def cmd_new(args: argparse.Namespace) -> int:
     }, indent=2))
     
     # Record in database
-    db.create_experiment(exp_id, args.name, repos, strategy.get("version", "default"), model=model)
+    db.create_experiment(exp_id, args.name, repos, strategy.get("version", "default"))
     
     # Update state
     state["current_experiment_id"] = exp_id
     state["status"] = "pending"
     state["next_action"] = f"Run 'triage experiment run {exp_id}' to execute the experiment"
     state["repos_in_scope"] = repos
-    state["model"] = model
     state["experiment_history"].append({
         "id": exp_id,
         "name": args.name,
-        "model": model,
         "status": "pending",
         "created_at": datetime.now().isoformat(),
     })
@@ -452,7 +444,6 @@ def cmd_new(args: argparse.Namespace) -> int:
     save_state(state)
     
     print(f"Created experiment: {exp_name}")
-    print(f"Model: {model}")
     print(f"Directory: {exp_dir}")
     print()
     print("Next steps:")
@@ -587,9 +578,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     state["handoff_notes"] = f"Experiment {args.id} running."
     save_state(state)
     
-    model = config.get("model", "unknown")
     print(f"Experiment {args.id} marked as running.")
-    print(f"Model: {model}")
     print(f"Repos to scan: {', '.join(repos)}")
     print()
     print("The actual scanning should be performed by the agent using:")
@@ -777,14 +766,6 @@ def cmd_compare(args: argparse.Namespace) -> int:
                     print(f"    - {fname}")
                 print(f"\n  Check {args.id2}/Agents/changes.md for details")
     
-    # Compare models
-    model1 = config1.get("model", "unknown")
-    model2 = config2.get("model", "unknown")
-    if model1 != model2:
-        print(f"\n== Model Difference ==")
-        print(f"  {args.id1}: {model1}")
-        print(f"  {args.id2}: {model2}")
-    
     return 0
 
 
@@ -856,8 +837,24 @@ def cmd_promote(args: argparse.Namespace) -> int:
     exp_dir = exp_dirs[0]
     exp_name = exp_dir.name
     
+    # Validate experiment directory is within expected location
+    base_dir = Path(EXPERIMENTS_DIR).resolve()
+    exp_dir_resolved = exp_dir.resolve()
+    try:
+        exp_dir_resolved.relative_to(base_dir)
+    except ValueError:
+        print(f"ERROR: Invalid experiment directory path")
+        return 1
+    
     # Check for key result files
     results_file = exp_dir / "RESULTS.md"
+    # Validate results file is within experiment directory
+    try:
+        results_file.resolve().relative_to(exp_dir_resolved)
+    except ValueError:
+        print(f"ERROR: Invalid file path")
+        return 1
+    
     if not results_file.exists():
         print(f"ERROR: No RESULTS.md found in {exp_dir}")
         print("Complete the experiment and document results before promoting.")
@@ -877,6 +874,11 @@ def cmd_promote(args: argparse.Namespace) -> int:
     result_docs = list(exp_dir.glob("*.md"))
     print("Available result documents:")
     for doc in sorted(result_docs):
+        # Validate doc is within experiment directory before processing
+        try:
+            doc.resolve().relative_to(exp_dir_resolved)
+        except ValueError:
+            continue
         if doc.name not in [".gitkeep"]:
             print(f"  - {doc.name}")
     print()
@@ -919,13 +921,35 @@ def cmd_promote(args: argparse.Namespace) -> int:
         
         # Update experiment.json if it exists, otherwise create promotion marker
         if config_file.exists():
-            config = json.loads(config_file.read_text())
+            # Validate config_file is within experiment directory before writing
+            try:
+                config_file.resolve().relative_to(exp_dir_resolved)
+            except ValueError:
+                print(f"ERROR: Invalid config file path")
+                return 1
+            
+            config = json.loads(config_file.read_text(encoding="utf-8"))
             config["promoted_at"] = timestamp
             config["promoted_by"] = "manual"
-            config_file.write_text(json.dumps(config, indent=2))
+            # Validate path again before write operation
+            config_file_resolved = config_file.resolve()
+            try:
+                config_file_resolved.relative_to(exp_dir_resolved)
+            except ValueError:
+                print(f"ERROR: Invalid config file path")
+                return 1
+            # Final validation: ensure file is named exactly "experiment.json" and is in exp_dir
+            if config_file_resolved.name != "experiment.json" or config_file_resolved.parent != exp_dir_resolved:
+                print(f"ERROR: Invalid config file path")
+                return 1
+            config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
         else:
             # Legacy experiment - create a promotion marker file
             promotion_file = exp_dir / "PROMOTED.json"
+            base_real = os.path.realpath(EXPERIMENTS_DIR)
+            target_real = os.path.realpath(promotion_file)
+            if os.path.commonpath([base_real, target_real]) != base_real:
+                raise Exception("Invalid file path")
             promotion_file.write_text(json.dumps({
                 "promoted_at": timestamp,
                 "promoted_by": "manual",
@@ -966,7 +990,6 @@ def main() -> int:
     new_parser = subparsers.add_parser("new", help="Create new experiment")
     new_parser.add_argument("name", help="Experiment name (e.g., baseline, optimized_v1)")
     new_parser.add_argument("--repos", nargs="+", default=[], help="Repos to scan")
-    new_parser.add_argument("--model", default=None, help="Model used for experiment (e.g., claude-sonnet-4, claude-haiku-4.5)")
     
     # list
     subparsers.add_parser("list", help="List all experiments")
