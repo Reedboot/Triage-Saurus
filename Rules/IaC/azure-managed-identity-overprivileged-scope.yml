@@ -1,0 +1,62 @@
+rules:
+  - id: azure-managed-identity-overprivileged-scope
+    message: |
+      Managed identity assigned an overprivileged role without resource scoping.
+      
+      Managed identities (MI) should follow principle of least privilege.
+      Assigning roles like Contributor or Owner at subscription/tenant level
+      to a VM or App Service MI creates excessive blast radius.
+      
+      If the identity is compromised (e.g., RCE on VM), the attacker gains
+      access to all resources in the scope.
+      
+      Remediation:
+      1. Scope the role assignment to a specific resource group (preferred)
+      2. Or scope to individual resources (most secure)
+      3. Replace Contributor/Owner with specific roles (e.g., Storage Blob Data Reader)
+      4. Document why broad scope is needed; escalate for architecture review
+      
+      Example - BAD:
+      ```
+      scope = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+      role_definition_name = "Contributor"
+      ```
+      
+      Example - GOOD:
+      ```
+      scope = azurerm_resource_group.example.id
+      role_definition_name = "Storage Blob Data Reader"
+      ```
+      
+      Reference: https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices
+    severity: ERROR
+    languages: [terraform, json]
+    pattern-either:
+      - pattern-regex:
+          regex: 'role_definition_name\s*=\s*"(?:Contributor|Owner)"'
+          message: "Overprivileged role detected"
+      - pattern: |
+          resource "azurerm_role_assignment" "$_" {
+            ...
+            role_definition_name = "Contributor"
+            ...
+            principal_id = $VM_ID
+            ...
+          }
+          message: "Contributor role assigned to VM managed identity"
+      - pattern: |
+          resource "azurerm_role_assignment" "$_" {
+            ...
+            role_definition_name = "Owner"
+            ...
+            principal_id = $APP_SERVICE_ID
+            ...
+          }
+          message: "Owner role assigned to App Service managed identity"
+    metadata:
+      cwe: "CWE-269: Improper Access Control / Excessive Privileges"
+      owasp: "A01:2021 – Broken Access Control"
+      severity-score: 7.0
+      resource-type: "azurerm_role_assignment + azurerm_linux_virtual_machine"
+      detection-method: "Pattern matching for Contributor/Owner roles in MI assignments"
+      remediation-time: "1-2 hours"

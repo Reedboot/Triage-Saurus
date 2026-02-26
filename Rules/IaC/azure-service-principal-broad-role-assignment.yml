@@ -1,0 +1,88 @@
+rules:
+  - id: azure-service-principal-broad-role-assignment
+    message: |
+      Service Principal assigned a broad role (Contributor/Owner) without resource scoping.
+      
+      Service Principals used in automation (CI/CD, scripts, applications) should
+      follow principle of least privilege. Assigning Contributor or Owner roles
+      at subscription/tenant level is a common privilege escalation risk.
+      
+      If the Service Principal credential is compromised (exposed in Git, logs, or
+      via credential spray), the attacker gains access to ALL resources in the scope.
+      
+      Remediation:
+      1. Scope role assignment to specific resource group (preferred)
+      2. Or scope to individual resources (most secure)
+      3. Replace Contributor/Owner with specific roles:
+         - Storage Blob Data Reader/Contributor
+         - Cosmos DB Data Contributor
+         - Key Vault Secrets User
+         - App Service Contributor (for specific app)
+      4. Document why broad scope is needed; request architecture review
+      5. Implement regular SP credential rotation
+      
+      Example - BAD:
+      ```
+      resource "azuread_app_role_assignment" "example" {
+        app_id            = azuread_service_principal.example.id
+        principal_id      = azuread_service_principal.deployer.id
+        role_id           = azuread_app_role.contributor.id
+        # Assigned at subscription level - affects all resources
+      }
+      
+      resource "azurerm_role_assignment" "example" {
+        scope              = "/subscriptions/${subscription_id}"
+        role_definition_name = "Contributor"
+        principal_id       = azuread_service_principal.example.id
+      }
+      ```
+      
+      Example - GOOD:
+      ```
+      resource "azurerm_role_assignment" "example" {
+        scope              = azurerm_resource_group.example.id  # Scoped to RG
+        role_definition_name = "Storage Blob Data Contributor"  # Specific role
+        principal_id       = azuread_service_principal.example.id
+      }
+      ```
+      
+      Reference: https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices
+    severity: ERROR
+    languages: [terraform, json]
+    pattern-either:
+      - pattern-regex:
+          regex: 'role_definition_name\s*=\s*"(?:Contributor|Owner)"'
+          message: "Broad role assignment detected"
+      - pattern: |
+          resource "azurerm_role_assignment" "$_" {
+            ...
+            scope = "/subscriptions/$_"
+            role_definition_name = "Contributor"
+            ...
+          }
+          message: "Contributor role assigned at subscription level"
+      - pattern: |
+          resource "azurerm_role_assignment" "$_" {
+            ...
+            scope = "/subscriptions/$_"
+            role_definition_name = "Owner"
+            ...
+          }
+          message: "Owner role assigned at subscription level"
+      - pattern: |
+          resource "azuread_app_role_assignment" "$_" {
+            ...
+            role_id = $ROLE_ID
+            ...
+          }
+          metavariable-regex:
+            metavariable: $ROLE_ID
+            regex: '.*[Cc]ontributor.*|.*[Oo]wner.*'
+            message: "Contributor/Owner role assigned via Azure AD"
+    metadata:
+      cwe: "CWE-269: Improper Access Control / Excessive Privileges"
+      owasp: "A01:2021 – Broken Access Control"
+      severity-score: 5.0
+      resource-type: "azurerm_role_assignment, azuread_app_role_assignment"
+      detection-method: "Pattern matching for Contributor/Owner roles assigned at subscription/tenant level"
+      remediation-time: "1-2 hours"

@@ -1,0 +1,62 @@
+rules:
+  - id: azure-storage-container-public-access
+    message: |
+      Storage container configured with public access (blob or container level).
+      
+      Public container access makes the container enumerable and blobs readable
+      by anyone on the internet. Combined with write/delete permissions via SAS,
+      attackers can inject/poison data or exfiltrate sensitive information.
+      
+      Remediation:
+      1. Set container_access_type = "none" (default, private)
+      2. Use SAS tokens for temporary access with minimal permissions (read-only when possible)
+      3. Avoid "write" or "delete" permissions in SAS URLs unless absolutely required
+      4. If public read is needed, use CDN with appropriate cache headers instead
+      5. Implement network firewall rules (service endpoints / private endpoints)
+      
+      Example - BAD:
+      ```
+      resource "azurerm_storage_container" "example" {
+        container_access_type = "blob"  # PUBLIC READ
+      }
+      
+      resource "azurerm_storage_blob_sas" "example" {
+        permissions = "racwd"  # Includes write/delete - HIGH RISK
+      }
+      ```
+      
+      Example - GOOD:
+      ```
+      resource "azurerm_storage_container" "example" {
+        container_access_type = "none"  # PRIVATE (default)
+      }
+      
+      resource "azurerm_storage_blob_sas" "example" {
+        permissions = "r"  # Read-only
+      }
+      ```
+      
+      Reference: https://learn.microsoft.com/en-us/azure/storage/blobs/storage-manage-access-to-resources
+    severity: ERROR
+    languages: [terraform, json]
+    pattern-either:
+      - pattern-regex:
+          regex: 'container_access_type\s*=\s*"(?:blob|container)"'
+          message: "Container configured with public access"
+      - pattern: |
+          resource "azurerm_storage_container" "$_" {
+            ...
+            container_access_type = "blob"
+            ...
+          }
+          message: "Blob-level public access detected"
+      - pattern-regex:
+          regex: 'permissions\s*=\s*"[^"]*[wd][^"]*"'
+          message: "SAS URL includes write/delete permissions - potentially over-privileged"
+    metadata:
+      cwe: "CWE-732: Incorrect Permission Assignment for Critical Resource"
+      owasp: "A01:2021 – Broken Access Control"
+      severity-score: 6.0
+      resource-type: "azurerm_storage_container, azurerm_storage_blob_sas"
+      detection-method: "Pattern matching for public container_access_type and SAS permissions"
+      remediation-time: "30 minutes"

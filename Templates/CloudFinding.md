@@ -54,8 +54,11 @@ flowchart TB
   style blob stroke:#ff0000,stroke-width:4px
 ```
 
-- **Description:** <short description>
-- **Overall Score:** <severity emoji + label> <score>/10
+**🗺️ Legend:**
+- 🔴 blob = Vulnerable/Critical component
+- 🔵 Logs = Monitoring (informational)
+
+(IMPORTANT: Legend should contain ONLY styled components that appear in the diagram. Do not include Description, Overall Score, or other narrative content. Color meanings: 🔴 = vulnerable, 🟠 = misconfigured, 🟢 = secure, etc.)
 
 ## 📊 TL;DR - Executive Summary
 *(Add this section after Collaboration is complete for quick reference)*

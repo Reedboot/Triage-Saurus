@@ -1,0 +1,65 @@
+rules:
+  - id: azure-vm-custom-script-sql-injection
+    message: |
+      Custom script extension downloads and executes SQL scripts with credential parameters.
+      
+      This pattern combines multiple attack vectors:
+      1. Custom script extensions execute with high privileges (root/SYSTEM)
+      2. SQL scripts downloaded from internet (network exposure)
+      3. Credentials passed as shell variables (visible in process listing, logs)
+      4. SQL injection possible if script uses string interpolation for queries
+      
+      Lateral movement: Attacker gains RCE on VM → uses credentials → gains database access
+      
+      Remediation:
+      1. Use managed identity instead of hardcoded credentials
+      2. Fetch SQL initialization scripts from secure location (private blob, Key Vault)
+      3. If credentials required, use systemd-user-secrets or Key Vault for secure retrieval
+      4. Use parameterized queries in SQL scripts
+      5. Avoid passing credentials as shell variables; use environment files with restricted permissions
+      6. Run custom scripts with minimal privileges (non-root)
+      
+      Example - BAD:
+      ```
+      command_to_execute = "curl https://public-blob.blob.core.windows.net/init.sql | sqlcmd -S $SERVER -U $USER -P $PASSWORD"
+      protected_settings = jsonencode({
+        commandToExecute = "export PASSWORD=SecurePassword123; sqlcmd < init.sql"
+      })
+      ```
+      
+      Example - GOOD:
+      ```
+      managed_identity_ids = [azurerm_user_assigned_identity.example.id]
+      command_to_execute = "az storage blob download --account-name secure_storage --container-name scripts --name init.sql --file init.sql && sqlcmd < init.sql"
+      ```
+      
+      Reference: https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux
+    severity: ERROR
+    languages: [terraform, json, bash]
+    pattern-either:
+      - pattern-regex:
+          regex: 'command_to_execute.*(?:sqlcmd|mysql|psql).*(?:PASSWORD|password|credential)'
+          message: "SQL execution with credential parameters in custom script"
+      - pattern-regex:
+          regex: 'protected_settings.*(?:sqlcmd|mysql|psql).*export\s+(?:PASSWORD|DB_PASS)'
+          message: "SQL script execution with exported password variable"
+      - pattern: |
+          resource "azurerm_virtual_machine_extension" "$_" {
+            ...
+            settings = jsonencode({
+              commandToExecute = $CMD
+              ...
+            })
+            ...
+          }
+          metavariable-regex:
+            metavariable: $CMD
+            regex: '.*(?:sqlcmd|mysql|psql).*PASSWORD|password.*'
+            message: "SQL execution detected with password in command"
+    metadata:
+      cwe: "CWE-798: Use of Hard-Coded Credentials, CWE-89: SQL Injection"
+      owasp: "A02:2021 – Cryptographic Failures, A03:2021 – Injection"
+      severity-score: 7.0
+      resource-type: "azurerm_virtual_machine_extension"
+      detection-method: "Pattern matching for SQL execution with credential parameters"
+      remediation-time: "2-3 hours"

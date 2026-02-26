@@ -1,0 +1,82 @@
+rules:
+  - id: azure-app-service-vnet-integration-no-egress-rules
+    message: |
+      App Service integrated to VNet without explicit outbound NSG rules.
+      
+      VNet integration is often seen as a security improvement, but without
+      explicit NSG rules on outbound traffic, it provides no additional restriction.
+      
+      The implicit allow-all outbound rule means the App Service can still:
+      - Connect to external databases (exfiltration risk)
+      - Call external APIs (command & control)
+      - Download malware (if compromised)
+      
+      Remediation:
+      1. Create NSG rules on the integrated subnet with explicit outbound rules
+      2. Default deny outbound, then allow only required:
+         - DNS (53)
+         - NTP for time sync (123)
+         - Database connections (SQL: 1433, PostgreSQL: 5432, etc.)
+         - Approved external APIs only
+      3. Use service endpoints to restrict to Azure services only (when possible)
+      4. Monitor outbound traffic with NSG flow logs
+      
+      Example - BAD:
+      ```
+      resource "azurerm_app_service_virtual_network_swift_connection" "example" {
+        app_service_id      = azurerm_app_service.example.id
+        subnet_id           = azurerm_subnet.example.id
+      }
+      # NO NSG rules defined - implicit allow-all outbound
+      ```
+      
+      Example - GOOD:
+      ```
+      resource "azurerm_app_service_virtual_network_swift_connection" "example" {
+        app_service_id      = azurerm_app_service.example.id
+        subnet_id           = azurerm_subnet.example.id
+      }
+      
+      resource "azurerm_network_security_group" "example" {
+        ...
+        security_rule {
+          name = "deny-outbound-default"
+          direction = "Outbound"
+          access = "Deny"
+          protocol = "*"
+          source_port_range = "*"
+          destination_port_range = "*"
+          source_address_prefix = "*"
+          destination_address_prefix = "*"
+          priority = 4096
+        }
+        
+        security_rule {
+          name = "allow-dns-outbound"
+          direction = "Outbound"
+          access = "Allow"
+          protocol = "Udp"
+          destination_port_range = "53"
+          ...
+        }
+        # ... other rules for required outbound traffic
+      }
+      ```
+      
+      Reference: https://learn.microsoft.com/en-us/azure/app-service/overview-vnet-integration
+    severity: WARNING
+    languages: [terraform, json]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_service_virtual_network_swift_connection" "$_" {
+            ...
+          }
+          message: "VNet integration detected - ensure NSG rules are defined for outbound traffic control"
+    metadata:
+      cwe: "CWE-613: Insufficient Access Control"
+      owasp: "A01:2021 – Broken Access Control"
+      severity-score: 5.0
+      resource-type: "azurerm_app_service_virtual_network_swift_connection"
+      detection-method: "Pattern matching for VNet integration without explicit outbound NSG rules"
+      remediation-time: "1-2 hours"
+      note: "This is a heuristic check - verify that NSG rules exist in the environment"
