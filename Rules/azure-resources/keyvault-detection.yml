@@ -1,0 +1,35 @@
+rules:
+  - id: context-azure-keyvault
+    message: |
+      Azure Key Vault detected in infrastructure.
+      This rule extracts Key Vault configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_key_vault" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: secrets-management
+      technology: [terraform, azure, keyvault]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Key Vault
+        resource_type: azurerm_key_vault
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku_name
+            pattern: sku_name = "$SKU"
+          - name: tenant_id
+            pattern: tenant_id = $TENANT
+          - name: enable_rbac_authorization
+            pattern: enable_rbac_authorization = $RBAC
+      description: |
+        Detects Azure Key Vault resources in Terraform.
+        Used to determine if Key Vault-related security rules should be applied.

@@ -1,0 +1,37 @@
+rules:
+  - id: context-azure-aks-cluster
+    message: |
+      Azure Kubernetes Service (AKS) cluster detected in infrastructure.
+      This rule extracts AKS configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_kubernetes_cluster" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: container-orchestration
+      technology: [terraform, azure, kubernetes, aks]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: AKS Cluster
+        resource_type: azurerm_kubernetes_cluster
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: kubernetes_version
+            pattern: kubernetes_version = "$VERSION"
+          - name: dns_prefix
+            pattern: dns_prefix = "$PREFIX"
+          - name: role_based_access_control_enabled
+            pattern: role_based_access_control_enabled = $RBAC
+          - name: local_account_disabled
+            pattern: local_account_disabled = $LOCAL_DISABLED
+      description: |
+        Detects Azure Kubernetes Service clusters in Terraform.
+        Used to determine if AKS/Kubernetes-related security rules should be applied.
