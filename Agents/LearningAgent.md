@@ -200,6 +200,56 @@ Apply these changes to experiment 004? [y/n]
 }
 ```
 
+## Promoting Learnings to Production
+
+When an experiment produces **validated, high-confidence learnings**, promote them to production:
+
+### Promotion Process
+
+**Command:**
+```bash
+python3 Scripts/triage_experiment.py promote <experiment_id>
+```
+
+**What Gets Promoted:**
+1. **SessionKickoff.md** - Update phase workflows based on experiment results
+2. **Agents/Instructions.md** - Add best practices sections with experiment validation
+3. **Output/Learning/EXPERIMENT_XXX_LEARNINGS.md** - Create comprehensive summary
+
+**Promotion Criteria:**
+- ✅ Experiment completed with RESULTS.md documented
+- ✅ Validated findings (not just hypotheses)
+- ✅ Quantified impact (e.g., "50% → 100% detection")
+- ✅ Clear action items (e.g., "Apply ALL 42 rules, not selective subset")
+
+**Example - Experiment 015:**
+- **Learning:** Selective rule application (7 rules) = 50% detection, ALL rules (42) = 100%
+- **Promoted to:** SessionKickoff.md Phase 3 now requires ALL rules
+- **Impact:** Future experiments will achieve complete ground truth coverage
+- **Validation:** 71% of findings adjusted by skeptic reviews, -3.1 avg severity reduction
+
+### When NOT to Promote
+
+❌ **Don't promote if:**
+- Only 1-2 experiments (need ≥3 for pattern confidence)
+- Regression detected (accuracy/speed declined)
+- Environment-specific learning (not generalizable)
+- Unclear/ambiguous results
+
+### Tracking Promotions
+
+The `promote` command:
+- Marks experiment with `promoted_at` timestamp
+- Updates database with promotion metadata
+- Creates PROMOTED.json marker for legacy experiments
+- Provides template prompt for GitHub Copilot CLI to help
+
+**View promoted experiments:**
+```bash
+python3 Scripts/triage_experiment.py list
+# Shows which experiments have been promoted
+```
+
 ## Regression Detection
 
 Before adopting changes, verify no regression:

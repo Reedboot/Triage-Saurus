@@ -66,6 +66,30 @@ All findings MUST reference the rule that detected them:
 - If manual detection, use `detected_by_rule: manual`
 - This enables tracking rule effectiveness
 
+### Rule Application Best Practices (Experiment 015 Learnings)
+
+**CRITICAL: Apply ALL Rules, Not Selective Subsets**
+
+Experiment 015 validated that applying ALL rules is essential for complete detection:
+- **Selective application (7 rules):** 50% detection rate in Phase 4
+- **Complete application (42 rules):** 100% detection rate (14/14 ground truth)
+- **Missing MEDIUM findings:** Selective approach missed 3 MEDIUM-severity issues
+
+**When scanning IaC/code:**
+1. ✅ Apply ALL rules from `Rules/IaC/*.yml` (currently 42 rules)
+2. ✅ Run skeptic reviews (DevSkeptic + PlatformSkeptic) for each finding
+3. ✅ Adjust severity based on mitigating controls identified by skeptics
+4. ❌ NEVER apply selective rule subsets based on assumed scope
+5. ❌ NEVER skip rules because "this type of issue seems unlikely"
+
+**Skeptic Review Value:**
+- 71% of findings had severity adjusted after skeptic reviews (Exp 015)
+- Average severity reduction: -3.1 points (on 10-point scale)
+- Key adjustments: Identifying VNet rules, managed identities, RBAC, tenant isolation
+- Result: 0% false positive rate vs 5% without skeptic reviews
+
+**Reference:** `Output/Learning/experiments/015_Rules_Engine_Clean_Scan/RESULTS.md`
+
 ## 🚨 Critical Rule: Production Rigor for ALL Environments
 
 **NEVER reduce assessment rigor based on environment classification (CTF, lab, training, test, dev).**
