@@ -1,0 +1,36 @@
+rules:
+  - id: context-nodejs-package-json
+    message: |
+      Node.js project detected.
+      This rule extracts Node.js and framework information.
+    severity: INFO
+    languages: [json]
+    pattern-regex: |
+      "name"\s*:\s*"[^"]+"\s*,.*"version"\s*:\s*"[^"]+"
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: framework
+      technology: [nodejs, javascript, typescript]
+      target_files: ["package.json", "**/package.json"]
+      extracts:
+        framework: Node.js
+        language: JavaScript
+        properties:
+          - name: node_version
+            pattern: '"engines":\s*{\s*"node":\s*"([^"]+)"'
+          - name: npm_version
+            pattern: '"engines":\s*{\s*"npm":\s*"([^"]+)"'
+          - name: typescript
+            pattern: '"typescript":\s*"([^"]+)"'
+          - name: framework_detected
+            patterns:
+              - react: '"react":\s*"([^"]+)"'
+              - express: '"express":\s*"([^"]+)"'
+              - nestjs: '"@nestjs/core":\s*"([^"]+)"'
+              - next: '"next":\s*"([^"]+)"'
+              - vue: '"vue":\s*"([^"]+)"'
+      description: |
+        Detects Node.js projects by scanning package.json files.
+        Extracts Node.js version requirements and popular frameworks.
+        Identifies TypeScript usage and framework dependencies.

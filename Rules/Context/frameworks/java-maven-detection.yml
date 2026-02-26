@@ -1,0 +1,37 @@
+rules:
+  - id: context-java-maven
+    message: |
+      Java/Maven project detected.
+      This rule extracts Java version and framework information.
+    severity: INFO
+    languages: [xml]
+    pattern: |
+      <project ...>
+        ...
+        <groupId>$GROUP</groupId>
+        <artifactId>$ARTIFACT</artifactId>
+        ...
+      </project>
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: framework
+      technology: [java, maven]
+      target_files: ["pom.xml", "**/pom.xml"]
+      extracts:
+        framework: Maven
+        language: Java
+        properties:
+          - name: java_version
+            pattern: '<maven.compiler.source>([0-9.]+)</maven.compiler.source>'
+          - name: spring_boot_version
+            pattern: '<parent>.*<artifactId>spring-boot-starter-parent</artifactId>.*<version>([^<]+)</version>'
+          - name: framework_detected
+            patterns:
+              - spring_boot: '<artifactId>spring-boot-starter'
+              - spring_security: '<artifactId>spring-security-'
+              - hibernate: '<artifactId>hibernate-'
+              - jakarta_ee: '<artifactId>jakarta.'
+      description: |
+        Detects Java projects using Maven by scanning pom.xml files.
+        Extracts Java version, Spring Boot version, and framework dependencies.

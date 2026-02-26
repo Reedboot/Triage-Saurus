@@ -1,0 +1,32 @@
+rules:
+  - id: context-golang-go-mod
+    message: |
+      Go project detected.
+      This rule extracts Go version and module information.
+    severity: INFO
+    languages: [text]
+    pattern-regex: |
+      ^module\s+[^\s]+
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: framework
+      technology: [golang, go]
+      target_files: ["go.mod", "**/go.mod"]
+      extracts:
+        framework: Go
+        language: Go
+        properties:
+          - name: go_version
+            pattern: '^go\s+([0-9.]+)'
+          - name: module_path
+            pattern: '^module\s+([^\s]+)'
+          - name: framework_detected
+            patterns:
+              - gin: 'github.com/gin-gonic/gin'
+              - echo: 'github.com/labstack/echo'
+              - fiber: 'github.com/gofiber/fiber'
+              - chi: 'github.com/go-chi/chi'
+      description: |
+        Detects Go projects by scanning go.mod files.
+        Extracts Go version and popular web frameworks.

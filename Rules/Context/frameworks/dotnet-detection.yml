@@ -1,0 +1,56 @@
+rules:
+  - id: context-dotnet-csproj
+    message: |
+      .NET project detected.
+      This rule extracts .NET version and framework information.
+    severity: INFO
+    languages: [xml]
+    patterns:
+      - pattern: |
+          <Project Sdk="$SDK">
+            ...
+            <TargetFramework>$FRAMEWORK</TargetFramework>
+            ...
+          </Project>
+      - pattern: |
+          <Project Sdk="$SDK">
+            ...
+            <TargetFrameworks>$FRAMEWORKS</TargetFrameworks>
+            ...
+          </Project>
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: framework
+      technology: [dotnet, csharp]
+      target_files: ["*.csproj", "**/*.csproj"]
+      extracts:
+        framework: .NET
+        sdk: $SDK
+        target_framework: $FRAMEWORK
+        language: C#
+        properties:
+          - name: sdk_version
+            detect_from: Project.Sdk attribute
+          - name: target_framework_version
+            pattern: <TargetFramework>net$VERSION</TargetFramework>
+          - name: multi_targeting
+            pattern: <TargetFrameworks>
+          - name: nullable_enabled
+            pattern: <Nullable>$NULLABLE</Nullable>
+          - name: lang_version
+            pattern: <LangVersion>$LANG</LangVersion>
+      version_mapping:
+        net8.0: .NET 8
+        net7.0: .NET 7
+        net6.0: .NET 6
+        net5.0: .NET 5
+        netcoreapp3.1: .NET Core 3.1
+        netstandard2.1: .NET Standard 2.1
+        netstandard2.0: .NET Standard 2.0
+        net48: .NET Framework 4.8
+        net472: .NET Framework 4.7.2
+      description: |
+        Detects .NET projects by scanning .csproj files.
+        Extracts target framework, SDK version, and C# language version.
+        Maps framework monikers (net8.0) to friendly names (.NET 8).

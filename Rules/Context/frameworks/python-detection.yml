@@ -1,0 +1,31 @@
+rules:
+  - id: context-python-requirements
+    message: |
+      Python project detected.
+      This rule extracts Python and framework information.
+    severity: INFO
+    languages: [text]
+    pattern-regex: |
+      ^[a-zA-Z0-9\-_]+(==|>=|<=|~=|!=)[0-9.]+
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: framework
+      technology: [python]
+      target_files: ["requirements.txt", "**/requirements.txt", "pyproject.toml", "**/pyproject.toml"]
+      extracts:
+        framework: Python
+        language: Python
+        properties:
+          - name: python_version
+            pattern: 'python_requires\s*=\s*"([^"]+)"'
+          - name: framework_detected
+            patterns:
+              - django: 'Django==([0-9.]+)'
+              - flask: 'Flask==([0-9.]+)'
+              - fastapi: 'fastapi==([0-9.]+)'
+              - pandas: 'pandas==([0-9.]+)'
+              - numpy: 'numpy==([0-9.]+)'
+      description: |
+        Detects Python projects by scanning requirements.txt and pyproject.toml.
+        Extracts Python version requirements and popular frameworks.
