@@ -19,6 +19,7 @@ Experiment management (for self-optimizing triage):
 - `python3 Scripts/triage_experiment.py resume` — check experiment state, continue from last position
 - `python3 Scripts/triage_experiment.py status` — detailed experiment + learning status
 - `python3 Scripts/triage_experiment.py list` — show all experiments with metrics
+- `python3 Scripts/triage_experiment.py promote <id>` — promote experiment learnings to production (updates SessionKickoff.md, Instructions.md)
 - `python3 Scripts/learning_db.py status` — show SQLite learning database status
 
 Targeted helpers (stdout-only):
@@ -118,12 +119,20 @@ Targeted helpers (stdout-only):
      - Agent traces middleware execution order, routing logic, business purpose
      - Updates Traffic Flow section with complete details
      - See Agents/ContextDiscoveryAgent.md for Phase 2 prompt template
-   - **Phase 3 - Security Review (manual, based on gathered context):**
+   - **Phase 3 - Apply ALL Detection Rules (CRITICAL for 100% detection):**
+     - **IMPORTANT:** Apply ALL rules from `Rules/IaC/*.yml` (not a selective subset)
+     - Experiment 015 learning: Selective rule application achieved only 50% detection in initial pass
+     - Applying all 42 rules ensures complete ground truth coverage (100% detection rate)
+     - For each finding, invoke DevSkeptic + PlatformSkeptic for context-aware severity scoring
+     - Reference rule ID in finding metadata: `detected_by_rule: rule-id`
+     - See `Output/Learning/experiments/015_Rules_Engine_Clean_Scan/RESULTS.md` for validation
+   - **Phase 4 - Security Review (manual, based on gathered context):**
      - Use Phase 1 + Phase 2 context to perform qualitative security review
      - Check auth flows, IaC configs, routing logic, error handling
-     - Invoke Dev Skeptic and Platform Skeptic for scoring
+     - Deep dive on complex attack chains and business logic vulnerabilities
+     - Validate mitigating controls (network rules, managed identities, RBAC)
      - Update TL;DR and Security Observations sections
-   - **Phase 4 - Cloud Architecture Update (if IaC detected):**
+   - **Phase 5 - Cloud Architecture Update (if IaC detected):**
      - Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`
      - Shows where this repo/service fits in overall cloud estate
    - **Optional - Automated Vulnerability Scanning (if requested):**
