@@ -1,0 +1,60 @@
+rules:
+  - id: azure-vm-ubuntu-version-check
+    message: |
+      Virtual machine uses Ubuntu Linux. Version should be reviewed for EOL status.
+      
+      Detected Ubuntu version: Check if this version is end-of-life or approaching EOL.
+      LLM will determine current EOL status and recommend upgrade if needed.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-regex: |
+          resource\s+"azurerm_linux_virtual_machine"\s+"[^"]+"\s*\{[\s\S]*?source_image_reference\s*\{[\s\S]*?offer\s*=\s*"[^"]*ubuntu[^"]*"[\s\S]*?sku\s*=\s*"([^"]+)"
+    metadata:
+      category: security
+      subcategory: [patch-management, lifecycle]
+      cwe: CWE-1395
+      confidence: HIGH
+      likelihood: VARIES
+      impact: VARIES
+      technology: [terraform, azure, linux]
+      llm_review: REQUIRED
+      remediation: |
+        If LLM determines version is EOL or approaching EOL:
+        
+        1. Check current Ubuntu LTS releases at https://ubuntu.com/about/release-cycle
+        2. Upgrade to latest LTS version
+        3. Update source_image_reference:
+        
+        source_image_reference {
+          offer     = "0001-com-ubuntu-server-jammy"  # or latest
+          publisher = "canonical"
+          sku       = "22_04-lts-gen2"  # Update to current LTS
+          version   = "latest"
+        }
+      notes: |
+        **GENERIC OS VERSION DETECTION**
+        
+        This rule detects Ubuntu usage and extracts the version/SKU.
+        The LLM then:
+        - Determines current EOL status based on latest information
+        - Calculates time until EOL
+        - Assesses severity based on:
+          * Already EOL = HIGH/CRITICAL
+          * < 6 months to EOL = MEDIUM
+          * 6-12 months to EOL = LOW
+          * > 12 months = INFO
+        
+        Common Ubuntu LTS versions:
+        - 18.04 LTS (Bionic) - EOL April 2023
+        - 20.04 LTS (Focal) - EOL April 2025
+        - 22.04 LTS (Jammy) - EOL April 2027
+        - 24.04 LTS (Noble) - EOL April 2029
+        
+        Pattern extracts SKU value for LLM analysis.
+        Works with flexible whitespace (handles both `sku = ` and `sku       = `).
+        
+        **For grep-based detection:**
+        ```bash
+        grep -E 'sku\s*=\s*"[^"]*lts[^"]*"' tfscripts/*.tf
+        ```

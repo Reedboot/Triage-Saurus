@@ -1,0 +1,58 @@
+rules:
+  - id: azure-storage-https-not-configured
+    message: |
+      Storage Account does not explicitly configure HTTPS-only traffic enforcement.
+      Missing this property means relying on provider defaults, which may change.
+      Explicitly set enable_https_traffic_only = true for security clarity.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not-inside: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            enable_https_traffic_only = ...
+            ...
+          }
+      - pattern-not-inside: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            https_traffic_only_enabled = ...
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [configuration, cloud, best-practice]
+      cwe: CWE-1188
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: LOW
+      technology: [terraform, azure, storage]
+      remediation: |
+        Explicitly configure HTTPS enforcement:
+        
+        resource "azurerm_storage_account" "example" {
+          name                      = "examplesa"
+          resource_group_name       = azurerm_resource_group.example.name
+          location                  = azurerm_resource_group.example.location
+          account_tier              = "Standard"
+          account_replication_type  = "LRS"
+          enable_https_traffic_only = true  # Explicit is better than implicit
+        }
+      notes: |
+        This rule is informational - it detects missing configuration rather
+        than explicit security issues. Azure defaults to HTTPS-only in modern
+        provider versions, but explicit configuration is best practice.
+        
+        Contrast with azure-storage-https-not-enforced (WARNING):
+        - That rule: explicit `= false` (active risk)
+        - This rule: missing property (configuration hygiene)
+        
+        Why explicit is better:
+        - Makes security intent clear in code review
+        - Prevents accidental changes when provider updates
+        - Documents security requirements
+        - Avoids "works on my machine" issues with provider versions

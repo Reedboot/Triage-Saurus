@@ -1,0 +1,42 @@
+rules:
+  - id: azure-sql-auditing-disabled
+    message: |
+      Azure SQL Database auditing is not configured. Without auditing enabled,
+      there is no visibility into database access patterns, suspicious activities,
+      or potential credential theft. Enable extended auditing policy with Log
+      Analytics or Storage Account destination.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_mssql_database" "$DB" {
+            ...
+          }
+      - pattern-not-inside: |
+          resource "azurerm_mssql_database_extended_auditing_policy" "$POLICY" {
+            database_id = azurerm_mssql_database.$DB.id
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [logging, monitoring, cloud]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure, sql]
+      remediation: |
+        Add extended auditing policy:
+        
+        resource "azurerm_mssql_database_extended_auditing_policy" "example" {
+          database_id                             = azurerm_mssql_database.example.id
+          storage_endpoint                        = azurerm_storage_account.example.primary_blob_endpoint
+          storage_account_access_key              = azurerm_storage_account.example.primary_access_key
+          storage_account_access_key_is_secondary = false
+          retention_in_days                       = 90
+        }
+      notes: |
+        Detection requires checking that:
+        1. Each azurerm_mssql_database has a corresponding auditing policy
+        2. The policy references the correct database_id
+        3. A valid destination (Storage or Log Analytics) is configured

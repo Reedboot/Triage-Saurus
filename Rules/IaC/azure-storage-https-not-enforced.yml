@@ -1,0 +1,56 @@
+rules:
+  - id: azure-storage-https-not-enforced
+    message: |
+      Storage Account does not enforce HTTPS-only traffic. Either the property
+      is explicitly set to false or is missing (relying on defaults). Data 
+      transmitted over HTTP can be intercepted. Enable HTTPS-only mode explicitly.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      # Detects explicit false setting
+      - pattern-either:
+          - pattern: |
+              resource "azurerm_storage_account" "$NAME" {
+                ...
+                enable_https_traffic_only = false
+                ...
+              }
+          - pattern: |
+              resource "azurerm_storage_account" "$NAME" {
+                ...
+                https_traffic_only_enabled = false
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption, network, cloud]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure, storage]
+      remediation: |
+        Enable HTTPS-only mode explicitly:
+        
+        resource "azurerm_storage_account" "example" {
+          name                      = "examplesa"
+          resource_group_name       = azurerm_resource_group.example.name
+          location                  = azurerm_resource_group.example.location
+          account_tier              = "Standard"
+          account_replication_type  = "LRS"
+          enable_https_traffic_only = true  # or https_traffic_only_enabled = true
+        }
+      notes: |
+        This rule detects explicit disabling of HTTPS enforcement.
+        
+        For missing properties (relying on defaults), use companion rule:
+        azure-storage-https-not-configured.yml
+        
+        Azure Storage Account property names vary by provider version:
+        - Older: enable_https_traffic_only
+        - Newer: https_traffic_only_enabled
+        
+        Impact:
+        - Blob/File/Queue/Table data transmitted unencrypted over HTTP
+        - Subject to man-in-the-middle attacks
+        - Non-compliant with security standards (PCI-DSS, HIPAA, etc.)

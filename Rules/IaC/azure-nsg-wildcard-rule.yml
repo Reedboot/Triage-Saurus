@@ -1,0 +1,63 @@
+rules:
+  - id: azure-nsg-wildcard-rule
+    message: |
+      Network Security Group rule uses wildcard "*" for source or destination.
+      This effectively allows traffic from/to ANY IP address, similar to 0.0.0.0/0.
+      Restrict to specific IP ranges, service tags, or application security groups.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              resource "azurerm_network_security_rule" "$NAME" {
+                ...
+                source_address_prefix = "*"
+                ...
+              }
+          - pattern: |
+              resource "azurerm_network_security_rule" "$NAME" {
+                ...
+                destination_address_prefix = "*"
+                ...
+              }
+          - pattern: |
+              resource "azurerm_network_security_rule" "$NAME" {
+                ...
+                source_port_range = "*"
+                ...
+                access = "Allow"
+                ...
+              }
+          - pattern: |
+              resource "azurerm_network_security_rule" "$NAME" {
+                ...
+                destination_port_range = "*"
+                ...
+                access = "Allow"
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, cloud, firewall]
+      cwe: CWE-923
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure, networking]
+      remediation: |
+        Replace wildcard with specific values:
+        - source_address_prefix = "10.0.1.0/24"  # Specific subnet
+        - source_address_prefix = "VirtualNetwork"  # Service tag
+        - destination_port_range = "443"  # Specific port
+        
+        For multiple values, use prefixes (plural):
+        - source_address_prefixes = ["10.0.1.0/24", "10.0.2.0/24"]
+      notes: |
+        Wildcards in NSG rules include:
+        - "*" in address prefixes (source/destination)
+        - "*" in port ranges (any port)
+        - Priority with "*" may indicate overly permissive rules
+        
+        Context matters:
+        - Inbound Allow with "*" source = internet exposure
+        - Outbound Deny with "*" destination = egress lockdown (good)
