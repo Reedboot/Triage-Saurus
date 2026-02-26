@@ -15,9 +15,9 @@
 
 ## 🏗️ Architecture
 
-\`\`\`mermaid
+```mermaid
 ${architecture_diagram}
-\`\`\`
+```
 
 ## 🔐 Authentication & Identity
 
