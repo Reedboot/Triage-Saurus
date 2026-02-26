@@ -3,7 +3,13 @@
 **Repository Type:** ${repo_type}  
 **Generated:** ${timestamp}
 
-## 📋 Quick Stats
+## 🏗️ Architecture
+
+```mermaid
+${architecture_diagram}
+```
+
+## 📊 TL;DR
 
 | Aspect | Value |
 |--------|-------|
@@ -11,19 +17,17 @@
 | **Hosting** | ${hosting} |
 | **CI/CD** | ${ci_cd} |
 | **Cloud Providers** | ${providers} |
-| **Framework** | ${framework} |
+| **Security Status** | 🔍 Phase 1 discovery - security review pending |
 
-## 🏗️ Architecture
+**Top Risks:** PHASE 2 TODO - Run security scan to identify risks
 
-```mermaid
-${architecture_diagram}
-```
+## 🧭 Overview
 
-## 🔐 Authentication & Identity
+### 🔐 Authentication & Identity
 
 ${auth_summary}
 
-## 🌐 Network Topology
+### 🌐 Network Topology
 
 ${network_summary}
 
