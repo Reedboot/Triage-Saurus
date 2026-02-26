@@ -42,6 +42,7 @@ Targeted helpers (stdout-only):
    - If experiment awaiting review → prompt for review
    - If learning pending → offer to apply learnings
    - If fresh/no experiments → proceed to normal triage flow
+   - **Parallel experiments:** Multiple experiments can run simultaneously. If user wants to start a new experiment while another is running, create the new experiment without stopping the existing one. Use `python3 Scripts/triage_experiment.py list` to see all experiments and their statuses.
 
 4. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
 
