@@ -13,6 +13,7 @@ Usage:
     python3 Scripts/triage_experiment.py review <id>
     python3 Scripts/triage_experiment.py compare <id1> <id2>
     python3 Scripts/triage_experiment.py learn <id>
+    python3 Scripts/triage_experiment.py promote <id>
 """
 
 from __future__ import annotations
@@ -844,6 +845,112 @@ def cmd_learn(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_promote(args: argparse.Namespace) -> int:
+    """Promote experiment learnings to production instructions."""
+    # Find experiment directory
+    exp_dirs = list(EXPERIMENTS_DIR.glob(f"{args.id}_*"))
+    if not exp_dirs:
+        print(f"ERROR: Experiment {args.id} not found")
+        return 1
+    
+    exp_dir = exp_dirs[0]
+    exp_name = exp_dir.name
+    
+    # Check for key result files
+    results_file = exp_dir / "RESULTS.md"
+    if not results_file.exists():
+        print(f"ERROR: No RESULTS.md found in {exp_dir}")
+        print("Complete the experiment and document results before promoting.")
+        return 1
+    
+    print(f"== Promote Learnings: Experiment {args.id} ({exp_name}) ==")
+    print()
+    print("This will:")
+    print("  1. Analyze experiment results for key learnings")
+    print("  2. Update SessionKickoff.md with workflow improvements")
+    print("  3. Update Agents/Instructions.md with best practices")
+    print("  4. Create a learning summary document")
+    print("  5. Track promotion in experiment metadata")
+    print()
+    
+    # Show available result documents
+    result_docs = list(exp_dir.glob("*.md"))
+    print("Available result documents:")
+    for doc in sorted(result_docs):
+        if doc.name not in [".gitkeep"]:
+            print(f"  - {doc.name}")
+    print()
+    
+    # Check if already promoted (handle legacy experiments without experiment.json)
+    config_file = exp_dir / "experiment.json"
+    promoted_at = None
+    
+    if config_file.exists():
+        config = json.loads(config_file.read_text())
+        promoted_at = config.get("promoted_at")
+    
+    if promoted_at:
+        print(f"⚠️  This experiment was already promoted on {promoted_at}")
+        confirm = input("Promote again? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("Aborted.")
+            return 0
+        print()
+    
+    print("RECOMMENDATION:")
+    print("  Use the GitHub Copilot CLI to help with promotion:")
+    print()
+    print("  Example prompt:")
+    print(f'  "Review experiment {args.id} results and promote key learnings to')
+    print('   SessionKickoff.md and Agents/Instructions.md. Create a summary')
+    print(f'   document at Output/Learning/EXPERIMENT_{args.id.zfill(3)}_LEARNINGS.md"')
+    print()
+    print("  The CLI will:")
+    print("  - Read RESULTS.md and analysis documents")
+    print("  - Identify critical learnings (e.g., rule coverage, skeptic value)")
+    print("  - Update phase workflows in SessionKickoff.md")
+    print("  - Add best practices to Instructions.md")
+    print("  - Create comprehensive learning summary")
+    print()
+    
+    # Mark as promoted
+    if not args.dry_run:
+        timestamp = datetime.now().isoformat()
+        
+        # Update experiment.json if it exists, otherwise create promotion marker
+        if config_file.exists():
+            config = json.loads(config_file.read_text())
+            config["promoted_at"] = timestamp
+            config["promoted_by"] = "manual"
+            config_file.write_text(json.dumps(config, indent=2))
+        else:
+            # Legacy experiment - create a promotion marker file
+            promotion_file = exp_dir / "PROMOTED.json"
+            promotion_file.write_text(json.dumps({
+                "promoted_at": timestamp,
+                "promoted_by": "manual",
+                "note": "Legacy experiment without experiment.json"
+            }, indent=2))
+        
+        # Update database if experiment exists there
+        try:
+            db.update_experiment(
+                args.id,
+                promoted_at=timestamp,
+            )
+        except Exception as e:
+            print(f"Note: Could not update database (experiment may not be tracked): {e}")
+        
+        print(f"✅ Experiment {args.id} marked as promoted.")
+        print(f"   Timestamp: {timestamp}")
+        if not config_file.exists():
+            print(f"   Marker: {promotion_file.relative_to(REPO_ROOT)}")
+    else:
+        print("(Dry run - no changes made)")
+    
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Triage-Saurus Experiment Management",
@@ -888,6 +995,11 @@ def main() -> int:
     learn_parser = subparsers.add_parser("learn", help="Apply learnings from feedback")
     learn_parser.add_argument("id", help="Experiment ID")
     
+    # promote
+    promote_parser = subparsers.add_parser("promote", help="Promote experiment learnings to production")
+    promote_parser.add_argument("id", help="Experiment ID")
+    promote_parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    
     args = parser.parse_args()
     
     commands = {
@@ -900,6 +1012,7 @@ def main() -> int:
         "review": cmd_review,
         "compare": cmd_compare,
         "learn": cmd_learn,
+        "promote": cmd_promote,
     }
     
     return commands[args.command](args)

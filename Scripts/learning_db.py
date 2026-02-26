@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     false_positives INTEGER,
     accuracy_rate REAL,
     human_reviewed INTEGER DEFAULT 0,
+    promoted_at TIMESTAMP,  -- When learnings were promoted to production
+    promoted_by TEXT,  -- manual, automated, or user identifier
     notes TEXT
 );
 
