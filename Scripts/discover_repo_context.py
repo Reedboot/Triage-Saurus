@@ -36,6 +36,7 @@ from pathlib import Path
 
 from output_paths import OUTPUT_KNOWLEDGE_DIR, OUTPUT_SUMMARY_DIR
 from markdown_validator import validate_markdown_file
+from template_renderer import render_template
 
 # Database integration
 try:
