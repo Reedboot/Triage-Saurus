@@ -413,10 +413,12 @@ flowchart TB
 **Key Architecture Pattern:** 
 Brief description of the overall architecture pattern.
 
-**Top 3 Gaps:**
-1. Gap 1 - action needed
-2. Gap 2 - action needed
-3. Gap 3 - action needed
+**Top 3 Priority Actions:**
+| # | Action | Why | Finding |
+|---|--------|-----|---------|
+| 1 | Action needed | Explain reasoning | [Finding_Name](../Findings/Cloud/Finding_Name.md) |
+| 2 | Action needed | Explain reasoning | [Finding_Name](../Findings/Cloud/Finding_Name.md) |
+| 3 | Action needed | Explain reasoning | [Finding_Name](../Findings/Cloud/Finding_Name.md) |
 
 ---
 
