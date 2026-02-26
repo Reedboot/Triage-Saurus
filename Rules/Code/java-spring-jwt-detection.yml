@@ -1,0 +1,18 @@
+rules:
+  - id: java-spring-jwt-detection
+    message: |
+      Spring Security config enables JWT-based auth (`oauth2ResourceServer().jwt()` / `NimbusJwtDecoder`) indicating bearer token enforcement.
+      Capture this signal to link findings that depend on JWT validation (signing keys, scopes, expiry).
+    severity: INFO
+    languages: [java]
+    patterns:
+      - pattern: |
+          http.oauth2ResourceServer().jwt()
+      - pattern: |
+          NimbusJwtDecoder.withJwkSetUri($URI).build()
+    metadata:
+      category: discovery
+      subcategory: [authentication, jwt]
+      technology: [java, spring]
+      cwe: CWE-287
+      signal: jwt_auth

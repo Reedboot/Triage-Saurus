@@ -1,0 +1,14 @@
+rules:
+  - id: node-jwt-auth-detection
+    message: |
+      Node.js service enforces JWT authentication (express-jwt/passport-jwt/jsonwebtoken usage detected).
+      Use this signal to reason about token validation, signature handling, and downstream credential requirements.
+    severity: INFO
+    languages: [javascript, typescript]
+    pattern-regex: "(passport\\.authenticate\\(['\"]jwt['\"]|jwt\\.verify\\(|expressJwt\\s*\\()"
+    metadata:
+      category: discovery
+      subcategory: [authentication, jwt]
+      technology: [nodejs]
+      cwe: CWE-287
+      signal: jwt_auth

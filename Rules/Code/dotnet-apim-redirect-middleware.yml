@@ -1,0 +1,19 @@
+rules:
+  - id: dotnet-apim-redirect-middleware
+    message: |
+      ASP.NET Core application registers `RedirectToApiManagerMiddleware`, indicating reverse-proxy routing to API Management.
+      Capture this signal so downstream analysis can reason about APIM forwarding logic (rate limits, auth, logging).
+    severity: INFO
+    languages: [csharp]
+    patterns:
+      - pattern: |
+          UseMiddleware<$MIDDLEWARE>
+      - metavariable-regex:
+          metavariable: $MIDDLEWARE
+          regex: (?i).*ApiManager.*
+    metadata:
+      category: discovery
+      subcategory: [routing, apim]
+      technology: [dotnet, apim]
+      cwe: CWE-441
+      signal: apim_proxy

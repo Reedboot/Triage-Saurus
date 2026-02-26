@@ -1,0 +1,14 @@
+rules:
+  - id: go-jwt-auth-detection
+    message: |
+      Go service validates JWTs using common libraries (github.com/golang-jwt/jwt / Auth0) or middleware.
+      This signal indicates bearer token enforcement for API requests.
+    severity: INFO
+    languages: [go]
+    pattern-regex: "(jwt\\.Parse\\(|jwt\\.NewWithClaims\\(|auth0/go-jwt-middleware)"
+    metadata:
+      category: discovery
+      subcategory: [authentication, jwt]
+      technology: [go]
+      cwe: CWE-287
+      signal: jwt_auth

@@ -1,0 +1,21 @@
+rules:
+  - id: dotnet-jwt-parser-detection
+    message: |
+      ASP.NET Core project defines and registers a JWT parser service, signalling JWT-based request authentication.
+      Capture this to correlate downstream rules about token validation, signature handling, and credential flow.
+    severity: INFO
+    languages: [csharp]
+    patterns:
+      - pattern: |
+          class $CLASS : IJwtParser
+      - pattern-inside: |
+          namespace $NS
+          {
+            ...
+          }
+    metadata:
+      category: discovery
+      subcategory: [authentication, jwt]
+      technology: [dotnet]
+      cwe: CWE-287
+      signal: jwt_auth

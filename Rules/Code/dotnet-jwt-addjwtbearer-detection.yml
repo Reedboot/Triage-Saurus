@@ -1,0 +1,24 @@
+rules:
+  - id: dotnet-jwt-addjwtbearer-detection
+    message: |
+      ASP.NET Core config registers JWT bearer authentication (`AddAuthentication(...).AddJwtBearer(...)`).
+      Emits a `jwt_auth` signal so downstream analysis knows bearer tokens protect inbound requests.
+    severity: INFO
+    languages: [csharp]
+    patterns:
+      - pattern: |
+          services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+              .AddJwtBearer($OPTIONS => {
+                  ...
+              });
+      - pattern: |
+          builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+              .AddJwtBearer($OPTIONS => {
+                  ...
+              });
+    metadata:
+      category: discovery
+      subcategory: [authentication, jwt]
+      technology: [dotnet]
+      cwe: CWE-287
+      signal: jwt_auth
