@@ -36,7 +36,6 @@ from pathlib import Path
 
 from output_paths import OUTPUT_KNOWLEDGE_DIR, OUTPUT_SUMMARY_DIR
 from markdown_validator import validate_markdown_file
-from template_renderer import render_template
 
 # Database integration
 try:
@@ -5444,43 +5443,15 @@ def write_experiment_cloud_architecture_summary(
     return first_out_path
 
 
-def write_repo_summary(
-    *,
-    repo: Path,
+def _build_simple_architecture_diagram(
     repo_name: str,
-    repo_type: str,
-    purpose: str,
-    langs: list[tuple[str, str]],
-    ci: str,
-    providers: list[str],
-    ingress: list[Evidence],
-    egress: list[Evidence],
-    extra_evidence: list[Evidence],
-    scan_scope: str,
-    dotnet_info: dict[str, str | None] = None,
-    summary_dir: Path | None = None,
-) -> Path:
-    """Write repository summary using template_renderer."""
-    sdir = summary_dir if summary_dir else OUTPUT_SUMMARY_DIR
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "Repos").mkdir(parents=True, exist_ok=True)
-    out_path = sdir / "Repos" / f"{repo_name}.md"
-
-    # Data preparation - keep all detect_* calls
-    provider_line = ", ".join(providers) if providers else "Unknown"
-    tf_resource_types = detect_terraform_resources(iter_files(repo), repo)
-    hosting_info = detect_hosting_from_terraform(iter_files(repo), repo)
-    ingress_info = detect_ingress_from_code(iter_files(repo), repo)
-    apim_routing = detect_apim_routing_config(iter_files(repo), repo)
-    backend_result = detect_apim_backend_services(iter_files(repo), repo)
-    auth_service = backend_result["auth_service"]
-    backend_services = backend_result["backends"]
-    external_deps = detect_external_dependencies(iter_files(repo), repo)
-    auth_methods = detect_authentication_methods(iter_files(repo), repo)
-    network_info = detect_network_topology(iter_files(repo), repo)
-    ci_cd_info = parse_ci_cd_details(repo)
-
-    # Build architecture diagram (simplified)
+    hosting_info: dict,
+    tf_resource_types: set[str],
+    ingress_info: dict,
+    auth_service: str,
+    backend_services: list[str],
+) -> str:
+    """Build simplified architecture diagram for template."""
     has_kv = "azurerm_key_vault" in tf_resource_types
     has_sql = any(t in tf_resource_types for t in {"azurerm_mssql_server", "azurerm_mssql_database", "azurerm_sql_server", "azurerm_sql_database"})
     has_webapp = hosting_info["type"] in {"Windows App Service", "Linux App Service"} or "azurerm_linux_web_app" in tf_resource_types or "azurerm_windows_web_app" in tf_resource_types
@@ -5512,8 +5483,7 @@ def write_repo_summary(
     
     # Add connections
     if has_appgw and has_webapp:
-        diagram_lines.append("  internet[Internet] --> appgw")
-        diagram_lines.append("  appgw --> web")
+        diagram_lines.extend(["  internet[Internet] --> appgw", "  appgw --> web"])
     elif has_webapp:
         diagram_lines.append("  internet[Internet] --> web")
     if has_webapp and has_sql:
@@ -5521,13 +5491,69 @@ def write_repo_summary(
     if has_webapp and has_kv:
         diagram_lines.append("  web --> kv")
     if has_webapp and has_apim and auth_service:
-        diagram_lines.append("  web --> apim")
-        diagram_lines.append("  apim --> auth")
+        diagram_lines.extend(["  web --> apim", "  apim --> auth"])
     if has_apim and backend_services:
         for idx in range(1, len(backend_services) + 1):
             diagram_lines.append(f"  apim --> backend{idx}")
+    
+    return "\n".join(diagram_lines)
 
-    architecture_diagram = "\n".join(diagram_lines)
+
+def _group_evidence(evidence_list: list) -> list[str]:
+    """Group evidence items by label, showing count if multiple."""
+    grouped: dict[str, list] = {}
+    for ev in evidence_list:
+        grouped.setdefault(ev.label, []).append(ev)
+    
+    result = []
+    for label, items in grouped.items():
+        if len(items) == 1:
+            result.append(items[0].fmt())
+        else:
+            first_path = items[0].path.split(":")[0] if ":" in items[0].path else items[0].path
+            result.append(f"- 💡 {label} — {len(items)} files (e.g., `{first_path}`)")
+    return result
+
+
+def write_repo_summary(
+    *,
+    repo: Path,
+    repo_name: str,
+    repo_type: str,
+    purpose: str,
+    langs: list[tuple[str, str]],
+    ci: str,
+    providers: list[str],
+    ingress: list[Evidence],
+    egress: list[Evidence],
+    extra_evidence: list[Evidence],
+    scan_scope: str,
+    dotnet_info: dict[str, str | None] = None,
+    summary_dir: Path | None = None,
+) -> Path:
+    """Write repository summary using template_renderer."""
+    sdir = summary_dir if summary_dir else OUTPUT_SUMMARY_DIR
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "Repos").mkdir(parents=True, exist_ok=True)
+    out_path = sdir / "Repos" / f"{repo_name}.md"
+
+    # Data preparation - keep all detect_* calls
+    provider_line = ", ".join(providers) if providers else "Unknown"
+    tf_resource_types = detect_terraform_resources(iter_files(repo), repo)
+    hosting_info = detect_hosting_from_terraform(iter_files(repo), repo)
+    ingress_info = detect_ingress_from_code(iter_files(repo), repo)
+    backend_result = detect_apim_backend_services(iter_files(repo), repo)
+    auth_service = backend_result["auth_service"]
+    backend_services = backend_result["backends"]
+    external_deps = detect_external_dependencies(iter_files(repo), repo)
+    auth_methods = detect_authentication_methods(iter_files(repo), repo)
+    network_info = detect_network_topology(iter_files(repo), repo)
+    ci_cd_info = parse_ci_cd_details(repo)
+
+    # Build architecture diagram
+    architecture_diagram = _build_simple_architecture_diagram(
+        repo_name, hosting_info, tf_resource_types, ingress_info, auth_service, backend_services
+    )
 
     # Build context dict for template
     lang_list = [f"{l} (evidence: `{e}`)" for l, e in langs] if langs else ["none detected"]
@@ -5543,30 +5569,14 @@ def write_repo_summary(
     
     framework = ", ".join([l for l, _ in langs[:2]]) if langs else "Unknown"
     
-    # Auth summary
     auth_summary = "No authentication mechanisms detected." if not auth_methods["methods"] else \
         f"Detected methods: {', '.join(list(auth_methods['methods'])[:5])}"
     
-    # Network summary
     network_summary = "No network topology detected." if not (network_info["vnets"] or network_info["nsgs"]) else \
         f"VNets: {len(network_info['vnets'])}, NSGs: {len(network_info['nsgs'])}, Private Endpoints: {len(network_info['private_endpoints'])}"
     
-    # Ingress summary
-    def group_evidence(evidence_list: list) -> list[str]:
-        grouped: dict[str, list] = {}
-        for ev in evidence_list:
-            grouped.setdefault(ev.label, []).append(ev)
-        result = []
-        for label, items in grouped.items():
-            if len(items) == 1:
-                result.append(items[0].fmt())
-            else:
-                first_path = items[0].path.split(":")[0] if ":" in items[0].path else items[0].path
-                result.append(f"- 💡 {label} — {len(items)} files (e.g., `{first_path}`)")
-        return result
-    
-    ingress_summary = "\n".join(group_evidence(ingress)) if ingress else "No ingress signals detected in quick scan."
-    egress_summary = "\n".join(group_evidence(egress)) if egress else "No egress signals detected in quick scan."
+    ingress_summary = "\n".join(_group_evidence(ingress)) if ingress else "No ingress signals detected in quick scan."
+    egress_summary = "\n".join(_group_evidence(egress)) if egress else "No egress signals detected in quick scan."
     
     # External dependencies
     ext_deps_parts = []
@@ -5581,15 +5591,10 @@ def write_repo_summary(
     external_deps_str = "\n".join(ext_deps_parts) if ext_deps_parts else "None detected."
     
     # Evidence list
-    evidence_lines = group_evidence((extra_evidence + ingress + egress)[:30])
-    if not evidence_lines:
-        evidence_lines = ["- 💡 (no notable evidence captured)"]
-    evidence_list = "\n".join(evidence_lines)
+    evidence_lines = _group_evidence((extra_evidence + ingress + egress)[:30])
+    evidence_list = "\n".join(evidence_lines) if evidence_lines else "- 💡 (no notable evidence captured)"
     
-    # Notes
-    notes = f"Repository type: {repo_type}. Purpose: {purpose}."
-    
-    # Build context
+    # Build context dict
     context = {
         "repo_name": repo_name,
         "repo_type": repo_type,
@@ -5606,14 +5611,14 @@ def write_repo_summary(
         "egress_summary": egress_summary,
         "external_deps": external_deps_str,
         "evidence_list": evidence_list,
-        "notes": notes,
+        "notes": f"Repository type: {repo_type}. Purpose: {purpose}.",
     }
     
-    # Render template
+    # Render template and write
     content = render_template("RepoSummary.md", context)
-    
-    # Write and validate
     out_path.write_text(content, encoding="utf-8")
+    
+    # Validate markdown
     probs = validate_markdown_file(out_path, fix=True)
     errs = [p for p in probs if p.level == "ERROR"]
     warns = [p for p in probs if p.level == "WARN"]
@@ -5624,6 +5629,7 @@ def write_repo_summary(
         raise SystemExit(f"Mermaid validation failed for {out_path}: {errs[0].message}")
     
     return out_path
+
 
 
 def main() -> int:
