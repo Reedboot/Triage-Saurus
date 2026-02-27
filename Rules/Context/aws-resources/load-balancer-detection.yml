@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-load-balancer
+    message: |
+      AWS Load Balancer detected in infrastructure.
+      This rule extracts load balancer configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_lb" $NAME {
+        ...
+        name = "$LB_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, load_balancer]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Load Balancer
+        resource_type: aws_lb
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$LB_NAME"
+          - name: load_balancer_type
+            pattern: load_balancer_type = "$LB_TYPE"
+          - name: internal
+            pattern: internal = $INTERNAL
+          - name: security_groups
+            pattern: security_groups = $SECURITY_GROUPS
+      description: |
+        Detects AWS Application/Network Load Balancers in Terraform to enable ingress/egress focused scans.

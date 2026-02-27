@@ -1,0 +1,32 @@
+rules:
+  - id: context-aws-api-gateway-rest
+    message: |
+      AWS API Gateway REST API detected in infrastructure.
+      This rule extracts API Gateway configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_api_gateway_rest_api" $NAME {
+        ...
+        name = "$API_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api_gateway
+      technology: [terraform, aws, api_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway REST API
+        resource_type: aws_api_gateway_rest_api
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$API_NAME"
+          - name: minimum_compression_size
+            pattern: minimum_compression_size = $COMPRESSION
+          - name: endpoint_configuration
+            pattern: endpoint_configuration = $ENDPOINT_CONFIG
+      description: |
+        Detects AWS API Gateway REST APIs in Terraform to drive API security rule coverage.

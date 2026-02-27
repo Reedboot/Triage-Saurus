@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-cloudfront-distribution
+    message: |
+      AWS CloudFront Distribution detected in infrastructure.
+      This rule extracts CDN configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_cloudfront_distribution" $NAME {
+        ...
+        enabled = $ENABLED
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: edge
+      technology: [terraform, aws, cloudfront]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CloudFront Distribution
+        resource_type: aws_cloudfront_distribution
+        resource_name: $NAME
+        properties:
+          - name: enabled
+            pattern: enabled = $ENABLED
+          - name: aliases
+            pattern: aliases = $ALIASES
+          - name: default_cache_behavior
+            pattern: default_cache_behavior = $CACHE_BEHAVIOR
+          - name: viewer_certificate
+            pattern: viewer_certificate = $VIEWER_CERT
+      description: |
+        Detects AWS CloudFront distributions in Terraform to drive CDN and edge security rule coverage.

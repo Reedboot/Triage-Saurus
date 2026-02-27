@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-kms-key
+    message: |
+      AWS KMS Key detected in infrastructure.
+      This rule extracts key configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_kms_key" $NAME {
+        ...
+        description = "$DESCRIPTION"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: key_management
+      technology: [terraform, aws, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key
+        resource_type: aws_kms_key
+        resource_name: $NAME
+        properties:
+          - name: description
+            pattern: description = "$DESCRIPTION"
+          - name: key_usage
+            pattern: key_usage = "$USAGE"
+          - name: is_enabled
+            pattern: is_enabled = $ENABLED
+          - name: enable_key_rotation
+            pattern: enable_key_rotation = $ROTATION
+      description: |
+        Detects AWS KMS keys in Terraform to inform encryption-related rule selection.

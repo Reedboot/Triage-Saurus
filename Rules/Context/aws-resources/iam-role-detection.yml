@@ -1,0 +1,32 @@
+rules:
+  - id: context-aws-iam-role
+    message: |
+      AWS IAM Role detected in infrastructure.
+      This rule extracts role configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_iam_role" $NAME {
+        ...
+        name = "$ROLE_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, aws, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: IAM Role
+        resource_type: aws_iam_role
+        resource_name: $NAME
+        properties:
+          - name: role_name
+            pattern: name = "$ROLE_NAME"
+          - name: assume_role_policy
+            pattern: assume_role_policy = $POLICY
+          - name: max_session_duration
+            pattern: max_session_duration = $DURATION
+      description: |
+        Detects AWS IAM roles in Terraform configurations for identity-focused context awareness.

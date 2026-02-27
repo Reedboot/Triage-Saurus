@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-s3-bucket
+    message: |
+      AWS S3 Bucket detected in infrastructure.
+      This rule extracts bucket configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_s3_bucket" $NAME {
+        ...
+        bucket = "$BUCKET"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, aws, s3]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: S3 Bucket
+        resource_type: aws_s3_bucket
+        resource_name: $NAME
+        properties:
+          - name: bucket
+            pattern: bucket = "$BUCKET"
+          - name: acl
+            pattern: acl = "$ACL"
+          - name: force_destroy
+            pattern: force_destroy = $FORCE_DESTROY
+          - name: object_lock_enabled
+            pattern: object_lock_enabled = $OBJECT_LOCK
+      description: |
+        Detects AWS S3 bucket resources in Terraform to enable storage-specific rule gating.

@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-eks-cluster
+    message: |
+      AWS EKS Cluster detected in infrastructure.
+      This rule extracts Kubernetes control plane configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_eks_cluster" $NAME {
+        ...
+        name = "$CLUSTER_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kubernetes
+      technology: [terraform, aws, eks]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: EKS Cluster
+        resource_type: aws_eks_cluster
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$CLUSTER_NAME"
+          - name: version
+            pattern: version = "$VERSION"
+          - name: endpoint_public_access
+            pattern: endpoint_public_access = $PUBLIC_ACCESS
+          - name: role_arn
+            pattern: role_arn = $ROLE_ARN
+      description: |
+        Detects AWS EKS clusters in Terraform to drive Kubernetes-specific context and rule gating.

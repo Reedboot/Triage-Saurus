@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-ec2-instance
+    message: |
+      AWS EC2 Instance detected in infrastructure.
+      This rule extracts instance configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_instance" $NAME {
+        ...
+        ami = "$AMI"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, aws, ec2]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: EC2 Instance
+        resource_type: aws_instance
+        resource_name: $NAME
+        properties:
+          - name: ami
+            pattern: ami = "$AMI"
+          - name: instance_type
+            pattern: instance_type = "$TYPE"
+          - name: subnet_id
+            pattern: subnet_id = $SUBNET
+          - name: vpc_security_group_ids
+            pattern: vpc_security_group_ids = $SECURITY_GROUPS
+      description: |
+        Detects AWS EC2 instances declared in Terraform for compute-focused scanning context.

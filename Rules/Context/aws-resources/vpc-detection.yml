@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-vpc
+    message: |
+      AWS VPC detected in infrastructure.
+      This rule extracts VPC configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_vpc" $NAME {
+        ...
+        cidr_block = "$CIDR"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, vpc]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC
+        resource_type: aws_vpc
+        resource_name: $NAME
+        properties:
+          - name: cidr_block
+            pattern: cidr_block = "$CIDR"
+          - name: enable_dns_support
+            pattern: enable_dns_support = $DNS_SUPPORT
+          - name: enable_dns_hostnames
+            pattern: enable_dns_hostnames = $DNS_HOSTNAMES
+          - name: tags
+            pattern: tags = $TAGS
+      description: |
+        Detects AWS VPC resources in Terraform to inform VPC and networking-focused scans.

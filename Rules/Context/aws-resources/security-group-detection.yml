@@ -1,0 +1,36 @@
+rules:
+  - id: context-aws-security-group
+    message: |
+      AWS Security Group detected in infrastructure.
+      This rule extracts security group configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_security_group" $NAME {
+        ...
+        name = "$SG_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, security_group]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group
+        resource_type: aws_security_group
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$SG_NAME"
+          - name: description
+            pattern: description = "$DESCRIPTION"
+          - name: vpc_id
+            pattern: vpc_id = $VPC_ID
+          - name: ingress
+            pattern: ingress = $INGRESS
+          - name: egress
+            pattern: egress = $EGRESS
+      description: |
+        Detects AWS security groups in Terraform to drive network security rule selection.

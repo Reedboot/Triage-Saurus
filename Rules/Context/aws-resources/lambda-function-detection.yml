@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-lambda-function
+    message: |
+      AWS Lambda Function detected in infrastructure.
+      This rule extracts Lambda configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_lambda_function" $NAME {
+        ...
+        function_name = "$FUNCTION"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, aws, lambda]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Lambda Function
+        resource_type: aws_lambda_function
+        resource_name: $NAME
+        properties:
+          - name: function_name
+            pattern: function_name = "$FUNCTION"
+          - name: runtime
+            pattern: runtime = "$RUNTIME"
+          - name: handler
+            pattern: handler = "$HANDLER"
+          - name: role
+            pattern: role = $ROLE
+      description: |
+        Detects AWS Lambda function resources in Terraform to inform serverless-specific scanning.

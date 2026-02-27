@@ -1,0 +1,34 @@
+rules:
+  - id: context-aws-dynamodb-table
+    message: |
+      AWS DynamoDB Table detected in infrastructure.
+      This rule extracts table configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_dynamodb_table" $NAME {
+        ...
+        name = "$TABLE_NAME"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, aws, dynamodb]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: DynamoDB Table
+        resource_type: aws_dynamodb_table
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$TABLE_NAME"
+          - name: billing_mode
+            pattern: billing_mode = "$BILLING_MODE"
+          - name: server_side_encryption
+            pattern: server_side_encryption = $SSE
+          - name: point_in_time_recovery
+            pattern: point_in_time_recovery = $PITR
+      description: |
+        Detects AWS DynamoDB tables in Terraform to guide database-specific scan coverage.

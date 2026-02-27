@@ -1,0 +1,36 @@
+rules:
+  - id: context-aws-rds-instance
+    message: |
+      AWS RDS Instance detected in infrastructure.
+      This rule extracts database configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_db_instance" $NAME {
+        ...
+        identifier = "$IDENTIFIER"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, aws, rds]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: RDS Instance
+        resource_type: aws_db_instance
+        resource_name: $NAME
+        properties:
+          - name: identifier
+            pattern: identifier = "$IDENTIFIER"
+          - name: engine
+            pattern: engine = "$ENGINE"
+          - name: engine_version
+            pattern: engine_version = "$VERSION"
+          - name: instance_class
+            pattern: instance_class = "$CLASS"
+          - name: storage_encrypted
+            pattern: storage_encrypted = $ENCRYPTED
+      description: |
+        Detects AWS RDS database instances to enable database-focused rule execution.
