@@ -102,7 +102,7 @@ Targeted helpers (stdout-only):
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
    - **Phase 1 - Fast Context Discovery (~10 seconds per repo):**
-      - Use the Rules/ catalog (Rules/Summary.md) to derive rule-based grep patterns and guide discovery; run programmatic grep checks when opengrep isn't available.
+      - Run `opengrep scan --config Rules/ <repo>` immediately after discovery; log the command in the audit log. Only fall back to manual grep if opengrep is unavailable, and document the outage.
 
      - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
      - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies
