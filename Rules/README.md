@@ -28,17 +28,23 @@ Follow `CreationGuide.md` for format and examples.
 
 ### Usage
 
-**Manual Detection:**
+**Mandatory opengrep Scan**
 ```bash
-# Example: Check for nonsensitive() usage
-grep -r "nonsensitive(" --include="*.tf"
-```
-
-**Automated (Future):**
-```bash
-# When opengrep installed
 opengrep scan --config Rules/ /path/to/repo
 ```
+- Run this before any skeptic reviews or manual checks; it executes the full ruleset.
+- Log the exact command and target path in `Output/Audit/...`.
+
+**Rule Design Principles**
+- Each rule targets a specific service/resource misconfiguration (e.g., `azure-storage-logging-disabled`, `kubernetes-run-as-root`).
+- LLMs only enrich findings after a deterministic rule match; do not rely on LLMs for initial detection.
+- When new services/configs are discovered during scans, immediately codify them as new opengrep rules.
+
+**Temporary Fallback (if opengrep unavailable)**
+```bash
+grep -r "pattern" --include="*.tf"
+```
+- Only use while restoring opengrep. Document the outage and rerun opengrep immediately after.
 
 ## Rule Statistics
 
