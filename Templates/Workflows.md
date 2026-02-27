@@ -57,7 +57,7 @@ This document defines the navigation flows and menu structures for Triage-Saurus
 
 ### Step 4: Phase 1 - Automated Context Discovery (~10 seconds)
 
-**Note:** Phase 1 must use the Rules/ catalog (Rules/Summary.md) to derive rule-based grep patterns to aid discovery when opengrep is unavailable.
+**Note:** Phase 1 must run `opengrep scan --config Rules/ <target>` as soon as opengrep is installed; if it is temporarily unavailable, document the outage and use Rules/Summary.md patterns as a fallback until opengrep is restored.
 
 **Action:** Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
 
