@@ -1,0 +1,31 @@
+rules:
+  - id: context-azure-log-analytics-workspace
+    message: |
+      Azure Log Analytics Workspace detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_log_analytics_workspace" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: observability
+      subcategory: log-analytics
+      technology: [terraform, azure, log_analytics]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Log Analytics Workspace
+        resource_type: azurerm_log_analytics_workspace
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: retention_in_days
+            pattern: retention_in_days = $RETENTION
+    description: |
+      Detects Azure Log Analytics workspaces to inform monitoring context.

@@ -1,0 +1,40 @@
+rules:
+  - id: context-azure-app-service-environment
+    message: |
+      Azure App Service Environment detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_service_environment_v3" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*app[_-]?service[_-]?environment.*"
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: app_service_environment
+      technology: [terraform, azure, app_service_environment]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: App Service Environment
+        resource_type: azurerm_app_service_environment_v3
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: internal_load_balancing_mode
+            pattern: internal_load_balancing_mode = "$ILB_MODE"
+          - name: zone_redundant
+            pattern: zone_redundant = $ZONE
+    description: |
+      Detects Azure App Service Environment v3 resources or modules to inform hosting topology context.

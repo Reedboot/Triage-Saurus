@@ -1,0 +1,31 @@
+rules:
+  - id: context-azure-application-gateway
+    message: |
+      Azure Application Gateway detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_application_gateway" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, azure, application_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Application Gateway
+        resource_type: azurerm_application_gateway
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku_name
+            pattern: sku { name = "$SKU" }
+          - name: tier
+            pattern: sku { tier = "$TIER" }
+    description: |
+      Detects Azure Application Gateway resources to drive downstream routing/WAF checks.

@@ -1,0 +1,43 @@
+rules:
+  - id: context-azure-private-dns-record
+    message: |
+      Azure Private DNS A record detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_private_dns_a_record" $NAME {
+            ...
+            zone_name = $ZONE
+            ...
+            records = $RECORDS
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*private[_-]?dns[_-]?record.*"
+    metadata:
+      rule_type: context_discovery
+      category: networking
+      subcategory: private_dns
+      technology: [terraform, azure, dns]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private DNS A Record
+        resource_type: azurerm_private_dns_a_record
+        resource_name: $NAME
+        properties:
+          - name: zone_name
+            pattern: zone_name = "$ZONE"
+          - name: records
+            pattern: records = $RECORDS
+    description: |
+      Detects Azure Private DNS A records to document hostname mappings for internal services.
+

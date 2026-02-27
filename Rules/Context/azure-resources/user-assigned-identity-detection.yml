@@ -1,0 +1,40 @@
+rules:
+  - id: context-azure-user-assigned-identity
+    message: |
+      Azure User Assigned Managed Identity detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_user_assigned_identity" $NAME {
+            ...
+            location = $LOCATION
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*user[_-]?assigned[_-]?identity.*"
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: managed_identity
+      technology: [terraform, azure, managed_identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: User Assigned Managed Identity
+        resource_type: azurerm_user_assigned_identity
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: resource_group_name
+            pattern: resource_group_name = "$RG"
+    description: |
+      Detects user-assigned managed identities to correlate with role assignments and workloads.
