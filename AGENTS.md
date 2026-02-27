@@ -5,7 +5,7 @@ repository.
 ## Primary Instructions
 - **Path:** Agents/Instructions.md
 - **Purpose:** Canonical agent operating rules for this repo.
-- **Note:** By default, the agent should avoid running `git` commands and avoid running scripts unless it explains why first (see `Agents/Instructions.md`).
+- **Note:** By default, the agent should avoid running `git` commands and avoid running scripts unless it explains why first (see `Agents/Instructions.md`). When opengrep is installed, all IaC/code scans must run `opengrep scan --config Rules/ <target>` and log the command; manual grep is fallback-only.
 
 ## Session Management
 - **Path:** SessionKickoff.md
