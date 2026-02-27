@@ -1,0 +1,33 @@
+rules:
+  - id: context-azuredevops-resource-authorization
+    message: |
+      Azure DevOps resource authorization detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuredevops_resource_authorization" $NAME {
+        ...
+        project_id = $PROJECT
+        ...
+        resource_id = $RESOURCE
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: devops
+      subcategory: resource_authorization
+      technology: [terraform, azuredevops]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure DevOps Resource Authorization
+        resource_type: azuredevops_resource_authorization
+        resource_name: $NAME
+        properties:
+          - name: project_id
+            pattern: project_id = $PROJECT
+          - name: resource_id
+            pattern: resource_id = $RESOURCE
+          - name: authorized
+            pattern: authorized = $AUTHORIZED
+    description: |
+      Detects Azure DevOps resource authorization blocks to understand which pipelines/resources are approved for project use.

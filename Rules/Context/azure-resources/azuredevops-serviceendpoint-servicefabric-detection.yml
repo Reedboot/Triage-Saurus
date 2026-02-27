@@ -1,0 +1,33 @@
+rules:
+  - id: context-azuredevops-serviceendpoint-servicefabric
+    message: |
+      Azure DevOps Service Fabric service connection detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuredevops_serviceendpoint_servicefabric" $NAME {
+        ...
+        project_id = $PROJECT
+        ...
+        service_endpoint_name = "$ENDPOINT"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: devops
+      subcategory: service_connection
+      technology: [terraform, azuredevops, service_fabric]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure DevOps Service Fabric Service Connection
+        resource_type: azuredevops_serviceendpoint_servicefabric
+        resource_name: $NAME
+        properties:
+          - name: project_id
+            pattern: project_id = $PROJECT
+          - name: service_endpoint_name
+            pattern: service_endpoint_name = "$ENDPOINT"
+          - name: cluster_endpoint
+            pattern: cluster_endpoint = "$CLUSTER"
+    description: |
+      Detects Azure DevOps Service Fabric service connections to understand cluster deployment access configured in pipelines.

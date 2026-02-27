@@ -1,0 +1,33 @@
+rules:
+  - id: context-azuread-app-role-assignment
+    message: |
+      Azure AD app role assignment detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuread_app_role_assignment" $NAME {
+        ...
+        principal_object_id = $PRINCIPAL
+        ...
+        resource_object_id = $RESOURCE
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: app_role_assignment
+      technology: [terraform, azuread, identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure AD App Role Assignment
+        resource_type: azuread_app_role_assignment
+        resource_name: $NAME
+        properties:
+          - name: principal_object_id
+            pattern: principal_object_id = $PRINCIPAL
+          - name: resource_object_id
+            pattern: resource_object_id = $RESOURCE
+          - name: app_role_id
+            pattern: app_role_id = $ROLE_ID
+    description: |
+      Detects Azure AD app role assignments to understand privilege delegation between principals and applications.

@@ -1,0 +1,42 @@
+rules:
+  - id: context-azuread-application
+    message: |
+      Azure AD application registration detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azuread_application" $NAME {
+            ...
+            display_name = "$DISPLAY"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*azuread[_-]?application.*"
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: application
+      technology: [terraform, azuread, identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure AD Application
+        resource_type: azuread_application
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$DISPLAY"
+          - name: owners
+            pattern: owners = [$OWNERS, ...]
+          - name: sign_in_audience
+            pattern: sign_in_audience = "$AUDIENCE"
+    description: |
+      Detects Azure AD application registrations or modules to capture identity app metadata for later correlation.

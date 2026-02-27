@@ -1,0 +1,31 @@
+rules:
+  - id: context-azapi-update-resource
+    message: |
+      Generic Azure resource updated via azapi detected (azapi_update_resource).
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azapi_update_resource" $NAME {
+        ...
+        type = "$TYPE"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: azapi
+      technology: [terraform, azure, azapi]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: AzAPI Update Resource
+        resource_type: azapi_update_resource
+        resource_name: $NAME
+        properties:
+          - name: type
+            pattern: type = "$TYPE"
+          - name: name
+            pattern: name = "$RESOURCE_NAME"
+          - name: parent_id
+            pattern: parent_id = $PARENT
+    description: |
+      Detects azapi_update_resource usage to capture custom/preview Azure resources configured outside the standard provider.

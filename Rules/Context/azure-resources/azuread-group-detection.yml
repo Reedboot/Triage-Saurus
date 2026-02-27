@@ -1,0 +1,31 @@
+rules:
+  - id: context-azuread-group
+    message: |
+      Azure AD group detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuread_group" $NAME {
+        ...
+        display_name = "$DISPLAY"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: group
+      technology: [terraform, azuread, identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure AD Group
+        resource_type: azuread_group
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$DISPLAY"
+          - name: mail_enabled
+            pattern: mail_enabled = $MAIL
+          - name: security_enabled
+            pattern: security_enabled = $SECURITY
+    description: |
+      Detects Azure AD groups to capture directory role targets (security or M365) for later access analysis.

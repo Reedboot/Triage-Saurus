@@ -1,0 +1,31 @@
+rules:
+  - id: context-azuread-group-member
+    message: |
+      Azure AD group membership detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuread_group_member" $NAME {
+        ...
+        group_object_id  = $GROUP_ID
+        ...
+        member_object_id = $MEMBER_ID
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: group_membership
+      technology: [terraform, azuread, identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure AD Group Member
+        resource_type: azuread_group_member
+        resource_name: $NAME
+        properties:
+          - name: group_object_id
+            pattern: group_object_id = $GROUP_ID
+          - name: member_object_id
+            pattern: member_object_id = $MEMBER_ID
+    description: |
+      Detects Azure AD group membership assignments to map relationships between principals and directory groups.

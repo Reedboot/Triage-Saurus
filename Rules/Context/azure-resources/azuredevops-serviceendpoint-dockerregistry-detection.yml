@@ -1,0 +1,33 @@
+rules:
+  - id: context-azuredevops-serviceendpoint-dockerregistry
+    message: |
+      Azure DevOps Docker Registry service connection detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azuredevops_serviceendpoint_dockerregistry" $NAME {
+        ...
+        project_id = $PROJECT
+        ...
+        service_endpoint_name = "$ENDPOINT"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: devops
+      subcategory: service_connection
+      technology: [terraform, azuredevops, containers]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure DevOps Docker Registry Service Connection
+        resource_type: azuredevops_serviceendpoint_dockerregistry
+        resource_name: $NAME
+        properties:
+          - name: project_id
+            pattern: project_id = $PROJECT
+          - name: service_endpoint_name
+            pattern: service_endpoint_name = "$ENDPOINT"
+          - name: registry_type
+            pattern: registry_type = "$REGISTRY"
+    description: |
+      Detects Azure DevOps Docker registry endpoints to capture container publishing credentials configured for pipelines.

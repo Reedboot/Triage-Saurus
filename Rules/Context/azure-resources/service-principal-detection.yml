@@ -1,0 +1,42 @@
+rules:
+  - id: context-azure-service-principal
+    message: |
+      Azure AD service principal detected in infrastructure code.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azuread_service_principal" $NAME {
+            ...
+            application_id = $APP_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*(service[_-]?principal|spn).*"
+    metadata:
+      rule_type: context_discovery
+      category: identity
+      subcategory: service_principal
+      technology: [terraform, azuread, identity]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure AD Service Principal
+        resource_type: azuread_service_principal
+        resource_name: $NAME
+        properties:
+          - name: application_id
+            pattern: application_id = $APP_ID
+          - name: client_id
+            pattern: client_id = "$CLIENT_ID"
+          - name: owners
+            pattern: owners = [$OWNERS, ...]
+    description: |
+      Detects Azure AD service principal resources (or modules) to capture identity context, including links back to the owning application.
