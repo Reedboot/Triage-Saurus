@@ -4,7 +4,7 @@ rules:
       Python project detected.
       This rule extracts Python and framework information.
     severity: INFO
-    languages: [text]
+    languages: [generic]
     pattern-regex: |
       ^[a-zA-Z0-9\-_]+(==|>=|<=|~=|!=)[0-9.]+
     metadata:
