@@ -21,11 +21,18 @@ This repository supports consistent security triage. The expected workflow is:
 - Scripts are imperative (HOW to execute checks)
 - Use opengrep/Semgrep-compatible format
 
+### Mandatory opengrep Execution
+
+- When opengrep is installed (default repo state), every IaC/code scan MUST start with `opengrep scan --config Rules/ <target>` to apply the entire ruleset.
+- Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are only acceptable if opengrep becomes unavailable mid-session and must be documented in the audit log.
+- Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
+
 **Rules + LLM Pattern:**
 - Rules detect patterns and extract relevant data
-- LLM reviews detected items for context-specific assessment
-- Example: Rule detects Ubuntu version → LLM checks if EOL
-- Benefits: Rules stay generic, LLM provides current knowledge
+- Rules MUST be scoped to specific services/resources (e.g., `azure-storage-logging-disabled`) for deterministic coverage
+- LLM reviews the concrete rule hits for context-specific assessment (severity, compensating controls, remediation urgency)
+- Example: Rule detects Ubuntu version → LLM checks if EOL or subject to CVE
+- Benefits: Rules stay precise, LLM provides fresh context without deciding what to flag
 
 ### When to Create a Rule
 
@@ -75,12 +82,13 @@ All findings MUST reference the rule that detected them:
 **CRITICAL: Apply ALL Rules, Not Selective Subsets**
 
 **When scanning IaC/code:**
-1. ✅ Apply ALL rules from `Rules/IaC/*.yml` (currently 48 rules as of Feb 2026)
+1. ✅ Run `opengrep scan --config Rules/ <target>` to apply ALL rules from `Rules/IaC/*.yml` (currently 48 rules as of Feb 2026). Rules are granular per service; do not rely on generic "detect resource then ask LLM" fallbacks. If opengrep fails, log it and immediately rerun after fixing the issue; only use manual grep as a temporary fallback.
 2. ✅ Run skeptic reviews (DevSkeptic + PlatformSkeptic) for each finding
 3. ✅ Adjust severity based on mitigating controls identified by skeptics
 4. ✅ Document findings with proper rule metadata (`detected_by_rule: <rule-id>`)
 5. ❌ NEVER apply selective rule subsets based on assumed scope
 6. ❌ NEVER skip rules because "this type of issue seems unlikely"
+7. ❌ NEVER defer detection to LLMs; LLMs only enrich rule hits.
 
 ## 🚨 Critical Rule: Production Rigor for ALL Environments
 
