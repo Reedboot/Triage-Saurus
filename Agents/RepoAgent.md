@@ -48,7 +48,7 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
 - Choices: "Manual analysis only", "IaC scan", "All (SAST, SCA, Secrets, IaC)", "SAST only", "SCA only", "Secrets only", "IaC only", "Custom combination"
 - **Default is "Manual analysis only"** for Phase 2 (Deeper Context Search) - code review without automated dependency scanning
 
-**Phase 1 rule integration:** Phase 1 should use Rules/ (Rules/Summary.md) to derive grep patterns and guide IaC discovery when opengrep is not available.
+**Phase 1 rule integration:** Phase 1 should use the per-service context rules under `Rules/Context/` (e.g., storage, SQL, Key Vault detectors) so downstream scans know exactly which security rules to prioritize. If opengrep is unavailable, fall back to the manual patterns in `Rules/Summary.md`, but always aim for deterministic per-service detection.
 - **SCA (CVE scanning)** runs ONLY when explicitly requested or as part of SAST
 - SAST available but not default (more time-intensive, less actionable for initial triage)
 
