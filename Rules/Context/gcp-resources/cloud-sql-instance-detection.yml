@@ -1,0 +1,36 @@
+rules:
+  - id: context-gcp-cloud-sql-instance
+    message: |
+      Google Cloud SQL instance detected in infrastructure.
+      This rule extracts database configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_sql_database_instance" $NAME {
+        ...
+        database_version = "$DB_VERSION"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, sql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud SQL
+        resource_type: google_sql_database_instance
+        resource_name: $NAME
+        properties:
+          - name: database_version
+            pattern: database_version = "$DB_VERSION"
+          - name: region
+            pattern: region = "$REGION"
+          - name: availability_type
+            pattern: availability_type = "$AVAILABILITY"
+          - name: disk_encryption_configuration
+            pattern: kms_key_name = "$KMS_KEY"
+          - name: root_password
+            pattern: root_password = "$ROOT_PASSWORD"
+    description: |
+      Detects Google Cloud SQL database instances to enable database-focused rule filtering.
