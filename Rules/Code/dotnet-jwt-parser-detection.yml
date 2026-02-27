@@ -8,8 +8,6 @@ rules:
     patterns:
       - pattern: |
           class $CLASS : IJwtParser
-      - pattern-inside: |
-          namespace $NS
           {
             ...
           }
