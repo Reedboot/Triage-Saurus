@@ -2,6 +2,7 @@
 
 **Total Rules:** 50+  
 **Format:** Opengrep/Semgrep compatible  
+**Execution:** Always run `opengrep scan --config Rules/ <target>` when available; log each command in the audit log. Manual grep is fallback-only during opengrep outages.
 **License:** Personal Use (see /LICENSE)
 
 ---
@@ -96,6 +97,11 @@
   - Pillar 3: Audit Logging
   - Pillar 5: Data Protection
 
+**Detection Philosophy:**
+- Rules are scoped per service/resource to keep detection deterministic.
+- Context discovery uses specific detectors (e.g., separate Key Vault, Storage, SQL rules) rather than generic "catch-all" LLM pipelines.
+- Any newly observed service MUST get its own rule before LLM review.
+
 **Cloud Providers:**
 - Azure (primary)
 - AWS (secrets only)
@@ -115,7 +121,7 @@ Each rule includes detection steps for manual grep/checking.
 
 ### Automated (Future)
 ```bash
-# When opengrep installed:
+# Mandatory opengrep execution:
 opengrep scan --config Rules/ /path/to/repo
 ```
 
