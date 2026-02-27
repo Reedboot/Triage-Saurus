@@ -1,0 +1,37 @@
+rules:
+  - id: context-azure-storage-account
+    message: |
+      Azure Storage Account detected in infrastructure.
+      This rule extracts Storage Account configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_storage_account" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, azure, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Storage Account
+        resource_type: azurerm_storage_account
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: account_tier
+            pattern: account_tier = "$TIER"
+          - name: account_replication_type
+            pattern: account_replication_type = "$REPLICATION"
+          - name: enable_https_traffic_only
+            pattern: enable_https_traffic_only = $HTTPS
+          - name: min_tls_version
+            pattern: min_tls_version = "$TLS"
+      description: |
+        Detects Azure Storage Account resources in Terraform.
+        Used to determine if Storage-related security rules should be applied.

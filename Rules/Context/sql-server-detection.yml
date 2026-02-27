@@ -1,0 +1,33 @@
+rules:
+  - id: context-azure-sql-server
+    message: |
+      Azure SQL Server detected in infrastructure.
+      This rule extracts SQL Server configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_mssql_server" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, azure, sql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: SQL Server
+        resource_type: azurerm_mssql_server
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: version
+            pattern: version = "$VERSION"
+          - name: administrator_login
+            pattern: administrator_login = $LOGIN
+      description: |
+        Detects Azure SQL Server resources in Terraform.
+        Used to determine if SQL-related security rules should be applied.

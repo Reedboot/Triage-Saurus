@@ -1,0 +1,43 @@
+rules:
+  - id: context-azure-container-registry
+    message: |
+      Azure Container Registry detected in infrastructure.
+      This rule extracts Container Registry configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_container_registry" $NAME {
+            ...
+            location = $LOCATION
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: ".*container-registry.*"
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: container_registry
+      technology: [terraform, azure, acr]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Container Registry
+        resource_type: azurerm_container_registry
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: admin_enabled
+            pattern: admin_enabled = $ADMIN
+    description: |
+      Detects Azure Container Registry resources or modules in Terraform.
+      Used to determine if container-registry security controls should be applied.

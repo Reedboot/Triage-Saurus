@@ -1,0 +1,25 @@
+rules:
+  - id: context-azure-waf-policy
+    message: |
+      Azure Application Gateway WAF policy detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_application_gateway_web_application_firewall_policy" $NAME {
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: security
+      subcategory: waf
+      technology: [terraform, azure, application_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Application Gateway WAF Policy
+        resource_type: azurerm_application_gateway_web_application_firewall_policy
+        resource_name: $NAME
+        properties:
+          - name: custom_rules
+            pattern: custom_rules { ... }
+    description: |
+      Detects WAF policies linked to Application Gateways for coverage mapping.

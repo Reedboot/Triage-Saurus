@@ -1,0 +1,41 @@
+rules:
+  - id: context-azure-private-dns-zone
+    message: |
+      Azure Private DNS Zone detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_private_dns_zone" $NAME {
+            ...
+            resource_group_name = $RG
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*private[_-]?dns[_-]?zone.*"
+    metadata:
+      rule_type: context_discovery
+      category: networking
+      subcategory: private_dns
+      technology: [terraform, azure, dns]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private DNS Zone
+        resource_type: azurerm_private_dns_zone
+        resource_name: $NAME
+        properties:
+          - name: resource_group_name
+            pattern: resource_group_name = "$RG"
+          - name: zone_name
+            pattern: name = "$ZONE"
+    description: |
+      Detects Azure Private DNS zones or supporting modules to document private name resolution dependencies.
+
