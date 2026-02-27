@@ -74,17 +74,19 @@ Triage-Saurus now includes a **declarative security rules library** in opengrep/
 
 ### Usage
 
-**Manual Detection** (current):
+**Primary (Mandatory) Detection – opengrep**
 ```bash
-# Each rule includes pattern examples for manual grep
-grep -r "nonsensitive(" --include="*.tf"
-```
-
-**Automated Scanning** (future):
-```bash
-# When opengrep installed
 opengrep scan --config Rules/ /path/to/repo
 ```
+- Run this command for every IaC/code scan whenever opengrep is installed (default state).
+- Capture the command, timestamp, and target path in the session audit log.
+
+**Fallback (only if opengrep unavailable)**
+```bash
+# Temporary manual grep until opengrep is restored
+grep -r "pattern" --include="*.tf"
+```
+- Document the outage and remediation plan in the audit log, then rerun opengrep ASAP.
 
 **Learning from Gaps**:
 When experiments or external tools find issues we miss → LearningAgent creates rules → Track effectiveness in next run
