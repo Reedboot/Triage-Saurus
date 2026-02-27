@@ -9,7 +9,6 @@ rules:
       - pattern-either:
           - pattern: connection_string = $VAL
           - pattern: primary_connection_string = $VAL
-          - pattern: "${azurerm_storage_account.$NAME.primary_connection_string}"
       - metavariable-regex:
           metavariable: $VAL
           regex: .*(connection_string|primary_connection_string|AccountKey|AccountName|SAS).*|.*(AccountKey=|AccountName=|SharedAccessSignature=).* 

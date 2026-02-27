@@ -40,19 +40,14 @@ rules:
     severity: ERROR
     languages: [terraform, json]
     pattern-either:
-      - pattern-regex:
-          regex: 'container_access_type\s*=\s*"(?:blob|container)"'
-          message: "Container configured with public access"
+      - pattern-regex: "container_access_type\\s*=\\s*\"(?:blob|container)\""
       - pattern: |
           resource "azurerm_storage_container" "$_" {
             ...
             container_access_type = "blob"
             ...
           }
-          message: "Blob-level public access detected"
-      - pattern-regex:
-          regex: 'permissions\s*=\s*"[^"]*[wd][^"]*"'
-          message: "SAS URL includes write/delete permissions - potentially over-privileged"
+      - pattern-regex: "permissions\\s*=\\s*\"[^\"]*[wd][^\"]*\""
     metadata:
       cwe: "CWE-732: Incorrect Permission Assignment for Critical Resource"
       owasp: "A01:2021 – Broken Access Control"

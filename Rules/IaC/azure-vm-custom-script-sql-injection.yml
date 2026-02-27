@@ -37,25 +37,8 @@ rules:
     severity: ERROR
     languages: [terraform, json, bash]
     pattern-either:
-      - pattern-regex:
-          regex: 'command_to_execute.*(?:sqlcmd|mysql|psql).*(?:PASSWORD|password|credential)'
-          message: "SQL execution with credential parameters in custom script"
-      - pattern-regex:
-          regex: 'protected_settings.*(?:sqlcmd|mysql|psql).*export\s+(?:PASSWORD|DB_PASS)'
-          message: "SQL script execution with exported password variable"
-      - pattern: |
-          resource "azurerm_virtual_machine_extension" "$_" {
-            ...
-            settings = jsonencode({
-              commandToExecute = $CMD
-              ...
-            })
-            ...
-          }
-          metavariable-regex:
-            metavariable: $CMD
-            regex: '.*(?:sqlcmd|mysql|psql).*PASSWORD|password.*'
-            message: "SQL execution detected with password in command"
+      - pattern-regex: "command_to_execute.*(?:sqlcmd|mysql|psql).*(?:PASSWORD|password|credential)"
+      - pattern-regex: "protected_settings.*(?:sqlcmd|mysql|psql).*export\\s+(?:PASSWORD|DB_PASS)"
     metadata:
       cwe: "CWE-798: Use of Hard-Coded Credentials, CWE-89: SQL Injection"
       owasp: "A02:2021 – Cryptographic Failures, A03:2021 – Injection"

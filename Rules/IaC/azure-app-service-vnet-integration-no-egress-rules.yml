@@ -71,7 +71,6 @@ rules:
           resource "azurerm_app_service_virtual_network_swift_connection" "$_" {
             ...
           }
-          message: "VNet integration detected - ensure NSG rules are defined for outbound traffic control"
     metadata:
       cwe: "CWE-613: Insufficient Access Control"
       owasp: "A01:2021 – Broken Access Control"

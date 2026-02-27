@@ -50,9 +50,7 @@ rules:
     severity: ERROR
     languages: [terraform, json]
     pattern-either:
-      - pattern-regex:
-          regex: 'role_definition_name\s*=\s*"(?:Contributor|Owner)"'
-          message: "Broad role assignment detected"
+      - pattern-regex: "role_definition_name\\s*=\\s*\"(?:Contributor|Owner)\""
       - pattern: |
           resource "azurerm_role_assignment" "$_" {
             ...
@@ -60,7 +58,6 @@ rules:
             role_definition_name = "Contributor"
             ...
           }
-          message: "Contributor role assigned at subscription level"
       - pattern: |
           resource "azurerm_role_assignment" "$_" {
             ...
@@ -68,17 +65,6 @@ rules:
             role_definition_name = "Owner"
             ...
           }
-          message: "Owner role assigned at subscription level"
-      - pattern: |
-          resource "azuread_app_role_assignment" "$_" {
-            ...
-            role_id = $ROLE_ID
-            ...
-          }
-          metavariable-regex:
-            metavariable: $ROLE_ID
-            regex: '.*[Cc]ontributor.*|.*[Oo]wner.*'
-            message: "Contributor/Owner role assigned via Azure AD"
     metadata:
       cwe: "CWE-269: Improper Access Control / Excessive Privileges"
       owasp: "A01:2021 – Broken Access Control"
