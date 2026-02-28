@@ -1,0 +1,29 @@
+rules:
+  - id: context-azure-application-insights-connection
+    message: |
+      Application Insights instrumentation detected.
+      Extracts instrumentation key and ingestion endpoint to confirm telemetry service usage.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      InstrumentationKey=[0-9a-fA-F\-]{36}
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: observability
+      technology: [azure, applicationinsights]
+      target_files: ["**/*.config", "**/*.json", "**/*.js", "**/*.ts", "**/*.tf", "**/*.tfvars", "**/*.ps1", "**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Application Insights
+        resource_type: connection_string
+        resource_name: Application Insights instrumentation key
+        properties:
+          - name: instrumentation_key
+            pattern-regex: InstrumentationKey=([0-9a-fA-F\-]{36})
+          - name: ingestion_endpoint
+            pattern-regex: IngestionEndpoint=([^;"]+)
+          - name: live_endpoint
+            pattern-regex: LiveEndpoint=([^;"]+)
+      description: |
+        Detects Application Insights telemetry configuration in application settings, scripts, and IaC.
+        Captures instrumentation key and endpoint metadata for observability context and rule scoping.

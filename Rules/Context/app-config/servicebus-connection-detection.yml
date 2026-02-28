@@ -1,0 +1,29 @@
+rules:
+  - id: context-azure-servicebus-connection
+    message: |
+      Azure Service Bus connection string detected.
+      Extracts namespace and key metadata to confirm Service Bus usage.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      Endpoint=sb://[A-Za-z0-9\.\-]+\.servicebus\.windows\.net/;[^"\n]+
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: messaging
+      technology: [azure, servicebus]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.ps1", "**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Azure Service Bus
+        resource_type: connection_string
+        resource_name: Service Bus connection string
+        properties:
+          - name: namespace
+            pattern-regex: Endpoint=sb://([A-Za-z0-9\-]+)\.servicebus\.windows\.net
+          - name: shared_access_key_name
+            pattern-regex: SharedAccessKeyName=([^;]+)
+          - name: shared_access_key_present
+            pattern: SharedAccessKey=
+      description: |
+        Detects Azure Service Bus usage by scanning application configuration and Terraform variables
+        for connection strings. Captures namespace and SAS usage to feed context-aware messaging rules.

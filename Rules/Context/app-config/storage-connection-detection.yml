@@ -1,0 +1,29 @@
+rules:
+  - id: context-azure-storage-connection
+    message: |
+      Azure Storage account connection string detected.
+      Extracts account name and key usage to confirm Storage dependency.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      DefaultEndpointsProtocol=https;AccountName=[A-Za-z0-9]+;AccountKey=[A-Za-z0-9+/=]+;EndpointSuffix=core\.windows\.net
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: storage
+      technology: [azure, storage]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.ps1", "**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Azure Storage
+        resource_type: connection_string
+        resource_name: Azure Storage connection string
+        properties:
+          - name: account_name
+            pattern-regex: AccountName=([^;]+)
+          - name: endpoint_suffix
+            pattern-regex: EndpointSuffix=([^;]+)
+          - name: account_key_present
+            pattern: AccountKey=
+      description: |
+        Detects Azure Storage account connection strings in configuration to infer blob/table/queue dependencies.
+        Captures account-level metadata for downstream security rule filtering.

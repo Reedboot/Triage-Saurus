@@ -1,0 +1,29 @@
+rules:
+  - id: context-azure-redis-connection
+    message: |
+      Azure Cache for Redis connection string detected.
+      Extracts host and key usage to confirm Redis dependency.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      [A-Za-z0-9\-]+\.redis\.cache\.windows\.net:6379,password=[^,;\s]+
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: caching
+      technology: [azure, redis]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.ps1", "**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Azure Cache for Redis
+        resource_type: connection_string
+        resource_name: Redis connection string
+        properties:
+          - name: host
+            pattern-regex: ([A-Za-z0-9\-]+\.redis\.cache\.windows\.net)
+          - name: ssl_enabled
+            pattern: ssl=true
+          - name: password_present
+            pattern: password=
+      description: |
+        Detects Azure Cache for Redis endpoints in application configuration to infer caching dependencies.
+        Captures host names and confirms secret usage.

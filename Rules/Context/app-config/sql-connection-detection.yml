@@ -1,0 +1,31 @@
+rules:
+  - id: context-azure-sql-connection-string
+    message: |
+      Azure SQL Database connection string detected.
+      Extracts server, database, and authentication clues for context.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      Server=tcp:[A-Za-z0-9\.\-]+(?:,1433)?;[^"\n]*Database=[^;"\n]+;
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [azure, sql]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.ps1", "**/*.cs", "**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Azure SQL Database
+        resource_type: connection_string
+        resource_name: SQL connection string
+        properties:
+          - name: server
+            pattern-regex: Server=tcp:([^;,]+)
+          - name: database
+            pattern-regex: Database=([^;]+)
+          - name: authentication
+            pattern-regex: Authentication=([^;]+)
+          - name: managed_identity
+            pattern: Active Directory Managed Identity
+      description: |
+        Detects Azure SQL Database connection strings across application configuration and IaC variables.
+        Captures server/database metadata and authentication mode to scope SQL-specific rules.
