@@ -42,6 +42,7 @@ def _ensure_schema(conn: sqlite3.Connection):
       source_file TEXT,
       source_line_start INTEGER,
       source_line_end INTEGER,
+      parent_resource_id INTEGER,
       status TEXT DEFAULT 'active',
       first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -90,7 +91,11 @@ def _ensure_schema(conn: sqlite3.Connection):
     );
     """)
 
-    # Backward-compatible finding columns used by helper queries/inserts.
+    # Ensure optional columns exist for backward compatibility.
+    resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
+    if "parent_resource_id" not in resource_columns:
+        conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
+
     findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
     if "repo_id" not in findings_columns:
         conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
