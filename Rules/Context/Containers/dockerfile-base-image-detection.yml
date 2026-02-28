@@ -1,0 +1,27 @@
+rules:
+  - id: context-dockerfile-base-image
+    message: |
+      Dockerfile base image detected.
+      Extracts each stage name and base image reference, differentiating builder vs runtime stages.
+    severity: INFO
+    languages: [dockerfile]
+    pattern-regex: |
+      (?m)^\s*FROM\s+([^\s]+)(?:\s+AS\s+([A-Za-z0-9_\-\.]+))?
+    metadata:
+      rule_type: context_discovery
+      category: application
+      subcategory: containers
+      technology: [docker]
+      target_files: ["Dockerfile", "**/Dockerfile", "Dockerfile.*", "**/Dockerfile.*"]
+      extracts:
+        service_type: Container Image
+        resource_type: dockerfile_stage
+        resource_name: Dockerfile stage
+        properties:
+          - name: base_image
+            pattern-regex: (?m)^\s*FROM\s+([^\s]+)
+          - name: stage_name
+            pattern-regex: (?m)^\s*FROM\s+[^\s]+\s+AS\s+([A-Za-z0-9_\-\.]+)
+      description: |
+        Detects all FROM statements in Dockerfiles to understand builder/runtime base images.
+        Supports repositories that publish multiple services or multi-stage builds.
