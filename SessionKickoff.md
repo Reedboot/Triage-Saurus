@@ -105,7 +105,7 @@ Targeted helpers (stdout-only):
       - Run `opengrep scan --config Rules/ <repo>` immediately after discovery; log the command in the audit log. Only fall back to manual grep if opengrep is unavailable, and document the outage.
 
      - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
-     - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies
+     - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies.
      - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
        - 🗺️ Architecture Diagram (Mermaid) - infrastructure topology with colored borders
        - 📊 TL;DR - Executive summary with Phase 2 TODO markers
@@ -126,6 +126,8 @@ Targeted helpers (stdout-only):
      - Applying all 42 rules ensures complete ground truth coverage (100% detection rate)
      - For each finding, invoke DevSkeptic + PlatformSkeptic for context-aware severity scoring
      - Reference rule ID in finding metadata: `detected_by_rule: rule-id`
+     - **Identity Best Practice:** Strongly recommend **IAM Roles for Service Accounts (IRSA)** or **Workload Identity Federation** over long-lived secrets (Experiment 006 learning).
+     - **Container Security Best Practice:** Strongly recommend against `privileged: true`. Use granular Linux capabilities instead.
      - See `Output/Learning/experiments/015_Rules_Engine_Clean_Scan/RESULTS.md` for validation
    - **Phase 4 - Security Review (manual, based on gathered context):**
      - Use Phase 1 + Phase 2 context to perform qualitative security review

@@ -77,6 +77,8 @@ rules:
 All findings MUST reference the rule that detected them:
 - Add `detected_by_rule: rule-id` in finding metadata
 - If manual detection, use `detected_by_rule: manual`
+- **Identity Best Practice:** Strongly recommend **IAM Roles for Service Accounts (IRSA)** or **Workload Identity Federation** over long-lived secrets. 
+- **Container Security Best Practice:** Strongly recommend against `privileged: true`. Use granular Linux capabilities instead. 
 - This enables tracking rule effectiveness
 
 **CRITICAL: Apply ALL Rules, Not Selective Subsets**
