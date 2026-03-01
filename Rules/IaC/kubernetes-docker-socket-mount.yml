@@ -1,0 +1,19 @@
+rules:
+  - id: kubernetes-docker-socket-mount
+    message: |
+      Host's Docker socket `/var/run/docker.sock` is mounted into the container.
+      This grants the container full control over the host's Docker engine and allows for trivial host escape to root.
+      Remove the Docker socket mount and use rootless tools like Kaniko or Buildah instead.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      hostPath:
+        path: /var/run/docker.sock
+    metadata:
+      category: security
+      subcategory: [kubernetes, container-security]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [kubernetes]
