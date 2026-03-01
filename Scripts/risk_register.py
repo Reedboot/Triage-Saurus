@@ -76,16 +76,27 @@ def iter_finding_files() -> Iterable[Path]:
 
 def parse_overall_score(lines: list[str], path: Path) -> tuple[str, int]:
     for line in lines:
+        # Support bullet point format
         if line.strip().startswith("- **Overall Score:**"):
             # New format: - **Overall Score:** 🔴 **10/10** - Critical
-            match = re.search(r"\*\*(\d+)/10\*\*\s*-\s*(Critical|High|Medium|Low|Informational)", line)
+            match = re.search(r"\*\*(\d+)/10\*\*\s*[-—]\s*(Critical|High|Medium|Low|Informational)", line, re.IGNORECASE)
             if match:
-                return match.group(2), int(match.group(1))
+                return match.group(2).capitalize(), int(match.group(1))
             # Old format: Critical 10/10
-            match = re.search(r"(Critical|High|Medium|Low|Informational)\s+(\d+)/10", line)
+            match = re.search(r"(Critical|High|Medium|Low|Informational)\s+(\d+)/10", line, re.IGNORECASE)
             if match:
-                return match.group(1), int(match.group(2))
-            raise ValueError(f"Unable to parse overall score in {path}: {line}")
+                return match.group(1).capitalize(), int(match.group(2))
+            # My experimental format: **CRITICAL 9/10**
+            match = re.search(r"\*\*(Critical|High|Medium|Low|Informational)\s+(\d+)/10\*\*", line, re.IGNORECASE)
+            if match:
+                return match.group(1).capitalize(), int(match.group(2))
+            
+        # Support TL;DR table format: | **Final Score** | 🟠 **7/10** (HIGH) |
+        if "| **Final Score** |" in line:
+            match = re.search(r"\*\*(\d+)/10\*\*\s*\((Critical|High|Medium|Low|Informational)\)", line, re.IGNORECASE)
+            if match:
+                return match.group(2).capitalize(), int(match.group(1))
+
     raise ValueError(f"Missing overall score in {path}")
 
 
