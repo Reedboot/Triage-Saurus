@@ -698,6 +698,8 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - This enables linking from architecture diagrams, risk registers, and cross-referencing
   - When delegating to sub-agents for rule scanning, explicitly instruct them to create individual finding files
 - **Repo scan summaries:** `Output/Summary/Repos/<RepoName>.md` (one file per repo; follows `Templates/RepoFinding.md` structure with architecture diagram, security review, skeptic reviews, and metadata; use exact repo name without prefix)
+  - **Thematic Summary:** The summary's `TL;DR` section MUST contain a high-level analysis grouped into common themes (e.g., "Critical Credential Mismanagement", "Pervasive Network Insecurity").
+  - **Detailed Findings List:** The summary MUST include a complete list of all individual findings, grouped by the same themes. Each item must include the severity emoji, score, a link to the finding file, and be prioritized.
   - Should reference any extracted code findings using clickable markdown links under `## Compounding Findings` or in relevant finding summaries
   - **Cloud architecture knowledge:** When scanning a repo, any cloud architecture knowledge discovered (ingress paths, services used, authentication patterns, network topology) should be immediately captured in:
     - `Output/Knowledge/<Provider>.md` (confirmed services, controls, architecture facts)
@@ -776,5 +778,6 @@ When DevSkeptic/PlatformSkeptic reviews are complete:
   - `## 🗺️ Architecture Diagram` **directly under the title** (first section, before Overview)
   - `- **Overall Score:** <severity> <n>/10` **immediately after the diagram** (before Overview)
   - `## Meta Data` as the final section in the file
+  - `- **Theme:** <ThemeName>`
   - `- 🗓️ **Last updated:** DD/MM/YYYY HH:MM`
   - **All finding types** (Cloud, Code, Repo) must include the Architecture Diagram section

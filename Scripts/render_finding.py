@@ -241,9 +241,10 @@ def compute_output_path(model: dict, *, in_path: Path) -> Path:
 
     kind = str(model.get("kind", "")).strip().lower()
     title = str(model.get("title", "")).strip()
+    repo_name = str((model.get("meta") or {}).get("repo_name", "unknown_repo")).strip()
 
-    sub = "Cloud" if kind == "cloud" else ("Code" if kind == "code" else "Repo")
-    return (OUTPUT_FINDINGS_DIR / sub / _safe_filename(title)).resolve()
+    sub = "Cloud" if kind == "cloud" else ("Code" if kind == "code" else ("IaC" if kind == "iac" else ("Secrets" if kind == "secrets" else "Repo")))
+    return (OUTPUT_FINDINGS_DIR / sub / repo_name / _safe_filename(title)).resolve()
 
 
 def main() -> int:
