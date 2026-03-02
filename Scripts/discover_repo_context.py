@@ -331,7 +331,15 @@ DATA_PROTECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 CI_MARKERS: list[tuple[str, str]] = [
     ("GitHub Actions", ".github/workflows"),
     ("Azure Pipelines", "azure-pipelines.yml"),
+    ("Azure Pipelines", "azure-pipelines.yaml"),
+    ("Azure Pipelines", ".azurepipelines"),
+    ("Azure Pipelines", ".vsts-ci.yml"),
     ("GitLab CI", ".gitlab-ci.yml"),
+    ("GitLab CI", ".gitlab-ci.yaml"),
+    ("CircleCI", ".circleci/config.yml"),
+    ("CircleCI", ".circleci/config.yaml"),
+    ("CircleCI", ".circleci"),
+    ("Bitbucket Pipelines", "bitbucket-pipelines.yml"),
 ]
 
 LANG_MARKERS: list[tuple[str, list[str]]] = [
