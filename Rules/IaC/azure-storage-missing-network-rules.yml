@@ -1,0 +1,29 @@
+rules:
+  - id: azure-storage-missing-network-rules
+    message: |
+      Storage accounts without network_rules blocks allow traffic from any network.
+      Add network_rules with default_action = "Deny" and explicit allowlists or private endpoints.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            network_rules {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
