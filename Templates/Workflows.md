@@ -1,364 +1,142 @@
-# 🟣 Triage-Saurus Workflows
+# 🟣 Audit Log - Session YYYY-MM-DD HHMMSS
 
-## Purpose
-This document defines the navigation flows and menu structures for Triage-Saurus sessions. It ensures consistent user experience across different operations.
+**AUDIT LOG ONLY — do not load into LLM triage context**
 
----
+*This log tracks all questions, answers, assumptions, and actions taken during a triage session. It is for human review, compliance tracking, and session replay - not for feeding into LLM context windows.*
 
-## Main Menu
-
-**Presented at:** Session start, or when user selects "Return to main menu"
-
-**Options:**
-1. Copy/paste a single issue to triage
-2. Process bulk intake from Intake/Cloud (N files)
-3. Scan a repo
-4. Scan a sample repo
-5. Import and triage sample cloud findings (N files)
-6. Import and triage sample code findings (N files)
-
-**Allow freeform:** Yes (for custom paths or special requests)
-
-**Navigation:**
-- Option 1 → Single Issue Triage Flow
-- Option 2 → Bulk Cloud Triage Flow
-- Option 3 → Repository Scan Flow
-- Option 4 → Repository Scan Flow (sample repo)
-- Option 5 → Sample Cloud Triage Flow
-- Option 6 → Sample Code Triage Flow
+## Session Metadata
+- **Date:** DD/MM/YYYY
+- **Start time:** HH:MM
+- **End time:** HH:MM (update at session end)
+- **Triage type:** Cloud / Code / Repo scan / Mixed
+- **Provider:** Azure / AWS / GCP / N/A
+- **Intake source:** <path or "Interactive paste">
+- **Scan scope:** SAST / SCA / Secrets / IaC / IaC+SCA / All / N/A
 
 ---
 
-## Repository Scan Flow
+## Scan Timing & Tools
 
-### Step 1: Confirm Repos Root Path
-**Prompt:** "Confirm the repos root directory path where your repositories are located:"
+### Scan Type: <IaC / SCA / SAST / Secrets>
+- **Duration:** MM:SS or HH:MM:SS
+- **Tools used:** <comma-separated list of tools/commands>
+- **Findings count:** N
+- **Status:** Completed / Failed / Skipped
 
-**Options:**
-- `/mnt/c/Repos (Recommended)` (or detected path)
-- Allow freeform for custom paths
-
-### Step 2: Select Repository
-**Prompt:** "Which repository would you like to scan?"
-
-**Options:**
-- List all individual repositories found in repos root
-- Special patterns: "Scan all terraform-* repos", "Scan multiple repos (specify pattern)"
-- Allow freeform for custom repo names or patterns
-
-### Step 3: Pre-Discovery Folder Access
-**Prompt:** "Ready to scan {repo_name}. This will access {repo_path}. Grant permission to proceed?"
-
-**Purpose:** Request folder access permission ONCE before launching parallel agents to avoid multiple permission prompts.
-
-**Options:**
-- Continue with context discovery (Recommended)
-- Cancel and return to repository selection
-
-### Step 4: Phase 1 - Automated Context Discovery (~10 seconds)
-
-**Note:** Phase 1 must run `opengrep scan --config Rules/ <target>` as soon as opengrep is installed; if it is temporarily unavailable, document the outage and use Rules/Summary.md patterns as a fallback until opengrep is restored.
-
-**Action:** Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
-
-**Detects automatically:**
-- Languages & frameworks (C#, F#, TypeScript, Python, Go, Java, Kotlin)
-- IaC & orchestration (Terraform, Bicep, Helm, Kustomize, Skaffold, Tilt, K8s manifests)
-- Container runtime (Dockerfile analysis: base images, ports, user, health checks, multi-stage builds)
-- Network topology (VNets, subnets, NSGs, private endpoints, peerings)
-- Hosting (App Service, AKS, Functions, Container Apps)
-- CI/CD (Azure Pipelines, GitHub Actions, GitLab CI)
-- API routes (MapGet/MapPost, [HttpGet], route mapping JSON files)
-- Authentication methods (JWT, OAuth, APIM keys, mTLS, Digital Signatures)
-- External dependencies (databases with auth method, storage, queues, monitoring, backend APIs via APIM)
-- Ingress patterns (App Gateway, Front Door from code & Terraform)
-- APIM routing (mock vs real backend routing)
-- Backend services (from HttpClient config and route mapping JSON files)
-
-**Output:** `Output/Summary/Repos/<RepoName>.md` with:
-- 🗺️ Architecture Diagram (infrastructure topology, colored borders, clean connections)
-- 📊 TL;DR (Phase 2 TODO markers for security review)
-- 🛡️ Security Observations (detected controls, Phase 2 guidance)
-- 🧭 Overview (purpose, hosting, dependencies, auth, container/network details)
-- 🚦 Traffic Flow (Phase 2 TODO with route mappings table)
-- Updates `Output/Knowledge/Repos.md` and `Output/Knowledge/<Provider>.md`
-- Cloud architecture files in `Output/Summary/Cloud/Architecture_*.md` (provider + overview)
-- Kubernetes detail files when AKS/EKS/GKE exists: `Output/Summary/Cloud/<Provider>/Architecture_<Provider>_Kubernetes_<ClusterName>.md`
-- Provider resource summaries under `Output/Summary/Cloud/<Provider>/` (top-level `Cloud/` kept for `Architecture_*.md` only)
-
-### Step 5a: Phase 1.5 - Rules-Based IaC Scanning (~5-10 minutes)
-**Action:** If IaC detected (Terraform, Bicep, CloudFormation), run automated rule scanning
-**Purpose:** Detect common misconfigurations before manual review
-
-**CRITICAL:** Apply ALL detection rules for complete coverage.
-
-```bash
-# For Terraform repositories
-semgrep --config Rules/IaC/ <repo_path> --json -o findings_iac.json
-
-# Verify all rules ran (should be ~42 rules as of 2026-02-25)
-ls -1 Rules/IaC/*.yml | wc -l
-```
-
-**For each finding from semgrep:**
-1. Create individual finding document in `Output/Findings/Cloud/`
-2. Follow `Templates/CloudFinding.md` template
-3. Include:
-   - Resource name and type
-   - Rule ID that detected it
-   - Evidence location (file, line number)
-   - Technical severity (from rule metadata)
-   - Architecture diagram showing resource context
-4. Leave Skeptic sections BLANK (filled in Phase 3)
-
-**Expected Results:**
-- Detection rate: ~80-90% of infrastructure vulnerabilities
-- Time: 5-10 minutes for 40+ rules
-- Output: Individual finding files ready for skeptic review
-
-**Key Learning from Experiment 015:**
-- Selective rule application achieves only 50% detection
-- Applying ALL rules achieves 86%+ detection
-- Phase 1.5 reduces manual Phase 3 effort by catching common issues early
-
-**Validation checkpoint:**
-```bash
-# Verify findings were created
-ls Output/Findings/Cloud/*.md | wc -l
-
-# Verify rule coverage
-grep "Rule:" Output/Findings/Cloud/*.md | sort -u
-```
-
-### Step 5: Phase 2 - Deeper Context Search
-**Action:** Launch ONE explore agent per repo
-**Purpose:** Complete Phase 2 TODO markers with deep code understanding
-- Trace middleware execution order (numbered steps)
-- Document routing logic (how backend selection works)
-- Explain business purpose and key files
-- Complete Traffic Flow section with full details
-- See `Agents/ContextDiscoveryAgent.md` for Phase 2 prompt template
-
-### Step 6: Phase 3 - Security Review (Manual, Using Gathered Context)
-**Action:** Perform qualitative security review using Phase 1 + Phase 2 context
-- Review authentication/authorization flows for bypass risks
-- Check IaC configurations (public exposure, weak encryption, missing controls)
-- Review routing logic and middleware for security gaps
-- Identify injection risks, insecure deserialization, secrets in code
-- **Invoke Dev Skeptic** - Review from developer perspective
-- **Invoke Platform Skeptic** - Review from platform perspective
-- Document findings in Security Observations section
-- Update TL;DR with final scores and skeptic reasoning
-- Note: This is qualitative code/config review, NOT automated vulnerability scanning
-
-### Step 7: Phase 4 - Cloud Architecture Update (If IaC Detected)
-**Action:** Launch ArchitectureAgent
-- Updates `Output/Summary/Cloud/Architecture_<Provider>.md`
-- Shows where this repo/service fits in overall cloud estate
-- Multiple focused diagrams (Ingress, Routing, Backend, Network)
-- Adds hyperlinks (🔗) between services for navigation
-
-### Step 8: Remote Sync Check
-**Action:** Check if local repo is in sync with remote
-- If up-to-date: Proceed to Step 6
-- If behind/diverged: Ask user whether to pull or scan current version
-- If no remote configured: Proceed with local scan
-
-### Step 6: Post-Context Discovery Menu
-**Prompt:** "Context discovery complete for {repo_name}. What would you like to do next?"
-
-**Options:**
-1. SAST scan on {repo_name}
-2. SCA scan on {repo_name}
-3. Secrets scan on {repo_name}
-4. IaC scan on {repo_name}
-5. All scans on {repo_name}
-6. Scan another repository (→ returns to Step 2)
-7. Return to main menu (→ returns to Main Menu)
-
-**Allow freeform:** No (clear structured choices)
-
-**Navigation:**
-- Options 1-5 → Security Scan Flow (with selected scan type)
-- Option 6 → Repository Scan Flow (Step 2)
-- Option 7 → Main Menu
+### Scan Type: <next type>
+- **Duration:** MM:SS or HH:MM:SS
+- **Tools used:** <comma-separated list>
+- **Findings count:** N
+- **Status:** Completed / Failed / Skipped
 
 ---
 
-## Security Scan Flow
+## Q&A Log
 
-### Step 1: Execute Scan
-**Action:** Run selected scan type(s) on the repository
-- SAST: Static Application Security Testing (code analysis)
-- SCA: Software Composition Analysis (dependency vulnerabilities)
-- Secrets: Credential/secret detection
-- IaC: Infrastructure as Code security analysis
-- All: Execute all scan types
+### HH:MM - Question 1
+❓ <question text>
 
-**Output:**
-- Create findings in `Output/Findings/Code/`
-- Update `Output/Knowledge/Repos.md` with scan results
-- Update audit log with scan timing and results
+**Answer:** <user response>
 
-### Step 2: Post-Scan Menu
-**Prompt:** "Scan complete for {repo_name}. What would you like to do next?"
+**Action taken:** <what was done with this answer>
+- Example: "Updated Azure.md Confirmed section: Added Key Vault, Storage Accounts to services in use"
+- Example: "Set finding ABC_001 applicability to Yes based on confirmed internet exposure"
 
-**Options:**
-1. Run another scan on {repo_name} (→ returns to Post-Context Discovery Menu, Step 5)
-2. Review and triage findings (→ Finding Review Flow)
-3. Generate summary report (→ Summary Generation Flow)
-4. Scan another repository (→ Repository Scan Flow, Step 2)
-5. Return to main menu (→ Main Menu)
+### HH:MM - Question 2
+❓ <question text>
 
-**Allow freeform:** No
+**Answer:** <user response>
+
+**Action taken:** <what was done with this answer>
 
 ---
 
-## Post-Scan Rule Assessment
+## Actions Log
 
-After any scan completes and findings are generated, automatically check whether each finding could have been detected by an existing rule in Rules/:
+### HH:MM - Finding Created
+- **Action:** Created
+- **Target:** `Output/Findings/Cloud/Public_Storage_Account.md`
+- **Reason:** Processing bulk intake from Intake/Cloud/cloud.txt
+- **Impact:** New finding, initial score 8/10
 
-1. Map each created finding to rule IDs listed in Rules/Summary.md. If a matching rule exists, annotate the finding with the rule ID and evidence.
-2. If a finding appears rule-detectable but no existing rule matches, create a new draft rule in the appropriate Rules/ subfolder (IaC, Kubernetes, Secrets) with metadata (title, description, technology, five_pillars) and a minimal test case under Rules/tests/.
-3. Record the new rule proposal in `Output/Learning/experiments/<experiment>/proposed_rules/` (or `Output/Learning/proposed_rules/` for global runs) with links to the finding and suggested rule file path.
-4. Add an audit log entry documenting mapping results and any new rule files created.
+### HH:MM - Knowledge Updated
+- **Action:** Updated
+- **Target:** `Output/Knowledge/Azure.md`
+- **Reason:** User confirmed Private Endpoints are in use
+- **Impact:** Moved "Private Endpoints" from Assumptions to Confirmed
 
-Rationale: Close the detection-feedback loop so manual findings inform future automated detection coverage.
+### HH:MM - Finding Updated
+- **Action:** Updated
+- **Target:** `Output/Findings/Cloud/Public_Storage_Account.md`
+- **Reason:** Dev Skeptic review completed
+- **Impact:** Score adjusted 8/10 → 6/10 (compensating control: VNet integration)
 
----
-
-## Single Issue Triage Flow
-
-### Step 1: Receive Issue Text
-**Prompt:** "Please paste the issue to triage:"
-
-**Action:** User pastes finding text (cloud, code, or other)
-
-### Step 2: Identify Triage Type
-**Action:** Analyze pasted content to determine:
-- Cloud finding (Azure/AWS/GCP)
-- Code finding (SAST/SCA/vulnerability)
-- Infrastructure/other
-
-**Navigation:**
-- Cloud → Cloud Triage Flow
-- Code → Code Triage Flow
-
-### Step 3: Post-Triage Menu
-**Prompt:** "Triage complete. What would you like to do next?"
-
-**Options:**
-1. Triage another issue (→ returns to Step 1)
-2. Process bulk intake (→ Bulk Triage Flow)
-3. Scan a repo (→ Repository Scan Flow)
-4. Return to main menu (→ Main Menu)
+### HH:MM - Summary Regenerated
+- **Action:** Updated
+- **Target:** `Output/Summary/Risk Register.xlsx`
+- **Reason:** Bulk triage completed, 15 new findings
+- **Impact:** Risk register now contains 19 total findings
 
 ---
 
-## Bulk Triage Flow
+## Bulk Operations
 
-### Step 1: Select Intake Path
-**Prompt:** "Select intake path for bulk triage:"
+### HH:MM - Bulk Import Started
+- **Source:** `Intake/Cloud/cloud.txt`
+- **Items count:** 15
+- **Processing order:** Internet exposure → Data stores → Identity → Detection → Hardening
 
-**Options:**
-- List all non-empty folders under Intake/ and Sample Findings/
-- Example: Intake/Cloud, Intake/Code, Sample Findings/Cloud, Sample Findings/Code
-- Allow freeform for custom paths
+### HH:MM - Bulk Import Completed
+- **Duration:** 12 minutes
+- **Items processed:** 15/15
+- **Findings created:** 15
+- **Knowledge updates:** Azure.md (added 8 services)
 
-### Step 2: Check for Duplicates
-**Action:** Run `python3 Scripts/compare_intake_to_findings.py --intake <path> --findings Output/Findings/<type>`
-- If duplicates found: Ask to proceed with new items only
-- If no new items: Stop and notify user
-
-### Step 3: Infer Triage Type
-**Action:** Determine scope from folder name or content
-- If Intake/Cloud or Sample Findings/Cloud → Cloud triage
-- If Intake/Code or Sample Findings/Code → Code triage
-- Otherwise: Ask user to specify
-
-### Step 4: Execute Bulk Triage
-**Action:** Process all items in selected path
-- Create findings in `Output/Findings/<type>/`
-- Update knowledge files
-- Log all actions to audit log
-
-### Step 5: Post-Bulk-Triage Menu
-**Prompt:** "Bulk triage complete ({N} findings created). What would you like to do next?"
-
-**Options:**
-1. Process another bulk intake (→ returns to Step 1)
-2. Review and triage findings (→ Finding Review Flow)
-3. Generate summary report (→ Summary Generation Flow)
-4. Scan a repo (→ Repository Scan Flow)
-5. Return to main menu (→ Main Menu)
+### HH:MM - Items Processed (if <20 items)
+1. Public Storage Account → Finding created
+2. SQL Firewall Allows Azure → Finding created
+3. Key Vault Public Access → Finding created
+... (continue for all items if count < 20)
 
 ---
 
-## Finding Review Flow
+## Assumptions Made
 
-**Status:** To be defined (depends on review workflow requirements)
+### HH:MM - Assumption
+**Service/Topic:** Azure Private Endpoints
 
-**Potential navigation:**
-- Filter findings by severity/type
-- Apply DevSkeptic/PlatformSkeptic reviews
-- Update scores and applicability
-- Return to previous menu
+**Assumption:** Private Endpoints are NOT in use (inferred from multiple public access findings)
 
----
+**Status:** Pending confirmation
 
-## Summary Generation Flow
-
-**Status:** To be defined (depends on summary generation requirements)
-
-**Potential navigation:**
-- Generate risk register
-- Create executive summaries
-- Export findings reports
-- Return to previous menu
+**Impact if wrong:** Would downgrade 8 findings from HIGH to MEDIUM
 
 ---
 
-## Navigation Principles
+## Score Changes
 
-### Consistent Menu Structure
-Every menu should:
-1. Present clear, actionable choices
-2. Include "Return to main menu" option (except Main Menu itself)
-3. Include "Go back" or contextual return option where appropriate
-4. Use `ask_user` tool with `allow_freeform: false` for structured menus
-5. Use `allow_freeform: true` only when custom input is legitimately needed
-
-### Menu Choice Format
-- Use clear action-oriented language: "SAST scan on {repo_name}", not "SAST"
-- Include context in choices: "{action} on {target}"
-- Group related actions logically
-- Put recommended options first with "(Recommended)" suffix if applicable
-
-### Navigation State Management
-- Always know where the user is in the workflow
-- Log navigation decisions to audit log
-- Update session metadata when changing contexts (e.g., repo, scan type)
-- Preserve context when returning to previous menus
-
-### Exit Points
-Every workflow should have clear exit points:
-1. Complete current task and return to previous menu
-2. Skip to main menu
-3. Continue with related task in same context
+### HH:MM - Finding: Public_Storage_Account.md
+- **Initial (Security Review):** 8/10 (High)
+- **After Dev Skeptic:** 6/10 (Medium) - VNet integration confirmed
+- **After Platform Skeptic:** 6/10 (Medium) - No change
+- **Final:** 6/10 (Medium)
+- **Rationale:** VNet integration limits blast radius despite public DNS
 
 ---
 
-## Future Enhancements
+## Summary
+- **Session duration:** HH:MM
+- **Total findings created:** N
+- **Total findings updated:** N
+- **Knowledge files updated:** <comma-separated list>
+- **Summaries regenerated:** <comma-separated list>
+- **Questions asked:** N
+- **Questions answered:** N
+- **Assumptions made:** N (see Assumptions Made section)
+- **Assumptions confirmed:** N
+- **Assumptions rejected:** N
 
-### To Be Added
-- Finding Review Flow details
-- Summary Generation Flow details
-- Cloud Context Discovery menu (when cloud triage is selected)
-- Multiple repository parallel scanning workflow
-- Incremental scan workflow (scan only changed files)
+---
 
-### To Be Refined
-- Error handling and retry workflows
-- Cancel/abort operations mid-workflow
-- Session save/resume functionality
-- Multi-step workflows with checkpoints
+## Notes
+*Add any special observations, edge cases encountered, or context that would help someone reviewing this audit log later.*
