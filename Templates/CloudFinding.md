@@ -228,6 +228,7 @@ openssl s_client -connect <endpoint>:443 -tls1_2  # Should succeed
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
+- **Theme:** <TBD>
 - **Provider:** {{provider}}
 - **Resource Type:** {{resource_type}}
 - **Source:** <Defender/Advisor/Scanner name>

@@ -174,6 +174,7 @@ echo "Expected: [HTTP status/behavior]"
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
+- **Theme:** <TBD>
 - **Provider:** {{provider}}
 - **Resource Type:** {{resource_type}}
 - **Source:** <Defender/Advisor/Scanner name>

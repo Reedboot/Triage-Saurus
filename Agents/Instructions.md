@@ -686,8 +686,11 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   Change that only if you explicitly want to commit triage artifacts.
   - **File path references:** When referencing files within the Triage-Saurus repository (findings, knowledge, templates, agents), use **clickable markdown links with relative paths** from the current file location (e.g., `[Finding.md](../../Findings/Cloud/Finding.md)`, not inline code like `` `Output/Findings/Cloud/Finding.md` ``). External repo paths can remain as inline code.
 
-- **Cloud findings:** `Output/Findings/Cloud/<Titlecase>.md`
-- **Code findings:** `Output/Findings/Code/<Titlecase>.md`
+- **Cloud findings:** `Output/Findings/Cloud/<RepoName>/<Titlecase>.md`
+- **Code findings:** `Output/Findings/Code/<RepoName>/<Titlecase>.md`
+- **IaC findings:** `Output/Findings/IaC/<RepoName>/<Titlecase>.md`
+- **Secrets findings:** `Output/Findings/Secrets/<RepoName>/<Titlecase>.md`
+  - **CRITICAL: All findings MUST be placed in a repository-specific subdirectory.**
   - **Note:** Repo scans that identify specific code-level security vulnerabilities (e.g., SQL injection, XSS, insecure deserialization) should extract those as individual findings under `Output/Findings/Code/` for tracking and remediation.
 - **CRITICAL: One finding per file** — NEVER create consolidated finding files (e.g., `IaC_Findings.md` with all findings). Each security finding MUST be a separate markdown file:
   - Naming: `<RuleID_or_Title>_<RepoOrResource>.md` (e.g., `SQL_Firewall_All_Access_terraform-database.md`)
