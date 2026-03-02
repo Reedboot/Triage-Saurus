@@ -25,12 +25,12 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 
 ## File Template
 ```md
-# 🟣 <finding-title>
+# 🟣 {{title}}
 
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Edge[Internet / Users] --> Svc[<cloud service>]
+  Edge[Internet / Users] --> Svc[{{provider}} {{resource_type}}]
   Svc --> Data[<data store>]
   Svc --> Logs[Monitoring/Logs]
 
@@ -39,8 +39,8 @@ flowchart TB
 
 **CRITICAL: Never use `style fill:<color>` in Mermaid diagrams** - breaks dark themes (Settings/Styling.md). Use standard emoji from Settings/Styling.md instead: 🛡️ 🔐 🔒 🌐 🚦 📡 🗄️ 📈 ✅ ❌ ⚠️ ⛔
 
-- **Description:** <short description>
-- **Overall Score:** <severity emoji + label> <score>/10 — *Final after skeptic review: Security X/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
+- **Description:** {{description}}
+- **Overall Score:** {{overall_score_emoji}} **{{overall_score}}/10** ({{overall_score_severity}}) — *Final after skeptic review: Security {{overall_score}}/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
   - Note: Show score progression through skeptic reviews. Use ✅ if no change, ⬇️ if downgraded, ⬆️ if upgraded.
   - Example: `🟠 **7/10** (HIGH) — *Final: Security 9/10 → Dev ⬇️7/10 → Platform ✅7/10*`
 
@@ -50,9 +50,9 @@ flowchart TB
 | Aspect | Value |
 |--------|-------|
 | **Final Score** | <emoji> **X/10** (Risk Level) |
-| **Initial Score** | Security Review: X/10 |
+| **Initial Score** | Security Review: {{overall_score}}/10 |
 | **Adjustments** | Dev: <✅/⬆️/⬇️> → Platform: <✅/⬆️/⬇️> |
-| **Key Takeaway** | <one sentence summary of outcome> |
+| **Key Takeaway** | {{security_review_summary}} |
 
 **Top 3 Actions:**
 1. <Priority 1 with effort estimate>
@@ -87,23 +87,23 @@ flowchart TB
 - **Detection method:** <automated scan / manual review / external tool>
 
 ### 🧾 Summary
-<brief business impact summary: what it means to the business if this isn’t fixed>
+{{security_review_summary}}
 
 ### ✅ Applicability
 - **Status:** Yes / No / Don’t know
-- **Evidence:** <what makes this true/false>
+- **Evidence:** {{applicability_evidence}}
 
 ### ⚠️ Assumptions
-- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+- {{assumptions_bullets}}
 
 ### 🔎 Key Evidence
-- <evidence bullets with `path:line` references>
+- {{key_evidence_bullets}}
 
 ### 🎯 Exploitability
-<exploitability>
+{{exploitability}}
 
 ### ✅ Recommendations
-- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
+{{recommendations_checkboxes}}
 
 ### 🧰 Considered Countermeasures
 - 🔴 <countermeasure> — <effectiveness note>
@@ -111,7 +111,7 @@ flowchart TB
 - 🟢 <countermeasure> — <effectiveness note>
 
 ### 📐 Rationale
-<rationale>
+{{rationale}}
 
 ## 🧪 Proof of Concept
 **[Include this section for exploitable vulnerabilities]**
@@ -174,10 +174,10 @@ echo "Expected: [HTTP status/behavior]"
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
-- **Provider:** <Azure/AWS/GCP>
-- **Resource Type:** <Key Vault/Storage Account/etc>
+- **Provider:** {{provider}}
+- **Resource Type:** {{resource_type}}
 - **Source:** <Defender/Advisor/Scanner name>
-- 🗓️ **Last updated:** DD/MM/YYYY HH:MM
+- 🗓️ **Last updated:** {{last_updated}}
 ```
 
 ## Required Sections

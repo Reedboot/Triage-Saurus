@@ -26,7 +26,7 @@ Use this template for **one file per scanned repo** under `Findings/Repo/` and *
 
 ## File Template
 ```md
-# 🟣 Repo <repo-name>
+# 🟣 Repo {{title}}
 
 ## 🗺️ Architecture Diagram
 ```mermaid
@@ -51,7 +51,7 @@ flowchart TB
 
 **CRITICAL: Never use `style fill:<color>` in Mermaid diagrams** - breaks dark themes (Settings/Styling.md). Use standard emoji from Settings/Styling.md instead: 🛡️ 🔐 🔒 🌐 🚦 📡 🗄️ 📈 ✅ ❌ ⚠️ ⛔
 
-- **Overall Score:** <severity emoji + label> <score>/10 — *Final after skeptic review: Security X/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
+- **Overall Score:** {{overall_score_emoji}} **{{overall_score}}/10** ({{overall_score_severity}}) — *Final after skeptic review: Security {{overall_score}}/10 → Dev [✅/⬇️/⬆️]Y/10 → Platform [✅/⬇️/⬆️]Z/10*
   - Note: Show score progression through skeptic reviews. Use ✅ if no change, ⬇️ if downgraded, ⬆️ if upgraded.
   - Example: `🟠 **6/10** (HIGH - Moderate) — *Final: Security 7/10 → Dev ✅7/10 → Platform ⬇️6/10*`
 
@@ -60,7 +60,7 @@ flowchart TB
 | Aspect | Value |
 |--------|-------|
 | **Final Score** | <emoji> **X/10** (Risk Level) |
-| **Initial Score** | Security Review: X/10 |
+| **Initial Score** | Security Review: {{overall_score}}/10 |
 | **Adjustments** | Dev: [X/10 with ✅/⬆️/⬇️ + brief reason] → Platform: [Y/10 with ✅/⬆️/⬇️ + brief reason] |
 | **Key Takeaway** | <one sentence summary of security posture and main concerns> |
 
@@ -206,7 +206,7 @@ flowchart TB
 - **Evidence:** <what was observed>
 
 ### ⚠️ Assumptions
-- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+- {{assumptions_bullets}}
 
 ### 🎯 Exploitability
 <how an attacker would realistically leverage issues>
@@ -237,7 +237,7 @@ Examples:
 Capture any **reusable** cloud context inferred from the repo (IaC + app config).
 Promote reusable facts into `Knowledge/` as **Confirmed**/**Assumptions**.
 
-- **Provider(s) referenced:** <Azure/AWS/GCP>
+- **Provider(s) referenced:** {{provider}}
 - **Cloud resources/services deployed or referenced:** <Key Vault, Storage, AKS, ACR, SQL, ...>
 - **Network posture patterns:** <public endpoints, private endpoints, etc>
 - **Identity patterns:** <managed identity/workload identity/roles>
@@ -265,7 +265,7 @@ Extract downstream dependencies indicated by configuration, e.g.:
 - **Base images:** <list of FROM images>
 
 ### ✅ Recommendations
-- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
+{{recommendations_checkboxes}}
 
 ### 📐 Rationale
 <why the score is what it is>
@@ -298,7 +298,7 @@ Extract downstream dependencies indicated by configuration, e.g.:
 <Specific realistic attack scenarios that would increase severity>
 
 **Countermeasure effectiveness:**
-- <✅/🔵> **<Recommendation>** — <High/Medium/Low> impact (<rationale>)
+- <✅/🔵> **<Recommendation>** — <High/Medium/Low> impact ({{rationale}})
 
 **Assumptions to validate:**
 - [ ] **<Assumption>** — <Why it matters and how to validate>
@@ -378,7 +378,7 @@ X. **[Assumption statement]** (<✅ Confirmed / ❌ Assumption>)
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
-- **Repo Name:** <repo-name>
+- **Repo Name:** {{title}}
 - **Repo Path:** <absolute local path>
 - **Repo URL:** <url or N/A>
 - **Repo Type:** <Terraform/Go/Node.js/etc + purpose>
@@ -386,5 +386,5 @@ X. **[Assumption statement]** (<✅ Confirmed / ❌ Assumption>)
 - **CI/CD:** <Azure Pipelines/GitHub Actions/etc or N/A>
 - **Scan Scope:** <SAST / dependency (SCA) / secrets / IaC / All>
 - **Scanner:** <tool name>
-- 🗓️ **Last updated:** DD/MM/YYYY HH:MM
+- 🗓️ **Last updated:** {{last_updated}}
 ```

@@ -76,26 +76,22 @@ def iter_finding_files() -> Iterable[Path]:
 
 def parse_overall_score(lines: list[str], path: Path) -> tuple[str, int]:
     for line in lines:
-        # Support bullet point format
-        if line.strip().startswith("- **Overall Score:**"):
-            # New format: - **Overall Score:** 🔴 **10/10** - Critical
-            match = re.search(r"\*\*(\d+)/10\*\*\s*[-—]\s*(Critical|High|Medium|Low|Informational)", line, re.IGNORECASE)
+        # Support bullet point format for Overall Score
+        if line.strip().startswith("- **Overall Score:"):
+            # Example: - **Overall Score:** 🟠 **7/10** (High)
+            match = re.search(r"\*\*(\d+)/10\*\*\s*\((\w+)\)", line, re.IGNORECASE)
             if match:
-                return match.group(2).capitalize(), int(match.group(1))
-            # Old format: Critical 10/10
-            match = re.search(r"(Critical|High|Medium|Low|Informational)\s+(\d+)/10", line, re.IGNORECASE)
-            if match:
-                return match.group(1).capitalize(), int(match.group(2))
-            # My experimental format: **CRITICAL 9/10**
-            match = re.search(r"\*\*(Critical|High|Medium|Low|Informational)\s+(\d+)/10\*\*", line, re.IGNORECASE)
-            if match:
-                return match.group(1).capitalize(), int(match.group(2))
-            
+                severity = match.group(2).capitalize()
+                score = int(match.group(1))
+                return severity, score
+
         # Support TL;DR table format: | **Final Score** | 🟠 **7/10** (HIGH) |
         if "| **Final Score** |" in line:
-            match = re.search(r"\*\*(\d+)/10\*\*\s*\((Critical|High|Medium|Low|Informational)\)", line, re.IGNORECASE)
+            match = re.search(r"\*\*(\d+)/10\*\*\s*\((\w+)\)", line, re.IGNORECASE)
             if match:
-                return match.group(2).capitalize(), int(match.group(1))
+                severity = match.group(2).capitalize()
+                score = int(match.group(1))
+                return severity, score
 
     raise ValueError(f"Missing overall score in {path}")
 
@@ -647,7 +643,9 @@ def build_rows() -> list[RiskRow]:
     # Try database first
     if USE_DATABASE:
         try:
-            return build_rows_from_database()
+            rows = build_rows_from_database()
+            if rows:
+                return rows
         except Exception as e:
             print(f"WARN: Database query failed, falling back to markdown: {e}", file=sys.stderr)
     

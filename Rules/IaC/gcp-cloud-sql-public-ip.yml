@@ -1,0 +1,26 @@
+rules:
+  - id: gcp-cloud-sql-public-ip
+    languages:
+      - hcl
+    message: >-
+      GCP Cloud SQL instance has a public IP address enabled. 
+      This exposes the database to the internet, increasing the attack surface. 
+      Configure `ipv4_enabled = false` to ensure the database is only accessible via private IP.
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          resource "google_sql_database_instance" $ANY {
+            ...
+          }
+      - pattern: |
+          ip_configuration {
+            ...
+            ipv4_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      technology:
+        - gcp
+        - terraform
+        - cloud-sql

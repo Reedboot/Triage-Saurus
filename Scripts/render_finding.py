@@ -80,11 +80,11 @@ def _as_list(x: object) -> list[str]:
 
 def _get_template_path(kind: str) -> Path:
     if kind == "cloud":
-        return ROOT / "Templates" / "Render" / "CloudFinding.md"
+        return ROOT / "Templates" / "CloudFinding.md"
     if kind == "code":
-        return ROOT / "Templates" / "Render" / "CodeFinding.md"
+        return ROOT / "Templates" / "CodeFinding.md"
     if kind == "repo":
-        return ROOT / "Templates" / "Render" / "RepoFinding.md"
+        return ROOT / "Templates" / "RepoFinding.md"
     raise SystemExit(f"Unknown kind for template: {kind}")
 
 
@@ -183,6 +183,11 @@ def render_md(model: dict) -> str:
         raise SystemExit(f"Renderer template not found: {template_path.relative_to(ROOT)}")
 
     tmpl = template_path.read_text(encoding="utf-8", errors="replace")
+    
+    # Extract template from inside the ```md block if it exists
+    match = re.search(r"## File Template\s*```md\n(.*?)\n```\s*(?:## Required Sections|## Testing|$)", tmpl, re.DOTALL)
+    if match:
+        tmpl = match.group(1)
 
     provider = str(meta.get("provider", "")).strip() or str(model.get("provider", "")).strip() or "TODO"
     resource_type = str(meta.get("resource_type", "")).strip() or str(model.get("resource_type", "")).strip() or "TODO"

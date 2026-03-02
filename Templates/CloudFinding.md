@@ -25,12 +25,12 @@ rules, follow `Settings/Styling.md`. For behavioural rules, follow
 
 ## File Template
 ```md
-# 🟣 <finding-title>
+# 🟣 {{title}}
 
 ## 🗺️ Architecture Diagram
 ```mermaid
 flowchart TB
-  Edge[Internet / Users] --> Svc[<cloud service>]
+  Edge[Internet / Users] --> Svc[{{provider}} {{resource_type}}]
   
   %% Use subgraphs for hierarchical Azure/AWS/GCP resources
   %% Example: SQL Server contains databases
@@ -66,9 +66,9 @@ flowchart TB
 | Aspect | Value |
 |--------|-------|
 | **Final Score** | <emoji> **X/10** (Risk Level) |
-| **Initial Score** | Security Review: X/10 |
+| **Initial Score** | Security Review: {{overall_score}}/10 |
 | **Adjustments** | Dev: <✅/⬆️/⬇️> → Platform: <✅/⬆️/⬇️> |
-| **Key Takeaway** | <one sentence summary of outcome> |
+| **Key Takeaway** | {{security_review_summary}} |
 
 **Top 3 Actions:**
 1. <Priority 1 with effort estimate>
@@ -103,20 +103,20 @@ flowchart TB
 - **Detection method:** <automated scan / manual review / external tool>
 
 ### 🧾 Summary
-<brief business impact summary: what it means to the business if this isn’t fixed>
+{{security_review_summary}}
 
 ### ✅ Applicability
 - **Status:** Yes / No / Don’t know
-- **Evidence:** <what makes this true/false>
+- **Evidence:** {{applicability_evidence}}
 
 ### ⚠️ Assumptions
-- <assumption that could change score/applicability> (mark as Confirmed/Unconfirmed)
+- {{assumptions_bullets}}
 
 ### 🔎 Key Evidence
-- <evidence bullets with `path:line` references>
+- {{key_evidence_bullets}}
 
 ### 🎯 Exploitability
-<exploitability>
+{{exploitability}}
 
 **For encryption/TLS findings, include Data Protection Matrix:**
 
@@ -144,7 +144,7 @@ flowchart TB
 - No break-glass capability
 
 ### ✅ Recommendations
-- [ ] <recommendation> — ⬇️ <score>➡️<reduced-score> (est.)
+{{recommendations_checkboxes}}
 
 ### 🧰 Considered Countermeasures
 - 🔴 <countermeasure> — <effectiveness note>
@@ -152,7 +152,7 @@ flowchart TB
 - 🟢 <countermeasure> — <effectiveness note>
 
 ### 📐 Rationale
-<rationale>
+{{rationale}}
 
 ## 🧪 Proof of Concept
 **[Include this section for demonstrable cloud misconfigurations]**
@@ -228,10 +228,10 @@ openssl s_client -connect <endpoint>:443 -tls1_2  # Should succeed
 
 ## Meta Data
 <!-- Meta Data must remain the final section in the file. -->
-- **Provider:** <Azure/AWS/GCP>
-- **Resource Type:** <Key Vault/Storage Account/etc>
+- **Provider:** {{provider}}
+- **Resource Type:** {{resource_type}}
 - **Source:** <Defender/Advisor/Scanner name>
-- 🗓️ **Last updated:** DD/MM/YYYY HH:MM
+- 🗓️ **Last updated:** {{last_updated}}
 ```
 
 ## Required Sections
