@@ -26,6 +26,8 @@ This repository supports consistent security triage. The expected workflow is:
 - When opengrep is installed (default repo state), every IaC/code scan MUST start with `opengrep scan --config Rules/ <target>` to apply the entire ruleset.
 - Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are only acceptable if opengrep becomes unavailable mid-session and must be documented in the audit log.
 - Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
+- **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
+- **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` + `triage.db`, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the DB rather than keeping prior repo transcripts in memory.
 
 **Rules + LLM Pattern:**
 - Rules detect patterns and extract relevant data
@@ -427,7 +429,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - **Questions asked:** N
     - **Assumptions made:** N (see Knowledge files for details)
     ```
-  - **Token tracking:** Track token consumption deltas for major operations (scan types, finding generation, skeptic reviews) by noting system warnings before/after operations. Calculate efficiency (tokens/second) to identify optimization opportunities.
+  - **Token tracking:** Removed from workflow. Focus audit logging on actions, questions, and findings; do not attempt to capture per-operation token/model data (proved inaccurate).
   - **When to append (not replace):** Always append to the session log, never overwrite previous entries
   - **Audit log size:** for bulk title imports, prefer an audit summary (count + source file path + timestamp). Only include per-item lists when the user explicitly asks or when count is <20 items.
   - **Audit log is append-only:** clearly mark at the top of each audit file as shown above. These logs are for human review and compliance tracking, not for feeding back into context windows.
