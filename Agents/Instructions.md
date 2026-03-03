@@ -1,6 +1,10 @@
 # 🟣 Agent Instructions
 
 ## Purpose
+
+> Agents should persist any script/diagram/template changes made during experiments back into the repository under Scripts/, Templates/, and Rules/ so they are available for future runs; avoid committing without user confirmation but write files in-place as part of the experiment workflow.
+
+
 This repository supports consistent security triage. The expected workflow is:
 1. Triage an issue (cloud or code).
 2. Create/update a finding under `Output/Findings/` using the relevant template.
