@@ -1,50 +1,18 @@
 #!/usr/bin/env python3
-"""Render a finding Markdown file from a JSON "finding model".
-
-Design goal: scripts do repeatable IO + formatting; the AI provides the content.
-
-Usage:
-  python3 Scripts/render_finding.py --in Output/Audit/RenderInputs/Cloud/Foo.json
-
-Input JSON (v1) minimal shape:
-  {
-    "version": 1,
-    "kind": "cloud" | "code" | "repo",
-    "title": "...",
-    "description": "...",
-    "overall_score": { "severity": "Critical|High|Medium|Low", "score": 1-10 },
-    "architecture_mermaid": "flowchart TB\\n  ...",
-    "security_review": {
-      "summary": "...",
-      "applicability": { "status": "Yes|No|Don’t know", "evidence": "..." },
-      "key_evidence": ["...", "..."],
-      "assumptions": ["...", "..."],
-      "exploitability": "...",
-      "recommendations": [
-        { "text": "...", "score_from": 7, "score_to": 4 }
-      ],
-      "countermeasures": ["...", "..."],
-      "rationale": "..."
-    },
-    "meta": { "category": "...", "languages": "...", "source": "...", "last_updated": "DD/MM/YYYY HH:MM" },
-    "output": { "path": "Output/Findings/Cloud/Foo.md" }  // optional
-  }
-"""
-
-from __future__ import annotations
+"""Render a finding Markdown file from a database finding ID."""
 
 import argparse
 import json
 import re
 from pathlib import Path
 
+from db_helpers import get_db_connection
 from markdown_validator import validate_markdown_file
 from output_paths import OUTPUT_FINDINGS_DIR
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
-
+# (The rest of the helper functions from the original script will be kept the same)
 def _emoji_for(sev: str) -> str:
     s = sev.strip().lower()
     if s == "critical":
@@ -57,18 +25,15 @@ def _emoji_for(sev: str) -> str:
         return "🟢"
     raise SystemExit(f"Unknown severity: {sev!r} (expected Critical/High/Medium/Low)")
 
-
 def _safe_filename(title: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")
     parts = [p for p in cleaned.split("_") if p]
     out = "_".join([p[:1].upper() + p[1:] for p in parts]) or "Finding"
     return f"{out}.md"
 
-
 def _mermaid_block(mermaid: str | None) -> str:
     body = (mermaid or "flowchart TB\n  A[TODO]").rstrip("\n")
     return "```mermaid\n" + body + "\n```"
-
 
 def _as_list(x: object) -> list[str]:
     if x is None:
@@ -76,7 +41,6 @@ def _as_list(x: object) -> list[str]:
     if isinstance(x, list):
         return [str(i) for i in x if str(i).strip()]
     return [str(x)]
-
 
 def _get_template_path(kind: str) -> Path:
     if kind == "cloud":
@@ -87,13 +51,11 @@ def _get_template_path(kind: str) -> Path:
         return ROOT / "Templates" / "RepoFinding.md"
     raise SystemExit(f"Unknown kind for template: {kind}")
 
-
 def _bullets(items: list[str], *, checkbox: bool = False) -> str:
     if not items:
         return "- (none)"
     prefix = "- [ ] " if checkbox else "- "
     return "\n".join(prefix + i for i in items)
-
 
 def _recommendations(recs: object, score_i: int) -> str:
     if not isinstance(recs, list) or not recs:
@@ -116,7 +78,6 @@ def _recommendations(recs: object, score_i: int) -> str:
             st_i = max(score_i - 2, 0)
         out.append(f"- [ ] {txt} — ⬇️ {sf_i}➡️{st_i} (est.)")
     return "\n".join(out) if out else f"- [ ] TODO — ⬇️ {score_i}➡️{max(score_i - 2, 0)} (est.)"
-
 
 def render_md(model: dict) -> str:
     version = int(model.get("version", 1))
@@ -163,7 +124,6 @@ def render_md(model: dict) -> str:
 
     overview_bullets = _bullets(_as_list(model.get("overview_bullets")))
     risks_bullets = _bullets(_as_list(sr.get("risks")))
-    # Repo findings often separate deep-dive evidence; allow both schema shapes.
     key_evidence_deep = _as_list(sr.get("key_evidence_deep") or sr.get("key_evidence_deep_dive"))
     if not key_evidence_deep:
         key_evidence_deep = key_evidence
@@ -184,7 +144,6 @@ def render_md(model: dict) -> str:
 
     tmpl = template_path.read_text(encoding="utf-8", errors="replace")
     
-    # Extract template from inside the ```md block if it exists
     match = re.search(r"## File Template\s*```md\n(.*?)\n```\s*(?:## Required Sections|## Testing|$)", tmpl, re.DOTALL)
     if match:
         tmpl = match.group(1)
@@ -224,14 +183,22 @@ def render_md(model: dict) -> str:
     for k, v in mapping.items():
         out = out.replace("{{" + k + "}}", v)
 
-    # Fail if any placeholders remain to avoid silent partial renders.
     if re.search(r"\{\{[A-Za-z0-9_]+\}\}", out):
         raise SystemExit(f"Unresolved placeholders remain after render using {template_path.relative_to(ROOT)}")
 
     return out.rstrip() + "\n"
 
+def get_finding_model_from_db(finding_id: int) -> dict:
+    """Get finding model from the database."""
+    with get_db_connection() as conn:
+        finding = conn.execute("SELECT * FROM findings WHERE id = ?", [finding_id]).fetchone()
+        if not finding:
+            raise ValueError(f"Finding not found in database: {finding_id}")
+    
+    # The 'details' column is expected to contain a JSON string with the finding model
+    return json.loads(finding['details'])
 
-def compute_output_path(model: dict, *, in_path: Path) -> Path:
+def compute_output_path(model: dict) -> Path:
     out = (model.get("output") or {}).get("path")
     if out:
         p = Path(str(out))
@@ -248,21 +215,20 @@ def compute_output_path(model: dict, *, in_path: Path) -> Path:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Render a finding Markdown file from JSON.")
-    p.add_argument("--in", dest="in_path", required=True, help="Input JSON path")
+    p = argparse.ArgumentParser(description="Render a finding Markdown file from the database.")
+    p.add_argument("--id", dest="finding_id", type=int, required=True, help="Finding ID from the database")
     p.add_argument("--out", dest="out_path", help="Override output Markdown path")
     args = p.parse_args()
 
-    in_path = Path(args.in_path).expanduser()
-    if not in_path.is_absolute():
-        in_path = (ROOT / in_path).resolve()
-    if not in_path.is_file():
-        raise SystemExit(f"Input not found: {in_path}")
+    try:
+        model = get_finding_model_from_db(args.finding_id)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
-    model = json.loads(in_path.read_text(encoding="utf-8", errors="replace"))
     md = render_md(model)
 
-    out_path = Path(args.out_path).expanduser() if args.out_path else compute_output_path(model, in_path=in_path)
+    out_path = Path(args.out_path).expanduser() if args.out_path else compute_output_path(model)
     if not out_path.is_absolute():
         out_path = (ROOT / out_path).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,31 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 
 
+def get_node_style(resource: dict) -> Optional[str]:
+    """Return Mermaid style string for a resource based on type and score."""
+    node_id = sanitize_id(resource['resource_name'])
+    score = resource.get('max_finding_score', 0)
+    
+    if score >= 9:
+        return f"style {node_id} stroke:#ff0000,stroke-width:4px"
+    if score >= 7:
+        return f"style {node_id} stroke:#ff6b00,stroke-width:3px"
+    
+    resource_type = resource.get('resource_type', '')
+    if resource_type == 'VM':
+        return f"style {node_id} stroke:#0066cc,stroke-width:2px"
+    if resource_type in ('SQL', 'SQLServer'):
+        return f"style {node_id} stroke:#00aa00,stroke-width:2px"
+    if resource_type == 'KeyVault':
+        return f"style {node_id} stroke:#f59f00,stroke-width:2px"
+    if resource_type == 'Storage':
+        return f"style {node_id} stroke:#00aa00,stroke-width:2px"
+    if resource_type == 'NSG':
+        return f"style {node_id} stroke:#ff6b6b,stroke-width:2px"
+    
+    return None
+
+
 def sanitize_id(name: str) -> str:
     """Convert resource name to valid Mermaid node ID."""
     return name.replace('-', '_').replace('.', '_').replace(' ', '_')
@@ -171,23 +196,9 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     
     # Styling based on findings
     for r in resources:
-        node_id = sanitize_id(r['resource_name'])
-        score = r['max_finding_score']
-        
-        if score >= 9:
-            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px")
-        elif score >= 7:
-            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px")
-        elif r['resource_type'] == 'VM':
-            lines.append(f"  style {node_id} stroke:#0066cc,stroke-width:2px")
-        elif r['resource_type'] == 'SQL':
-            lines.append(f"  style {node_id} stroke:#00aa00,stroke-width:2px")
-        elif r['resource_type'] == 'KeyVault':
-            lines.append(f"  style {node_id} stroke:#f59f00,stroke-width:2px")
-        elif r['resource_type'] == 'Storage':
-            lines.append(f"  style {node_id} stroke:#00aa00,stroke-width:2px")
-        elif r['resource_type'] == 'NSG':
-            lines.append(f"  style {node_id} stroke:#ff6b6b,stroke-width:2px")
+        style = get_node_style(r)
+        if style:
+            lines.append(f"  {style}")
     
     if has_internet_connections:
         lines.append("  style internet stroke:#ff0000,stroke-width:3px")
@@ -257,11 +268,9 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
     
     # Styling
     for r in vulnerable:
-        node_id = sanitize_id(r['resource_name'])
-        if r['max_score'] >= 9:
-            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px")
-        else:
-            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px")
+        style = get_node_style(r)
+        if style:
+            lines.append(f"  {style}")
     
     return "\n".join(lines)
 
