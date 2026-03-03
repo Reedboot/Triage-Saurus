@@ -471,25 +471,60 @@ def format_source_location(source_file: str, start_line: Optional[int], end_line
 # ============================================================================
 
 def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
-    """Get all resources for diagram generation."""
+    """Get all resources with properties merged into a canonical dict for diagram/summaries."""
     with get_db_connection() as conn:
         cursor = conn.execute("""
-            SELECT 
-              r.resource_name,
-              r.resource_type,
-              r.provider,
-              repo.repo_name,
-              COALESCE(MAX(f.score), 0) as max_finding_score,
-              GROUP_CONCAT(DISTINCT rp.property_key || ':' || rp.property_value) as properties
+            SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                   COALESCE(MAX(f.score), 0) as max_finding_score
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
             LEFT JOIN findings f ON r.id = f.resource_id
-            LEFT JOIN resource_properties rp ON r.id = rp.resource_id
             WHERE r.experiment_id = ?
             GROUP BY r.id
+            ORDER BY r.resource_type, r.resource_name
         """, [experiment_id])
-        
-        return [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        resources = []
+        for row in rows:
+            r = dict(row)
+            props = conn.execute("SELECT property_key, property_value FROM resource_properties WHERE resource_id = ?", [r['id']]).fetchall()
+            prop_dict = {p['property_key']: _maybe_parse_json(p['property_value']) for p in props}
+            # Normalize common fields
+            canon = {
+                'id': r['id'],
+                'resource_name': r['resource_name'],
+                'resource_type': r['resource_type'],
+                'provider': r['provider'],
+                'repo_name': r['repo_name'],
+                'max_finding_score': r['max_finding_score'],
+                'properties': prop_dict,
+                'public': _prop_bool(prop_dict.get('public') or prop_dict.get('public_access') or prop_dict.get('public', False)),
+                'public_reason': prop_dict.get('public_reason') or prop_dict.get('notes') or '',
+                'network_acls': _maybe_parse_json(prop_dict.get('network_acls')),
+                'firewall_rules': _maybe_parse_json(prop_dict.get('firewall_rules')) or [],
+            }
+            resources.append(canon)
+        return resources
+
+
+def _maybe_parse_json(val: Optional[str]):
+    if val is None:
+        return None
+    try:
+        return json.loads(val)
+    except Exception:
+        return val
+
+
+def _prop_bool(val):
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    s = str(val).lower()
+    return s in ('1','true','yes','y','t')
 
 
 def get_connections_for_diagram(experiment_id: str) -> List[Dict]:

@@ -2211,7 +2211,9 @@ def extract_nsg_associations(files: list[Path], repo: Path, provider: str, vm_na
         
         # If firewall exists, mark all instances as potentially protected
         if has_firewall:
-            for vm_name, _ in vm_names:
+            for vm_entry in vm_names:
+                # vm_names entries are (name, os, role); support future tuple extensions.
+                vm_name = vm_entry[0]
                 associations[vm_name] = True
     
     return associations
@@ -2324,6 +2326,9 @@ def write_cloud_resource_summaries(
         vm_list = extract_vm_names_with_os(files, repo, "azure")
         nsg_associations = extract_nsg_associations(files, repo, "azure", vm_list)
         
+        # Extract PaaS resources and ensure PaaS subgraph is included in cloud overview
+        paas_resources = _extract_paas_resources(files, repo, "azure")
+        has_paas = any(len(v) > 0 for v in paas_resources.values())
         # Extract AKS clusters
         aks_clusters = extract_resource_names_with_property(files, repo, "azurerm_kubernetes_cluster", "name")
         
@@ -2390,22 +2395,38 @@ def write_cloud_resource_summaries(
             summary_lines.append("  end")
             summary_lines.append("")
             
-            # Internet connections
-            summary_lines.append("  Internet -->|HTTPS| App")
+            # Internet connections - label and color red if target is public/unprotected
+            def add_internet_arrow(target, label=None, unprotected=False):
+                lbl = f"|{label}|" if label else "|HTTPS|"
+                if unprotected:
+                    summary_lines.append(f"  Internet -->{lbl} {target}")
+                    summary_lines.append(f"  style {target} stroke:#ff0000,stroke-width:3px")
+                else:
+                    summary_lines.append(f"  Internet -->{lbl} {target}")
+
+            add_internet_arrow('App', 'HTTPS', not paas_connections.get('app_protected'))
             for aks in aks_clusters_list:
-                summary_lines.append(f"  Internet --> AKS_{aks}")
+                add_internet_arrow(f'AKS_{aks}', 'HTTPS', False)
             if paas_connections.get("sql_databases"):
-                summary_lines.append("  Internet --> SQL")
+                add_internet_arrow('SQL', 'TDS', False)
             if paas_connections.get("key_vaults"):
-                summary_lines.append("  Internet --> KV")
+                add_internet_arrow('KV', 'HTTPS', not paas_connections.get('kv_restricted'))
             if paas_connections.get("storage_accounts"):
-                summary_lines.append("  Internet --> Storage")
-            summary_lines.append("  Internet -->|All Ports| NSG")
+                add_internet_arrow('Storage', 'HTTPS', not paas_connections.get('sa_restricted'))
+            # NSG shown separately
+            if any(not nsg_associations.get(vm, True) for vm in [v[0] for v in vm_list]):
+                summary_lines.append("  %% Some VMs are unprotected; direct Internet arrows will be shown to those VMs")
             summary_lines.append("")
             
-            # NSG to VMs
+            # NSG to VMs (if NSG exists route via NSG, otherwise show Internet -> VM as unprotected)
             for other_vm, _, _ in vm_list:
-                summary_lines.append(f"  NSG --> VM_{other_vm}")
+                if nsg_associations.get(other_vm):
+                    summary_lines.append(f"  NSG --> VM_{other_vm}")
+                else:
+                    # Unprotected VM - show direct Internet access
+                    summary_lines.append(f"  Internet -->|All Ports| VM_{other_vm}")
+                    # Mark unprotected VM visually
+                    summary_lines.append(f"  style VM_{other_vm} stroke:#ff0000,stroke-width:3px")
             summary_lines.append("")
             
             # Current VM's connections to PaaS (emphasized)
@@ -2498,6 +2519,9 @@ def write_cloud_resource_summaries(
             
             # Add critical security issues section first
             summary_lines.append("## 🔥 Critical Security Issues")
+            summary_lines.append("")
+            # Clarify gateway messaging: gateway presence alone is not risk; lack of enforced ingress and auth is
+            summary_lines.append("- Note: Presence of an Application Gateway or other edge router is not inherently the top risk. Risk is highest when ingress AND authentication enforcement are lacking — e.g., Application Gateway + application allowing unauthenticated or unfiltered requests to reach services (missing WAF, no HTTPS enforcement, no auth on backend).")
             summary_lines.append("")
             
             critical_issues = []
@@ -2988,29 +3012,29 @@ def write_cloud_resource_summaries(
         # Process PaaS resources
         paas_resources = _extract_paas_resources(files, repo, "azure")
         
-        # SQL Server summaries
-        for sql in paas_resources["sql_servers"]:
+        # SQL Server summaries (use sql_databases from extractor)
+        for sql in paas_resources.get("sql_databases", []):
             summary_lines = []
-            summary_lines.append(f"# SQL Server Summary: {sql['name']}")
+            summary_lines.append(f"# SQL Server Summary: {sql.get('name')}")
             summary_lines.append("")
             summary_lines.append(f"**Resource Type:** Azure SQL Server")
             if sql.get("version"):
-                summary_lines.append(f"**Version:** {sql['version']}")
+                summary_lines.append(f"**Version:** {sql.get('version')}")
             summary_lines.append("")
             
             summary_lines.append("## 🔥 Critical Security Issues")
             summary_lines.append("")
             
             critical_issues = []
-            if sql["public_access"]:
-                critical_issues.append("🔴 **PUBLIC INTERNET ACCESS** - SQL Server allows connections from 0.0.0.0")
-            if not sql["aad_auth"]:
+            if sql.get("public", False):
+                critical_issues.append("🔴 **PUBLIC INTERNET ACCESS** - SQL Server allows connections from 0.0.0.0 or has external IP")
+            if not sql.get("aad_auth", False):
                 critical_issues.append("🟠 **No Azure AD Authentication** - Relies on SQL authentication only")
-            if not sql.get("tls_version") or sql["tls_version"] < "1.2":
+            if not sql.get("tls_version") or (isinstance(sql.get('tls_version'), str) and sql.get('tls_version') < "1.2"):
                 critical_issues.append(f"🟠 **Weak TLS Version** - Using TLS {sql.get('tls_version', 'Unknown')} (should be 1.2+)")
-            if not sql["auditing"]:
+            if not sql.get("auditing", False):
                 critical_issues.append("🟡 **No Auditing Enabled** - Cannot detect unauthorized access")
-            if not sql["threat_detection"]:
+            if not sql.get("threat_detection", False):
                 critical_issues.append("🟡 **No Threat Detection** - Advanced threat protection not enabled")
             
             if critical_issues:
@@ -3075,9 +3099,17 @@ def write_cloud_resource_summaries(
             print(f"Generated SQL Server summary: {out_path}")
         
         # Key Vault summaries
-        for kv in paas_resources["key_vaults"]:
+        for kv in paas_resources.get("key_vaults", []):
             summary_lines = []
-            summary_lines.append(f"# Key Vault Summary: {kv['name']}")
+            name = kv.get('name', '<unknown>')
+            public_access = kv.get('public_access', False)
+            network_acls = kv.get('network_acls')
+            rbac_enabled = kv.get('rbac_enabled', False)
+            access_policies = kv.get('access_policies', 0)
+            purge_protection = kv.get('purge_protection', False)
+            soft_delete = kv.get('soft_delete', False)
+
+            summary_lines.append(f"# Key Vault Summary: {name}")
             summary_lines.append("")
             summary_lines.append(f"**Resource Type:** Azure Key Vault")
             summary_lines.append("")
@@ -3086,15 +3118,15 @@ def write_cloud_resource_summaries(
             summary_lines.append("")
             
             critical_issues = []
-            if kv["public_access"]:
+            if public_access:
                 critical_issues.append("🔴 **PUBLIC INTERNET ACCESS** - Key Vault accessible from any IP")
-            if not kv["network_acls"]:
+            if not network_acls:
                 critical_issues.append("🟠 **No Network ACLs** - No IP restrictions configured")
-            if not kv["rbac_enabled"] and kv["access_policies"] == 0:
+            if (not rbac_enabled) and access_policies == 0:
                 critical_issues.append("🔴 **No Access Control** - Neither RBAC nor access policies detected")
-            if not kv["purge_protection"]:
+            if not purge_protection:
                 critical_issues.append("🟠 **No Purge Protection** - Secrets can be permanently deleted")
-            if not kv["soft_delete"]:
+            if not soft_delete:
                 critical_issues.append("🟡 **No Soft Delete** - Deleted secrets cannot be recovered")
             
             if critical_issues:
@@ -3106,8 +3138,8 @@ def write_cloud_resource_summaries(
             
             summary_lines.append("## 🌐 Network Access")
             summary_lines.append("")
-            if kv["network_acls"]:
-                if kv["public_access"]:
+            if network_acls:
+                if public_access:
                     summary_lines.append("- 🟡 Network ACLs configured but still allows public access")
                 else:
                     summary_lines.append("- ✅ Network ACLs configured - restricted access")
@@ -3118,29 +3150,29 @@ def write_cloud_resource_summaries(
             
             summary_lines.append("## 🔐 Access Control")
             summary_lines.append("")
-            if kv["rbac_enabled"]:
+            if rbac_enabled:
                 summary_lines.append("- ✅ RBAC authorization enabled")
             else:
                 summary_lines.append("- Access Policy model (legacy)")
-            summary_lines.append(f"- **Access Policies:** {kv['access_policies']} detected")
+            summary_lines.append(f"- **Access Policies:** {access_policies} detected")
             summary_lines.append("")
             
             summary_lines.append("## 🛡️ Data Protection")
             summary_lines.append("")
-            summary_lines.append(f"- **Soft Delete:** {'✅ Enabled' if kv['soft_delete'] else '❌ Disabled'}")
-            summary_lines.append(f"- **Purge Protection:** {'✅ Enabled' if kv['purge_protection'] else '❌ Disabled'}")
+            summary_lines.append(f"- **Soft Delete:** {'✅ Enabled' if soft_delete else '❌ Disabled'}")
+            summary_lines.append(f"- **Purge Protection:** {'✅ Enabled' if purge_protection else '❌ Disabled'}")
             summary_lines.append("")
             
             summary_lines.append("## 🔒 Recommendations")
             summary_lines.append("")
-            if kv["public_access"]:
+            if public_access:
                 summary_lines.append("- [ ] 🔴 **URGENT:** Restrict network access to specific IPs or VNets")
                 summary_lines.append("- [ ] Consider private endpoint for Azure-only access")
-            if not kv["rbac_enabled"]:
+            if not rbac_enabled:
                 summary_lines.append("- [ ] Migrate to RBAC for better access control")
-            if not kv["purge_protection"]:
+            if not purge_protection:
                 summary_lines.append("- [ ] Enable purge protection to prevent permanent deletion")
-            if not kv["soft_delete"]:
+            if not soft_delete:
                 summary_lines.append("- [ ] Enable soft delete for recovery capability")
             summary_lines.append("- [ ] Enable diagnostic logging")
             summary_lines.append("- [ ] Review access policies/RBAC assignments")
@@ -3150,14 +3182,21 @@ def write_cloud_resource_summaries(
             summary_lines.append("---")
             summary_lines.append(f"*Generated: {now_uk()}*")
             
-            sanitized_name = kv["name"].replace("/", "_").replace("\\", "_")
+            sanitized_name = kv.get("name","<unknown>").replace("/", "_").replace("\\", "_")
             out_path = provider_summary_dir / f"KeyVault_{sanitized_name}.md"
             out_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
             generated_files.append(out_path)
             print(f"Generated Key Vault summary: {out_path}")
         
         # Storage Account summaries
-        for sa in paas_resources["storage_accounts"]:
+        for sa in paas_resources.get("storage_accounts", []):
+            # normalize storage account fields defensively
+            sa['name'] = sa.get('name','<unknown>')
+            sa['public_access'] = sa.get('public_access', False)
+            sa['blob_public_access'] = sa.get('blob_public_access', None)
+            sa['https_only'] = sa.get('https_only', True)
+            sa['network_rules'] = sa.get('network_rules', None)
+            sa['min_tls'] = sa.get('min_tls', None)
             summary_lines = []
             summary_lines.append(f"# Storage Account Summary: {sa['name']}")
             summary_lines.append("")
@@ -3240,9 +3279,15 @@ def write_cloud_resource_summaries(
             print(f"Generated Storage Account summary: {out_path}")
         
         # App Service summaries
-        for app in paas_resources["app_services"]:
+        for app in paas_resources.get("app_services", []):
+            # normalize app fields defensively
+            app['name'] = app.get('name','<unknown>')
+            app['https_only'] = app.get('https_only', True)
+            app['managed_identity'] = app.get('managed_identity', False)
+            app['public'] = app.get('public', app.get('public_access', False))
+            app['notes'] = app.get('notes','')
             summary_lines = []
-            summary_lines.append(f"# App Service Summary: {app['name']}")
+            summary_lines.append(f"# App Service Summary: {app.get('name','<unknown>')}")
             summary_lines.append("")
             summary_lines.append(f"**Resource Type:** Azure App Service")
             summary_lines.append("")
@@ -3456,6 +3501,153 @@ def _extract_aks_configuration(files: list[Path], repo: Path, aks_name: str) -> 
 
 
 def _extract_paas_resources(files: list[Path], repo: Path, provider: str) -> dict[str, list[dict]]:
+    """Extract PaaS resources and exposure flags.
+
+    Returns dict with keys: app_services, sql_databases, key_vaults, storage_accounts
+    Each value is a list of dicts: {"name": str, "public": bool, "notes": str}
+    """
+    paas = {
+        "app_services": [],
+        "sql_databases": [],
+        "key_vaults": [],
+        "storage_accounts": [],
+    }
+
+    provider_lower = provider.lower()
+    for p in files:
+        if p.suffix.lower() != ".tf":
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        # Azure App Service
+        if provider_lower == "azure":
+            # Support azurerm_linux_web_app, azurerm_windows_web_app and azurerm_app_service
+            for m in re.finditer(r'resource\s+"azurerm_(?:app_service|linux_web_app|windows_web_app)"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                # Check for site_config or https_only
+                if re.search(r'https_only\s*=\s*false', text, re.IGNORECASE):
+                    public = True
+                    notes.append('HTTPS not enforced')
+                # Check for app service with auth_enabled or not
+                if not re.search(r'auth_settings\.|auth_settings\s*=\s*\{', text, re.IGNORECASE):
+                    notes.append('No app auth settings detected')
+                paas['app_services'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+            # Azure SQL
+            for m in re.finditer(r'resource\s+"azurerm_sql_server"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                firewall_rules = []
+                aad_auth = False
+                tls_version = None
+                auditing = False
+                threat_detection = False
+                # Check firewall rules allowing 0.0.0.0/0
+                if re.search(r'firewall_rule\s+"[^\"]+"\s+\{[^}]*start_ip_address\s*=\s*"0.0.0.0"', text, re.IGNORECASE) or re.search(r'0\.0\.0\.0/0', text):
+                    public = True
+                    notes.append('Firewall allows 0.0.0.0/0')
+                    firewall_rules.append('0.0.0.0/0')
+                sql_info = {"name": name, "public": public, "notes": "; ".join(notes), "firewall_rules": firewall_rules, "public_access": public, "aad_auth": aad_auth, "tls_version": tls_version, "auditing": auditing, "threat_detection": threat_detection}
+                paas['sql_databases'].append(sql_info)
+
+            # Azure Key Vault
+            for m in re.finditer(r'resource\s+"azurerm_key_vault"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = True
+                notes = []
+                # Default action check
+                if re.search(r'network_acls\s*\{[^}]*default_action\s*=\s*"Deny"', text, re.IGNORECASE):
+                    public = False
+                else:
+                    notes.append('No network_acls.default_action=\"Deny\"')
+                paas['key_vaults'].append({
+                "name": name,
+                "provider": provider,
+                "resource_type": "key_vault",
+                "public": public,
+                "public_access": public,
+                "public_reason": "; ".join(notes) if notes else "",
+                "network_acls": None,
+                "firewall_rules": [],
+                "auth_enforced": False,
+                "ingress_via_gateway": False,
+                "sensitive": True,
+                "notes": "; ".join(notes)
+            })
+
+
+
+            # Azure Storage
+            for m in re.finditer(r'resource\s+"azurerm_storage_account"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = True
+                notes = []
+                if re.search(r'allow_blob_public_access\s*=\s*false', text, re.IGNORECASE):
+                    public = False
+                if re.search(r'network_rules\s*\{[^}]*default_action\s*=\s*"Deny"', text, re.IGNORECASE):
+                    public = False
+                else:
+                    notes.append('No network_rules.default_action=\"Deny\" or allow_blob_public_access=false')
+                paas['storage_accounts'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+        # AWS and GCP heuristics (basic)
+        if provider_lower == 'aws':
+            # AWS: check S3 buckets, RDS, ALB with public IPs
+            for m in re.finditer(r'resource\s+"aws_s3_bucket"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                if re.search(r'acl\s*=\s*"public-read"', text, re.IGNORECASE) or re.search(r'public_access_block', text, re.IGNORECASE) is False:
+                    public = True
+                    notes.append('S3 ACL or public access not restricted')
+                paas['storage_accounts'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+            for m in re.finditer(r'resource\s+"aws_db_instance"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                if re.search(r'publicly_accessible\s*=\s*true', text, re.IGNORECASE):
+                    public = True
+                    notes.append('publicly_accessible=true')
+                paas['sql_databases'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+            # ALB/ELB public frontends
+            if re.search(r'resource\s+"aws_lb"|resource\s+"aws_elb"', text):
+                # crude: mark provider services as public
+                paas.setdefault('provider_public', True)
+
+        if provider_lower == 'gcp':
+            # GCP: check storage buckets, sql instances
+            for m in re.finditer(r'resource\s+"google_storage_bucket"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                if re.search(r'uniform_bucket_level_access\s*=\s*false', text, re.IGNORECASE) or re.search(r'public_access', text, re.IGNORECASE):
+                    public = True
+                    notes.append('Bucket allows public access')
+                paas['storage_accounts'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+            for m in re.finditer(r'resource\s+"google_sql_database_instance"\s+"([^\"]+)"', text, re.IGNORECASE):
+                name = m.group(1)
+                public = False
+                notes = []
+                if re.search(r'ip_configuration\s*\{[^}]*authorized_networks\s*=\s*\[?[^\]]*0\.0\.0\.0/0', text, re.IGNORECASE) or re.search(r'external_ip', text, re.IGNORECASE):
+                    public = True
+                    notes.append('External IP or 0.0.0.0/0 authorized')
+                paas['sql_databases'].append({"name": name, "public": public, "notes": "; ".join(notes)})
+
+    return paas
+    """Extract PaaS resources and exposure flags.
+
+    Returns dict with keys: app_services, sql_databases, key_vaults, storage_accounts
+    Each value is a list of dicts: {"name": str, "public": bool, "notes": str}
+    """
     """Extract PaaS resources (SQL, Key Vault, Storage, App Service) with security configurations."""
     paas_resources = {
         "sql_servers": [],
@@ -3618,8 +3810,8 @@ def _extract_paas_resources(files: list[Path], repo: Path, provider: str) -> dic
                 if kv_match:
                     kv_name = kv_match.group(1)
                     for kv in paas_resources["key_vaults"]:
-                        if kv["name"] == kv_name:
-                            kv["access_policies"] += 1
+                        if kv.get("name") == kv_name:
+                            kv["access_policies"] = kv.get("access_policies", 0) + 1
         
         # Extract Storage Accounts
         for p in files:
@@ -3739,10 +3931,36 @@ def _extract_paas_resources(files: list[Path], repo: Path, provider: str) -> dic
                 
                 paas_resources["app_services"].append(app_info)
     
+    # Upsert discovered PaaS resources into DB with canonical properties when DB available
+    try:
+        if DB_AVAILABLE and 'experiment_id' in globals() and experiment_id:
+            from db_helpers import insert_resource
+            repo_name = repo.name if hasattr(repo, 'name') else str(repo)
+            for key, rlist in paas_resources.items():
+                for r in rlist:
+                    # Build canonical properties
+                    props = dict(r)
+                    # Ensure name exists
+                    name = props.pop('name', props.get('resource_name', None))
+                    if not name:
+                        continue
+                    resource_type = props.get('resource_type') or ({'sql_servers':'SQLServer','key_vaults':'KeyVault','storage_accounts':'StorageAccount','app_services':'AppService'}.get(key, key.rstrip('s').title()))
+                    # ensure canonical 'public' field exists for DB queries
+                    if 'public' not in props:
+                        props['public'] = props.get('public_access', props.get('public', False))
+                    insert_resource(experiment_id=experiment_id, repo_name=repo_name, resource_name=name, resource_type=resource_type, provider=provider.title(), source_file=str(repo), properties=props)
+    except Exception:
+        pass
+
     return paas_resources
 
 
 def _detect_vm_paas_connections(files: list[Path], repo: Path, resource_name: str) -> dict[str, list[str]]:
+    """Detect per-VM connections to PaaS and mark service protection flags.
+
+    Returns a dict with keys like sql_databases, key_vaults, storage_accounts and
+a boolean flag per resource indicating whether it's publicly exposed.
+    """
     """Detect connections from VMs/AKS to PaaS services (Key Vault, Storage, SQL)."""
     connections = {
         "key_vaults": [],
@@ -4586,7 +4804,12 @@ def write_experiment_cloud_architecture_summary(
             subgraph_label = f"VNet: {vnet_name}" if provider_lower == "azure" else (f"VPC: {vnet_name}" if provider_lower == "aws" else f"Network: {vnet_name}")
             content_lines.append(f"  subgraph cloud[{subgraph_label}]")
         else:
-            content_lines.append(f"  subgraph cloud[{provider_title}]")
+            # Only include a cloud subgraph if there are compute resources to show (VMs/AKS)
+            if has_vm or has_aks:
+                content_lines.append(f"  subgraph cloud[{provider_title}]")
+            else:
+                # omit empty subgraph
+                pass
         
         # Inside VNet: VMs and AKS only (compute resources with NICs in subnets)
         
@@ -4712,6 +4935,22 @@ def write_experiment_cloud_architecture_summary(
         content_lines.append("")
         
         # Connection logic - depends on if edge exists
+        # Determine per-resource public flags from extracted PaaS (DB-driven when available)
+        per_resource_public = {}
+        try:
+            # paas_resources may not be defined in some code paths; fallback to extracting again
+            if 'paas_resources' not in locals() or paas_resources is None:
+                paas_resources = _extract_paas_resources(files, repo, provider_lower)
+            for key, rlist in paas_resources.items():
+                for r in rlist:
+                    name = r.get('name') or r.get('resource_name')
+                    if not name:
+                        continue
+                    # canonical field 'public' used for diagram decisions
+                    per_resource_public[name] = r.get('public', r.get('public_access', False))
+        except Exception:
+            per_resource_public = {}
+
         if edge_confirmed:
             content_lines.append("  internet -->|HTTPS| edge")
             if has_webapp:
@@ -4778,10 +5017,31 @@ def write_experiment_cloud_architecture_summary(
             if not sql_node_ids:
                 sql_node_ids = ["sql"]
             for sql_node_id in sql_node_ids:
-                content_lines.append(f"  internet --> {sql_node_id}")
+                # If we can map sql_node_id to a specific named SQL and it's public, label it
+                label = ''
+                direct_arrow = True
+                if edge_confirmed:
+                    # if an edge exists and we routed app -> sql via edge, assume SQL isn't directly exposed unless we added a direct internet arrow earlier
+                    direct_arrow = any('internet -->' in l and sql_node_id in l and 'edge' not in l for l in content_lines)
+                if sql_node_id.startswith('sql') and sql_names:
+                    try:
+                        idx = int(sql_node_id.replace('sql','')) - 1
+                        sql_name = sql_names[idx] if idx < len(sql_names) else None
+                    except Exception:
+                        sql_name = None
+                    if sql_name and per_resource_public.get(sql_name, True) and direct_arrow:
+                        label = '|Public/Unprotected'
+                else:
+                    if any(per_resource_public.get(n, True) for n in sql_names) and direct_arrow:
+                        label = '|Public/Unprotected'
+                content_lines.append(f"  internet -->{label} {sql_node_id}")
+                if label:
+                    # mark link style for this internet -> sql arrow (approx index)
+                    content_lines.append(f"  %% RED_LINK_SQL: {sql_node_id}")
             if has_webapp:
                 for sql_node_id in sql_node_ids:
                     content_lines.append(f"  app --> {sql_node_id}")
+                    # style app -> public sql as internal (no label change)
             if has_vm:
                 if len(vm_names) <= 3 and len(vm_names) > 0:
                     for vm_name, vm_os, vm_role in vm_names:
@@ -4801,7 +5061,23 @@ def write_experiment_cloud_architecture_summary(
         
         if has_kv:
             # Internet can access Key Vault (public endpoint unless private endpoint configured)
-            content_lines.append("  internet --> kv")
+            # Internet -> Key Vault (label if public)
+            kv_label = ''
+            if per_resource_public and 'kv' in locals():
+                # try to find kv name if individual Key Vaults are listed
+                if len(kv_label) == 0:
+                    if 'kv_label' in locals():
+                        kv_label = ''
+            # If any Key Vault is public, label the internet arrow
+            if any(per_resource_public.get(n, True) for n in [k.get('name') for k in paas_resources.get('key_vaults', []) if k.get('name')]):
+                # if kv is directly reachable from internet and marked public, mark red
+                kv_direct = any('internet -->' in l and 'kv' in l and 'edge' not in l for l in content_lines)
+                if any(per_resource_public.get(n, True) for n in [k.get('name') for k in paas_resources.get('key_vaults', []) if k.get('name')]) and kv_direct:
+                    content_lines.append("  internet -->|Public/Unprotected| kv")
+                    content_lines.append("  %% RED_LINK_KV: kv")
+                    content_lines.append("  style kv stroke:#ff0000,stroke-width:3px")
+                else:
+                    content_lines.append("  internet --> kv")
             if has_webapp:
                 content_lines.append("  app --> kv")
             if has_vm:
@@ -4820,7 +5096,13 @@ def write_experiment_cloud_architecture_summary(
         # Storage Account connections (for deployment packages, scripts, etc.)
         if has_state_backend:
             # Internet can access Storage Account (public endpoint)
-            content_lines.append("  internet --> sa")
+            # Internet -> Storage Account (label if public)
+            if any(per_resource_public.get(n, True) for n in [s.get('name') for s in paas_resources.get('storage_accounts', []) if s.get('name')]):
+                content_lines.append("  internet -->|Public/Unprotected| sa")
+                content_lines.append("  %% RED_LINK_SA: sa")
+                content_lines.append("  style sa stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+            else:
+                content_lines.append("  internet --> sa")
             # App Service may use storage for deployment packages
             if has_webapp:
                 content_lines.append("  app --> sa")
@@ -4915,9 +5197,11 @@ def write_experiment_cloud_architecture_summary(
             else:
                 content_lines.append("  style sql stroke:#00aa00,stroke-width:3px")
         if has_kv:
+            # default kv style
             content_lines.append("  style kv stroke:#f59f00,stroke-width:2px")
         if has_nsg:
-            content_lines.append("  style nsg stroke:#ff6b6b,stroke-width:2px")
+            # Style NSG/Security Group as purple to denote security/network control
+            content_lines.append("  style nsg stroke:#6b2b9f,stroke-width:2px")
         if has_state_backend:
             content_lines.append("  style sa stroke:#00aa00,stroke-width:3px")
         # Module-derived resources are considered confirmed IaC intent and are styled as solid.
@@ -4931,10 +5215,11 @@ def write_experiment_cloud_architecture_summary(
         
         # Only style edge if it exists
         if edge_confirmed:
-            content_lines.append("  style edge stroke:#ff6b6b,stroke-width:3px")
-        
+            # Style edge (ALB/App Gateway) as purple to denote security/network control
+            content_lines.append("  style edge stroke:#6b2b9f,stroke-width:3px")
+
         # Style internet-facing connections as red (attack surface)
-        if not edge_confirmed:
+        # Apply red styling to specific internet->resource links regardless of edge presence when resource is public
             # The connections are added in this exact order:
             # 1. internet → app (if webapp)
             # 2. internet → aks (if aks)
@@ -4948,6 +5233,8 @@ def write_experiment_cloud_architecture_summary(
             # Internet → App Service
             if has_webapp:
                 content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                # tag the internet->app arrow for clarity in generated mermaid
+                content_lines.append(f"  %% RED_LINK: internet_app_{link_idx}")
                 link_idx += 1
             
             # Internet → AKS (direct exposure)
@@ -4965,6 +5252,12 @@ def write_experiment_cloud_architecture_summary(
                 sql_node_count = len(sql_node_ids) if sql_node_ids else 1
                 for _ in range(sql_node_count):
                     content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                    # also highlight the SQL node border red to indicate exposure
+                    if sql_node_ids:
+                        for sql_node_id in sql_node_ids:
+                            content_lines.append(f"  style {sql_node_id} stroke:#ff0000,stroke-width:3px")
+                    else:
+                        content_lines.append(f"  style sql stroke:#ff0000,stroke-width:3px")
                     link_idx += 1
 
                 # Skip internal SQL connections
@@ -4980,6 +5273,8 @@ def write_experiment_cloud_architecture_summary(
             # Internet → Key Vault (then skip internal KV connections)
             if has_kv:
                 content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                # highlight kv node as exposed
+                content_lines.append(f"  style kv stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
                 link_idx += 1
                 
                 # Skip internal kv connections
@@ -4998,6 +5293,8 @@ def write_experiment_cloud_architecture_summary(
             # Internet → Storage Account (then skip internal SA connections)
             if has_state_backend:
                 content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
+                # highlight storage node as exposed
+                content_lines.append(f"  style sa stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
                 link_idx += 1
                 
                 # Skip internal sa connections
@@ -5016,9 +5313,10 @@ def write_experiment_cloud_architecture_summary(
         content_lines.append("```")
         content_lines.append("")
         content_lines.append("**Legend:**")
-        content_lines.append("- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🔴 Red = Security/Network Controls")
+        content_lines.append("- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🟣 Purple = Security/Network Controls")
         content_lines.append("- **Line Styles:** Solid = direct dependency | Dashed = protection/monitoring")
         content_lines.append("- **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)")
+        # Legend: security/network controls previously used red; switch to purple for borders/styles to avoid confusion with red internet arrows.
         content_lines.append("- **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)")
         content_lines.append("")
         content_lines.append("## 🧭 Overview")
@@ -5103,7 +5401,17 @@ def write_experiment_cloud_architecture_summary(
         overview_lines: list[str] = []
         overview_lines.append(f"# 🗺️ Multi-Cloud Architecture Overview (Experiment scoped - {repo_name})")
         overview_lines.append("")
-        overview_lines.append(f"**Detected Providers:** {', '.join([p.title() for p in cloud_providers])}")
+        # Show detected providers (only those with resources)
+        detected_list = []
+        for p in cloud_providers:
+            provider_lower = p.lower()
+            prefix = 'azurerm_' if provider_lower == 'azure' else ('aws_' if provider_lower == 'aws' else 'google_')
+            found = any(re.search(rf"{re.escape(prefix)}", str(pt.name), re.IGNORECASE) for pt in files)
+            if found:
+                detected_list.append(p.title())
+        if not detected_list:
+            detected_list = [p.title() for p in cloud_providers]
+        overview_lines.append(f"**Detected Providers:** {', '.join(detected_list)}")
         overview_lines.append("")
         overview_lines.append("## 🌍 Cross-Cloud Topology")
         overview_lines.append("")
@@ -5112,11 +5420,18 @@ def write_experiment_cloud_architecture_summary(
         overview_lines.append("  internet[🌐 Internet]")
         overview_lines.append("  ")
         
-        # Create subgraphs for each provider
+        # Create subgraphs for each provider and include resource counts in labels
         for idx, provider in enumerate(cloud_providers):
             provider_title = provider.title()
-            overview_lines.append(f"  subgraph {provider_title.lower()}_cloud[{provider_title}]")
-            overview_lines.append(f"    {provider_title.lower()}_services[🧩 Services]")
+            provider_lower = provider.lower()
+            # Count resources for this provider
+            prefix = 'azurerm_' if provider_lower == 'azure' else ('aws_' if provider_lower == 'aws' else 'google_')
+            resource_count = sum(1 for pt in files if re.search(rf"{re.escape(prefix)}", str(pt.name), re.IGNORECASE))
+            # plural label
+            plural = 'VMs' if provider_lower in {'azure','aws','gcp'} else 'Resources'
+            label = f"{provider_title} ({resource_count})" if resource_count > 0 else provider_title
+            overview_lines.append(f"  subgraph {provider_title.lower()}_cloud[{label}]")
+            overview_lines.append(f"    {provider_title.lower()}_services[🧩 Services {f'({resource_count})' if resource_count>0 else ''}]")
             overview_lines.append(f"    {provider_title.lower()}_data[🗄️ Data Stores]")
             overview_lines.append(f"    {provider_title.lower()}_identity[🔐 Identity/Secrets]")
             overview_lines.append("  end")
@@ -5126,7 +5441,40 @@ def write_experiment_cloud_architecture_summary(
         overview_lines.append("  %% Internet ingress")
         for provider in cloud_providers:
             provider_lower = provider.lower()
-            overview_lines.append(f"  internet -->|HTTPS| {provider_lower}_services")
+            # Determine if this provider has public/unprotected resources
+            prefix = 'azurerm_' if provider_lower == 'azure' else ('aws_' if provider_lower == 'aws' else 'google_')
+            public_count = 0
+            for pt in files:
+                try:
+                    text = Path(pt).read_text(encoding='utf-8', errors='ignore') if pt.is_file() else ''
+                except Exception:
+                    text = ''
+                # crude heuristic: check for public_ip resources or firewall/allows 0.0.0.0/0
+                if re.search(r'public_ip|public_ip_address|public_ip_address_id', str(pt), re.IGNORECASE):
+                    public_count += 1
+                if re.search(r'0\.0\.0\.0/0|"0.0.0.0/0"|0.0.0.0', text):
+                    public_count += 1
+            if public_count > 0:
+                # label arrows with reason and color red
+                overview_lines.append(f"  internet -->|Public/Unprotected ({public_count})| {provider_lower}_services")
+                overview_lines.append(f"  style {provider_lower}_services stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+            else:
+                # Label HTTPS arrows to indicate protected ingress
+                overview_lines.append(f"  internet -->|HTTPS| {provider_lower}_services")
+
+            # Additionally, mark individual internet->resource arrows as 'Public/Unprotected' in content_lines
+            if public_count > 0:
+                # replace generic internet arrows with labeled ones in content_lines (best-effort)
+                for i, line in enumerate(content_lines):
+                    if line.strip().startswith('internet -->') and 'HTTPS' not in line:
+                        content_lines[i] = line.replace('internet -->', 'internet -->|Public/Unprotected|')
+                    if line.strip().startswith('internet -->|') and 'Public/Unprotected' not in line and 'HTTPS' not in line:
+                        parts = line.split('|')
+                        if len(parts) >= 3:
+                            parts[1] = 'Public/Unprotected '
+                            content_lines[i] = '|'.join(parts)
+            
+
         
         overview_lines.append("  ")
         

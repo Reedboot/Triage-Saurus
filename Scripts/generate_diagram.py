@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db_helpers import get_db_connection
+from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 
 
 def sanitize_id(name: str) -> str:
@@ -15,55 +15,35 @@ def sanitize_id(name: str) -> str:
 
 
 def generate_architecture_diagram(experiment_id: str) -> str:
+    # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
+    from db_helpers import get_db_connection as _get_db_conn
+    with _get_db_conn() as _conn:
+        check = _conn.execute("SELECT COUNT(1) as c FROM repositories WHERE experiment_id = ?", [experiment_id]).fetchone()
+        if check and check['c'] == 0 and '_' in experiment_id:
+            alt = experiment_id.split('_')[0]
+            # If numeric prefix exists in DB, use it
+            alt_check = _conn.execute("SELECT COUNT(1) as c FROM repositories WHERE experiment_id = ?", [alt]).fetchone()
+            if alt_check and alt_check['c'] > 0:
+                experiment_id = alt
+
     """Generate full architecture diagram from database with parent-child hierarchies."""
     
+    # Prefer canonical helpers that return merged properties
+    resources = get_resources_for_diagram(experiment_id)
+    hierarchies = []
+    connections = get_connections_for_diagram(experiment_id)
+    # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
-        # Get all resources with parent information
-        resources = conn.execute("""
-            SELECT 
-              r.id,
-              r.resource_name,
-              r.resource_type,
-              r.provider,
-              r.parent_resource_id,
-              repo.repo_name,
-              COALESCE(MAX(f.severity_score), 0) as max_finding_score
-            FROM resources r
-            JOIN repositories repo ON r.repo_id = repo.id
-            LEFT JOIN findings f ON r.id = f.resource_id
-            WHERE r.experiment_id = ?
-            GROUP BY r.id
-            ORDER BY r.resource_type, r.resource_name
-        """, [experiment_id]).fetchall()
-        
-        # Get parent-child relationships
-        hierarchies = conn.execute("""
-            SELECT 
-              parent.id as parent_id,
-              parent.resource_name as parent_name,
-              parent.resource_type as parent_type,
-              child.id as child_id,
-              child.resource_name as child_name,
-              child.resource_type as child_type
+        rows = conn.execute("""
+            SELECT parent.id as parent_id, parent.resource_name as parent_name, parent.resource_type as parent_type,
+                   child.id as child_id, child.resource_name as child_name, child.resource_type as child_type
             FROM resources parent
             JOIN resources child ON child.parent_resource_id = parent.id
             WHERE parent.experiment_id = ?
             ORDER BY parent.resource_name, child.resource_name
         """, [experiment_id]).fetchall()
-        
-        # Get connections
-        connections = conn.execute("""
-            SELECT 
-              r_src.resource_name as source,
-              r_tgt.resource_name as target,
-              rc.protocol,
-              rc.port,
-              rc.is_cross_repo
-            FROM resource_connections rc
-            JOIN resources r_src ON rc.source_resource_id = r_src.id
-            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
-            WHERE rc.experiment_id = ?
-        """, [experiment_id]).fetchall()
+        hierarchies = rows
+
     
     if not resources:
         return "flowchart TB\n  empty[No resources found]"
@@ -87,7 +67,7 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     sql_servers = [r for r in root_resources if r['resource_type'] in ('SQLServer', 'SQL')]
     storage_accounts = [r for r in root_resources if r['resource_type'] == 'StorageAccount']
     nsgs = [r for r in root_resources if r['resource_type'] == 'NSG']
-    paas = [r for r in root_resources if r['resource_type'] in ('KeyVault', 'AppService') and r['id'] not in child_ids]
+    paas = [r for r in root_resources if r['resource_type'] in ('KeyVault', 'AppService', 'App_Service') and r['id'] not in child_ids]
     other = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
     # Add Internet node if we have internet connections
