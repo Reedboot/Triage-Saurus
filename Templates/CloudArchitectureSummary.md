@@ -28,7 +28,7 @@ ${architecture_diagram}
 
 **Legend:**
 - **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🔴 Red = Security/Network Controls
-- **Line Styles:** Solid = direct dependency | Dashed = protection/monitoring
+- **Line Styles:** Solid = direct dependency | Dashed = monitoring/telemetry flow (e.g., alerts)
 - **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)
 - **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)
 

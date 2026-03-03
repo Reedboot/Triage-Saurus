@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+import re
 
 from models import RepositoryContext
 from template_renderer import render_template
@@ -51,6 +52,9 @@ def _friendly_service_name(resource_type: str) -> str:
         "aws_elasticsearch_domain_policy": "Amazon OpenSearch Service",
         "aws_s3_bucket": "Amazon S3",
         "aws_s3_bucket_object": "Amazon S3",
+        "aws_elb": "Elastic Load Balancing",
+        "aws_instance": "Amazon EC2",
+        "aws_lambda_function": "AWS Lambda",
         "aws_vpc": "Amazon VPC",
         "aws_subnet": "Amazon VPC",
         "aws_security_group": "Amazon VPC",
@@ -144,6 +148,41 @@ def _child_node_label(resource_type: str, parent_service: str) -> str:
     return friendly
 
 
+def _filter_mermaid_children(parent_service: str, raw_types: list[str]) -> list[str]:
+    """Filter child nodes for diagram clarity where vulnerability is on parent resource."""
+    if parent_service == "Azure Key Vault":
+        vault_only = [r for r in raw_types if r == "azurerm_key_vault"]
+        return vault_only if vault_only else raw_types
+    if parent_service == "Azure SQL Database":
+        # Terraform provider v2/v3 aliases can define both logical server types.
+        # Show one canonical server node in Mermaid to avoid visual duplication.
+        if "azurerm_mssql_server" in raw_types:
+            return ["azurerm_mssql_server"]
+        if "azurerm_sql_server" in raw_types:
+            return ["azurerm_sql_server"]
+    if parent_service == "Amazon RDS":
+        if "aws_rds_cluster" in raw_types:
+            return ["aws_rds_cluster"]
+        if "aws_db_instance" in raw_types:
+            return ["aws_db_instance"]
+    if parent_service == "Amazon Neptune":
+        if "aws_neptune_cluster" in raw_types:
+            return ["aws_neptune_cluster"]
+    if parent_service == "Amazon OpenSearch Service":
+        if "aws_elasticsearch_domain" in raw_types:
+            return ["aws_elasticsearch_domain"]
+    if parent_service == "Amazon S3":
+        if "aws_s3_bucket" in raw_types:
+            return ["aws_s3_bucket"]
+    if parent_service == "Google Kubernetes Engine":
+        if "google_container_cluster" in raw_types:
+            return ["google_container_cluster"]
+    if parent_service == "Cloud Storage":
+        if "google_storage_bucket" in raw_types:
+            return ["google_storage_bucket"]
+    return raw_types
+
+
 def _is_data_routing_resource(resource_type: str) -> bool:
     """Heuristic: resources that typically receive/forward data-plane traffic."""
     exclude_tokens = (
@@ -187,8 +226,6 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "neptune",
         "rds",
         "bigquery",
-        "subnet",
-        "network_interface",
     )
     return any(token in resource_type for token in include_tokens)
 
@@ -341,9 +378,81 @@ def _safe_id(value: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in value)
 
 
+def _relationship_label(src_type: str, dst_type: str) -> tuple[str, bool] | None:
+    """Return (label, dashed) for meaningful data/telemetry relationships."""
+    if "elb" in src_type and "instance" in dst_type:
+        return ("routes", False)
+    if "instance" in src_type and any(tok in dst_type for tok in ("db_instance", "rds_cluster", "neptune", "sql", "mysql", "postgres")):
+        return ("db access", False)
+    if "flow_log" in src_type and "s3_bucket" in dst_type:
+        return ("logs", True)
+    return None
+
+
+def _is_edge_gateway_service(service_name: str) -> bool:
+    tokens = (
+        "Application Gateway",
+        "Load Balancing",
+        "Api Management",
+        "Ingress",
+    )
+    return any(tok in service_name for tok in tokens)
+
+
+def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple[str, str, str, bool]]:
+    """Infer service-to-service relationships from Terraform references."""
+    prefix = {"aws": "aws_", "azure": "azurerm_", "gcp": "google_"}.get(provider)
+    if not prefix or not repo_path.exists():
+        return []
+
+    block_start_re = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{')
+    ref_re = re.compile(rf'({re.escape(prefix)}[A-Za-z0-9_]+)\.([A-Za-z0-9_-]+)')
+
+    blocks: list[tuple[str, str, str]] = []
+    for tf in repo_path.rglob("*.tf"):
+        try:
+            text = tf.read_text(errors="ignore")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        i = 0
+        while i < len(lines):
+            m = block_start_re.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            rtype, rname = m.group(1), m.group(2)
+            brace = lines[i].count("{") - lines[i].count("}")
+            body = [lines[i]]
+            i += 1
+            while i < len(lines) and brace > 0:
+                body.append(lines[i])
+                brace += lines[i].count("{") - lines[i].count("}")
+                i += 1
+            if rtype.startswith(prefix):
+                blocks.append((rtype, rname, "\n".join(body)))
+
+    defined = {(rtype, rname) for rtype, rname, _ in blocks}
+    rels: set[tuple[str, str, str, bool]] = set()
+    for src_type, _src_name, body in blocks:
+        for dst_type, dst_name in ref_re.findall(body):
+            if (dst_type, dst_name) not in defined:
+                continue
+            lbl = _relationship_label(src_type, dst_type)
+            if not lbl:
+                continue
+            src_service = _friendly_service_name(src_type)
+            dst_service = _friendly_service_name(dst_type)
+            if src_service == dst_service:
+                continue
+            rels.add((src_service, dst_service, lbl[0], lbl[1]))
+    return sorted(rels)
+
+
 def _build_simple_architecture_diagram(
     repo_name: str,
     provider_resources: dict[str, list[object]],
+    repo_path: Path | None = None,
 ) -> str:
     lines = ["flowchart LR"]
     edge_lines: list[str] = []
@@ -356,9 +465,12 @@ def _build_simple_architecture_diagram(
         label: str | None = None,
         red: bool = False,
         orange: bool = False,
+        dashed: bool = False,
     ) -> None:
         nonlocal link_index
         edge_lines.append(f'  {src} -->|{label}| {dst}' if label else f"  {src} --> {dst}")
+        if dashed:
+            link_styles.append(f"  linkStyle {link_index} stroke-dasharray: 5 5")
         if red:
             link_styles.append(f"  linkStyle {link_index} stroke:#ff0000,stroke-width:3px")
         elif orange:
@@ -417,20 +529,14 @@ def _build_simple_architecture_diagram(
                 if boundary is not None
                 else f"{boundary_label}: Unspecified"
             )
-            boundary_node = (
-                f'{net_id}_Boundary["{_friendly_service_name(boundary.resource_type)}"]'
-                if boundary is not None
-                else f'{net_id}_Boundary["{boundary_label} Boundary"]'
-            )
-
             lines.append(f'    subgraph {net_id}["{net_name}"]')
-            lines.append(f"      {boundary_node}")
 
             if idx == 1 and paas_services:
                 paas_subgraph_id = f"{net_id}_PaaS"
                 lines.append(f'      subgraph {paas_subgraph_id}["PaaS Services"]')
                 for p_idx, service in enumerate(paas_services, start=1):
                     service_raw = sorted(set(routable_parents.get(service, [])))
+                    service_raw = _filter_mermaid_children(service, service_raw)
                     service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
                     exposure_target = None
                     if len(service_raw) <= 1:
@@ -460,12 +566,13 @@ def _build_simple_architecture_diagram(
                         if has_alerting_signal and any(
                             tok in raw for raw in service_raw_all for tok in ("alert_policy", "threat_detection", "security_alert")
                         ):
-                            add_link(exposure_target, monitoring_node, label="alerts")
+                            add_link(exposure_target, monitoring_node, label="alerts", dashed=True)
                 lines.append("      end")
 
             if idx == 1 and other_services:
                 for o_idx, service in enumerate(other_services, start=1):
                     service_raw = sorted(set(routable_parents.get(service, [])))
+                    service_raw = _filter_mermaid_children(service, service_raw)
                     if len(service_raw) <= 1:
                         node_id = f"{net_id}_OtherSvc_{o_idx}"
                         lines.append(f'      {node_id}["{service}"]')
@@ -485,7 +592,18 @@ def _build_simple_architecture_diagram(
                             service_anchor_nodes[service] = first_child
 
             lines.append("    end")
-            add_link("Internet", f"{net_id}_Boundary")
+
+        if repo_path is not None:
+            for src_service, dst_service, rel_label, is_dashed in _extract_service_relationships(repo_path, provider):
+                src_node = service_anchor_nodes.get(src_service)
+                dst_node = service_anchor_nodes.get(dst_service)
+                if src_node and dst_node:
+                    add_link(src_node, dst_node, label=rel_label, dashed=is_dashed)
+
+        # Explicitly show ingress to gateway-like edge services.
+        for service_name, node_id in service_anchor_nodes.items():
+            if _is_edge_gateway_service(service_name):
+                add_link("Internet", node_id, label="ingress")
 
         lines.append("  end")
 
@@ -549,7 +667,7 @@ def write_repo_summary(
             "repo_name": repo_name,
             "repo_type": "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other",
             "timestamp": now_uk(),
-            "architecture_diagram": _build_simple_architecture_diagram(repo_name, provider_resources),
+            "architecture_diagram": _build_simple_architecture_diagram(repo_name, provider_resources, repo_path=repo),
             "languages": language_text,
             "hosting": hosting_text,
             "ci_cd": ci_cd_text,
@@ -583,6 +701,9 @@ def write_experiment_cloud_architecture_summary(
         provider_resource_objs = [r for r in context.resources if _provider_for_resource(r.resource_type) == provider]
         provider_resources = [r.resource_type for r in provider_resource_objs]
         unique_provider_resources = sorted(set(provider_resources))
+        edge_gateway_detected = any(
+            _is_edge_gateway_service(_friendly_service_name(rtype)) for rtype in unique_provider_resources
+        )
         if unique_provider_resources:
             inventory_lines = [
                 "| Service Name | Terraform Resource Type |",
@@ -641,8 +762,10 @@ def write_experiment_cloud_architecture_summary(
                 "top_risk": "Public exposure and weak network defaults require validation.",
                 "next_step": "Run Phase 2 deep context discovery and skeptic reviews.",
                 "attack_surface": "Internet-reachable services must be confirmed in Phase 2.",
-                "edge_gateway": "Not confirmed in Phase 1.",
-                "architecture_diagram": _build_simple_architecture_diagram(repo_name, {provider: provider_resource_objs}),
+                "edge_gateway": "Detected in Phase 1." if edge_gateway_detected else "Not confirmed in Phase 1.",
+                "architecture_diagram": _build_simple_architecture_diagram(
+                    repo_name, {provider: provider_resource_objs}, repo_path=repo
+                ),
                 "resource_inventory": resource_inventory,
                 "security_controls": security_controls,
                 "paas_exposure_checks": paas_exposure_checks,
