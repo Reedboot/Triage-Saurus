@@ -399,22 +399,17 @@ def _is_edge_gateway_service(service_name: str) -> bool:
     return any(tok in service_name for tok in tokens)
 
 
-def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple[str, str, str, bool]]:
-    """Infer service-to-service relationships from Terraform references."""
-    prefix = {"aws": "aws_", "azure": "azurerm_", "gcp": "google_"}.get(provider)
-    if not prefix or not repo_path.exists():
+def _terraform_resource_blocks(repo_path: Path, prefix: str | None = None) -> list[tuple[str, str, str]]:
+    """Return Terraform resource blocks as (resource_type, resource_name, body_text)."""
+    if not repo_path.exists():
         return []
-
     block_start_re = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{')
-    ref_re = re.compile(rf'({re.escape(prefix)}[A-Za-z0-9_]+)\.([A-Za-z0-9_-]+)')
-
     blocks: list[tuple[str, str, str]] = []
     for tf in repo_path.rglob("*.tf"):
         try:
-            text = tf.read_text(errors="ignore")
+            lines = tf.read_text(errors="ignore").splitlines()
         except Exception:
             continue
-        lines = text.splitlines()
         i = 0
         while i < len(lines):
             m = block_start_re.match(lines[i])
@@ -429,8 +424,65 @@ def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple
                 body.append(lines[i])
                 brace += lines[i].count("{") - lines[i].count("}")
                 i += 1
-            if rtype.startswith(prefix):
+            if not prefix or rtype.startswith(prefix):
                 blocks.append((rtype, rname, "\n".join(body)))
+    return blocks
+
+
+def _ingress_posture_for_service(repo_path: Path | None, provider: str, service_name: str) -> tuple[str, bool]:
+    """
+    Return (label, insecure_http) for internet ingress edge.
+    insecure_http=True when listener explicitly permits HTTP.
+    """
+    if repo_path is None or not repo_path.exists():
+        return ("ingress", False)
+    if provider != "azure" or service_name != "Azure Application Gateway":
+        return ("ingress", False)
+
+    protocols: set[str] = set()
+    listener_re = re.compile(r"http_listener\s*\{(.*?)\}", re.DOTALL)
+    protocol_re = re.compile(r'protocol\s*=\s*"([^"]+)"', re.IGNORECASE)
+    for rtype, _, body in _terraform_resource_blocks(repo_path, prefix="azurerm_"):
+        if rtype != "azurerm_application_gateway":
+            continue
+        for listener_match in listener_re.finditer(body):
+            listener_body = listener_match.group(1)
+            pm = protocol_re.search(listener_body)
+            if pm:
+                protocols.add(pm.group(1).strip().lower())
+
+    if not protocols:
+        return ("ingress", False)
+    if protocols == {"https"}:
+        return ("HTTPS ingress", False)
+    if protocols == {"http"}:
+        return ("HTTP ingress", True)
+    if "http" in protocols and "https" in protocols:
+        return ("HTTP/HTTPS ingress", True)
+    return (f"{'/'.join(sorted(p.upper() for p in protocols))} ingress", False)
+
+
+def _ingress_security_warnings(repo_path: Path | None, provider: str) -> list[str]:
+    if repo_path is None or not repo_path.exists():
+        return []
+    warnings: list[str] = []
+    if provider == "azure":
+        label, insecure = _ingress_posture_for_service(repo_path, provider, "Azure Application Gateway")
+        if insecure:
+            warnings.append(
+                f"- Warning: Azure Application Gateway allows `{label}` from internet; enforce HTTPS-only listeners and TLS."
+            )
+    return warnings
+
+
+def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple[str, str, str, bool]]:
+    """Infer service-to-service relationships from Terraform references."""
+    prefix = {"aws": "aws_", "azure": "azurerm_", "gcp": "google_"}.get(provider)
+    if not prefix or not repo_path.exists():
+        return []
+
+    ref_re = re.compile(rf'({re.escape(prefix)}[A-Za-z0-9_]+)\.([A-Za-z0-9_-]+)')
+    blocks = _terraform_resource_blocks(repo_path, prefix=prefix)
 
     defined = {(rtype, rname) for rtype, rname, _ in blocks}
     rels: set[tuple[str, str, str, bool]] = set()
@@ -457,7 +509,33 @@ def _build_simple_architecture_diagram(
     lines = ["flowchart LR"]
     edge_lines: list[str] = []
     link_styles: list[str] = []
+    node_styles: list[str] = []
+    styled_ids: set[str] = set()
     link_index = 0
+
+    category_colors = {
+        "app": "#1976d2",       # blue
+        "data": "#2e7d32",      # green
+        "identity": "#ff8f00",  # orange
+        "security": "#7e57c2",  # purple
+    }
+
+    def style_id(target_id: str, category: str) -> None:
+        if target_id in styled_ids:
+            return
+        color = category_colors.get(category, category_colors["app"])
+        node_styles.append(f"  style {target_id} stroke:{color},stroke-width:2px")
+        styled_ids.add(target_id)
+
+    def category_for_service(service_name: str) -> str:
+        s = service_name.lower()
+        if any(tok in s for tok in ("key vault", "iam", "identity", "secret", "policy")):
+            return "identity"
+        if any(tok in s for tok in ("sql", "database", "storage", "bucket", "redis", "cosmos", "rds", "neptune", "bigquery")):
+            return "data"
+        if any(tok in s for tok in ("security", "firewall", "network", "waf", "monitor")):
+            return "security"
+        return "app"
 
     def add_link(
         src: str,
@@ -480,6 +558,7 @@ def _build_simple_architecture_diagram(
     lines.append('  Internet[Internet Users]')
     if not provider_resources:
         lines.append("  Internet --> Unknown[No cloud provider resources detected]")
+        style_id("Unknown", "security")
         return "\n".join(lines)
 
     for provider, resources in provider_resources.items():
@@ -520,6 +599,49 @@ def _build_simple_architecture_diagram(
         monitoring_node = f"{provider_id}_Monitoring"
         if has_alerting_signal:
             lines.append(f'    {monitoring_node}["Security Monitoring"]')
+            style_id(monitoring_node, "security")
+
+        if paas_services:
+            paas_subgraph_id = f"{provider_id}_PaaS"
+            lines.append(f'    subgraph {paas_subgraph_id}["PaaS Services"]')
+            style_id(paas_subgraph_id, "app")
+            for p_idx, service in enumerate(paas_services, start=1):
+                service_raw = sorted(set(routable_parents.get(service, [])))
+                service_raw = _filter_mermaid_children(service, service_raw)
+                service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
+                exposure_target = None
+                if len(service_raw) <= 1:
+                    node_id = f"{paas_subgraph_id}_Svc_{p_idx}"
+                    lines.append(f'      {node_id}["{service}"]')
+                    style_id(node_id, category_for_service(service))
+                    exposure_target = node_id
+                else:
+                    svc_subgraph = f"{paas_subgraph_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{service}"]')
+                    style_id(svc_subgraph, category_for_service(service))
+                    first_child = None
+                    for c_idx, child in enumerate(service_raw, start=1):
+                        child_node = f"{svc_subgraph}_Child_{c_idx}"
+                        child_label = _child_node_label(child, service)
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, category_for_service(service))
+                        if first_child is None:
+                            first_child = child_node
+                    lines.append("      end")
+                    exposure_target = first_child
+
+                if exposure_target:
+                    service_anchor_nodes[service] = exposure_target
+                    has_private, has_restriction = _service_access_signals(service, service_raw)
+                    if not has_private and not has_restriction:
+                        add_link("Internet", exposure_target, label="Public exposure", red=True)
+                    elif has_private != has_restriction:
+                        add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    if has_alerting_signal and any(
+                        tok in raw for raw in service_raw_all for tok in ("alert_policy", "threat_detection", "security_alert")
+                    ):
+                        add_link(exposure_target, monitoring_node, label="alerts", dashed=True)
+            lines.append("    end")
 
         networks = boundary_resources if boundary_resources else [None]
         for idx, boundary in enumerate(networks, start=1):
@@ -530,44 +652,7 @@ def _build_simple_architecture_diagram(
                 else f"{boundary_label}: Unspecified"
             )
             lines.append(f'    subgraph {net_id}["{net_name}"]')
-
-            if idx == 1 and paas_services:
-                paas_subgraph_id = f"{net_id}_PaaS"
-                lines.append(f'      subgraph {paas_subgraph_id}["PaaS Services"]')
-                for p_idx, service in enumerate(paas_services, start=1):
-                    service_raw = sorted(set(routable_parents.get(service, [])))
-                    service_raw = _filter_mermaid_children(service, service_raw)
-                    service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
-                    exposure_target = None
-                    if len(service_raw) <= 1:
-                        node_id = f"{paas_subgraph_id}_Svc_{p_idx}"
-                        lines.append(f'        {node_id}["{service}"]')
-                        exposure_target = node_id
-                    else:
-                        svc_subgraph = f"{paas_subgraph_id}_Svc_{p_idx}"
-                        lines.append(f'        subgraph {svc_subgraph}["{service}"]')
-                        first_child = None
-                        for c_idx, child in enumerate(service_raw, start=1):
-                            child_node = f"{svc_subgraph}_Child_{c_idx}"
-                            child_label = _child_node_label(child, service)
-                            lines.append(f'          {child_node}["{child_label}"]')
-                            if first_child is None:
-                                first_child = child_node
-                        lines.append("        end")
-                        exposure_target = first_child
-
-                    if exposure_target:
-                        service_anchor_nodes[service] = exposure_target
-                        has_private, has_restriction = _service_access_signals(service, service_raw)
-                        if not has_private and not has_restriction:
-                            add_link("Internet", exposure_target, label="Public exposure", red=True)
-                        elif has_private != has_restriction:
-                            add_link("Internet", exposure_target, label="Partial controls", orange=True)
-                        if has_alerting_signal and any(
-                            tok in raw for raw in service_raw_all for tok in ("alert_policy", "threat_detection", "security_alert")
-                        ):
-                            add_link(exposure_target, monitoring_node, label="alerts", dashed=True)
-                lines.append("      end")
+            style_id(net_id, "security")
 
             if idx == 1 and other_services:
                 for o_idx, service in enumerate(other_services, start=1):
@@ -576,15 +661,18 @@ def _build_simple_architecture_diagram(
                     if len(service_raw) <= 1:
                         node_id = f"{net_id}_OtherSvc_{o_idx}"
                         lines.append(f'      {node_id}["{service}"]')
+                        style_id(node_id, category_for_service(service))
                         service_anchor_nodes[service] = node_id
                     else:
                         svc_subgraph = f"{net_id}_OtherSvc_{o_idx}"
                         lines.append(f'      subgraph {svc_subgraph}["{service}"]')
+                        style_id(svc_subgraph, category_for_service(service))
                         first_child = None
                         for c_idx, child in enumerate(service_raw, start=1):
                             child_node = f"{svc_subgraph}_Child_{c_idx}"
                             child_label = _child_node_label(child, service)
                             lines.append(f'        {child_node}["{child_label}"]')
+                            style_id(child_node, category_for_service(service))
                             if first_child is None:
                                 first_child = child_node
                         lines.append("      end")
@@ -603,12 +691,14 @@ def _build_simple_architecture_diagram(
         # Explicitly show ingress to gateway-like edge services.
         for service_name, node_id in service_anchor_nodes.items():
             if _is_edge_gateway_service(service_name):
-                add_link("Internet", node_id, label="ingress")
+                ingress_label, insecure_http = _ingress_posture_for_service(repo_path, provider, service_name)
+                add_link("Internet", node_id, label=ingress_label, red=insecure_http)
 
         lines.append("  end")
 
     lines.extend(edge_lines)
     lines.extend(link_styles)
+    lines.extend(node_styles)
     return "\n".join(lines)
 
 
@@ -717,17 +807,19 @@ def write_experiment_cloud_architecture_summary(
 
         paas_types = sorted({t for t in provider_resources if _is_paas_resource(t)})
         network_control_types = sorted({t for t in provider_resources if _is_network_control_resource(t)})
+        paas_service_names = sorted({_friendly_service_name(t) for t in paas_types})
+        network_control_service_names = sorted({_friendly_service_name(t) for t in network_control_types})
         paas_exposure_checks = _build_paas_exposure_checks(provider_resources)
         if paas_types:
             controls_line = (
                 "- Network control signals detected: "
-                + ", ".join(f"`{t}`" for t in network_control_types)
+                + ", ".join(network_control_service_names)
                 if network_control_types
                 else "- Network control signals detected: none"
             )
             security_controls = "\n".join(
                 [
-                    "- PaaS services detected: " + ", ".join(f"`{t}`" for t in paas_types),
+                    "- PaaS services detected: " + ", ".join(paas_service_names),
                     controls_line,
                     "- Action required: validate each PaaS service has explicit access restrictions/private access and default-deny behavior.",
                 ]
@@ -736,6 +828,9 @@ def write_experiment_cloud_architecture_summary(
                 security_controls += (
                     "\n- Warning: PaaS resources are commonly internet-reachable by default; no explicit network-control resources were detected in Phase 1."
                 )
+            ingress_warnings = _ingress_security_warnings(repo, provider)
+            if ingress_warnings:
+                security_controls += "\n" + "\n".join(ingress_warnings)
         else:
             security_controls = "- No PaaS services detected in Phase 1."
 

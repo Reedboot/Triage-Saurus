@@ -2,13 +2,23 @@
 
 **Provider:** ${provider_title}  
 **Repository:** ${repo_name}  
-**Generated:** ${timestamp}
 
 ## 🧭 Overview
 
-- **Provider:** ${provider_title}
 - **Scope:** Experiment-scoped (inferred from repo \`${repo_name}\`; not platform-wide)
 - **Auth signals:** ${auth_signals}
+
+## 🏗️ High-Level Architecture
+
+\`\`\`mermaid
+${architecture_diagram}
+\`\`\`
+
+**Legend:**
+- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🟣 Purple = Security/Network Controls
+- **Line Styles:** Solid = direct dependency | Dashed = monitoring/telemetry flow (e.g., alerts)
+- **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)
+- **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)
 
 ## 📊 TL;DR - Executive Summary
 
@@ -19,18 +29,6 @@
 | **Primary next step** | ${next_step} |
 | **Attack surface** | ${attack_surface} |
 | **Edge gateway** | ${edge_gateway} |
-
-## 🏗️ High-Level Architecture
-
-\`\`\`mermaid
-${architecture_diagram}
-\`\`\`
-
-**Legend:**
-- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🔴 Red = Security/Network Controls
-- **Line Styles:** Solid = direct dependency | Dashed = monitoring/telemetry flow (e.g., alerts)
-- **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)
-- **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)
 
 ## 🎯 Resource Inventory
 
