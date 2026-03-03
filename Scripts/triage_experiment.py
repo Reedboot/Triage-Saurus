@@ -37,6 +37,7 @@ EXPERIMENTS_DIR = LEARNING_DIR / "experiments"
 STRATEGIES_DIR = LEARNING_DIR / "strategies"
 AGENTS_SOURCE = REPO_ROOT / "Agents"
 SCRIPTS_SOURCE = REPO_ROOT / "Scripts"
+RULES_DIR = REPO_ROOT / "Rules"
 
 
 def compute_file_hash(path: Path) -> str:
@@ -555,6 +556,19 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"ERROR: repo path not found: {rp}")
                 return 1
 
+            # Mandatory baseline rules scan before context discovery.
+            og_cmd = ["opengrep", "scan", "--config", str(RULES_DIR), str(rp)]
+            print(f"Running rules scan: {' '.join(og_cmd)}")
+            og_result = subprocess.run(og_cmd, check=False)
+            if og_result.returncode != 0:
+                print("WARNING: opengrep scan failed; retrying with chunked scanner.")
+                chunked_cmd = [sys.executable, str(SCRIPTS_SOURCE / "opengrep_chunked_scan.py"), str(rp)]
+                print(f"Running fallback scan: {' '.join(chunked_cmd)}")
+                chunked_result = subprocess.run(chunked_cmd, check=False)
+                if chunked_result.returncode != 0:
+                    print("ERROR: Both opengrep scan and chunked fallback failed.")
+                    return 1
+
             cmd = [
                 sys.executable,
                 str(SCRIPTS_SOURCE / "discover_repo_context.py"),
@@ -563,6 +577,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 str(repos_root),
                 "--output-dir",
                 str(exp_dir),
+                "--experiment-id",
+                str(args.id),
             ]
             subprocess.run(cmd, check=True)
 
@@ -602,6 +618,15 @@ def cmd_complete(args: argparse.Namespace) -> int:
         return 1
     
     exp_dir = exp_dirs[0]
+    
+    # Guardrail: Check if any findings were generated
+    findings_dir = exp_dir / "Findings"
+    if not any(findings_dir.rglob("*.md")):
+        print("ERROR: No findings generated for this experiment.")
+        print("The analysis step appears to have been skipped.")
+        print(f"Please run the analysis and ensure findings are placed in: {findings_dir}")
+        return 1
+        
     config_file = exp_dir / "experiment.json"
     config = json.loads(config_file.read_text())
     

@@ -64,6 +64,8 @@ def _ensure_schema(conn: sqlite3.Connection):
       experiment_id TEXT NOT NULL,
       source_resource_id INTEGER NOT NULL,
       target_resource_id INTEGER NOT NULL,
+      source_repo_id INTEGER,
+      target_repo_id INTEGER,
       is_cross_repo BOOLEAN DEFAULT 0,
       connection_type TEXT,
       protocol TEXT,
@@ -96,6 +98,12 @@ def _ensure_schema(conn: sqlite3.Connection):
     if "parent_resource_id" not in resource_columns:
         conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
 
+    connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
+    if "source_repo_id" not in connection_columns:
+        conn.execute("ALTER TABLE resource_connections ADD COLUMN source_repo_id INTEGER")
+    if "target_repo_id" not in connection_columns:
+        conn.execute("ALTER TABLE resource_connections ADD COLUMN target_repo_id INTEGER")
+
     findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
     if "repo_id" not in findings_columns:
         conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
@@ -110,9 +118,10 @@ def _ensure_schema(conn: sqlite3.Connection):
 
 
 @contextmanager
-def get_db_connection():
+def get_db_connection(db_path: Optional[Path] = None):
     """Context manager for database connections."""
-    conn = sqlite3.connect(DB_PATH)
+    path = db_path or DB_PATH
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row  # Access columns by name
     _ensure_schema(conn)
     try:

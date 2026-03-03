@@ -161,13 +161,31 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     repo_name = repo_path.name
     context = RepositoryContext(repository_name=repo_name)
 
-    # Simplified extraction logic
-    tf_resources = detect_terraform_resources(files, repo_path)
-    for resource_type in tf_resources:
-        names = extract_resource_names(files, repo_path, resource_type)
-        for name in names:
-            # A real implementation would find the file and line number
-            resource = Resource(name=name, resource_type=resource_type, file_path="Unknown", line_number=0)
+    # Parse Terraform resource + data blocks with source location.
+    block_re = re.compile(r'^\s*(resource|data)\s+"([^"]+)"\s+"([^"]+)"')
+    for file in files:
+        if file.suffix != ".tf":
+            continue
+        try:
+            rel = str(file.relative_to(repo_path))
+        except ValueError:
+            rel = str(file)
+        try:
+            content = file.read_text(errors="ignore")
+        except Exception:
+            continue
+        for idx, line in enumerate(content.splitlines(), start=1):
+            m = block_re.match(line)
+            if not m:
+                continue
+            block_kind, resource_type, name = m.groups()
+            resource = Resource(
+                name=name,
+                resource_type=resource_type,
+                file_path=rel,
+                line_number=idx,
+                properties={"terraform_block": block_kind},
+            )
             context.resources.append(resource)
 
     return context

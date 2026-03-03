@@ -34,7 +34,7 @@ def generate_finding_model(repo_context: dict) -> dict:
         "architecture_mermaid": "graph TB\n  A --> B",
         "description": "Repo scan summary.",
         "overall_score": {"severity": "Low", "score": 3},
-        "overview_bullets": [f"**Repo path:** {repo['repo_path']}"],
+        "overview_bullets": [f"**Repo name:** {repo['repo_name']}"],
         "security_review": {
             "summary": "This repo appears to manage cloud infrastructure via IaC.",
             "applicability": {"status": "Yes", "evidence": "IaC files detected."},

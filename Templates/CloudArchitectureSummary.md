@@ -40,6 +40,10 @@ ${resource_inventory}
 
 ${security_controls}
 
+## ⚠️ High-Risk PaaS Exposure Checks
+
+${paas_exposure_checks}
+
 ## 📝 Recommendations
 
 ${recommendations}
