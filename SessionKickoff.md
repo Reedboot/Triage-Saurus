@@ -55,15 +55,17 @@ Targeted helpers (stdout-only):
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
    - If Knowledge/ is empty (0 knowledge files): treat as first run and say "🦖 Welcome to Triage-Saurus."
 
-7. **Present triage menu** using ask_user tool with selectable choices:
-   - **Continue experiment** (if experiment in progress)
-   - **Start experiment mode** (for self-optimizing triage)
-   - **Answer questions to build context** (if existing knowledge/findings exist)
-   - **Copy/paste a single issue to triage**
-   - **Provide a path under Intake/ to process in bulk**
+7. **Present triage menu (automatically)** using ask_user tool with selectable choices:
+    - **Continue experiment** (if experiment in progress)
+    - **Start experiment mode** (for self-optimizing triage)
+    - **Answer questions to build context** (if existing knowledge/findings exist)
+    - **Copy/paste a single issue to triage**
+    - **Provide a path under Intake/ to process in bulk**
    - **Scan a repo**
    - **Scan a sample repo**
-   - **Import and triage the sample findings**
+    - **Import and triage the sample findings**
+
+    > **Automation requirement:** Trigger this menu immediately after `sessionkickoff` completes without waiting for the user to type `mainmenu`.
 
 8. **Handle bulk intake selection:**
    - If user chooses bulk intake, offer selectable folder paths (no numeric prefixes).
@@ -91,7 +93,7 @@ Targeted helpers (stdout-only):
 
 10. **Repo scan initialization:**
    - **FIRST: Request repos folder access permission** — Before checking for repos or doing any repo operations, ask user once to grant read access to the repos directory (e.g., `/mnt/c/Repos` or wherever repos are stored). This covers discovery and scanning. Do NOT ask again for individual repos during the session.
-   - Check Output/Knowledge/Repos.md for known repo root path(s).
+   - Check Output/Knowledge/Repos.md for known repo root path(s). (Default to current workspace repo '/mnt/c/Repos/Triage-Saurus' to avoid scanning the entire /mnt/c/Repos unless the user explicitly allows it.)
    - If none recorded: suggest default using `python3 Scripts/get_cwd.py`
    - Ask user to confirm the repos root directory path.
    - Discover available repos: `ls -1 <confirmed_repos_root_path>`
