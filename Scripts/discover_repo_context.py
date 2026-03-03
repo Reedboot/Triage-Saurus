@@ -2462,7 +2462,7 @@ def write_cloud_resource_summaries(
             
             summary_lines.append("")
             # Styling - highlight current VM
-            summary_lines.append(f"  style VM_{vm_name} stroke:#ff0000,stroke-width:4px,fill:#ffe6e6")
+            summary_lines.append(f"  style VM_{vm_name} stroke:#ff0000,stroke-width:4px")
             summary_lines.append("  style Internet stroke:#ff0000,stroke-width:2px")
             summary_lines.append("  style NSG stroke:#ff6b6b,stroke-width:2px")
             if paas_connections.get("key_vaults"):
@@ -5100,7 +5100,7 @@ def write_experiment_cloud_architecture_summary(
             if any(per_resource_public.get(n, True) for n in [s.get('name') for s in paas_resources.get('storage_accounts', []) if s.get('name')]):
                 content_lines.append("  internet -->|Public/Unprotected| sa")
                 content_lines.append("  %% RED_LINK_SA: sa")
-                content_lines.append("  style sa stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+                content_lines.append("  style sa stroke:#ff0000,stroke-width:3px")
             else:
                 content_lines.append("  internet --> sa")
             # App Service may use storage for deployment packages
@@ -5274,7 +5274,7 @@ def write_experiment_cloud_architecture_summary(
             if has_kv:
                 content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
                 # highlight kv node as exposed
-                content_lines.append(f"  style kv stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+                content_lines.append(f"  style kv stroke:#ff0000,stroke-width:3px")
                 link_idx += 1
                 
                 # Skip internal kv connections
@@ -5294,7 +5294,7 @@ def write_experiment_cloud_architecture_summary(
             if has_state_backend:
                 content_lines.append(f"  linkStyle {link_idx} stroke:#ff0000,stroke-width:3px")
                 # highlight storage node as exposed
-                content_lines.append(f"  style sa stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+                content_lines.append(f"  style sa stroke:#ff0000,stroke-width:3px")
                 link_idx += 1
                 
                 # Skip internal sa connections
@@ -5457,7 +5457,7 @@ def write_experiment_cloud_architecture_summary(
             if public_count > 0:
                 # label arrows with reason and color red
                 overview_lines.append(f"  internet -->|Public/Unprotected ({public_count})| {provider_lower}_services")
-                overview_lines.append(f"  style {provider_lower}_services stroke:#ff0000,stroke-width:3px,fill:#ffe6e6")
+                overview_lines.append(f"  style {provider_lower}_services stroke:#ff0000,stroke-width:3px")
             else:
                 # Label HTTPS arrows to indicate protected ingress
                 overview_lines.append(f"  internet -->|HTTPS| {provider_lower}_services")
