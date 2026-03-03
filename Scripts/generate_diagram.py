@@ -175,9 +175,9 @@ def generate_architecture_diagram(experiment_id: str) -> str:
         score = r['max_finding_score']
         
         if score >= 9:
-            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px,fill:#ffe6e6")
+            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px")
         elif score >= 7:
-            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px,fill:#fff4e6")
+            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px")
         elif r['resource_type'] == 'VM':
             lines.append(f"  style {node_id} stroke:#0066cc,stroke-width:2px")
         elif r['resource_type'] == 'SQL':
@@ -259,9 +259,9 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
     for r in vulnerable:
         node_id = sanitize_id(r['resource_name'])
         if r['max_score'] >= 9:
-            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px,fill:#ffe6e6")
+            lines.append(f"  style {node_id} stroke:#ff0000,stroke-width:4px")
         else:
-            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px,fill:#fff4e6")
+            lines.append(f"  style {node_id} stroke:#ff6b00,stroke-width:3px")
     
     return "\n".join(lines)
 
@@ -330,7 +330,7 @@ def generate_blast_radius_diagram(experiment_id: str, compromised_resource: str)
                 seen_edges.add(edge)
     
     lines.append("")
-    lines.append("  classDef compromised stroke:#ff0000,stroke-width:6px,fill:#ffcccc")
+    lines.append("  classDef compromised stroke:#ff0000,stroke-width:6px")
     
     return "\n".join(lines)
 
