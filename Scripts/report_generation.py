@@ -25,32 +25,8 @@ def now_uk() -> str:
     return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
-def _provider_for_resource(resource_type: str) -> str:
-    conn = _get_db()
-    if conn:
-        return _rtdb.get_provider_key(conn, resource_type)
-    # Fallback: prefix check (no DB)
-    if resource_type.startswith("azurerm_"): return "azure"
-    if resource_type.startswith("aws_"):     return "aws"
-    if resource_type.startswith("google_"):  return "gcp"
-    return "unknown"
-
-
 def _provider_title(provider: str) -> str:
     return {"azure": "Azure", "aws": "AWS", "gcp": "GCP"}.get(provider, provider.upper())
-
-
-def _friendly_service_name(resource_type: str) -> str:
-    conn = _get_db()
-    if conn:
-        return _rtdb.get_friendly_name(conn, resource_type)
-    # Fallback: strip prefix + title-case (no DB)
-    cleaned = resource_type
-    for prefix in ("azurerm_", "aws_", "google_"):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):]
-            break
-    return cleaned.replace("_", " ").title()
 
 
 def _is_key_service_type(resource_type: str) -> bool:
@@ -95,14 +71,14 @@ def _is_key_service_type(resource_type: str) -> bool:
 
 
 def _summarize_service_names(resource_types: list[str]) -> str:
-    service_names = sorted({_friendly_service_name(r) for r in resource_types if _is_key_service_type(r)})
+    service_names = sorted({_rtdb.get_friendly_name(_get_db(), r) for r in resource_types if _is_key_service_type(r)})
     return ", ".join(service_names) if service_names else "None"
 
 
 def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for rtype in resource_types:
-        parent = _friendly_service_name(rtype)
+        parent = _rtdb.get_friendly_name(_get_db(), rtype)
         grouped.setdefault(parent, []).append(rtype)
     return grouped
 
@@ -117,45 +93,15 @@ def _resource_kind_label(resource_type: str) -> str:
 
 
 def _child_node_label(resource_type: str, parent_service: str) -> str:
-    friendly = _friendly_service_name(resource_type)
+    friendly = _rtdb.get_friendly_name(_get_db(), resource_type)
     if friendly == parent_service:
         return f"{friendly}: {_resource_kind_label(resource_type)}"
     return friendly
 
 
-def _filter_mermaid_children(parent_service: str, raw_types: list[str]) -> list[str]:
-    """Filter child nodes for diagram clarity where vulnerability is on parent resource."""
-    if parent_service == "Azure Key Vault":
-        vault_only = [r for r in raw_types if r == "azurerm_key_vault"]
-        return vault_only if vault_only else raw_types
-    if parent_service == "Azure SQL Database":
-        # Terraform provider v2/v3 aliases can define both logical server types.
-        # Show one canonical server node in Mermaid to avoid visual duplication.
-        if "azurerm_mssql_server" in raw_types:
-            return ["azurerm_mssql_server"]
-        if "azurerm_sql_server" in raw_types:
-            return ["azurerm_sql_server"]
-    if parent_service == "Amazon RDS":
-        if "aws_rds_cluster" in raw_types:
-            return ["aws_rds_cluster"]
-        if "aws_db_instance" in raw_types:
-            return ["aws_db_instance"]
-    if parent_service == "Amazon Neptune":
-        if "aws_neptune_cluster" in raw_types:
-            return ["aws_neptune_cluster"]
-    if parent_service == "Amazon OpenSearch Service":
-        if "aws_elasticsearch_domain" in raw_types:
-            return ["aws_elasticsearch_domain"]
-    if parent_service == "Amazon S3":
-        if "aws_s3_bucket" in raw_types:
-            return ["aws_s3_bucket"]
-    if parent_service == "Google Kubernetes Engine":
-        if "google_container_cluster" in raw_types:
-            return ["google_container_cluster"]
-    if parent_service == "Cloud Storage":
-        if "google_storage_bucket" in raw_types:
-            return ["google_storage_bucket"]
-    return raw_types
+def _filter_mermaid_children(_parent_service: str, raw_types: list[str]) -> list[str]:
+    """Filter child nodes for diagram clarity — delegates to resource_type_db canonical type logic."""
+    return _rtdb.filter_to_canonical(raw_types)
 
 
 def _is_data_routing_resource(resource_type: str) -> bool:
@@ -468,8 +414,8 @@ def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple
             lbl = _relationship_label(src_type, dst_type)
             if not lbl:
                 continue
-            src_service = _friendly_service_name(src_type)
-            dst_service = _friendly_service_name(dst_type)
+            src_service = _rtdb.get_friendly_name(_get_db(), src_type)
+            dst_service = _rtdb.get_friendly_name(_get_db(), dst_type)
             if src_service == dst_service:
                 continue
             rels.add((src_service, dst_service, lbl[0], lbl[1]))
@@ -691,7 +637,7 @@ def write_repo_summary(
     resource_types = [r.resource_type for r in context.resources]
     resource_counter = Counter(resource_types)
     provider_resources = {
-        provider: [r for r in context.resources if _provider_for_resource(r.resource_type) == provider]
+        provider: [r for r in context.resources if _rtdb.get_provider_key(_get_db(), r.resource_type) == provider]
         for provider in providers
     }
 
@@ -763,11 +709,11 @@ def write_experiment_cloud_architecture_summary(
     resource_types = [r.resource_type for r in context.resources]
 
     for provider in providers:
-        provider_resource_objs = [r for r in context.resources if _provider_for_resource(r.resource_type) == provider]
+        provider_resource_objs = [r for r in context.resources if _rtdb.get_provider_key(_get_db(), r.resource_type) == provider]
         provider_resources = [r.resource_type for r in provider_resource_objs]
         unique_provider_resources = sorted(set(provider_resources))
         edge_gateway_detected = any(
-            _is_edge_gateway_service(_friendly_service_name(rtype)) for rtype in unique_provider_resources
+            _is_edge_gateway_service(_rtdb.get_friendly_name(_get_db(), rtype)) for rtype in unique_provider_resources
         )
         if unique_provider_resources:
             inventory_lines = [
@@ -775,15 +721,15 @@ def write_experiment_cloud_architecture_summary(
                 "|---|---|",
             ]
             for rtype in unique_provider_resources:
-                inventory_lines.append(f"| {_friendly_service_name(rtype)} | `{rtype}` |")
+                inventory_lines.append(f"| {_rtdb.get_friendly_name(_get_db(), rtype)} | `{rtype}` |")
             resource_inventory = "\n".join(inventory_lines)
         else:
             resource_inventory = "None detected."
 
         paas_types = sorted({t for t in provider_resources if _is_paas_resource(t)})
         network_control_types = sorted({t for t in provider_resources if _is_network_control_resource(t)})
-        paas_service_names = sorted({_friendly_service_name(t) for t in paas_types})
-        network_control_service_names = sorted({_friendly_service_name(t) for t in network_control_types})
+        paas_service_names = sorted({_rtdb.get_friendly_name(_get_db(), t) for t in paas_types})
+        network_control_service_names = sorted({_rtdb.get_friendly_name(_get_db(), t) for t in network_control_types})
         paas_exposure_checks = _build_paas_exposure_checks(provider_resources)
         if paas_types:
             controls_line = (
@@ -857,9 +803,9 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
 
     providers = sorted(
         {
-            _provider_for_resource(r.resource_type)
+            _rtdb.get_provider_key(_get_db(), r.resource_type)
             for r in context.resources
-            if _provider_for_resource(r.resource_type) != "unknown"
+            if _rtdb.get_provider_key(_get_db(), r.resource_type) != "unknown"
         }
     )
 
@@ -900,7 +846,7 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
                 repo_name=context.repository_name,
                 resource_name=resource.name,
                 resource_type=resource.resource_type,
-                provider=_provider_for_resource(resource.resource_type),
+                provider=_rtdb.get_provider_key(_get_db(), resource.resource_type),
                 source_file=resource.file_path,
                 source_line=resource.line_number,
             )

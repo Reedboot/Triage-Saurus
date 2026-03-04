@@ -91,6 +91,29 @@ def _ensure_schema(conn: sqlite3.Connection):
       answered_by TEXT,
       answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS skeptic_reviews (
+      id INTEGER PRIMARY KEY,
+      finding_id INTEGER NOT NULL,
+      reviewer_type TEXT NOT NULL,
+      score_adjustment REAL,
+      adjusted_score REAL,
+      confidence REAL,
+      reasoning TEXT,
+      key_concerns TEXT,
+      mitigating_factors TEXT,
+      recommendation TEXT DEFAULT 'confirm',
+      reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS risk_score_history (
+      id INTEGER PRIMARY KEY,
+      finding_id INTEGER NOT NULL,
+      score REAL NOT NULL,
+      scored_by TEXT,
+      rationale TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     """)
 
     # Ensure optional columns exist for backward compatibility.
@@ -115,6 +138,28 @@ def _ensure_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
     if "evidence_location" not in findings_columns:
         conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
+    if "title" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
+    if "description" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
+    if "severity_score" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
+    if "source_file" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
+    if "source_line_start" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
+    if "source_line_end" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
+    if "code_snippet" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
+    if "reason" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
+    if "rule_id" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
+    if "proposed_fix" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
+    if "llm_enriched_at" not in findings_columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
 
 
 @contextmanager

@@ -155,14 +155,26 @@ _CATEGORY_KEYWORDS: list[tuple[str, str]] = [
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_resource_type(conn: sqlite3.Connection, terraform_type: str) -> dict:
+def get_resource_type(conn: sqlite3.Connection | None, terraform_type: str) -> dict:
     """Return lookup data for a terraform resource type.
 
     Returns dict with keys:
         friendly_name, category, icon, provider,
         is_data_store, is_internet_facing_capable
+
+    conn may be None; in that case the DB query is skipped and _FALLBACK / _derive() are used.
     """
     # 1. Query DB
+    if conn is None:
+        # No DB — derive provider then fall back to _FALLBACK / _derive()
+        provider = "unknown"
+        for prefix, prov in _PROVIDER_PREFIXES:
+            if terraform_type.startswith(prefix):
+                provider = prov
+                break
+        if terraform_type in _FALLBACK:
+            return {**_FALLBACK[terraform_type], "provider": provider, "is_data_store": False, "is_internet_facing_capable": False}
+        return {**_derive(terraform_type), "is_data_store": False, "is_internet_facing_capable": False}
     try:
         row = conn.execute(
             """
@@ -189,7 +201,12 @@ def get_resource_type(conn: sqlite3.Connection, terraform_type: str) -> dict:
 
     # 2. In-memory fallback
     if terraform_type in _FALLBACK:
-        entry = {**_FALLBACK[terraform_type],
+        provider = "unknown"
+        for prefix, prov in _PROVIDER_PREFIXES:
+            if terraform_type.startswith(prefix):
+                provider = prov
+                break
+        entry = {**_FALLBACK[terraform_type], "provider": provider,
                  "is_data_store": False, "is_internet_facing_capable": False}
         _auto_insert(conn, terraform_type, entry)
         return entry
@@ -200,21 +217,54 @@ def get_resource_type(conn: sqlite3.Connection, terraform_type: str) -> dict:
     return derived
 
 
-def get_friendly_name(conn: sqlite3.Connection, terraform_type: str) -> str:
+def get_friendly_name(conn: sqlite3.Connection | None, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["friendly_name"]
 
 
-def get_category(conn: sqlite3.Connection, terraform_type: str) -> str:
+def get_category(conn: sqlite3.Connection | None, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["category"]
 
 
-def get_provider_key(conn: sqlite3.Connection, terraform_type: str) -> str:
+def get_provider_key(conn: sqlite3.Connection | None, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["provider"]
 
 
-def get_display_label(conn: sqlite3.Connection, resource_name: str, terraform_type: str) -> str:
+def get_display_label(conn: sqlite3.Connection | None, resource_name: str, terraform_type: str) -> str:
     """Return diagram label: 'resource_name (Friendly Type)'."""
     return f"{resource_name} ({get_friendly_name(conn, terraform_type)})"
+
+
+# ---------------------------------------------------------------------------
+# Canonical type preferences — for diagram de-duplication.
+# When multiple related terraform types map to the same logical service,
+# prefer the canonical (primary resource) type for display.
+# Each entry: canonical_type -> [other types in the same family]
+# ---------------------------------------------------------------------------
+_PREFERRED_TYPES: dict[str, list[str]] = {
+    "azurerm_key_vault":          ["azurerm_key_vault_key", "azurerm_key_vault_secret"],
+    "azurerm_mssql_server":       ["azurerm_sql_server"],
+    "aws_rds_cluster":            ["aws_db_instance"],
+    "aws_neptune_cluster":        ["aws_neptune_cluster_instance", "aws_neptune_cluster_snapshot"],
+    "aws_elasticsearch_domain":   ["aws_elasticsearch_domain_policy"],
+    "aws_s3_bucket":              ["aws_s3_bucket_object"],
+    "google_container_cluster":   ["google_container_node_pool"],
+    "google_storage_bucket":      ["google_storage_bucket_iam_binding"],
+}
+
+
+def filter_to_canonical(types: list[str]) -> list[str]:
+    """Return just the canonical type from a list, if one is present.
+
+    If a canonical type (key in _PREFERRED_TYPES) appears in the list, all
+    other types that share the same family are removed.  If no canonical type
+    is recognised the original list is returned unchanged.
+    """
+    for canonical, aliases in _PREFERRED_TYPES.items():
+        if canonical in types:
+            family = {canonical, *aliases}
+            filtered = [t for t in types if t == canonical or t not in family]
+            return filtered if filtered else types
+    return types
 
 
 # ---------------------------------------------------------------------------

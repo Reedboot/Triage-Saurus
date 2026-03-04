@@ -523,7 +523,7 @@ The pipeline separates raw detection (scripts, no LLM) from LLM enrichment (one 
 `store_findings.py` reads the opengrep JSON and writes raw findings rows with `rule_id`, `source_file`, `source_line_start`, `code_snippet`, `reason`, `severity_score`. No LLM involved.
 
 **Phase 2 — LLM enrichment (your role):**  
-`enrich_findings.py --experiment <id>` queries `findings WHERE llm_enriched_at IS NULL` and calls you once per finding. You return JSON:
+`enrich_findings.py --experiment <id>` queries `findings WHERE llm_enriched_at IS NULL` and calls you once per finding. You return JSON (authoritative schema lives in `Scripts/enrich_findings.py`):
 ```json
 {
   "title": "short human title ≤60 chars",

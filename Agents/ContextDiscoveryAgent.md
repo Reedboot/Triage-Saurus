@@ -655,6 +655,9 @@ grep -r "host:\|destination:\|service:\|port:" --include="*.yaml" -A 3 | head -3
 ### Cloud Services & Dependencies
 **Goal:** Identify external services this repo integrates with
 
+> **Resource type → category/friendly name lookups:** Use `Scripts/resource_type_db.py` as the canonical source
+> rather than re-deriving these mappings here. The examples below are illustrative.
+
 **From IaC resources:**
 - Storage (azurerm_storage_account, aws_s3_bucket, google_storage_bucket)
 - Compute (azurerm_windows_web_app, aws_lambda_function, google_cloud_run_service)

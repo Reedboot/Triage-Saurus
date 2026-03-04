@@ -563,7 +563,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 str(SCRIPTS_SOURCE / "targeted_scan.py"),
                 str(rp),
                 "--experiment", str(args.id),
-                "--repo", repo_name,
+                "--repo", rp.name,
             ]
             print(f"Running targeted scan: {' '.join(targeted_cmd)}")
             targeted_result = subprocess.run(targeted_cmd, check=False)

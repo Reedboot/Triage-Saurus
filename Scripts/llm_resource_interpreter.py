@@ -309,32 +309,8 @@ def batch_interpret_resources(resources: list[dict]) -> list[dict]:
 
 
 def classify_resource_category(resource_type: str) -> str:
-    """Classify a resource into a category. DB-first; keyword fallback for unknowns.
-
-    Args:
-        resource_type: e.g. "azurerm_kubernetes_cluster", "aws_lambda_function"
-
-    Returns:
-        Category string e.g. "Compute", "Database", "Storage", "Network" …
-    """
-    conn = _get_db()
-    if conn:
-        return _rtdb.get_category(conn, resource_type)
-
-    # No DB available — fall back to keyword logic
-    cache_key = _cache_key("category", resource_type)
-    cached = _cache.get(cache_key)
-    if cached:
-        return cached["category"]
-
-    lower = resource_type.lower()
-    for keyword, cat in _rtdb._CATEGORY_KEYWORDS:
-        if keyword in lower:
-            _cache.set(cache_key, {"category": cat})
-            return cat
-
-    _cache.set(cache_key, {"category": "other"})
-    return "other"
+    """Classify a resource into a category. Delegates to resource_type_db (DB-first, keyword fallback)."""
+    return _rtdb.get_category(_get_db(), resource_type)
 
 
 def clear_cache():
