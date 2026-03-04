@@ -46,7 +46,7 @@ def _ensure_schema(conn: sqlite3.Connection):
       status TEXT DEFAULT 'active',
       first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, repo_id, resource_name)
+      UNIQUE(experiment_id, repo_id, resource_type, resource_name)
     );
 
     CREATE TABLE IF NOT EXISTS resource_properties (
