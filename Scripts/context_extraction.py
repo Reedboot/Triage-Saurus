@@ -152,6 +152,23 @@ def _extract_service_accounts(files: list[Path], repo: Path, provider: str) -> d
     # Simplified for brevity
     return {}
 
+def _load_parent_type_map() -> Dict[str, str]:
+    """Load type-level parent relationships from resource_types DB (child_type → parent_type)."""
+    try:
+        import resource_type_db as rtdb
+        from pathlib import Path as _Path
+        db_path = _Path(__file__).parent.parent / "Output" / "Learning" / "triage.db"
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT terraform_type, parent_type FROM resource_types WHERE parent_type IS NOT NULL"
+        ).fetchall()
+        conn.close()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+
 def extract_context(repo_path_str: str) -> RepositoryContext:
     """
     Extracts context from the repository and returns a data model.
@@ -163,9 +180,12 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
     # Parse Terraform resource + data blocks with source location.
     block_re = re.compile(r'^\s*(resource|data)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+"([^"]+)"')
-    for file in files:
-        if file.suffix != ".tf":
-            continue
+    # Detect attribute references to other resources: type.name.attr
+    ref_re = re.compile(r'\b([a-z][a-z0-9_]+\.[a-z][a-z0-9_\-]+)\.[a-z_]+\b')
+
+    # First pass: collect all resources and build a lookup map
+    resource_blocks: list[tuple[Resource, str]] = []  # (resource, raw_block_text)
+    for file in sorted(f for f in files if f.suffix == ".tf"):
         try:
             rel = str(file.relative_to(repo_path))
         except ValueError:
@@ -174,18 +194,63 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             content = file.read_text(errors="ignore")
         except Exception:
             continue
-        for idx, line in enumerate(content.splitlines(), start=1):
-            m = block_re.match(line)
-            if not m:
-                continue
-            block_kind, resource_type, name = m.groups()
-            resource = Resource(
-                name=name,
-                resource_type=resource_type,
-                file_path=rel,
-                line_number=idx,
-                properties={"terraform_block": block_kind},
-            )
-            context.resources.append(resource)
+        lines = content.splitlines()
+        i = 0
+        while i < len(lines):
+            m = block_re.match(lines[i])
+            if m:
+                block_kind, resource_type, name = m.groups()
+                # Collect block body until matching closing brace
+                depth = 0
+                block_lines = []
+                for j in range(i, min(i + 80, len(lines))):
+                    block_lines.append(lines[j])
+                    depth += lines[j].count("{") - lines[j].count("}")
+                    if j > i and depth <= 0:
+                        break
+                block_text = "\n".join(block_lines)
+                resource = Resource(
+                    name=name,
+                    resource_type=resource_type,
+                    file_path=rel,
+                    line_number=i + 1,
+                    properties={"terraform_block": block_kind},
+                )
+                resource_blocks.append((resource, block_text))
+                context.resources.append(resource)
+            i += 1
+
+    # Build lookup: "type.name" → resource
+    res_lookup: Dict[str, Resource] = {
+        f"{r.resource_type}.{r.name}": r for r, _ in resource_blocks
+    }
+
+    # Load type-level parent map as fallback
+    parent_type_map = _load_parent_type_map()
+
+    # Second pass: resolve parent references
+    for resource, block_text in resource_blocks:
+        if resource.parent:
+            continue
+        # Try explicit TF reference first
+        for ref_match in ref_re.finditer(block_text):
+            ref_key = ref_match.group(1)
+            if ref_key in res_lookup and res_lookup[ref_key] is not resource:
+                resource.parent = ref_key  # "type.name"
+                break
+        # Fall back to type-level map
+        if not resource.parent and resource.resource_type in parent_type_map:
+            parent_tf_type = parent_type_map[resource.resource_type]
+            # Find first resource of that type in the same file
+            for candidate, _ in resource_blocks:
+                if candidate.resource_type == parent_tf_type and candidate.file_path == resource.file_path:
+                    resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                    break
+            # Widen search to whole repo if not found in same file
+            if not resource.parent:
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == parent_tf_type:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
 
     return context

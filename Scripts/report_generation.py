@@ -948,8 +948,10 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
             repo_path=Path(context.repository_name),
         )
 
+        # First pass: insert all resources, collect type.name → db_id map
+        res_db_ids: dict[str, int] = {}
         for resource in context.resources:
-            insert_resource(
+            db_id = insert_resource(
                 experiment_id=experiment_id,
                 repo_name=context.repository_name,
                 resource_name=resource.name,
@@ -958,6 +960,22 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
                 source_file=resource.file_path,
                 source_line=resource.line_number,
             )
+            res_db_ids[f"{resource.resource_type}.{resource.name}"] = db_id
+
+        # Second pass: resolve parent references and update parent_resource_id
+        from db_helpers import get_db_connection as _gdb
+        for resource in context.resources:
+            if not resource.parent:
+                continue
+            parent_db_id = res_db_ids.get(resource.parent)
+            if parent_db_id:
+                child_db_id = res_db_ids.get(f"{resource.resource_type}.{resource.name}")
+                if child_db_id:
+                    with _gdb(db_path) as conn:
+                        conn.execute(
+                            "UPDATE resources SET parent_resource_id=? WHERE id=?",
+                            (parent_db_id, child_db_id),
+                        )
 
         for connection in context.connections:
             insert_connection(
