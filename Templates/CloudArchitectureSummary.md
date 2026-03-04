@@ -25,6 +25,8 @@ ${architecture_diagram}
 
 ## 🎯 Resource Inventory
 
+> ⚠️ **Blast radius note:** A compromise of a parent service puts all its sub-services at risk, and vice versa — a vulnerable sub-service (e.g. misconfigured app) can be a pivot point into the parent compute layer.
+
 ${resource_inventory}
 
 ## 🔐 Security Controls

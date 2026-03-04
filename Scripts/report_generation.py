@@ -569,7 +569,11 @@ def _build_simple_architecture_diagram(
             if not any(_is_paas_resource(raw) for raw in raw_types)
         ]
         has_alerting_signal = any(
-            any(tok in raw for tok in ("alert_policy", "threat_detection", "security_alert"))
+            any(tok in raw for tok in (
+                "alert_policy", "threat_detection", "security_alert",
+                "monitor_log_profile", "diagnostic_setting",
+                "security_center", "flow_log",
+            ))
             for raw_types in non_boundary_parents.values()
             for raw in raw_types
         )
@@ -665,9 +669,13 @@ def _build_simple_architecture_diagram(
                         elif has_private != has_restriction:
                             add_link("Internet", exposure_target, label="Partial controls", orange=True)
                     if has_alerting_signal and any(
-                        tok in raw for raw in service_raw_all for tok in ("alert_policy", "threat_detection", "security_alert")
+                        tok in raw for raw in service_raw_all for tok in (
+                            "alert_policy", "threat_detection", "security_alert",
+                            "monitor_log_profile", "diagnostic_setting",
+                            "security_center", "flow_log",
+                        )
                     ):
-                        add_link(exposure_target, monitoring_node, label="alerts", dashed=True)
+                        add_link(exposure_target, monitoring_node, label="logs/alerts", dashed=True)
             lines.append("    end")
 
 
@@ -709,6 +717,44 @@ def _build_simple_architecture_diagram(
                             service_anchor_nodes[service] = first_child
 
             lines.append("    end")
+
+        # Draw dashed monitoring edges: trace from monitoring-signal resource types
+        # back to their parent service anchor node. Deduplicated per anchor.
+        _monitoring_tokens = (
+            "alert_policy", "threat_detection", "security_alert",
+            "monitor_log_profile", "diagnostic_setting",
+            "security_center", "flow_log",
+        )
+        if has_alerting_signal:
+            _parent_type_map: dict[str, str] = {}
+            try:
+                rows = _get_db().execute(
+                    "SELECT terraform_type, parent_type FROM resource_types WHERE parent_type IS NOT NULL"
+                ).fetchall()
+                _parent_type_map = {row[0]: row[1] for row in rows}
+            except Exception:
+                pass
+
+            monitoring_sourced: set[str] = set()  # deduplicate per anchor node
+            for r in resources:
+                if not any(tok in r.resource_type for tok in _monitoring_tokens):
+                    continue
+                anchor: str | None = None
+                # Prioritise type-level parent (structural) over TF references (can be storage destinations)
+                parent_tf_type = _parent_type_map.get(r.resource_type, "")
+                if parent_tf_type:
+                    parent_friendly = _rtdb.get_friendly_name(_get_db(), parent_tf_type)
+                    anchor = service_anchor_nodes.get(parent_friendly)
+                # Fall back to TF reference parent only if no type-level match
+                if not anchor and r.parent:
+                    parent_tf_type = r.parent.split(".")[0]
+                    parent_friendly = _rtdb.get_friendly_name(_get_db(), parent_tf_type)
+                    anchor = service_anchor_nodes.get(parent_friendly)
+                # Skip subscription-level resources (Security Center, Monitor Log Profile)
+                # — they are the monitoring infrastructure, not a source feeding it
+                if anchor and anchor not in monitoring_sourced and anchor != monitoring_node:
+                    monitoring_sourced.add(anchor)
+                    add_link(anchor, monitoring_node, label="logs/alerts", dashed=True)
 
         if repo_path is not None:
             for src_service, dst_service, rel_label, is_dashed in _extract_service_relationships(repo_path, provider):
@@ -824,12 +870,66 @@ def write_experiment_cloud_architecture_summary(
             _is_edge_gateway_service(_rtdb.get_friendly_name(_get_db(), rtype)) for rtype in unique_provider_resources
         )
         if unique_provider_resources:
-            inventory_lines = [
-                "| Service Name | Terraform Resource Type |",
-                "|---|---|",
-            ]
-            for rtype in unique_provider_resources:
-                inventory_lines.append(f"| {_rtdb.get_friendly_name(_get_db(), rtype)} | `{rtype}` |")
+            db = _get_db()
+            # Resource types that are containers-only (not meaningful security parents)
+            _INFRA_ONLY = {"azurerm_resource_group", "azurerm_subnet", "aws_vpc", "google_compute_network"}
+
+            # Build parent-child map from DB parent_type column
+            parent_map: dict[str, str] = {}
+            try:
+                rows = db.execute(
+                    "SELECT terraform_type, parent_type FROM resource_types WHERE parent_type IS NOT NULL"
+                ).fetchall()
+                parent_map = {row[0]: row[1] for row in rows}
+            except Exception:
+                pass
+
+            # Separate top-level types from child types
+            child_types = {rt for rt in unique_provider_resources if rt in parent_map}
+            # TF reference parents — exclude infra-only containers
+            ref_parents: dict[str, set[str]] = {}  # parent_tf_type → {child_tf_type}
+            for r in provider_resource_objs:
+                if r.parent:
+                    parent_tf_type = r.parent.split(".")[0]
+                    if parent_tf_type not in _INFRA_ONLY and parent_tf_type != r.resource_type:
+                        ref_parents.setdefault(parent_tf_type, set()).add(r.resource_type)
+
+            # Exclude infra-only types from top-level display
+            top_level = [rt for rt in unique_provider_resources
+                         if rt not in child_types and rt not in _INFRA_ONLY]
+            inventory_lines = ["| Service | Sub-services | Terraform Type |", "|---|---|---|"]
+            for rtype in top_level:
+                friendly = _rtdb.get_friendly_name(db, rtype)
+                # Children via type-level map
+                children_by_type = sorted({
+                    ct for ct in child_types if parent_map.get(ct) == rtype
+                })
+                # Children via TF references (exclude those already in type map and infra-only)
+                children_by_ref = sorted(
+                    ref_parents.get(rtype, set())
+                    - set(children_by_type)
+                    - _INFRA_ONLY
+                )
+                all_children = children_by_type + children_by_ref
+                # Deduplicate children by terraform type, show type suffix if friendly name clashes
+                seen_friendly: dict[str, int] = {}
+                for ct in all_children:
+                    fn = _rtdb.get_friendly_name(db, ct)
+                    seen_friendly[fn] = seen_friendly.get(fn, 0) + 1
+                child_parts = []
+                for ct in all_children:
+                    fn = _rtdb.get_friendly_name(db, ct)
+                    suffix = f" (`{ct.split('_', 1)[-1]}`)" if seen_friendly[fn] > 1 else ""
+                    child_parts.append(f"{fn}{suffix}")
+                child_str = ", ".join(child_parts) if child_parts else "—"
+                inventory_lines.append(f"| **{friendly}** | {child_str} | `{rtype}` |")
+            # Append orphaned children that had no recognised parent in top_level
+            for rtype in sorted(child_types):
+                parent_rtype = parent_map.get(rtype, "")
+                if parent_rtype not in unique_provider_resources:
+                    friendly = _rtdb.get_friendly_name(db, rtype)
+                    parent_friendly = _rtdb.get_friendly_name(db, parent_rtype) if parent_rtype else "Unknown"
+                    inventory_lines.append(f"| {friendly} *(child of {parent_friendly})* | — | `{rtype}` |")
             resource_inventory = "\n".join(inventory_lines)
         else:
             resource_inventory = "None detected."
