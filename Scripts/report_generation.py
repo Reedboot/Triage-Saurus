@@ -120,6 +120,8 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "firewall_rule",
         "network_rules",
         "_configuration",
+        "_plan",
+        "_node_pool",
     )
     if any(token in resource_type for token in exclude_tokens):
         return False
@@ -130,10 +132,17 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "ingress",
         "load_balancer",
         "elb",
+        "_lb",
+        "forwarding_rule",
+        "registry",
+        "ecr",
+        "firewall",
+        "waf",
         "app_service",
         "function",
         "container",
         "cluster",
+        "virtual_machine",
         "instance",
         "server",
         "sql",

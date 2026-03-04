@@ -535,6 +535,15 @@ The pipeline separates raw detection (scripts, no LLM) from LLM enrichment (one 
 ```
 The script writes this back to the `findings` table and sets `llm_enriched_at`. **Do not re-enrich already-enriched findings.**
 
+**Phase 2b — Diagram consistency check (your role, after writing findings):**  
+After writing all findings, compare the resources you referenced in those findings against the architecture diagram in `Output/Summary/Cloud/Architecture_<Provider>.md`.
+
+- For each resource type you found a vulnerability in, check it appears as a node in the Mermaid diagram.
+- If a resource is **missing from the diagram**, flag it explicitly:
+  > ⚠️ `azurerm_xxx` was found in the IaC and has findings but does not appear in the architecture diagram. This likely indicates a context discovery parsing gap (e.g. unquoted HCL syntax). Raise this with the operator before proceeding.
+- Do **not** silently accept a missing node — the diagram is used for threat modelling and an absent service creates a blind spot in the attack surface view.
+- If the diagram is regenerated to fix the gap, re-check it before moving to skeptic reviews.
+
 **Phase 3 — Skeptic reviews:**  
 `run_skeptics.py --experiment <id> --reviewer all` runs each skeptic persona. Writes to `skeptic_reviews` + `risk_score_history`. Final `severity_score` = average of all three adjusted scores.
 

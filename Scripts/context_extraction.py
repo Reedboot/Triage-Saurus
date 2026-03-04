@@ -18,7 +18,7 @@ def extract_resource_names(files: List[Path], repo_path: Path, resource_type: st
         if file.suffix == ".tf":
             try:
                 content = file.read_text()
-                matches = re.findall(rf'resource "{resource_type}" "([^"]+)"', content)
+                matches = re.findall(rf'resource "?{resource_type}"? "([^"]+)"', content)
                 names.extend(matches)
             except Exception:
                 continue
@@ -37,7 +37,7 @@ def detect_terraform_resources(files: List[Path], repo_path: Path) -> Set[str]:
         if file.suffix == ".tf":
             try:
                 content = file.read_text()
-                matches = re.findall(r'resource "([^"]+)"', content)
+                matches = re.findall(r'resource "?([A-Za-z_][A-Za-z0-9_]*)"?', content)
                 resource_types.update(matches)
             except Exception:
                 continue
@@ -162,7 +162,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     context = RepositoryContext(repository_name=repo_name)
 
     # Parse Terraform resource + data blocks with source location.
-    block_re = re.compile(r'^\s*(resource|data)\s+"([^"]+)"\s+"([^"]+)"')
+    block_re = re.compile(r'^\s*(resource|data)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+"([^"]+)"')
     for file in files:
         if file.suffix != ".tf":
             continue
