@@ -309,7 +309,7 @@ def _terraform_resource_blocks(repo_path: Path, prefix: str | None = None) -> li
     """Return Terraform resource blocks as (resource_type, resource_name, body_text)."""
     if not repo_path.exists():
         return []
-    block_start_re = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{')
+    block_start_re = re.compile(r'^\s*resource\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+"([^"]+)"\s*\{')
     blocks: list[tuple[str, str, str]] = []
     for tf in repo_path.rglob("*.tf"):
         try:

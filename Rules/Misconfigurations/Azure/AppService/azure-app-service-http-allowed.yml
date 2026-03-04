@@ -13,6 +13,12 @@ rules:
             https_only = false
             ...
           }
+      - pattern: |
+          resource azurerm_app_service "$NAME" {
+            ...
+            https_only = false
+            ...
+          }
       - patterns:
           - pattern: |
               resource "azurerm_app_service" "$NAME" {
@@ -20,6 +26,17 @@ rules:
               }
           - pattern-not: |
               resource "azurerm_app_service" "$NAME" {
+                ...
+                https_only = true
+                ...
+              }
+      - patterns:
+          - pattern: |
+              resource azurerm_app_service "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_app_service "$NAME" {
                 ...
                 https_only = true
                 ...

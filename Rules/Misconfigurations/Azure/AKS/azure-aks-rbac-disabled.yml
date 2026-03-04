@@ -6,9 +6,17 @@ rules:
       Remove role_based_access_control block or set enabled = true.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
+    pattern-either:
       - pattern: |
           resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            role_based_access_control {
+              enabled = false
+            }
+            ...
+          }
+      - pattern: |
+          resource azurerm_kubernetes_cluster "$NAME" {
             ...
             role_based_access_control {
               enabled = false

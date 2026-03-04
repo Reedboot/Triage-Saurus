@@ -6,9 +6,15 @@ rules:
       Set tier = "Standard" or higher to enable Microsoft Defender for the resource type.
     severity: WARNING
     languages: [terraform, hcl]
-    patterns:
+    pattern-either:
       - pattern: |
           resource "azurerm_security_center_subscription_pricing" "$NAME" {
+            ...
+            tier = "Free"
+            ...
+          }
+      - pattern: |
+          resource azurerm_security_center_subscription_pricing "$NAME" {
             ...
             tier = "Free"
             ...

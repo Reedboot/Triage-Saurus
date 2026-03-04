@@ -6,25 +6,45 @@ rules:
       Restrict source_address_prefix to specific trusted IP ranges or use Azure Bastion.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
-      - pattern: |
-          resource "azurerm_network_security_rule" "$NAME" {
-            ...
-            access = "Allow"
-            ...
-            direction = "Inbound"
-            ...
-            destination_port_range = $PORT
-            ...
-            source_address_prefix = $SRC
-            ...
-          }
-      - metavariable-regex:
-          metavariable: $PORT
-          regex: ^"(22|3389)"$
-      - metavariable-regex:
-          metavariable: $SRC
-          regex: ^"(\*|0\.0\.0\.0/0|Internet)"$
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_network_security_rule" "$NAME" {
+                ...
+                access = "Allow"
+                ...
+                direction = "Inbound"
+                ...
+                destination_port_range = $PORT
+                ...
+                source_address_prefix = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $PORT
+              regex: ^"(22|3389)"$
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: ^"(\*|0\.0\.0\.0/0|Internet)"$
+      - patterns:
+          - pattern: |
+              resource azurerm_network_security_rule "$NAME" {
+                ...
+                access = "Allow"
+                ...
+                direction = "Inbound"
+                ...
+                destination_port_range = $PORT
+                ...
+                source_address_prefix = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $PORT
+              regex: ^"(22|3389)"$
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: ^"(\*|0\.0\.0\.0/0|Internet)"$
     metadata:
       category: security
       subcategory: [network, cloud, firewall]

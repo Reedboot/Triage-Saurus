@@ -6,17 +6,29 @@ rules:
       Set api_server_authorized_ip_ranges to trusted CIDR ranges or use a private cluster.
     severity: WARNING
     languages: [terraform, hcl]
-    patterns:
-      - pattern: |
-          resource "azurerm_kubernetes_cluster" "$NAME" {
-            ...
-          }
-      - pattern-not: |
-          resource "azurerm_kubernetes_cluster" "$NAME" {
-            ...
-            api_server_authorized_ip_ranges = [...]
-            ...
-          }
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+                api_server_authorized_ip_ranges = [...]
+                ...
+              }
+      - patterns:
+          - pattern: |
+              resource azurerm_kubernetes_cluster "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_kubernetes_cluster "$NAME" {
+                ...
+                api_server_authorized_ip_ranges = [...]
+                ...
+              }
     metadata:
       category: security
       subcategory: [network, cloud, kubernetes]

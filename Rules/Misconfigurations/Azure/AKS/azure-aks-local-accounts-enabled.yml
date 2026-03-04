@@ -6,17 +6,29 @@ rules:
       for centralized identity management.
     severity: WARNING
     languages: [terraform, hcl]
-    patterns:
-      - pattern: |
-          resource "azurerm_kubernetes_cluster" "$NAME" {
-            ...
-          }
-      - pattern-not: |
-          resource "azurerm_kubernetes_cluster" "$NAME" {
-            ...
-            local_account_disabled = true
-            ...
-          }
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+                local_account_disabled = true
+                ...
+              }
+      - patterns:
+          - pattern: |
+              resource azurerm_kubernetes_cluster "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_kubernetes_cluster "$NAME" {
+                ...
+                local_account_disabled = true
+                ...
+              }
     metadata:
       category: security
       subcategory: [iam, cloud]

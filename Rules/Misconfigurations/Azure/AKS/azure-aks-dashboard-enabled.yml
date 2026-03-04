@@ -6,9 +6,21 @@ rules:
       Remove the kube_dashboard block or set enabled = false.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
+    pattern-either:
       - pattern: |
           resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            addon_profile {
+              ...
+              kube_dashboard {
+                enabled = true
+              }
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          resource azurerm_kubernetes_cluster "$NAME" {
             ...
             addon_profile {
               ...
