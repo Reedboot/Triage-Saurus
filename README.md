@@ -43,6 +43,56 @@ See `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md` for full details.
 
 ---
 
+## Offline Pipeline (Phases 1–3, No LLM)
+
+Run the full detection-to-output pipeline against any repo with a single command — no API keys, no internet, no LLM required.
+
+```bash
+python3 Scripts/run_pipeline.py --repo /path/to/repo
+```
+
+This creates a new experiment and runs:
+
+| Phase | Script | What it does |
+|---|---|---|
+| **1** | `triage_experiment.py run` | opengrep detection rules → identify services → targeted misconfig scan → findings in DB |
+| **2** | `discover_code_context.py` | Parses manifests, Dockerfiles, K8s YAML, detects languages/frameworks/RBAC → metadata in DB |
+| **3a** | `render_finding.py` | Renders one MD per finding from DB → `Findings/<repo>/finding_<id>.md` |
+| **3b** | `generate_diagram.py` | Generates layered architecture diagram → `Summary/Cloud/Architecture_AWS.md` |
+
+### Output
+
+```
+Output/Learning/experiments/<id>_<name>/
+├── Summary/
+│   ├── Cloud/Architecture_AWS.md      ← layered architecture diagram
+│   └── Repos/<repo-name>.md           ← languages, frameworks, K8s context
+└── Findings/<repo-name>/
+    └── finding_<id>.md                ← one MD per finding
+```
+
+### Options
+
+| Flag | Purpose |
+|---|---|
+| `--name <name>` | Experiment name suffix (default: `offline_scan`) |
+| `--experiment <id>` | Reuse an existing experiment instead of creating a new one |
+| `--skip-phase1` | Skip Phase 1 (findings already in DB) |
+| `--skip-phase2` | Skip Phase 2 (metadata already populated) |
+| `--no-opengrep` | Phase 2 file parsing only (no opengrep detection rules) |
+
+### Next steps after Phase 1–3
+
+Phases 4–6 require an LLM:
+
+```bash
+python3 Scripts/enrich_findings.py --experiment <id>          # Phase 4 — LLM titles/descriptions/severity
+python3 Scripts/run_skeptics.py --experiment <id> --reviewer all  # Phase 5 — DevSkeptic/PlatformSkeptic
+python3 Scripts/triage_experiment.py complete <id>            # Mark done
+```
+
+---
+
 ## Security Rules Library
 
 Triage-Saurus now includes a **declarative security rules library** in opengrep/Semgrep-compatible format:
