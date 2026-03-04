@@ -60,7 +60,21 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
 
 **When to run:** ALWAYS run this before any scan type (full or incremental). This runs after context discovery.
 
-#### Step 1: Check Remote Status
+**Preferred method — use the helper script:**
+```bash
+# Check status only (no pull)
+python3 Scripts/pull_repo.py /path/to/repo --dry-run
+
+# Auto-pull if behind (non-interactive, recommended for agents)
+python3 Scripts/pull_repo.py /path/to/repo --auto-pull
+
+# Interactive prompt (for manual sessions)
+python3 Scripts/pull_repo.py /path/to/repo
+```
+
+The script handles: git-repo validation, fetch, ahead/behind/diverged detection, stash-before-pull, pull, stash-pop, and clear status output.
+
+#### Step 1: Check Remote Status (manual alternative if script unavailable)
 ```bash
 # Fetch remote refs without pulling
 cd /path/to/repo
