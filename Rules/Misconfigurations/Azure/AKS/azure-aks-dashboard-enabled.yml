@@ -1,0 +1,30 @@
+rules:
+  - id: azure-aks-dashboard-enabled
+    message: |
+      AKS cluster has the legacy Kubernetes dashboard explicitly enabled.
+      The dashboard exposes cluster resources via an unauthenticated UI and has a history of CVEs.
+      Remove the kube_dashboard block or set enabled = false.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            addon_profile {
+              ...
+              kube_dashboard {
+                enabled = true
+              }
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [exposure, cloud, kubernetes]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, kubernetes]
+      five_pillars: Pillar 1 (Network Security)

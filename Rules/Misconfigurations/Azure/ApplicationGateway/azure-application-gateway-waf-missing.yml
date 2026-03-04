@@ -1,0 +1,38 @@
+rules:
+  - id: azure-application-gateway-waf-missing
+    message: |
+      Application Gateway is using a Standard tier SKU without WAF protection.
+      Web application firewall (WAF/WAF_v2) is required to protect against OWASP Top 10 attacks.
+      Change sku tier to WAF or WAF_v2 and configure waf_configuration block.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_application_gateway" "$NAME" {
+            ...
+            sku {
+              ...
+              tier = "Standard"
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          resource "azurerm_application_gateway" "$NAME" {
+            ...
+            sku {
+              ...
+              tier = "Standard_v2"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud, firewall]
+      cwe: CWE-693
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)

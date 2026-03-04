@@ -1,0 +1,38 @@
+rules:
+  - id: azure-app-service-weak-tls
+    message: |
+      Azure App Service site_config allows deprecated TLS 1.0 or TLS 1.1 (RFC 8996).
+      Legacy TLS versions are vulnerable to known protocol attacks (BEAST, POODLE, SLOTH).
+      Set min_tls_version = "1.2" in the site_config block.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_service" "$NAME" {
+            ...
+            site_config {
+              ...
+              min_tls_version = "1.0"
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          resource "azurerm_app_service" "$NAME" {
+            ...
+            site_config {
+              ...
+              min_tls_version = "1.1"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud, web]
+      cwe: CWE-326
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 4 (Data Protection)

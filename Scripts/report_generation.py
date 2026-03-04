@@ -152,26 +152,11 @@ def _is_data_routing_resource(resource_type: str) -> bool:
 
 
 def _is_paas_resource(resource_type: str) -> bool:
-    """Heuristic classification for Terraform resource/data types that map to PaaS services."""
-    paas_tokens = (
-        "sql",
-        "mysql",
-        "postgres",
-        "storage",
-        "key_vault",
-        "app_service",
-        "function_app",
-        "container_registry",
-        "redis",
-        "cosmos",
-        "bigquery",
-        "gke",
-        "container_cluster",
-        "neptune",
-        "elasticsearch",
-        "rds",
-    )
-    return any(token in resource_type for token in paas_tokens)
+    """Return True for any resource type that has a known DB category — i.e. should
+    appear in a layer subgraph rather than being dropped into the network boundary box."""
+    cat = _rtdb.get_resource_type(_get_db(), resource_type).get("category", "")
+    return bool(cat)
+
 
 
 def _is_network_control_resource(resource_type: str) -> bool:
@@ -350,6 +335,48 @@ def _terraform_resource_blocks(repo_path: Path, prefix: str | None = None) -> li
     return blocks
 
 
+def _terraform_actual_names(repo_path: Path | None) -> dict[tuple[str, str], str]:
+    """Return {(resource_type, terraform_label): actual_name} from Terraform name attributes."""
+    if not repo_path:
+        return {}
+    name_re = re.compile(r'^\s*name\s*=\s*"([^"]+)"')
+    result: dict[tuple[str, str], str] = {}
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path):
+        for line in body.splitlines():
+            m = name_re.match(line)
+            if m:
+                result[(rtype, rlabel)] = m.group(1)
+                break
+    return result
+
+
+_INTERP_RE = re.compile(r'\$\{[^}]*\}')
+
+
+def _mermaid_safe_name(raw: str) -> str | None:
+    """
+    Sanitize a Terraform resource name for use inside a Mermaid node label.
+
+    - Replaces Terraform interpolations (${...}) with '*' to preserve the pattern.
+    - Returns None if the result is uninformative (only wildcards/punctuation).
+    - Strips characters that break Mermaid label parsing (double-quotes, brackets).
+    """
+    sanitized = _INTERP_RE.sub("*", raw)
+    # Collapse adjacent wildcards (e.g. ** → *)
+    sanitized = re.sub(r'\*+', '*', sanitized)
+    # Remove Mermaid-unsafe characters
+    sanitized = sanitized.replace('"', "'").replace("[", "").replace("]", "")
+    sanitized = sanitized.strip()
+    # Reject if nothing useful remains after stripping wildcards and punctuation
+    useful = re.sub(r'[\*\-_/. ]', '', sanitized)
+    if not useful:
+        return None
+    # Truncate long names
+    if len(sanitized) > 40:
+        sanitized = sanitized[:37] + "..."
+    return sanitized
+
+
 def _ingress_posture_for_service(repo_path: Path | None, provider: str, service_name: str) -> tuple[str, bool]:
     """
     Return (label, insecure_http) for internet ingress edge.
@@ -357,7 +384,7 @@ def _ingress_posture_for_service(repo_path: Path | None, provider: str, service_
     """
     if repo_path is None or not repo_path.exists():
         return ("ingress", False)
-    if provider != "azure" or service_name != "Azure Application Gateway":
+    if provider != "azure" or "application gateway" not in service_name.lower():
         return ("ingress", False)
 
     protocols: set[str] = set()
@@ -435,10 +462,11 @@ def _build_simple_architecture_diagram(
     link_index = 0
 
     category_colors = {
-        "app": "#1976d2",       # blue
-        "data": "#2e7d32",      # green
-        "identity": "#ff8f00",  # orange
-        "security": "#7e57c2",  # purple
+        "app": "#5a9e5a",         # green  (Compute)
+        "data": "#4a90d9",        # blue   (Data Services)
+        "identity": "#e07b00",    # orange (Identity & Secrets)
+        "security": "#8b5cf6",    # purple (Network boundary)
+        "monitoring": "#2ab7a9",  # teal   (Monitoring & Alerts)
     }
 
     def style_id(target_id: str, category: str) -> None:
@@ -448,14 +476,26 @@ def _build_simple_architecture_diagram(
         node_styles.append(f"  style {target_id} stroke:{color},stroke-width:2px")
         styled_ids.add(target_id)
 
-    def category_for_service(service_name: str) -> str:
-        s = service_name.lower()
-        if any(tok in s for tok in ("key vault", "iam", "identity", "secret", "policy")):
-            return "identity"
-        if any(tok in s for tok in ("sql", "database", "storage", "bucket", "redis", "cosmos", "rds", "neptune", "bigquery")):
-            return "data"
-        if any(tok in s for tok in ("security", "firewall", "network", "waf", "monitor")):
-            return "security"
+    # Maps DB category → diagram layer key
+    _DB_CAT_TO_LAYER: dict[str, str] = {
+        "Database": "data",
+        "Storage":  "data",
+        "Identity": "identity",
+        "Monitoring": "monitoring",
+        "Security": "security",
+        "Network":  "security",
+        "Compute":  "app",
+        "Container": "app",
+    }
+
+    def category_for_raw_types(raw_types: list[str]) -> str:
+        """Return diagram layer key by DB category lookup on the first matching terraform type."""
+        db = _get_db()
+        for rtype in raw_types:
+            cat = _rtdb.get_resource_type(db, rtype).get("category", "")
+            layer = _DB_CAT_TO_LAYER.get(cat)
+            if layer:
+                return layer
         return "app"
 
     def add_link(
@@ -490,6 +530,17 @@ def _build_simple_architecture_diagram(
         resource_types = sorted({r.resource_type for r in resources})
         parent_groups = _group_parent_services(resource_types)
         boundary_resources = [r for r in resources if _is_network_boundary_resource(provider, r.resource_type)]
+        # Map friendly service name → sorted unique actual instance names (from Terraform name attribute)
+        _actual_names = _terraform_actual_names(repo_path)
+        service_instances: dict[str, list[str]] = {}
+        for r in resources:
+            friendly = _rtdb.get_friendly_name(_get_db(), r.resource_type)
+            raw_actual = _actual_names.get((r.resource_type, r.name), r.name) if r.name else None
+            actual = _mermaid_safe_name(raw_actual) if raw_actual else None
+            if actual:
+                service_instances.setdefault(friendly, [])
+                if actual not in service_instances[friendly]:
+                    service_instances[friendly].append(actual)
         non_boundary_parents = {
             parent: raw_types
             for parent, raw_types in parent_groups.items()
@@ -518,34 +569,77 @@ def _build_simple_architecture_diagram(
         lines.append(f'  subgraph {provider_id}_Cloud["{provider_title} Services"]')
         lines.append("    direction TB")
         monitoring_node = f"{provider_id}_Monitoring"
-        if has_alerting_signal:
-            lines.append(f'    {monitoring_node}["Security Monitoring"]')
-            style_id(monitoring_node, "security")
 
-        if paas_services:
-            paas_subgraph_id = f"{provider_id}_PaaS"
-            lines.append(f'    subgraph {paas_subgraph_id}["PaaS Services"]')
-            style_id(paas_subgraph_id, "app")
-            for p_idx, service in enumerate(paas_services, start=1):
+        # Group paas_services by category layer and render one subgraph per layer
+        layer_meta = {
+            "data":       ("🗄️ Data Layer",                "data"),
+            "identity":   ("🔐 Identity & Secrets",        "identity"),
+            "monitoring": ("📈 Monitoring & Telemetry",    "monitoring"),
+            "security":   ("🛡️ Network & Security",        "security"),
+            "app":        ("⚙️ Compute Layer",             "app"),
+        }
+        # Preserve a stable layer order
+        layer_order = ["data", "identity", "monitoring", "security", "app"]
+        services_by_layer: dict[str, list[str]] = {k: [] for k in layer_order}
+        for service in paas_services:
+            raw_for_cat = sorted(set(non_boundary_parents.get(service, [])))
+            cat = category_for_raw_types(raw_for_cat)
+            services_by_layer.setdefault(cat, []).append(service)
+
+        svc_global_idx = 0
+        for layer_key in layer_order:
+            layer_services = services_by_layer.get(layer_key, [])
+            if not layer_services:
+                # Still render the Monitoring layer if has_alerting_signal and no services were bucketed here
+                if layer_key == "monitoring" and has_alerting_signal:
+                    layer_label, layer_cat = layer_meta[layer_key]
+                    layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
+                    lines.append(f'    subgraph {layer_id}["{layer_label}"]')
+                    style_id(layer_id, layer_cat)
+                    lines.append(f'      {monitoring_node}["Security Monitoring"]')
+                    style_id(monitoring_node, layer_cat)
+                    lines.append("    end")
+                continue
+            layer_label, layer_cat = layer_meta[layer_key]
+            layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
+            lines.append(f'    subgraph {layer_id}["{layer_label}"]')
+            style_id(layer_id, layer_cat)
+            # Place the monitoring node inside the Monitoring layer
+            if layer_key == "monitoring" and has_alerting_signal:
+                lines.append(f'      {monitoring_node}["Security Monitoring"]')
+                style_id(monitoring_node, layer_cat)
+            for service in layer_services:
+                svc_global_idx += 1
+                p_idx = svc_global_idx
                 service_raw = sorted(set(routable_parents.get(service, [])))
                 service_raw = _filter_mermaid_children(service, service_raw)
                 service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
                 exposure_target = None
                 if len(service_raw) <= 1:
-                    node_id = f"{paas_subgraph_id}_Svc_{p_idx}"
-                    lines.append(f'      {node_id}["{service}"]')
-                    style_id(node_id, category_for_service(service))
+                    node_id = f"{layer_id}_Svc_{p_idx}"
+                    names = service_instances.get(service, [])
+                    name_suffix = f" ({names[0]})" if len(names) == 1 else ""
+                    lines.append(f'      {node_id}["{service}{name_suffix}"]')
+                    style_id(node_id, layer_cat)
                     exposure_target = node_id
                 else:
-                    svc_subgraph = f"{paas_subgraph_id}_Svc_{p_idx}"
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
                     lines.append(f'      subgraph {svc_subgraph}["{service}"]')
-                    style_id(svc_subgraph, category_for_service(service))
+                    style_id(svc_subgraph, layer_cat)
                     first_child = None
                     for c_idx, child in enumerate(service_raw, start=1):
                         child_node = f"{svc_subgraph}_Child_{c_idx}"
                         child_label = _child_node_label(child, service)
+                        # Append instance name if there's exactly one for this raw type
+                        child_instances = [
+                            _mermaid_safe_name(_actual_names.get((child, r.name), r.name) or "") or ""
+                            for r in resources if r.resource_type == child and r.name
+                        ]
+                        child_instances = [n for n in child_instances if n]
+                        if len(child_instances) == 1:
+                            child_label = f"{child_label} ({child_instances[0]})"
                         lines.append(f'        {child_node}["{child_label}"]')
-                        style_id(child_node, category_for_service(service))
+                        style_id(child_node, layer_cat)
                         if first_child is None:
                             first_child = child_node
                     lines.append("      end")
@@ -553,18 +647,22 @@ def _build_simple_architecture_diagram(
 
                 if exposure_target:
                     service_anchor_nodes[service] = exposure_target
-                    has_private, has_restriction = _service_access_signals(service, service_raw)
-                    if not has_private and not has_restriction:
-                        add_link("Internet", exposure_target, label="Public exposure", red=True)
-                    elif has_private != has_restriction:
-                        add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    # Edge gateways (App Gateway, LB, APIM) are internet-facing by design —
+                    # skip the generic "Public exposure" arrow; the protocol ingress arrow below handles it.
+                    if not _is_edge_gateway_service(service):
+                        has_private, has_restriction = _service_access_signals(service, service_raw)
+                        if not has_private and not has_restriction:
+                            add_link("Internet", exposure_target, label="Public exposure", red=True)
+                        elif has_private != has_restriction:
+                            add_link("Internet", exposure_target, label="Partial controls", orange=True)
                     if has_alerting_signal and any(
                         tok in raw for raw in service_raw_all for tok in ("alert_policy", "threat_detection", "security_alert")
                     ):
                         add_link(exposure_target, monitoring_node, label="alerts", dashed=True)
             lines.append("    end")
 
-        networks = boundary_resources if boundary_resources else [None]
+
+        networks = (boundary_resources if boundary_resources else [None]) if other_services else []
         for idx, boundary in enumerate(networks, start=1):
             net_id = f"{provider_id}_Net_{idx}" if boundary is not None else f"{provider_id}_Net_Default"
             net_name = (
@@ -579,21 +677,22 @@ def _build_simple_architecture_diagram(
                 for o_idx, service in enumerate(other_services, start=1):
                     service_raw = sorted(set(routable_parents.get(service, [])))
                     service_raw = _filter_mermaid_children(service, service_raw)
+                    svc_cat = category_for_raw_types(sorted(set(non_boundary_parents.get(service, []))))
                     if len(service_raw) <= 1:
                         node_id = f"{net_id}_OtherSvc_{o_idx}"
                         lines.append(f'      {node_id}["{service}"]')
-                        style_id(node_id, category_for_service(service))
+                        style_id(node_id, svc_cat)
                         service_anchor_nodes[service] = node_id
                     else:
                         svc_subgraph = f"{net_id}_OtherSvc_{o_idx}"
                         lines.append(f'      subgraph {svc_subgraph}["{service}"]')
-                        style_id(svc_subgraph, category_for_service(service))
+                        style_id(svc_subgraph, svc_cat)
                         first_child = None
                         for c_idx, child in enumerate(service_raw, start=1):
                             child_node = f"{svc_subgraph}_Child_{c_idx}"
                             child_label = _child_node_label(child, service)
                             lines.append(f'        {child_node}["{child_label}"]')
-                            style_id(child_node, category_for_service(service))
+                            style_id(child_node, svc_cat)
                             if first_child is None:
                                 first_child = child_node
                         lines.append("      end")

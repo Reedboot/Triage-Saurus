@@ -1,0 +1,28 @@
+rules:
+  - id: azure-custom-role-wildcard-actions
+    message: |
+      Azure custom role definition grants wildcard (*) actions, allowing all Azure RM operations.
+      This violates the principle of least privilege and could enable full subscription takeover.
+      Replace actions = ["*"] with the specific actions required by the role.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_role_definition" "$NAME" {
+            ...
+            permissions {
+              ...
+              actions = ["*"]
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authorization, cloud, iam]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 2 (Access Control)

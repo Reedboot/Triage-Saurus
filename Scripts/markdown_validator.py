@@ -108,26 +108,30 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
                     new_block.append(bb2)
                 block = new_block
 
-        # Renderer-compat fixes: some renderers reject non-ASCII (e.g., emojis) in Mermaid.
-        # Prefer ASCII-only labels for broadest compatibility.
+        # Renderer-compat fixes: some renderers reject non-ASCII (e.g., emojis) in Mermaid
+        # node labels (inside [...] or ["..."]).  Subgraph titles are fine in modern renderers,
+        # so only strip from node label content, not from subgraph header lines.
+        _NODE_LABEL_RE = re.compile(r'(\[\"?)(.*?)(\"?\])')
+
+        def _strip_non_ascii_labels(line: str) -> str:
+            """Strip non-ASCII only from the label portion of node/edge definitions."""
+            def _clean(m: re.Match) -> str:
+                cleaned = "".join(ch for ch in m.group(2) if ord(ch) <= 127)
+                return f"{m.group(1)}{cleaned}{m.group(3)}"
+            return _NODE_LABEL_RE.sub(_clean, line)
+
         if any(any(ord(ch) > 127 for ch in b) for b in block):
-            for j, b in enumerate(block):
-                if any(ord(ch) > 127 for ch in b):
-                    problems.append(
-                        Problem(
-                            Path("."),
-                            "WARN",
-                            "Mermaid contains non-ASCII characters (e.g., emoji); renderer support varies. Prefer ASCII-only labels for compatibility.",
-                            start_line_no + j,
-                        )
-                    )
             if fix:
                 new_block2: list[str] = []
                 for b in block:
-                    bb = "".join(ch for ch in b if ord(ch) <= 127)
-                    if bb != b:
-                        changed = True
-                    new_block2.append(bb)
+                    is_subgraph = b.lstrip().startswith("subgraph ")
+                    if is_subgraph:
+                        new_block2.append(b)
+                    else:
+                        bb = _strip_non_ascii_labels(b)
+                        if bb != b:
+                            changed = True
+                        new_block2.append(bb)
                 block = new_block2
 
         # Renderer-compat fixes: some parsers reject parentheses in labels inside [] / [""].

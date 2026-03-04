@@ -1,0 +1,24 @@
+rules:
+  - id: azure-mysql-public-access-enabled
+    message: |
+      Azure MySQL server has public network access explicitly enabled.
+      The database endpoint is reachable from the public internet.
+      Set public_network_access_enabled = false and use private endpoints.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_mysql_server" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud, database]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure, mysql]
+      five_pillars: Pillar 1 (Network Security)

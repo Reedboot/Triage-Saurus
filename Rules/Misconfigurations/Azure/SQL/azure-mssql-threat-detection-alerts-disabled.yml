@@ -1,0 +1,30 @@
+rules:
+  - id: azure-mssql-threat-detection-alerts-disabled
+    message: |
+      Azure MSSQL server security alert policy has critical threat detection alerts disabled.
+      Disabling Sql_Injection or Data_Exfiltration alerts suppresses detection of active attacks.
+      Remove those entries from disabled_alerts or set disabled_alerts to an empty list.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_mssql_server_security_alert_policy" "$NAME" {
+            ...
+            disabled_alerts = [..., "Sql_Injection", ...]
+            ...
+          }
+      - pattern: |
+          resource "azurerm_mssql_server_security_alert_policy" "$NAME" {
+            ...
+            disabled_alerts = [..., "Data_Exfiltration", ...]
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [audit-logging, cloud, database]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, mssql]
+      five_pillars: Pillar 3 (Audit Logging)

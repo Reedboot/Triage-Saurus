@@ -1,0 +1,24 @@
+rules:
+  - id: azure-mysql-ssl-disabled
+    message: |
+      Azure MySQL server has SSL enforcement explicitly disabled.
+      All data in transit between clients and the server is unencrypted.
+      Set ssl_enforcement_enabled = true to require TLS for all connections.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_mysql_server" "$NAME" {
+            ...
+            ssl_enforcement_enabled = false
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud, database]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, mysql]
+      five_pillars: Pillar 4 (Data Protection)

@@ -1,0 +1,35 @@
+rules:
+  - id: azure-app-service-http-allowed
+    message: |
+      Azure App Service allows plain HTTP traffic — https_only is false or absent.
+      Data transmitted over HTTP is unencrypted and vulnerable to interception.
+      Set https_only = true to redirect all HTTP requests to HTTPS.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_service" "$NAME" {
+            ...
+            https_only = false
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "azurerm_app_service" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_app_service" "$NAME" {
+                ...
+                https_only = true
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud, web]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 4 (Data Protection)

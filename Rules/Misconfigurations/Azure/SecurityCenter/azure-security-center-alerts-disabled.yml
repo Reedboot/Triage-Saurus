@@ -1,0 +1,30 @@
+rules:
+  - id: azure-security-center-alerts-disabled
+    message: |
+      Azure Security Center contact has alert notifications or admin alerts explicitly disabled.
+      Security incidents will not be surfaced to responsible contacts.
+      Set alert_notifications = true and alerts_to_admins = true.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_security_center_contact" "$NAME" {
+            ...
+            alert_notifications = false
+            ...
+          }
+      - pattern: |
+          resource "azurerm_security_center_contact" "$NAME" {
+            ...
+            alerts_to_admins = false
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [audit-logging, cloud, monitoring]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 3 (Audit Logging)

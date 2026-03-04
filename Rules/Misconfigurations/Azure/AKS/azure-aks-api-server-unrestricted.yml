@@ -1,0 +1,28 @@
+rules:
+  - id: azure-aks-api-server-unrestricted
+    message: |
+      AKS cluster has no api_server_authorized_ip_ranges configured.
+      The Kubernetes API server is publicly accessible from any IP address.
+      Set api_server_authorized_ip_ranges to trusted CIDR ranges or use a private cluster.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            api_server_authorized_ip_ranges = [...]
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud, kubernetes]
+      cwe: CWE-284
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, kubernetes]
+      five_pillars: Pillar 1 (Network Security)

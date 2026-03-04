@@ -1,0 +1,26 @@
+rules:
+  - id: azure-aks-rbac-disabled
+    message: |
+      AKS cluster has Kubernetes RBAC explicitly disabled.
+      Without RBAC, all authenticated users have unrestricted access to cluster resources.
+      Remove role_based_access_control block or set enabled = true.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            role_based_access_control {
+              enabled = false
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authorization, cloud, kubernetes]
+      cwe: CWE-285
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, kubernetes]
+      five_pillars: Pillar 2 (Access Control)

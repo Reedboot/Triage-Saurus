@@ -1,0 +1,36 @@
+rules:
+  - id: azure-nsg-management-ports-internet-exposed
+    message: |
+      NSG rule allows SSH (22) or RDP (3389) inbound from the public internet.
+      Exposing management ports to any source enables brute-force and exploitation attacks.
+      Restrict source_address_prefix to specific trusted IP ranges or use Azure Bastion.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_network_security_rule" "$NAME" {
+            ...
+            access = "Allow"
+            ...
+            direction = "Inbound"
+            ...
+            destination_port_range = $PORT
+            ...
+            source_address_prefix = $SRC
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $PORT
+          regex: ^"(22|3389)"$
+      - metavariable-regex:
+          metavariable: $SRC
+          regex: ^"(\*|0\.0\.0\.0/0|Internet)"$
+    metadata:
+      category: security
+      subcategory: [network, cloud, firewall]
+      cwe: CWE-923
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)

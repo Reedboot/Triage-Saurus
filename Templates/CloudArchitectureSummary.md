@@ -1,10 +1,9 @@
 # Cloud Architecture Summary: ${provider}
 
-**Provider:** ${provider_title}  
-**Repository:** ${repo_name}  
-
 ## 🧭 Overview
 
+- **Provider:** ${provider_title}
+- **Repository:** ${repo_name}
 - **Scope:** Experiment-scoped (inferred from repo \`${repo_name}\`; not platform-wide)
 - **Auth signals:** ${auth_signals}
 
@@ -13,12 +12,6 @@
 \`\`\`mermaid
 ${architecture_diagram}
 \`\`\`
-
-**Legend:**
-- **Border Colors:** 🔵 Blue = Applications/Services | 🟢 Green = Data Stores | 🟠 Orange = Identity/Secrets/Pipeline | 🟣 Purple = Security/Network Controls
-- **Line Styles:** Solid = direct dependency | Dashed = monitoring/telemetry flow (e.g., alerts)
-- **Arrow Colors:** 🔴 Red arrows = Direct internet exposure (attack surface)
-- **Arrow Labels:** Only shown where context adds value (e.g., HTTPS protocol, State storage, Telemetry)
 
 ## 📊 TL;DR - Executive Summary
 
@@ -46,6 +39,7 @@ ${paas_exposure_checks}
 
 ${recommendations}
 
----
-*Generated: ${timestamp}*  
-*Scope: Experiment-scoped analysis from repository ${repo_name}*
+## Meta Data
+
+- **Generated:** ${timestamp}
+- **Scope:** Experiment-scoped analysis from repository ${repo_name}

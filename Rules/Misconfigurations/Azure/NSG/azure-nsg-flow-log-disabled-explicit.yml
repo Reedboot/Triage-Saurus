@@ -1,0 +1,33 @@
+rules:
+  - id: azure-nsg-flow-log-disabled-explicit
+    message: |
+      Network Watcher flow log resource has logging explicitly disabled.
+      Disabled flow logs mean network traffic will not be recorded for incident response or forensics.
+      Set enabled = true and ensure retention_policy { enabled = true } with an adequate retention period.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_network_watcher_flow_log" "$NAME" {
+            ...
+            enabled = false
+            ...
+          }
+      - pattern: |
+          resource "azurerm_network_watcher_flow_log" "$NAME" {
+            ...
+            retention_policy {
+              enabled = false
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [audit-logging, network, cloud]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, azure]
+      five_pillars: Pillar 3 (Audit Logging)
