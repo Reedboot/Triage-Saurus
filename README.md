@@ -54,7 +54,7 @@ Triage-Saurus now includes a **declarative security rules library** in opengrep/
   - **Secret Detection** (2 rules): AWS keys, SQL connection strings
 
 ### Rules as Single Source of Truth
-- **Rules folder**: `Rules/IaC/` and `Rules/Secrets/` — declarative WHAT to check
+- **Rules folder**: `Rules/Misconfigurations/` and `Rules/Misconfigurations/Secrets/` — declarative WHAT to check
 - **Scripts**: Read rules and execute checks — imperative HOW
 - **Findings**: Track which rule detected them via `detected_by_rule` field
 - **Learning**: Create new rules when detection gaps identified

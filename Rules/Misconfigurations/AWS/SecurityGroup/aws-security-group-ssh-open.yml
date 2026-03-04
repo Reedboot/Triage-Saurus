@@ -1,0 +1,34 @@
+rules:
+  - id: aws-security-group-ssh-open
+    message: |
+      Security group allows unrestricted SSH (port 22) or RDP (port 3389) ingress from
+      0.0.0.0/0 or ::/0. This exposes the instance management interface to the internet,
+      enabling brute-force and exploit attacks. Restrict ingress to known CIDR ranges,
+      use a bastion host, or enforce AWS Systems Manager Session Manager instead.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_security_group" $NAME {
+            ...
+          }
+      - pattern: |
+          ingress {
+            ...
+            from_port = $PORT
+            ...
+            cidr_blocks = ["0.0.0.0/0"]
+            ...
+          }
+      - metavariable-comparison:
+          metavariable: $PORT
+          comparison: $PORT == 22 or $PORT == 3389
+    metadata:
+      category: security
+      subcategory: [network, exposure]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, aws, security-group]
+      five_pillars: Pillar 3 (Network Security)

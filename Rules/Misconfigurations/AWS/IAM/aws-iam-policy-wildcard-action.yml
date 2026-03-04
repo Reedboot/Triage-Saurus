@@ -1,0 +1,24 @@
+rules:
+  - id: aws-iam-policy-wildcard-action
+    message: |
+      IAM policy grants wildcard Action ("*" or "ec2:*","s3:*" etc.) combined with
+      Effect "Allow". Overly permissive IAM policies violate least-privilege and allow
+      privilege escalation if the identity is compromised. Scope actions to the minimum
+      required set and restrict Resource to specific ARNs.
+    severity: WARNING
+    languages: [json, hcl, terraform]
+    patterns:
+      - pattern-inside: |
+          resource "aws_iam_user_policy" $NAME {
+            ...
+          }
+      - pattern-regex: '"Action":\s*\[?[^]]*"(?:ec2|s3|lambda|cloudwatch|\*):\*"'
+    metadata:
+      category: security
+      subcategory: [iam, least-privilege]
+      cwe: CWE-269
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, iam]
+      five_pillars: Pillar 2 (Identity & Access Management)

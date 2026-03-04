@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""resource_type_db.py — Single source of truth for resource type lookups.
+
+Query order:
+  1. resource_types table in DB (populated by init_database.py seed + auto-insert)
+  2. In-memory fallback dict  (mirrors seed data; works before DB is initialised)
+  3. Derive from type string  (prefix-strip + title-case; unknown types auto-inserted)
+
+All scripts should import from here instead of maintaining their own dicts.
+"""
+
+import sqlite3
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DB_PATH = ROOT / "Output/Learning/triage.db"
+
+# ---------------------------------------------------------------------------
+# Seed / fallback data  (kept in sync with init_database.py seed rows)
+# New entries here should also be added to _SEED_ROWS in init_database.py
+# ---------------------------------------------------------------------------
+_FALLBACK: dict[str, dict] = {
+    # Azure — Identity
+    "azurerm_key_vault":                          {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
+    "azurerm_key_vault_key":                      {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
+    "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
+    "azurerm_user_assigned_identity":             {"friendly_name": "Managed Identity",         "category": "Identity",    "icon": "👤"},
+    # Azure — Database
+    "azurerm_mssql_server":                       {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
+    "azurerm_sql_server":                         {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
+    "azurerm_mssql_database":                     {"friendly_name": "SQL Database",             "category": "Database",    "icon": "🗃️"},
+    "azurerm_mssql_server_security_alert_policy": {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
+    "azurerm_mysql_server":                       {"friendly_name": "MySQL Server",             "category": "Database",    "icon": "🗃️"},
+    "azurerm_postgresql_server":                  {"friendly_name": "PostgreSQL Server",        "category": "Database",    "icon": "🗃️"},
+    "azurerm_postgresql_configuration":           {"friendly_name": "PostgreSQL Server",        "category": "Database",    "icon": "🗃️"},
+    "azurerm_cosmosdb_account":                   {"friendly_name": "Cosmos DB",                "category": "Database",    "icon": "🗃️"},
+    # Azure — Storage
+    "azurerm_storage_account":                    {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
+    "azurerm_storage_account_network_rules":      {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
+    "azurerm_storage_container":                  {"friendly_name": "Storage Container",        "category": "Storage",     "icon": "🗄️"},
+    # Azure — Compute
+    "azurerm_linux_virtual_machine":              {"friendly_name": "Linux VM",                 "category": "Compute",     "icon": "🖥️"},
+    "azurerm_windows_virtual_machine":            {"friendly_name": "Windows VM",               "category": "Compute",     "icon": "🖥️"},
+    "azurerm_app_service":                        {"friendly_name": "App Service",              "category": "Compute",     "icon": "🌐"},
+    "azurerm_linux_function_app":                 {"friendly_name": "Function App",             "category": "Compute",     "icon": "⚡"},
+    "azurerm_windows_function_app":               {"friendly_name": "Function App",             "category": "Compute",     "icon": "⚡"},
+    # Azure — Container
+    "azurerm_kubernetes_cluster":                 {"friendly_name": "AKS Cluster",              "category": "Container",   "icon": "☸️"},
+    "azurerm_container_registry":                 {"friendly_name": "Container Registry",       "category": "Container",   "icon": "📦"},
+    "azurerm_container_group":                    {"friendly_name": "Container Instance",       "category": "Container",   "icon": "📦"},
+    # Azure — Network
+    "azurerm_application_gateway":                {"friendly_name": "Application Gateway",      "category": "Network",     "icon": "🌐"},
+    "azurerm_virtual_network":                    {"friendly_name": "Virtual Network",          "category": "Network",     "icon": "🔷"},
+    "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
+    "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔷"},
+    "azurerm_public_ip":                          {"friendly_name": "Public IP",                "category": "Network",     "icon": "🌍"},
+    "azurerm_private_endpoint":                   {"friendly_name": "Private Endpoint",         "category": "Network",     "icon": "🔒"},
+    # Azure — Security
+    "azurerm_network_security_group":             {"friendly_name": "Network Security Group",   "category": "Security",    "icon": "🛡️"},
+    "azurerm_firewall":                           {"friendly_name": "Azure Firewall",           "category": "Security",    "icon": "🛡️"},
+    "azurerm_web_application_firewall_policy":    {"friendly_name": "WAF Policy",               "category": "Security",    "icon": "🛡️"},
+    # Azure — Monitoring
+    "azurerm_monitor_diagnostic_setting":         {"friendly_name": "Diagnostic Settings",      "category": "Monitoring",  "icon": "📊"},
+    "azurerm_log_analytics_workspace":            {"friendly_name": "Log Analytics Workspace",  "category": "Monitoring",  "icon": "📊"},
+    # AWS — Storage
+    "aws_s3_bucket":                              {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
+    "aws_s3_bucket_object":                       {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
+    "aws_ebs_volume":                             {"friendly_name": "EBS Volume",               "category": "Storage",     "icon": "💾"},
+    # AWS — Database
+    "aws_rds_cluster":                            {"friendly_name": "RDS Cluster",              "category": "Database",    "icon": "🗃️"},
+    "aws_db_instance":                            {"friendly_name": "RDS Instance",             "category": "Database",    "icon": "🗃️"},
+    "aws_neptune_cluster":                        {"friendly_name": "Neptune Cluster",          "category": "Database",    "icon": "🗃️"},
+    "aws_neptune_cluster_instance":               {"friendly_name": "Neptune Instance",         "category": "Database",    "icon": "🗃️"},
+    "aws_neptune_cluster_snapshot":               {"friendly_name": "Neptune Snapshot",         "category": "Database",    "icon": "🗃️"},
+    "aws_elasticsearch_domain":                   {"friendly_name": "OpenSearch Domain",        "category": "Database",    "icon": "🔍"},
+    "aws_elasticsearch_domain_policy":            {"friendly_name": "OpenSearch Domain",        "category": "Database",    "icon": "🔍"},
+    "aws_dynamodb_table":                         {"friendly_name": "DynamoDB Table",           "category": "Database",    "icon": "🗃️"},
+    # AWS — Compute
+    "aws_instance":                               {"friendly_name": "EC2 Instance",             "category": "Compute",     "icon": "🖥️"},
+    "aws_lambda_function":                        {"friendly_name": "Lambda Function",          "category": "Compute",     "icon": "⚡"},
+    "aws_ecs_cluster":                            {"friendly_name": "ECS Cluster",              "category": "Container",   "icon": "☸️"},
+    "aws_ecs_service":                            {"friendly_name": "ECS Service",              "category": "Container",   "icon": "☸️"},
+    # AWS — Network
+    "aws_elb":                                    {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
+    "aws_alb":                                    {"friendly_name": "App Load Balancer",        "category": "Network",     "icon": "🌐"},
+    "aws_vpc":                                    {"friendly_name": "VPC",                      "category": "Network",     "icon": "🔷"},
+    "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
+    "aws_security_group":                         {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️"},
+    "aws_security_group_rule":                    {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "🛡️"},
+    "aws_internet_gateway":                       {"friendly_name": "Internet Gateway",         "category": "Network",     "icon": "🌍"},
+    # AWS — Identity
+    "aws_iam_role":                               {"friendly_name": "IAM Role",                 "category": "Identity",    "icon": "👤"},
+    "aws_iam_policy":                             {"friendly_name": "IAM Policy",               "category": "Identity",    "icon": "👤"},
+    "aws_iam_user":                               {"friendly_name": "IAM User",                 "category": "Identity",    "icon": "👤"},
+    "aws_iam_instance_profile":                   {"friendly_name": "IAM Instance Profile",     "category": "Identity",    "icon": "👤"},
+    "aws_kms_key":                                {"friendly_name": "KMS Key",                  "category": "Identity",    "icon": "🔑"},
+    "aws_kms_alias":                              {"friendly_name": "KMS Key Alias",            "category": "Identity",    "icon": "🔑"},
+    # GCP — Storage
+    "google_storage_bucket":                      {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},
+    "google_storage_bucket_iam_binding":          {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},
+    # GCP — Database
+    "google_sql_database_instance":               {"friendly_name": "Cloud SQL Instance",       "category": "Database",    "icon": "🗃️"},
+    "google_bigquery_dataset":                    {"friendly_name": "BigQuery Dataset",         "category": "Database",    "icon": "🗃️"},
+    "google_bigtable_instance":                   {"friendly_name": "Bigtable Instance",        "category": "Database",    "icon": "🗃️"},
+    # GCP — Compute
+    "google_compute_instance":                    {"friendly_name": "Compute Instance",         "category": "Compute",     "icon": "🖥️"},
+    "google_cloudfunctions_function":             {"friendly_name": "Cloud Function",           "category": "Compute",     "icon": "⚡"},
+    # GCP — Container
+    "google_container_cluster":                   {"friendly_name": "GKE Cluster",              "category": "Container",   "icon": "☸️"},
+    "google_container_node_pool":                 {"friendly_name": "GKE Node Pool",            "category": "Container",   "icon": "☸️"},
+    # GCP — Network
+    "google_compute_network":                     {"friendly_name": "VPC Network",              "category": "Network",     "icon": "🔷"},
+    "google_compute_subnetwork":                  {"friendly_name": "Subnetwork",               "category": "Network",     "icon": "🔷"},
+    "google_compute_firewall":                    {"friendly_name": "Firewall Rule",            "category": "Security",    "icon": "🛡️"},
+    # GCP — Identity
+    "google_project_iam_binding":                 {"friendly_name": "IAM Binding",              "category": "Identity",    "icon": "👤"},
+    "google_kms_crypto_key":                      {"friendly_name": "KMS Crypto Key",           "category": "Identity",    "icon": "🔑"},
+    "google_service_account":                     {"friendly_name": "Service Account",          "category": "Identity",    "icon": "👤"},
+}
+
+_PROVIDER_PREFIXES: list[tuple[str, str]] = [
+    ("azurerm_", "azure"),
+    ("aws_",     "aws"),
+    ("google_",  "gcp"),
+    ("alicloud_","alicloud"),
+    ("oci_",     "oracle"),
+]
+
+# Category keyword patterns for derive fallback — ordered by priority
+_CATEGORY_KEYWORDS: list[tuple[str, str]] = [
+    ("kubernetes", "Container"), ("aks", "Container"), ("eks", "Container"),
+    ("gke", "Container"), ("container", "Container"), ("ecs", "Container"),
+    ("sql", "Database"), ("database", "Database"), ("_db", "Database"),
+    ("rds", "Database"), ("mysql", "Database"), ("postgresql", "Database"),
+    ("postgres", "Database"), ("mssql", "Database"), ("cosmosdb", "Database"),
+    ("bigquery", "Database"), ("bigtable", "Database"), ("dynamo", "Database"),
+    ("neptune", "Database"), ("elasticsearch", "Database"),
+    ("storage", "Storage"), ("bucket", "Storage"), ("blob", "Storage"),
+    ("s3", "Storage"), ("ebs", "Storage"), ("disk", "Storage"),
+    ("virtual_machine", "Compute"), ("instance", "Compute"), ("lambda", "Compute"),
+    ("function", "Compute"), ("app_service", "Compute"), ("cloud_run", "Compute"),
+    ("key_vault", "Identity"), ("kms", "Identity"), ("iam", "Identity"),
+    ("identity", "Identity"), ("service_account", "Identity"),
+    ("firewall", "Security"), ("security_group", "Security"), ("waf", "Security"),
+    ("nsg", "Security"), ("sentinel", "Security"),
+    ("network", "Network"), ("subnet", "Network"), ("vpc", "Network"),
+    ("vnet", "Network"), ("gateway", "Network"), ("load_balancer", "Network"),
+    ("endpoint", "Network"), ("public_ip", "Network"),
+    ("monitor", "Monitoring"), ("log", "Monitoring"), ("diagnostic", "Monitoring"),
+    ("insights", "Monitoring"), ("cloudwatch", "Monitoring"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def get_resource_type(conn: sqlite3.Connection, terraform_type: str) -> dict:
+    """Return lookup data for a terraform resource type.
+
+    Returns dict with keys:
+        friendly_name, category, icon, provider,
+        is_data_store, is_internet_facing_capable
+    """
+    # 1. Query DB
+    try:
+        row = conn.execute(
+            """
+            SELECT rt.friendly_name, rt.category, rt.icon,
+                   p.key AS provider,
+                   rt.is_data_store, rt.is_internet_facing_capable
+            FROM resource_types rt
+            LEFT JOIN providers p ON rt.provider_id = p.id
+            WHERE rt.terraform_type = ?
+            """,
+            (terraform_type,),
+        ).fetchone()
+        if row:
+            return {
+                "friendly_name": row[0],
+                "category":      row[1],
+                "icon":          row[2] or "📦",
+                "provider":      row[3] or "unknown",
+                "is_data_store":               bool(row[4]),
+                "is_internet_facing_capable":  bool(row[5]),
+            }
+    except sqlite3.OperationalError:
+        pass  # Tables may not exist yet; fall through
+
+    # 2. In-memory fallback
+    if terraform_type in _FALLBACK:
+        entry = {**_FALLBACK[terraform_type],
+                 "is_data_store": False, "is_internet_facing_capable": False}
+        _auto_insert(conn, terraform_type, entry)
+        return entry
+
+    # 3. Derive from type string and auto-insert for future calls
+    derived = {**_derive(terraform_type), "is_data_store": False, "is_internet_facing_capable": False}
+    _auto_insert(conn, terraform_type, derived)
+    return derived
+
+
+def get_friendly_name(conn: sqlite3.Connection, terraform_type: str) -> str:
+    return get_resource_type(conn, terraform_type)["friendly_name"]
+
+
+def get_category(conn: sqlite3.Connection, terraform_type: str) -> str:
+    return get_resource_type(conn, terraform_type)["category"]
+
+
+def get_provider_key(conn: sqlite3.Connection, terraform_type: str) -> str:
+    return get_resource_type(conn, terraform_type)["provider"]
+
+
+def get_display_label(conn: sqlite3.Connection, resource_name: str, terraform_type: str) -> str:
+    """Return diagram label: 'resource_name (Friendly Type)'."""
+    return f"{resource_name} ({get_friendly_name(conn, terraform_type)})"
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _derive(terraform_type: str) -> dict:
+    """Derive friendly_name, category, icon, provider from a raw type string."""
+    provider = "unknown"
+    cleaned = terraform_type
+    for prefix, prov in _PROVIDER_PREFIXES:
+        if terraform_type.startswith(prefix):
+            provider = prov
+            cleaned = terraform_type[len(prefix):]
+            break
+
+    friendly = cleaned.replace("_", " ").title()
+
+    category = "Other"
+    lower = terraform_type.lower()
+    for keyword, cat in _CATEGORY_KEYWORDS:
+        if keyword in lower:
+            category = cat
+            break
+
+    return {"friendly_name": friendly, "category": category, "icon": "📦", "provider": provider}
+
+
+def _auto_insert(conn: sqlite3.Connection, terraform_type: str, entry: dict) -> None:
+    """Insert an unknown type so it only needs deriving once."""
+    try:
+        row = conn.execute("SELECT id FROM providers WHERE key = ?", (entry["provider"],)).fetchone()
+        pid = row[0] if row else None
+        conn.execute(
+            """INSERT OR IGNORE INTO resource_types
+               (provider_id, terraform_type, friendly_name, category, icon)
+               VALUES (?, ?, ?, ?, ?)""",
+            (pid, terraform_type, entry["friendly_name"], entry["category"], entry["icon"]),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+
+if __name__ == "__main__":
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(str(DB_PATH))
+    for t in ["azurerm_key_vault", "aws_s3_bucket", "google_container_cluster", "azurerm_quantum_widget"]:
+        print(get_display_label(conn, "my-resource", t), "|", get_category(conn, t))
+    conn.close()

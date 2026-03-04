@@ -16,12 +16,28 @@ Provide a platform/ops-focused challenge of the proposed finding:
 **IMPORTANT: You review FINDINGS, not code/IaC directly.**
 
 The workflow is:
-1. **Read the security finding** from `Output/Learning/experiments/<id>/Findings/`
-2. **Understand the security engineer's claim** - what vulnerability, what evidence, what score
-3. **Access the IaC/config files** referenced in the finding to verify or challenge
-4. **Update the finding file** with your Platform Skeptic section
+1. **Read the finding from DB** — query `findings WHERE id = ? AND llm_enriched_at IS NOT NULL`
+2. **Understand the security engineer's claim** — title, description, severity_score, code_snippet
+3. **Access the IaC/config files** referenced in `source_file:source_line_start` to verify or challenge
+4. **Write your review to DB** via `run_skeptics.py` OR directly call `db_helpers.store_skeptic_review()`
 
-**You are NOT doing independent IaC review.** You are challenging/validating specific claims made by the Security Engineer.
+**DB output (required):**  
+Your review must be persisted to `skeptic_reviews` table:
+```
+reviewer_type:        'platform'
+score_adjustment:     float (negative = downgrade, positive = escalate)
+adjusted_score:       int 1-10
+confidence:           float 0.0-1.0
+reasoning:            your full analysis
+key_concerns:         comma-separated main concerns
+mitigating_factors:   comma-separated mitigations found
+recommendation:       'confirm' | 'downgrade' | 'dismiss' | 'escalate'
+```
+A score history row is also written to `risk_score_history` automatically.
+
+**Idempotency:** If `skeptic_reviews` already has a row for `(finding_id, 'platform')`, skip — do not re-review.
+
+**Also update the finding MD file** under `Output/Learning/experiments/<id>/Findings/` (legacy format still used for reports), adding feedback under `## 🤔 Skeptic` → `### 🏗️ Platform`.
 
 - Add feedback under `## 🤔 Skeptic` → `### 🏗️ Platform` in the finding.
 - First, read and react to the **Security Review** (don't restate it).

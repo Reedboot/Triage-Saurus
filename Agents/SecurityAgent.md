@@ -515,6 +515,34 @@ account_id = "123456789012"       # AWS account # (public in ARNs)
    - Environment tier: Production vs non-production
    - Deployment patterns: Bastion, JIT, VPN access
 
+## DB-First Enrichment Workflow
+
+The pipeline separates raw detection (scripts, no LLM) from LLM enrichment (one pass per finding):
+
+**Phase 1 — Script only (automatic):**  
+`store_findings.py` reads the opengrep JSON and writes raw findings rows with `rule_id`, `source_file`, `source_line_start`, `code_snippet`, `reason`, `severity_score`. No LLM involved.
+
+**Phase 2 — LLM enrichment (your role):**  
+`enrich_findings.py --experiment <id>` queries `findings WHERE llm_enriched_at IS NULL` and calls you once per finding. You return JSON:
+```json
+{
+  "title": "short human title ≤60 chars",
+  "description": "2–3 sentences: why this is a risk",
+  "proposed_fix": "1–3 sentences: concrete remediation",
+  "severity_score": 7,
+  "confidence": 0.9
+}
+```
+The script writes this back to the `findings` table and sets `llm_enriched_at`. **Do not re-enrich already-enriched findings.**
+
+**Phase 3 — Skeptic reviews:**  
+`run_skeptics.py --experiment <id> --reviewer all` runs each skeptic persona. Writes to `skeptic_reviews` + `risk_score_history`. Final `severity_score` = average of all three adjusted scores.
+
+**Trust boundaries & data flows:**  
+Use `db_helpers.insert_trust_boundary()` and `insert_data_flow()` / `add_data_flow_step()` when you discover network topology or auth flows. These enrich diagrams and reports without re-reading the repo.
+
+**Idempotency rule:** Check `llm_enriched_at IS NOT NULL` before enriching. Check `skeptic_reviews` for `(finding_id, reviewer_type)` before reviewing. Never duplicate work.
+
 ## Behaviour
 - Follow `Agents/Instructions.md` and `Settings/Styling.md`.
 - Ask for missing context when required (cloud provider, environment, exposure).

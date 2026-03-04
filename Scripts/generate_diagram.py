@@ -2,36 +2,75 @@
 """Generate Mermaid diagrams from database queries."""
 
 import sys
+import sqlite3
 from pathlib import Path
 from typing import List, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
+import resource_type_db as _rtdb
+
+# Lazy DB connection for resource type lookups
+_lookup_conn: sqlite3.Connection | None = None
+
+def _get_lookup_db() -> sqlite3.Connection | None:
+    global _lookup_conn
+    if _lookup_conn is None:
+        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+        if db_path.exists():
+            _lookup_conn = sqlite3.connect(str(db_path))
+    return _lookup_conn
+
+
+# Category → diagram stroke colour
+_CATEGORY_COLOURS: dict[str, str] = {
+    "Compute":   "#0066cc",
+    "Container": "#0066cc",
+    "Database":  "#00aa00",
+    "Storage":   "#00aa00",
+    "Identity":  "#f59f00",
+    "Security":  "#ff6b6b",
+    "Network":   "#7e57c2",
+    "Monitoring":"#888888",
+}
 
 
 def get_node_style(resource: dict) -> Optional[str]:
-    """Return Mermaid style string for a resource based on type and score."""
+    """Return Mermaid style string for a resource based on finding score or category."""
     node_id = sanitize_id(resource['resource_name'])
     score = resource.get('max_finding_score', 0)
-    
+
     if score >= 9:
         return f"style {node_id} stroke:#ff0000,stroke-width:4px"
     if score >= 7:
         return f"style {node_id} stroke:#ff6b00,stroke-width:3px"
-    
-    resource_type = resource.get('resource_type', '')
-    if resource_type == 'VM':
-        return f"style {node_id} stroke:#0066cc,stroke-width:2px"
-    if resource_type in ('SQL', 'SQLServer'):
-        return f"style {node_id} stroke:#00aa00,stroke-width:2px"
-    if resource_type == 'KeyVault':
-        return f"style {node_id} stroke:#f59f00,stroke-width:2px"
-    if resource_type == 'Storage':
-        return f"style {node_id} stroke:#00aa00,stroke-width:2px"
-    if resource_type == 'NSG':
-        return f"style {node_id} stroke:#ff6b6b,stroke-width:2px"
-    
+
+    conn = _get_lookup_db()
+    if conn:
+        category = _rtdb.get_category(conn, resource.get('resource_type', ''))
+        colour = _CATEGORY_COLOURS.get(category)
+        if colour:
+            return f"style {node_id} stroke:{colour},stroke-width:2px"
+
     return None
+
+
+def _display_label(resource: dict) -> str:
+    """Return diagram node label using real name + friendly type."""
+    conn = _get_lookup_db()
+    name = resource['resource_name']
+    rtype = resource.get('resource_type', '')
+    if conn and rtype:
+        friendly = _rtdb.get_friendly_name(conn, rtype)
+        return f"{name}<br/>{friendly}"
+    return name
+
+
+def _category(resource: dict) -> str:
+    conn = _get_lookup_db()
+    if conn:
+        return _rtdb.get_category(conn, resource.get('resource_type', ''))
+    return 'Other'
 
 
 def sanitize_id(name: str) -> str:
@@ -87,13 +126,18 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
-    vms = [r for r in root_resources if r['resource_type'] == 'VM']
-    aks = [r for r in root_resources if r['resource_type'] == 'AKS']
-    sql_servers = [r for r in root_resources if r['resource_type'] in ('SQLServer', 'SQL')]
-    storage_accounts = [r for r in root_resources if r['resource_type'] == 'StorageAccount']
-    nsgs = [r for r in root_resources if r['resource_type'] == 'NSG']
-    paas = [r for r in root_resources if r['resource_type'] in ('KeyVault', 'AppService', 'App_Service') and r['id'] not in child_ids]
-    other = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
+
+    # Group by DB category instead of hardcoded type strings
+    def _in_cat(r: dict, *cats: str) -> bool:
+        return _category(r) in cats
+
+    vms            = [r for r in root_resources if _in_cat(r, 'Compute')]
+    aks            = [r for r in root_resources if _in_cat(r, 'Container')]
+    sql_servers    = [r for r in root_resources if _in_cat(r, 'Database')]
+    storage_accounts = [r for r in root_resources if _in_cat(r, 'Storage')]
+    nsgs           = [r for r in root_resources if _in_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()]
+    paas           = [r for r in root_resources if _in_cat(r, 'Identity') and r['id'] not in child_ids]
+    other          = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
     # Add Internet node if we have internet connections
     has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
@@ -106,15 +150,15 @@ def generate_architecture_diagram(experiment_id: str) -> str:
         
         for vm in vms:
             node_id = sanitize_id(vm['resource_name'])
-            lines.append(f"    {node_id}[{vm['resource_name']} VM]")
+            lines.append(f"    {node_id}[{_display_label(vm)}]")
         
         for aks_cluster in aks:
             node_id = sanitize_id(aks_cluster['resource_name'])
-            lines.append(f"    {node_id}[{aks_cluster['resource_name']} AKS]")
+            lines.append(f"    {node_id}[{_display_label(aks_cluster)}]")
         
         for nsg in nsgs:
             node_id = sanitize_id(nsg['resource_name'])
-            lines.append(f"    {node_id}[Network Security Group]")
+            lines.append(f"    {node_id}[{_display_label(nsg)}]")
         
         lines.append("  end")
     
@@ -159,18 +203,17 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     
     # PaaS subgraph
     if paas:
-        lines.append("  subgraph paas[Azure PaaS]")
+        lines.append(f"  subgraph paas[PaaS / Identity]")
         for p in paas:
             node_id = sanitize_id(p['resource_name'])
-            type_label = p['resource_type'].replace('KeyVault', 'Key Vault').replace('AppService', 'App Service')
-            lines.append(f"    {node_id}[{p['resource_name']}<br/>{type_label}]")
+            lines.append(f"    {node_id}[{_display_label(p)}]")
         lines.append("  end")
     
     # Other resources (outside subgraphs)
     for res in other:
         if res['resource_name'] not in ('Internet', 'NSG'):
             node_id = sanitize_id(res['resource_name'])
-            lines.append(f"  {node_id}[{res['resource_name']}<br/>{res['resource_type']}]")
+            lines.append(f"  {node_id}[{_display_label(res)}]")
     
     lines.append("")
     
@@ -215,10 +258,10 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
             SELECT DISTINCT
               r.resource_name,
               r.resource_type,
-              MAX(f.score) as max_score
+              MAX(COALESCE(f.severity_score, f.score, 0)) as max_score
             FROM resources r
             JOIN findings f ON r.id = f.resource_id
-            WHERE r.experiment_id = ? AND f.score >= ?
+            WHERE r.experiment_id = ? AND COALESCE(f.severity_score, f.score, 0) >= ?
             GROUP BY r.id
             ORDER BY max_score DESC
         """, [experiment_id, min_score]).fetchall()
@@ -253,7 +296,7 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
         node_id = sanitize_id(r['resource_name'])
         score = r['max_score']
         severity = "🔴 Critical" if score >= 9 else "🟠 High"
-        lines.append(f"  {node_id}[{r['resource_name']}<br/>{r['resource_type']}<br/>{severity} {score}/10]")
+        lines.append(f"  {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}<br/>{severity} {score}/10]")
     
     lines.append("")
     
@@ -322,7 +365,7 @@ def generate_blast_radius_diagram(experiment_id: str, compromised_resource: str)
     # Add reachable resources
     for r in reachable:
         node_id = sanitize_id(r['resource_name'])
-        lines.append(f"  {node_id}[{r['resource_name']}<br/>{r['resource_type']}<br/>Hop {r['hop_count']}]")
+        lines.append(f"  {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}<br/>Hop {r['hop_count']}]")
     
     lines.append("")
     
@@ -376,7 +419,7 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
             
             for r in resources:
                 node_id = f"{repo_node}_{sanitize_id(r['resource_name'])}"
-                lines.append(f"    {node_id}[{r['resource_name']}<br/>{r['resource_type']}]")
+                lines.append(f"    {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}]")
             
             lines.append("  end")
         

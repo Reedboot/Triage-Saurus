@@ -7,7 +7,7 @@ import sys
 
 # Database location
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "Output/triage.db"
+DB_PATH = ROOT / "Output/Learning/triage.db"
 
 
 def init_schema(conn: sqlite3.Connection):
@@ -265,7 +265,163 @@ def init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
     if 'base_severity' not in columns:
         conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
-    
+    if 'title' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
+    if 'description' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
+    if 'severity_score' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
+    if 'source_file' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
+    if 'source_line_start' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
+    if 'source_line_end' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
+    if 'code_snippet' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
+    if 'reason' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
+    if 'llm_enriched_at' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+    if 'rule_id' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
+    if 'proposed_fix' not in columns:
+        conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
+
+    # resources table — add display_label if missing
+    cursor = conn.execute("PRAGMA table_info(resources)")
+    res_cols = {row[1] for row in cursor.fetchall()}
+    if 'display_label' not in res_cols:
+        conn.execute("ALTER TABLE resources ADD COLUMN display_label TEXT")
+    if 'tags' not in res_cols:
+        conn.execute("ALTER TABLE resources ADD COLUMN tags TEXT")
+
+    # resource_connections table — add richer context columns if missing
+    cursor = conn.execute("PRAGMA table_info(resource_connections)")
+    rc_cols = {row[1] for row in cursor.fetchall()}
+    if 'is_encrypted' not in rc_cols:
+        conn.execute("ALTER TABLE resource_connections ADD COLUMN is_encrypted BOOLEAN")
+    if 'auth_method' not in rc_cols:
+        conn.execute("ALTER TABLE resource_connections ADD COLUMN auth_method TEXT")
+    if 'via_component' not in rc_cols:
+        conn.execute("ALTER TABLE resource_connections ADD COLUMN via_component TEXT")
+
+    # ============================================================================
+    # TRUST BOUNDARIES
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trust_boundaries (
+          id INTEGER PRIMARY KEY,
+          experiment_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          boundary_type TEXT,        -- 'vnet','subnet','paas','internet','aks_namespace'
+          provider TEXT,
+          region TEXT,
+          description TEXT,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(experiment_id) REFERENCES experiments(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trust_boundary_members (
+          trust_boundary_id INTEGER NOT NULL,
+          resource_id INTEGER NOT NULL,
+          PRIMARY KEY (trust_boundary_id, resource_id),
+          FOREIGN KEY(trust_boundary_id) REFERENCES trust_boundaries(id),
+          FOREIGN KEY(resource_id) REFERENCES resources(id)
+        )
+    """)
+
+    # ============================================================================
+    # DATA FLOWS
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS data_flows (
+          id INTEGER PRIMARY KEY,
+          experiment_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          flow_type TEXT,            -- 'ingress','egress','internal','auth'
+          description TEXT,
+          notes TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(experiment_id) REFERENCES experiments(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS data_flow_steps (
+          id INTEGER PRIMARY KEY,
+          flow_id INTEGER NOT NULL,
+          step_order INTEGER NOT NULL,
+          resource_id INTEGER,
+          component_label TEXT,      -- e.g. 'Internet','WAF','App Gateway'
+          protocol TEXT,
+          port TEXT,
+          auth_method TEXT,
+          is_encrypted BOOLEAN,
+          notes TEXT,
+          FOREIGN KEY(flow_id) REFERENCES data_flows(id),
+          FOREIGN KEY(resource_id) REFERENCES resources(id)
+        )
+    """)
+
+    # ============================================================================
+    # RISK SCORE HISTORY
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS risk_score_history (
+          id INTEGER PRIMARY KEY,
+          finding_id INTEGER NOT NULL,
+          score REAL NOT NULL,
+          scored_by TEXT,            -- 'script','llm','security_skeptic','human'
+          rationale TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(finding_id) REFERENCES findings(id)
+        )
+    """)
+
+    # ============================================================================
+    # REMEDIATIONS
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS remediations (
+          id INTEGER PRIMARY KEY,
+          finding_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          remediation_type TEXT,     -- 'config','code','architecture','process'
+          effort TEXT,               -- 'low','medium','high'
+          priority INTEGER,
+          code_fix TEXT,
+          reference_url TEXT,
+          status TEXT DEFAULT 'proposed',
+          verified_by TEXT,
+          verified_at TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(finding_id) REFERENCES findings(id)
+        )
+    """)
+
+    # ============================================================================
+    # SKEPTIC REVIEWS
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS skeptic_reviews (
+          id INTEGER PRIMARY KEY,
+          finding_id INTEGER NOT NULL,
+          reviewer_type TEXT NOT NULL,   -- 'security','dev','platform'
+          score_adjustment REAL,         -- delta applied to base score
+          adjusted_score REAL,
+          confidence REAL,               -- 0.0–1.0
+          reasoning TEXT,
+          key_concerns TEXT,
+          mitigating_factors TEXT,
+          recommendation TEXT,           -- 'confirm','downgrade','dismiss','escalate'
+          reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(finding_id) REFERENCES findings(id)
+        )
+    """)
+
     # ============================================================================
     # COUNTERMEASURES
     # ============================================================================
@@ -433,6 +589,162 @@ def init_schema(conn: sqlite3.Connection):
         )
     """)
     
+    # ============================================================================
+    # LOOKUP TABLES — providers + resource_types
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS providers (
+          id      INTEGER PRIMARY KEY,
+          key     TEXT UNIQUE NOT NULL,
+          friendly_name TEXT NOT NULL,
+          icon    TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS resource_types (
+          id                         INTEGER PRIMARY KEY,
+          provider_id                INTEGER,
+          terraform_type             TEXT UNIQUE NOT NULL,
+          friendly_name              TEXT NOT NULL,
+          category                   TEXT,
+          icon                       TEXT,
+          is_data_store              BOOLEAN DEFAULT 0,
+          is_internet_facing_capable BOOLEAN DEFAULT 0,
+          FOREIGN KEY(provider_id) REFERENCES providers(id)
+        )
+    """)
+
+    # Seed providers
+    conn.executemany(
+        "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+        [
+            ("azure",    "Microsoft Azure",         "☁️"),
+            ("aws",      "Amazon Web Services",     "🟠"),
+            ("gcp",      "Google Cloud Platform",   "🔵"),
+            ("alicloud", "Alibaba Cloud",            "🟡"),
+            ("oracle",   "Oracle Cloud",             "🔴"),
+        ],
+    )
+
+    # Helper to get provider_id by key
+    def _pid(key: str) -> int | None:
+        row = conn.execute("SELECT id FROM providers WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    # Seed resource_types  (terraform_type, friendly_name, category, icon, provider_key,
+    #                        is_data_store, is_internet_facing_capable)
+    _SEED: list[tuple] = [
+        # Azure — Identity
+        ("azurerm_key_vault",                          "Key Vault",                  "Identity",   "🔑",  "azure", 0, 0),
+        ("azurerm_key_vault_key",                      "Key Vault",                  "Identity",   "🔑",  "azure", 0, 0),
+        ("azurerm_key_vault_secret",                   "Key Vault",                  "Identity",   "🔑",  "azure", 0, 0),
+        ("azurerm_user_assigned_identity",             "Managed Identity",           "Identity",   "👤",  "azure", 0, 0),
+        # Azure — Database
+        ("azurerm_mssql_server",                       "SQL Server",                 "Database",   "🗃️", "azure", 1, 1),
+        ("azurerm_sql_server",                         "SQL Server",                 "Database",   "🗃️", "azure", 1, 1),
+        ("azurerm_mssql_database",                     "SQL Database",               "Database",   "🗃️", "azure", 1, 0),
+        ("azurerm_mssql_server_security_alert_policy", "SQL Server",                 "Database",   "🗃️", "azure", 1, 0),
+        ("azurerm_mysql_server",                       "MySQL Server",               "Database",   "🗃️", "azure", 1, 1),
+        ("azurerm_postgresql_server",                  "PostgreSQL Server",          "Database",   "🗃️", "azure", 1, 1),
+        ("azurerm_postgresql_configuration",           "PostgreSQL Server",          "Database",   "🗃️", "azure", 1, 0),
+        ("azurerm_cosmosdb_account",                   "Cosmos DB",                  "Database",   "🗃️", "azure", 1, 1),
+        # Azure — Storage
+        ("azurerm_storage_account",                    "Storage Account",            "Storage",    "🗄️", "azure", 1, 1),
+        ("azurerm_storage_account_network_rules",      "Storage Account",            "Storage",    "🗄️", "azure", 1, 0),
+        ("azurerm_storage_container",                  "Storage Container",          "Storage",    "🗄️", "azure", 1, 0),
+        # Azure — Compute
+        ("azurerm_linux_virtual_machine",              "Linux VM",                   "Compute",    "🖥️", "azure", 0, 1),
+        ("azurerm_windows_virtual_machine",            "Windows VM",                 "Compute",    "🖥️", "azure", 0, 1),
+        ("azurerm_app_service",                        "App Service",                "Compute",    "🌐", "azure", 0, 1),
+        ("azurerm_linux_function_app",                 "Function App",               "Compute",    "⚡", "azure", 0, 1),
+        ("azurerm_windows_function_app",               "Function App",               "Compute",    "⚡", "azure", 0, 1),
+        # Azure — Container
+        ("azurerm_kubernetes_cluster",                 "AKS Cluster",                "Container",  "☸️", "azure", 0, 1),
+        ("azurerm_container_registry",                 "Container Registry",         "Container",  "📦", "azure", 0, 0),
+        ("azurerm_container_group",                    "Container Instance",         "Container",  "📦", "azure", 0, 1),
+        # Azure — Network
+        ("azurerm_application_gateway",                "Application Gateway",        "Network",    "🌐", "azure", 0, 1),
+        ("azurerm_virtual_network",                    "Virtual Network",            "Network",    "🔷", "azure", 0, 0),
+        ("azurerm_subnet",                             "Subnet",                     "Network",    "🔷", "azure", 0, 0),
+        ("azurerm_network_interface",                  "Network Interface",          "Network",    "🔷", "azure", 0, 0),
+        ("azurerm_public_ip",                          "Public IP",                  "Network",    "🌍", "azure", 0, 1),
+        ("azurerm_private_endpoint",                   "Private Endpoint",           "Network",    "🔒", "azure", 0, 0),
+        # Azure — Security
+        ("azurerm_network_security_group",             "Network Security Group",     "Security",   "🛡️", "azure", 0, 0),
+        ("azurerm_firewall",                           "Azure Firewall",             "Security",   "🛡️", "azure", 0, 0),
+        ("azurerm_web_application_firewall_policy",    "WAF Policy",                 "Security",   "🛡️", "azure", 0, 0),
+        # Azure — Monitoring
+        ("azurerm_monitor_diagnostic_setting",         "Diagnostic Settings",        "Monitoring", "📊", "azure", 0, 0),
+        ("azurerm_log_analytics_workspace",            "Log Analytics Workspace",    "Monitoring", "📊", "azure", 0, 0),
+        # AWS — Storage
+        ("aws_s3_bucket",                              "S3 Bucket",                  "Storage",    "🗄️", "aws",   1, 1),
+        ("aws_s3_bucket_object",                       "S3 Bucket",                  "Storage",    "🗄️", "aws",   1, 0),
+        ("aws_ebs_volume",                             "EBS Volume",                 "Storage",    "💾", "aws",   1, 0),
+        # AWS — Database
+        ("aws_rds_cluster",                            "RDS Cluster",                "Database",   "🗃️", "aws",   1, 0),
+        ("aws_db_instance",                            "RDS Instance",               "Database",   "🗃️", "aws",   1, 0),
+        ("aws_neptune_cluster",                        "Neptune Cluster",            "Database",   "🗃️", "aws",   1, 0),
+        ("aws_neptune_cluster_instance",               "Neptune Instance",           "Database",   "🗃️", "aws",   1, 0),
+        ("aws_neptune_cluster_snapshot",               "Neptune Snapshot",           "Database",   "🗃️", "aws",   1, 0),
+        ("aws_elasticsearch_domain",                   "OpenSearch Domain",          "Database",   "🔍", "aws",   1, 1),
+        ("aws_elasticsearch_domain_policy",            "OpenSearch Domain",          "Database",   "🔍", "aws",   1, 0),
+        ("aws_dynamodb_table",                         "DynamoDB Table",             "Database",   "🗃️", "aws",   1, 0),
+        # AWS — Compute
+        ("aws_instance",                               "EC2 Instance",               "Compute",    "🖥️", "aws",   0, 1),
+        ("aws_lambda_function",                        "Lambda Function",            "Compute",    "⚡", "aws",   0, 0),
+        # AWS — Container
+        ("aws_ecs_cluster",                            "ECS Cluster",                "Container",  "☸️", "aws",   0, 0),
+        ("aws_ecs_service",                            "ECS Service",                "Container",  "☸️", "aws",   0, 0),
+        # AWS — Network
+        ("aws_elb",                                    "Load Balancer",              "Network",    "🌐", "aws",   0, 1),
+        ("aws_alb",                                    "App Load Balancer",          "Network",    "🌐", "aws",   0, 1),
+        ("aws_vpc",                                    "VPC",                        "Network",    "🔷", "aws",   0, 0),
+        ("aws_subnet",                                 "Subnet",                     "Network",    "🔷", "aws",   0, 0),
+        ("aws_internet_gateway",                       "Internet Gateway",           "Network",    "🌍", "aws",   0, 0),
+        # AWS — Security
+        ("aws_security_group",                         "Security Group",             "Security",   "🛡️", "aws",   0, 0),
+        ("aws_security_group_rule",                    "Security Group Rule",        "Security",   "🛡️", "aws",   0, 0),
+        # AWS — Identity
+        ("aws_iam_role",                               "IAM Role",                   "Identity",   "👤", "aws",   0, 0),
+        ("aws_iam_policy",                             "IAM Policy",                 "Identity",   "👤", "aws",   0, 0),
+        ("aws_iam_user",                               "IAM User",                   "Identity",   "👤", "aws",   0, 0),
+        ("aws_iam_instance_profile",                   "IAM Instance Profile",       "Identity",   "👤", "aws",   0, 0),
+        ("aws_kms_key",                                "KMS Key",                    "Identity",   "🔑", "aws",   0, 0),
+        ("aws_kms_alias",                              "KMS Key Alias",              "Identity",   "🔑", "aws",   0, 0),
+        # GCP — Storage
+        ("google_storage_bucket",                      "GCS Bucket",                 "Storage",    "🗄️", "gcp",   1, 1),
+        ("google_storage_bucket_iam_binding",          "GCS Bucket",                 "Storage",    "🗄️", "gcp",   1, 0),
+        # GCP — Database
+        ("google_sql_database_instance",               "Cloud SQL Instance",         "Database",   "🗃️", "gcp",   1, 1),
+        ("google_bigquery_dataset",                    "BigQuery Dataset",           "Database",   "🗃️", "gcp",   1, 1),
+        ("google_bigtable_instance",                   "Bigtable Instance",          "Database",   "🗃️", "gcp",   1, 0),
+        # GCP — Compute
+        ("google_compute_instance",                    "Compute Instance",           "Compute",    "🖥️", "gcp",   0, 1),
+        ("google_cloudfunctions_function",             "Cloud Function",             "Compute",    "⚡", "gcp",   0, 0),
+        # GCP — Container
+        ("google_container_cluster",                   "GKE Cluster",                "Container",  "☸️", "gcp",   0, 0),
+        ("google_container_node_pool",                 "GKE Node Pool",              "Container",  "☸️", "gcp",   0, 0),
+        # GCP — Network
+        ("google_compute_network",                     "VPC Network",                "Network",    "🔷", "gcp",   0, 0),
+        ("google_compute_subnetwork",                  "Subnetwork",                 "Network",    "🔷", "gcp",   0, 0),
+        # GCP — Security
+        ("google_compute_firewall",                    "Firewall Rule",              "Security",   "🛡️", "gcp",   0, 0),
+        # GCP — Identity
+        ("google_project_iam_binding",                 "IAM Binding",                "Identity",   "👤", "gcp",   0, 0),
+        ("google_kms_crypto_key",                      "KMS Crypto Key",             "Identity",   "🔑", "gcp",   0, 0),
+        ("google_service_account",                     "Service Account",            "Identity",   "👤", "gcp",   0, 0),
+    ]
+
+    for (tf_type, fname, cat, icon, pkey, is_ds, is_if) in _SEED:
+        conn.execute(
+            """INSERT OR IGNORE INTO resource_types
+               (provider_id, terraform_type, friendly_name, category, icon,
+                is_data_store, is_internet_facing_capable)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (_pid(pkey), tf_type, fname, cat, icon, is_ds, is_if),
+        )
+
     print("✅ Schema initialized successfully")
 
 

@@ -556,18 +556,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"ERROR: repo path not found: {rp}")
                 return 1
 
-            # Mandatory baseline rules scan before context discovery.
-            og_cmd = ["opengrep", "scan", "--config", str(RULES_DIR), str(rp)]
-            print(f"Running rules scan: {' '.join(og_cmd)}")
-            og_result = subprocess.run(og_cmd, check=False)
-            if og_result.returncode != 0:
-                print("WARNING: opengrep scan failed; retrying with chunked scanner.")
-                chunked_cmd = [sys.executable, str(SCRIPTS_SOURCE / "opengrep_chunked_scan.py"), str(rp)]
-                print(f"Running fallback scan: {' '.join(chunked_cmd)}")
-                chunked_result = subprocess.run(chunked_cmd, check=False)
-                if chunked_result.returncode != 0:
-                    print("ERROR: Both opengrep scan and chunked fallback failed.")
-                    return 1
+            # Two-phase targeted scan: Detection → Misconfigurations.
+            # targeted_scan.py handles both phases and calls store_findings.py.
+            targeted_cmd = [
+                sys.executable,
+                str(SCRIPTS_SOURCE / "targeted_scan.py"),
+                str(rp),
+                "--experiment", str(args.id),
+                "--repo", repo_name,
+            ]
+            print(f"Running targeted scan: {' '.join(targeted_cmd)}")
+            targeted_result = subprocess.run(targeted_cmd, check=False)
+            if targeted_result.returncode != 0:
+                print("WARNING: targeted_scan.py failed.")
+                return 1
 
             cmd = [
                 sys.executable,
@@ -597,12 +599,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Experiment {args.id} marked as running.")
     print(f"Repos to scan: {', '.join(repos)}")
     print()
-    print("The actual scanning should be performed by the agent using:")
-    print(f"  - Agent instructions from: {exp_dir / 'Agents'}")
-    print(f"  - Output findings to: {exp_dir / 'Findings'}")
-    print(f"  - Update knowledge in: {exp_dir / 'Knowledge'}")
+    print("Phase 1 (scripts only) complete — raw findings stored in DB.")
     print()
-    print("When scanning is complete, mark it done with:")
+    print("Next steps:")
+    print("  Phase 3 — LLM enrichment (run once, findings stored in DB):")
+    print(f"    python3 Scripts/enrich_findings.py --experiment {args.id}")
+    print()
+    print("  Phase 4 — Skeptic reviews (run once per reviewer, stored in DB):")
+    print(f"    python3 Scripts/run_skeptics.py --experiment {args.id} --reviewer all")
+    print()
+    print("  Generate reports from DB:")
+    print(f"    python3 Scripts/report_generation.py --experiment {args.id}")
+    print(f"    python3 Scripts/generate_diagram.py --experiment {args.id}")
+    print()
+    print("  Agent instructions in:", exp_dir / "Agents")
+    print("  Output findings to:",    exp_dir / "Findings")
+    print()
+    print("When all work is complete, mark done with:")
     print(f"  python3 Scripts/triage_experiment.py complete {args.id}")
     
     return 0

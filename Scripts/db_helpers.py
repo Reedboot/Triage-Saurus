@@ -359,34 +359,243 @@ def insert_finding(
     experiment_id: str,
     repo_name: str,
     finding_name: str,
-    resource_name: str,
+    resource_name: Optional[str],
     score: int,
     severity: str,
     category: str,
     evidence_location: str,
-    discovered_by: str = "SecurityAgent"
+    discovered_by: str = "SecurityAgent",
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    severity_score: Optional[int] = None,
+    source_file: Optional[str] = None,
+    source_line_start: Optional[int] = None,
+    source_line_end: Optional[int] = None,
+    code_snippet: Optional[str] = None,
+    reason: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    proposed_fix: Optional[str] = None,
 ) -> int:
-    """Insert finding and return finding_id."""
+    """Insert finding and return finding_id.
+
+    Backward-compatible: old callers pass finding_name/score; new callers can
+    also supply the enriched columns.  title falls back to finding_name;
+    severity_score falls back to score.
+    """
+    effective_title = title if title is not None else finding_name
+    effective_severity_score = severity_score if severity_score is not None else score
+
     with get_db_connection() as conn:
-        # Get resource_id
-        resource_result = conn.execute("""
-            SELECT r.id, r.repo_id FROM resources r
-            JOIN repositories repo ON r.repo_id = repo.id
-            WHERE r.resource_name = ? AND r.experiment_id = ? AND repo.repo_name = ?
-        """, (resource_name, experiment_id, repo_name)).fetchone()
-        
-        if not resource_result:
-            raise ValueError(f"Resource {resource_name} not found in repo {repo_name} experiment {experiment_id}")
-        
+        # Resolve resource — warn but don't raise if not found
+        resource_id = None
+        repo_id = None
+        if resource_name:
+            resource_result = conn.execute("""
+                SELECT r.id, r.repo_id FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE r.resource_name = ? AND r.experiment_id = ? AND repo.repo_name = ?
+            """, (resource_name, experiment_id, repo_name)).fetchone()
+            if resource_result:
+                resource_id = resource_result[0]
+                repo_id = resource_result[1]
+            else:
+                import warnings
+                warnings.warn(
+                    f"Resource '{resource_name}' not found in repo '{repo_name}' "
+                    f"experiment '{experiment_id}' — inserting finding without resource link."
+                )
+
+        # Fall back to repo_id via repo name if still None
+        if repo_id is None:
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+                (experiment_id, repo_name),
+            ).fetchone()
+            if repo_row:
+                repo_id = repo_row[0]
+
         cursor = conn.execute("""
             INSERT INTO findings
             (experiment_id, repo_id, finding_name, resource_id, score, base_severity,
-             category, discovered_by, evidence_location, validation_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft')
+             category, discovered_by, evidence_location, validation_status,
+             title, description, severity_score, source_file, source_line_start,
+             source_line_end, code_snippet, reason, rule_id, proposed_fix)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft',
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
-        """, (experiment_id, resource_result[1], finding_name, resource_result[0], 
-              score, severity, category, discovered_by, evidence_location))
-        
+        """, (
+            experiment_id, repo_id, finding_name, resource_id, score, severity,
+            category, discovered_by, evidence_location,
+            effective_title, description, effective_severity_score,
+            source_file, source_line_start, source_line_end,
+            code_snippet, reason, rule_id, proposed_fix,
+        ))
+
+        return cursor.fetchone()[0]
+
+
+def store_skeptic_review(
+    finding_id: int,
+    reviewer_type: str,
+    score_adjustment: float,
+    adjusted_score: float,
+    confidence: float,
+    reasoning: str,
+    key_concerns: str = None,
+    mitigating_factors: str = None,
+    recommendation: str = 'confirm',
+) -> int:
+    """Insert or update a skeptic review for a finding. Returns review id."""
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM skeptic_reviews WHERE finding_id = ? AND reviewer_type = ?",
+            (finding_id, reviewer_type),
+        ).fetchone()
+
+        if existing:
+            conn.execute("""
+                UPDATE skeptic_reviews
+                SET score_adjustment = ?, adjusted_score = ?, confidence = ?,
+                    reasoning = ?, key_concerns = ?, mitigating_factors = ?,
+                    recommendation = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (score_adjustment, adjusted_score, confidence, reasoning,
+                  key_concerns, mitigating_factors, recommendation, existing[0]))
+            return existing[0]
+        else:
+            cursor = conn.execute("""
+                INSERT INTO skeptic_reviews
+                (finding_id, reviewer_type, score_adjustment, adjusted_score,
+                 confidence, reasoning, key_concerns, mitigating_factors, recommendation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+            """, (finding_id, reviewer_type, score_adjustment, adjusted_score,
+                  confidence, reasoning, key_concerns, mitigating_factors, recommendation))
+            return cursor.fetchone()[0]
+
+
+def record_risk_score(
+    finding_id: int,
+    score: float,
+    scored_by: str,
+    rationale: str = None,
+) -> int:
+    """Append a risk score snapshot to risk_score_history. Returns history row id."""
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            INSERT INTO risk_score_history (finding_id, score, scored_by, rationale)
+            VALUES (?, ?, ?, ?)
+            RETURNING id
+        """, (finding_id, score, scored_by, rationale))
+        return cursor.fetchone()[0]
+
+
+def store_remediation(
+    finding_id: int,
+    title: str,
+    description: str = None,
+    remediation_type: str = 'config',
+    effort: str = 'medium',
+    priority: int = 2,
+    code_fix: str = None,
+    reference_url: str = None,
+) -> int:
+    """Insert or update a remediation for a finding. Returns remediation id."""
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM remediations WHERE finding_id = ? AND title = ?",
+            (finding_id, title),
+        ).fetchone()
+
+        if existing:
+            conn.execute("""
+                UPDATE remediations
+                SET description = ?, remediation_type = ?, effort = ?, priority = ?,
+                    code_fix = ?, reference_url = ?
+                WHERE id = ?
+            """, (description, remediation_type, effort, priority,
+                  code_fix, reference_url, existing[0]))
+            return existing[0]
+        else:
+            cursor = conn.execute("""
+                INSERT INTO remediations
+                (finding_id, title, description, remediation_type, effort, priority,
+                 code_fix, reference_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+            """, (finding_id, title, description, remediation_type, effort, priority,
+                  code_fix, reference_url))
+            return cursor.fetchone()[0]
+
+
+def insert_trust_boundary(
+    experiment_id: str,
+    name: str,
+    boundary_type: str,
+    provider: str = None,
+    region: str = None,
+    description: str = None,
+) -> int:
+    """Insert or return existing trust boundary id."""
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO trust_boundaries
+            (experiment_id, name, boundary_type, provider, region, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (experiment_id, name, boundary_type, provider, region, description))
+        row = conn.execute(
+            "SELECT id FROM trust_boundaries WHERE experiment_id = ? AND name = ?",
+            (experiment_id, name),
+        ).fetchone()
+        return row[0]
+
+
+def add_resource_to_trust_boundary(trust_boundary_id: int, resource_id: int):
+    """Add a resource to a trust boundary (idempotent)."""
+    with get_db_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO trust_boundary_members (trust_boundary_id, resource_id) VALUES (?, ?)",
+            (trust_boundary_id, resource_id),
+        )
+
+
+def insert_data_flow(
+    experiment_id: str,
+    name: str,
+    flow_type: str,
+    description: str = None,
+) -> int:
+    """Insert a data flow and return its id."""
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            INSERT INTO data_flows (experiment_id, name, flow_type, description)
+            VALUES (?, ?, ?, ?)
+            RETURNING id
+        """, (experiment_id, name, flow_type, description))
+        return cursor.fetchone()[0]
+
+
+def add_data_flow_step(
+    flow_id: int,
+    step_order: int,
+    component_label: str,
+    resource_id: int = None,
+    protocol: str = None,
+    port: str = None,
+    auth_method: str = None,
+    is_encrypted: bool = None,
+    notes: str = None,
+) -> int:
+    """Add a step to a data flow. Returns step id."""
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            INSERT INTO data_flow_steps
+            (flow_id, step_order, component_label, resource_id, protocol, port,
+             auth_method, is_encrypted, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+        """, (flow_id, step_order, component_label, resource_id, protocol, port,
+              auth_method, is_encrypted, notes))
         return cursor.fetchone()[0]
 
 
@@ -484,7 +693,7 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
-                   COALESCE(MAX(f.score), 0) as max_finding_score
+                   COALESCE(MAX(f.severity_score), MAX(f.score), 0) as max_finding_score
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
             LEFT JOIN findings f ON r.id = f.resource_id

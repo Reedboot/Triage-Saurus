@@ -1,0 +1,25 @@
+rules:
+  - id: aws-rds-publicly-accessible
+    message: |
+      RDS database instance has publicly_accessible = true, which assigns a public IP and
+      makes the endpoint resolvable from the internet. Even with security group restrictions,
+      this widens the attack surface unnecessarily. Set publicly_accessible = false and
+      access the database from within a VPC using private endpoints or a bastion.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_db_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          publicly_accessible = true
+    metadata:
+      category: security
+      subcategory: [network, exposure, database]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, aws, rds]
+      five_pillars: Pillar 3 (Network Security)

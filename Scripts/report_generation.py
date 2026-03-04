@@ -2,10 +2,23 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 import re
+import sqlite3
 
 from models import RepositoryContext
 from template_renderer import render_template
 from markdown_validator import validate_markdown_file
+import resource_type_db as _rtdb
+
+# Lazy DB connection — initialised on first use, None if DB unavailable
+_db_conn: sqlite3.Connection | None = None
+
+def _get_db() -> sqlite3.Connection | None:
+    global _db_conn
+    if _db_conn is None:
+        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+        if db_path.exists():
+            _db_conn = sqlite3.connect(str(db_path))
+    return _db_conn
 
 
 def now_uk() -> str:
@@ -13,12 +26,13 @@ def now_uk() -> str:
 
 
 def _provider_for_resource(resource_type: str) -> str:
-    if resource_type.startswith("azurerm_"):
-        return "azure"
-    if resource_type.startswith("aws_"):
-        return "aws"
-    if resource_type.startswith("google_"):
-        return "gcp"
+    conn = _get_db()
+    if conn:
+        return _rtdb.get_provider_key(conn, resource_type)
+    # Fallback: prefix check (no DB)
+    if resource_type.startswith("azurerm_"): return "azure"
+    if resource_type.startswith("aws_"):     return "aws"
+    if resource_type.startswith("google_"):  return "gcp"
     return "unknown"
 
 
@@ -27,49 +41,10 @@ def _provider_title(provider: str) -> str:
 
 
 def _friendly_service_name(resource_type: str) -> str:
-    explicit = {
-        "azurerm_application_gateway": "Azure Application Gateway",
-        "azurerm_key_vault": "Azure Key Vault",
-        "azurerm_key_vault_key": "Azure Key Vault",
-        "azurerm_key_vault_secret": "Azure Key Vault",
-        "azurerm_mssql_server": "Azure SQL Database",
-        "azurerm_sql_server": "Azure SQL Database",
-        "azurerm_mssql_server_security_alert_policy": "Azure SQL Database",
-        "azurerm_mysql_server": "Azure Database for MySQL",
-        "azurerm_postgresql_server": "Azure Database for PostgreSQL",
-        "azurerm_postgresql_configuration": "Azure Database for PostgreSQL",
-        "azurerm_storage_account": "Azure Storage",
-        "azurerm_storage_account_network_rules": "Azure Storage",
-        "azurerm_virtual_network": "Azure Virtual Network",
-        "azurerm_subnet": "Azure Virtual Network",
-        "azurerm_network_interface": "Azure Virtual Network",
-        "aws_rds_cluster": "Amazon RDS",
-        "aws_db_instance": "Amazon RDS",
-        "aws_neptune_cluster": "Amazon Neptune",
-        "aws_neptune_cluster_instance": "Amazon Neptune",
-        "aws_neptune_cluster_snapshot": "Amazon Neptune",
-        "aws_elasticsearch_domain": "Amazon OpenSearch Service",
-        "aws_elasticsearch_domain_policy": "Amazon OpenSearch Service",
-        "aws_s3_bucket": "Amazon S3",
-        "aws_s3_bucket_object": "Amazon S3",
-        "aws_elb": "Elastic Load Balancing",
-        "aws_instance": "Amazon EC2",
-        "aws_lambda_function": "AWS Lambda",
-        "aws_vpc": "Amazon VPC",
-        "aws_subnet": "Amazon VPC",
-        "aws_security_group": "Amazon VPC",
-        "google_sql_database_instance": "Cloud SQL",
-        "google_storage_bucket": "Cloud Storage",
-        "google_storage_bucket_iam_binding": "Cloud Storage",
-        "google_bigquery_dataset": "BigQuery",
-        "google_container_cluster": "Google Kubernetes Engine",
-        "google_container_node_pool": "Google Kubernetes Engine",
-        "google_compute_network": "VPC Network",
-        "google_compute_subnetwork": "VPC Network",
-    }
-    if resource_type in explicit:
-        return explicit[resource_type]
-
+    conn = _get_db()
+    if conn:
+        return _rtdb.get_friendly_name(conn, resource_type)
+    # Fallback: strip prefix + title-case (no DB)
     cleaned = resource_type
     for prefix in ("azurerm_", "aws_", "google_"):
         if cleaned.startswith(prefix):

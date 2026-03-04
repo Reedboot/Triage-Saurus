@@ -123,7 +123,7 @@ Targeted helpers (stdout-only):
      - Updates Traffic Flow section with complete details
      - See Agents/ContextDiscoveryAgent.md for Phase 2 prompt template
    - **Phase 3 - Apply ALL Detection Rules (CRITICAL for 100% detection):**
-     - **IMPORTANT:** Apply ALL rules from `Rules/IaC/*.yml` (not a selective subset)
+     - **IMPORTANT:** Apply ALL rules from `Rules/Misconfigurations/*.yml` (not a selective subset)
      - Experiment 015 learning: Selective rule application achieved only 50% detection in initial pass
      - Applying all 42 rules ensures complete ground truth coverage (100% detection rate)
      - For each finding, invoke DevSkeptic + PlatformSkeptic for context-aware severity scoring

@@ -20,6 +20,18 @@ This tells you:
 
 ## How to Run a Pending Experiment
 
+### Pipeline Overview (4 phases — minimize token usage)
+
+```
+Phase 1 (scripts, no LLM) ──► Phase 2 (LLM once per finding) ──► Phase 3 (skeptics) ──► Phase 4 (reports)
+   opengrep scan                  enrich_findings.py                run_skeptics.py        report_generation.py
+   store_findings.py              writes: title, description,       writes: skeptic_reviews generate_diagram.py
+   discover_repo_context.py         proposed_fix, severity_score      risk_score_history
+   writes: resources, raw findings  sets: llm_enriched_at           final score = avg(3 skeptics)
+```
+
+**Key principle:** After Phase 2 runs once, **never re-enrich**. Check `llm_enriched_at IS NOT NULL`. After Phase 3 runs, **never re-review** — check `(finding_id, reviewer_type)` in `skeptic_reviews`. Only re-run if new findings are added or context changes.
+
 When `status = "pending"`:
 
 1. **Mark as running:**
@@ -103,43 +115,25 @@ When `status = "pending"`:
    
    **CRITICAL:** Apply ALL detection rules to achieve complete coverage.
    
-   **For IaC scanning (Terraform, Bicep, CloudFormation):**
-   ```bash
-   # Run all IaC rules (currently ~42 rules)
-   semgrep --config Rules/IaC/ <repo_path> --json -o findings_iac.json
+   **`triage_experiment.py run` handles this automatically:**
+   - Runs `opengrep scan --config Rules/ <repo> --json --output scan_<repo>.json`
+   - Immediately calls `store_findings.py scan_<repo>.json --experiment <id>` → raw findings in DB
    
-   # Verify all rules ran
-   ls -1 Rules/IaC/*.yml | wc -l
+   **Manual run if needed:**
+   ```bash
+   opengrep scan --config /home/neil/code/Triage-Saurus/Rules/ <repo_path> \
+       --json --output Output/Learning/experiments/<id>/scan_<repo>.json
+   python3 Scripts/store_findings.py Output/Learning/experiments/<id>/scan_<repo>.json \
+       --experiment <id> --repo <repo_name>
    ```
    
-   **For each finding from semgrep:**
-   1. Create individual finding document in `experiments/001_baseline/Findings/Cloud/`
-   2. Follow `Templates/CloudFinding.md` template
-   3. Include:
-      - Resource name and type
-      - Rule ID that detected it
-      - Evidence location (file, line number)
-      - Technical severity (from rule metadata)
-      - Architecture diagram showing resource context
-   4. **Use hierarchies for targeted rule application:**
-      - Apply SQL TLS rules to all databases with SQL Server parent
-      - Apply blob public access rules to all containers with Storage Account parent
-      - Apply pod security rules to all namespaces with AKS cluster parent
-      - Query database: `SELECT * FROM resources WHERE parent_resource_id = (SELECT id FROM resources WHERE resource_name = 'tycho')`
-   4. Leave Skeptic sections BLANK (filled in Phase 5)
-   
-   **Expected Results:**
-   - Detection rate: ~80-90% of ground truth vulnerabilities
-   - Time: 5-10 minutes for 40+ rules
-   - Output: Individual finding files ready for skeptic review
-   
-   **Validation checkpoint:**
+   **Verify DB findings stored:**
    ```bash
-   # Verify findings were created
-   ls experiments/001_baseline/Findings/Cloud/*.md | wc -l
-   
-   # Verify rule coverage
-   grep "Rule:" experiments/001_baseline/Findings/Cloud/*.md | sort -u
+   python3 -c "
+   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
+   rows = conn.execute(\"SELECT rule_id, COUNT(*) FROM findings WHERE experiment_id=? GROUP BY rule_id\", ['<id>']).fetchall()
+   for r in rows: print(r)
+   "
    ```
    
    **Key Learning from Experiment 015:**
@@ -148,19 +142,28 @@ When `status = "pending"`:
    - Missing rules for: terraform-hardcoded-keyvault-secret, terraform-nonsensitive-secrets
    - These gaps are now filled (rules created 2026-02-25)
 
-   **Phase 4: Security Review (using gathered context)**
-   Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
+   **Phase 4: LLM Enrichment — run ONCE, findings stored in DB**
+   Follow `experiments/<id>/Agents/SecurityAgent.md` → `## DB-First Enrichment Workflow`:
    
-   **Phase 4: Security Review (using gathered context)**
-   Follow `experiments/001_baseline/Agents/SecurityAgent.md`:
+   ```bash
+   python3 Scripts/enrich_findings.py --experiment <id>
+   ```
+   - Queries `findings WHERE llm_enriched_at IS NULL`
+   - Calls LLM once per finding; writes `title`, `description`, `proposed_fix`, `severity_score`
+   - Sets `llm_enriched_at` — subsequent runs skip already-enriched findings
+   - Also writes a `risk_score_history` row (`scored_by='llm'`)
    
-   **Step 4a: Review repo summary security observations**
-   - Phase 2 has documented security findings in `Summary/Repos/<RepoName>.md`
-   - Review the "Security Observations" section for all identified issues
+   **After enrichment, generate finding MD files from DB:**
+   ```bash
+   # Render individual findings (by ID, or loop):
+   python3 Scripts/render_finding.py --id <finding_id>
+   # Regenerate architecture diagrams:
+   python3 Scripts/generate_diagram.py --experiment-id <id>
+   ```
    
-   **Step 4b: Extract findings as individual files** (MANDATORY)
-   - For **MEDIUM+ severity** findings documented in repo summary:
-     - Create individual finding file: `experiments/001_baseline/Findings/Code/<RepoName>_<Issue>_<Number>.md`
+   **Validation:** At end of Phase 4:
+
+
      - Include architecture diagram showing attack path
      - Copy finding details (location, issue, attack vector, mitigations)
      - Add POC script section (if exploitable - use guidance from SecurityAgent.md)
@@ -212,32 +215,40 @@ When `status = "pending"`:
    - `ls experiments/001_baseline/Findings/Cloud/*.md` → findings from Phase 3 rules
    - Each file has blank Skeptic sections (not yet filled)
    
-   **Phase 5: Skeptic Reviews (review each finding)**
+   **Phase 5: Skeptic Reviews — run ONCE, stored in DB**
    
-   **IMPORTANT:** Skeptics review the FINDINGS created in Phases 3-4, not the code directly.
-   The workflow is:
-   1. Read finding from `experiments/001_baseline/Findings/`
-   2. Understand the security engineer's claim
-   3. Access source code/IaC to verify or challenge the claim
-   4. Update the finding file with skeptic section
+   ```bash
+   python3 Scripts/run_skeptics.py --experiment <id> --reviewer all
+   ```
    
-   For EACH finding generated in Phases 3-4:
+   - Queries `findings WHERE llm_enriched_at IS NOT NULL`
+   - Skips findings already reviewed (checks `skeptic_reviews` table)
+   - Calls each reviewer persona (security, dev, platform) in sequence
+   - Writes to `skeptic_reviews` + `risk_score_history`
+   - When all 3 reviewers complete: averages adjusted scores → updates `findings.severity_score`
    
-   - **DevSkeptic Review:**
-     - Read the finding from `experiments/001_baseline/Findings/`
-     - Access the original code files referenced in the finding
-     - Challenge assumptions from a developer perspective
-     - Consider: app patterns, common mitigations, org conventions
-     - Update finding with Dev Skeptic section
+   **Run individual reviewers if preferred:**
+   ```bash
+   python3 Scripts/run_skeptics.py --experiment <id> --reviewer dev
+   python3 Scripts/run_skeptics.py --experiment <id> --reviewer platform
+   python3 Scripts/run_skeptics.py --experiment <id> --reviewer security
+   ```
    
-   - **PlatformSkeptic Review:**
-     - Read the finding from `experiments/001_baseline/Findings/`
-     - Access the IaC/config files referenced in the finding
-     - Challenge assumptions from a platform perspective
-     - Consider: networking constraints, CI/CD guardrails, rollout realities
-     - Update finding with Platform Skeptic section
+   **After skeptic reviews, regenerate diagrams and reports:**
+   ```bash
+   python3 Scripts/generate_diagram.py --experiment-id <id>
+   python3 Scripts/render_finding.py --id <finding_id>
+   python3 Scripts/risk_register.py
+   ```
    
-   **Important:** Skeptics need access to BOTH the finding AND the actual source code/IaC to provide meaningful reviews. The finding alone is not sufficient.
+   **Verify score history:**
+   ```bash
+   python3 -c "
+   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
+   for r in conn.execute(\"SELECT f.title, rsh.scored_by, rsh.score FROM risk_score_history rsh JOIN findings f ON f.id=rsh.finding_id WHERE f.experiment_id='<id>' ORDER BY f.id, rsh.id\").fetchall():
+       print(r)
+   "
+   ```
 
    **Phase 6: Capture Metrics**
    - Duration per phase

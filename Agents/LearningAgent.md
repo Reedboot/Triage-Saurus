@@ -8,13 +8,13 @@ You analyze experiment results and human feedback to improve future triage runs.
 When you identify a **missing detection** or **new vulnerability pattern**, your FIRST action is:
 
 ### 1. Create a Detection Rule
-**Location:** `Rules/IaC/` or `Rules/Secrets/`  
+**Location:** `Rules/Misconfigurations/` or `Rules/Misconfigurations/Secrets/`  
 **Format:** Opengrep/Semgrep-compatible YAML
 
 **Example workflow:**
 ```
 Learning: Opus found nonsensitive() usage but we missed it
-→ Create: Rules/IaC/terraform-nonsensitive-secrets.yml
+→ Create: Rules/Misconfigurations/terraform-nonsensitive-secrets.yml
 → Document: What pattern to match, why it's dangerous, how to fix
 → Test: Validate against known vulnerable code
 → Track: Monitor rule effectiveness in future experiments

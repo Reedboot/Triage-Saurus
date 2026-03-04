@@ -51,7 +51,7 @@ This repository supports consistent security triage. The expected workflow is:
 
 ### Rule Creation Guidelines
 
-**Location:** `Rules/IaC/` or `Rules/Secrets/`
+**Location:** `Rules/Misconfigurations/` or `Rules/Misconfigurations/Secrets/`
 
 **Format:** Opengrep/Semgrep YAML
 ```yaml
@@ -90,7 +90,7 @@ All findings MUST reference the rule that detected them:
 **CRITICAL: Apply ALL Rules, Not Selective Subsets**
 
 **When scanning IaC/code:**
-1. ✅ Run `opengrep scan --config Rules/ <target>` to apply ALL rules from `Rules/IaC/*.yml` (currently 48 rules as of Feb 2026). Rules are granular per service; do not rely on generic "detect resource then ask LLM" fallbacks. If opengrep fails, log it and immediately rerun after fixing the issue; only use manual grep as a temporary fallback.
+1. ✅ Run `opengrep scan --config Rules/ <target>` to apply ALL rules from `Rules/Misconfigurations/*.yml` (currently 48 rules as of Feb 2026). Rules are granular per service; do not rely on generic "detect resource then ask LLM" fallbacks. If opengrep fails, log it and immediately rerun after fixing the issue; only use manual grep as a temporary fallback.
 2. ✅ Run skeptic reviews (DevSkeptic + PlatformSkeptic) for each finding
 3. ✅ Adjust severity based on mitigating controls identified by skeptics
 4. ✅ Document findings with proper rule metadata (`detected_by_rule: <rule-id>`)

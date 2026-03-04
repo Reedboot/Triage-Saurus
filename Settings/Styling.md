@@ -109,6 +109,40 @@ those tools are added to the repo.
   - **Emphasis:** Use border styling (`stroke-width`, `stroke-dasharray`) or emojis from the standard set above
   - **Never use:** `style <node> fill:<color>` (breaks theme compatibility)
 
+- **Mermaid subgraph standard:** Group nodes into category subgraphs with colour-coded
+  stroke borders. This is the required structure for all architecture diagrams.
+
+  | Group | Emoji | Border colour | Hex |
+  |-------|-------|--------------|-----|
+  | Internet Edge | 🌐 | Red | `#cc0000` |
+  | Network boundary (VNet, NSG) | 🛡️ | Purple | `#8b5cf6` |
+  | Compute (App Service, AKS, VM) | ⚙️ | Green | `#5a9e5a` |
+  | Data Services (SQL, Storage, Redis) | 🗄️ | Blue | `#4a90d9` |
+  | Identity & Secrets (Key Vault, AAD, MI) | 🔐 | Orange | `#e07b00` |
+  | Monitoring & Alerts | 📈 | Teal | `#2ab7a9` |
+
+  Apply via `style <SubgraphId> stroke:#hex,stroke-width:2px` — never on individual nodes
+  unless highlighting a specific vulnerability (`stroke-dasharray: 5 5` or `stroke-width:3px`).
+
+  **Node label format:** `Resource Type\n(friendly-name)` — type for context, real name
+  for relatability. Example: `SQL Server\n(sql-terragoat)`.
+
+  **Legend format** (use colour names, not hex codes):
+  ```
+  **Legend — group borders:**
+  - 🔴 Red — Internet Edge (public attack surface)
+  - 🟣 Purple — Network boundary (VNet, NSG, firewall controls)
+  - 🟢 Green — Compute (App Service, AKS, VM, Functions)
+  - 🔵 Blue — Data Services (SQL, Storage, Redis, CosmosDB)
+  - 🟠 Orange — Identity & Secrets (Key Vault, Managed Identity, AAD)
+  - 🩵 Teal — Monitoring & Alerts (Defender, Log Analytics)
+
+  **Legend — arrows:**
+  - Solid red arrow — direct internet-facing traffic (attack surface)
+  - Solid arrow — internal routing / dependency
+  - Dashed arrow — telemetry / secrets injection / policy enforcement
+  ```
+
 ## Section Header Emoji Standards
 
 Use consistent emoji for section headers across all documents:

@@ -660,19 +660,20 @@ def build_rows_from_database() -> list[RiskRow]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT 
-              f.finding_name,
-              f.score,
+              COALESCE(f.title, f.finding_name, 'Unknown') AS finding_name,
+              COALESCE(f.severity_score, f.score, 0) AS score,
               f.base_severity,
               f.category,
-              f.evidence_location,
+              COALESCE(f.source_file, f.evidence_location) AS evidence_location,
               f.validation_status,
+              f.llm_enriched_at,
               r.resource_name,
               r.resource_type,
               repo.repo_name
             FROM findings f
             LEFT JOIN resources r ON f.resource_id = r.id
             LEFT JOIN repositories repo ON f.repo_id = repo.id
-            ORDER BY f.score DESC, f.base_severity DESC
+            ORDER BY COALESCE(f.severity_score, f.score, 0) DESC, f.base_severity DESC
         """)
         
         for row in cursor.fetchall():

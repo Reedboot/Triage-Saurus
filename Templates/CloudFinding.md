@@ -99,7 +99,7 @@ flowchart TB
 
 ### 🔍 Detection
 - **Detected by:** `rule-id` or `manual`
-- **Rule file:** `Rules/IaC/rule-name.yml` (if applicable)
+- **Rule file:** `Rules/Misconfigurations/rule-name.yml` (if applicable)
 - **Detection method:** <automated scan / manual review / external tool>
 
 ### 🧾 Summary

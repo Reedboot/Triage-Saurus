@@ -18,9 +18,23 @@ Usage:
 
 import json
 import hashlib
+import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timedelta
+
+import resource_type_db as _rtdb
+
+# Lazy DB connection
+_db_conn: sqlite3.Connection | None = None
+
+def _get_db() -> sqlite3.Connection | None:
+    global _db_conn
+    if _db_conn is None:
+        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+        if db_path.exists():
+            _db_conn = sqlite3.connect(str(db_path))
+    return _db_conn
 
 # Cache location
 CACHE_DIR = Path.home() / ".triage-saurus" / "cache"
@@ -160,26 +174,42 @@ def interpret_resource_type(
     resource_type: str,
     properties: dict[str, Any]
 ) -> dict[str, Any]:
-    """Interpret cloud resource type semantically.
-    
+    """Interpret cloud resource type semantically. DB-first; LLM only for unknowns.
+
     Args:
         resource_type: e.g. "azurerm_mssql_server", "aws_rds_cluster"
         properties: Resource properties/configuration
-    
+
     Returns:
         {
             "service_name": "SQL Server",
-            "category": "database",
+            "category": "Database",
             "subcategory": "relational",
             "security_relevance": "high",
-            "recommended_rules": ["sql-auditing", "sql-firewall", "sql-encryption"]
+            "recommended_rules": [...]
         }
     """
+    # 1. Check DB lookup table — no LLM tokens needed for known types
+    conn = _get_db()
+    if conn:
+        rt = _rtdb.get_resource_type(conn, resource_type)
+        if rt["category"] != "Other" or resource_type in _rtdb._FALLBACK:
+            return {
+                "service_name":       rt["friendly_name"],
+                "category":           rt["category"].lower(),
+                "subcategory":        rt["category"].lower(),
+                "security_relevance": "high" if rt.get("is_data_store") or rt.get("is_internet_facing_capable") else "medium",
+                "description":        f"{rt['friendly_name']} ({rt['provider']})",
+                "recommended_rules":  [],
+            }
+
+    # 2. Cache check (for previously LLM-resolved unknowns)
     cache_key = _cache_key("resource_type", resource_type, sorted(properties.keys()))
     cached = _cache.get(cache_key)
     if cached:
         return cached
-    
+
+    # 3. Call LLM only for genuinely unknown types not in DB or fallback dict
     prompt = f"""Interpret this cloud resource type:
 
 Resource Type: {resource_type}
@@ -194,28 +224,19 @@ Provide a JSON response with:
     "description": "Brief description of what this service does",
     "recommended_rules": ["rule-id-1", "rule-id-2"]
 }}
-
-Examples:
-- azurerm_mssql_server → {{"service_name": "SQL Server", "category": "database", "subcategory": "relational", "security_relevance": "high"}}
-- aws_s3_bucket → {{"service_name": "S3", "category": "storage", "subcategory": "object", "security_relevance": "high"}}
-- azurerm_kubernetes_cluster → {{"service_name": "AKS", "category": "compute", "subcategory": "container", "security_relevance": "critical"}}
 """
-    
-    result = _call_llm(prompt)
-    
-    # TODO: Parse actual LLM JSON response when integrated
+    _call_llm(prompt)
+
     interpretation = {
-        "service_name": resource_type.split("_")[-1].title(),
-        "category": "unknown",
-        "subcategory": "unknown",
+        "service_name":       resource_type.split("_")[-1].title(),
+        "category":           classify_resource_category(resource_type).lower(),
+        "subcategory":        "unknown",
         "security_relevance": "medium",
-        "description": f"Resource of type {resource_type}",
-        "recommended_rules": []
+        "description":        f"Resource of type {resource_type}",
+        "recommended_rules":  [],
     }
-    
-    # Cache for future use
+
     _cache.set(cache_key, interpretation)
-    
     return interpretation
 
 
@@ -288,75 +309,32 @@ def batch_interpret_resources(resources: list[dict]) -> list[dict]:
 
 
 def classify_resource_category(resource_type: str) -> str:
-    """Classify a resource into a category using LLM or fallback logic.
-    
+    """Classify a resource into a category. DB-first; keyword fallback for unknowns.
+
     Args:
         resource_type: e.g. "azurerm_kubernetes_cluster", "aws_lambda_function"
-    
+
     Returns:
-        Category: compute|database|storage|networking|identity|security|monitoring|other
+        Category string e.g. "Compute", "Database", "Storage", "Network" …
     """
+    conn = _get_db()
+    if conn:
+        return _rtdb.get_category(conn, resource_type)
+
+    # No DB available — fall back to keyword logic
     cache_key = _cache_key("category", resource_type)
     cached = _cache.get(cache_key)
     if cached:
         return cached["category"]
-    
-    # Simple fallback logic based on naming patterns
-    resource_lower = resource_type.lower()
-    
-    # Category keywords
-    compute_keywords = ['vm', 'virtual_machine', 'instance', 'compute', 'kubernetes', 'aks', 'eks', 'gke', 
-                       'container', 'app_service', 'web_app', 'function', 'lambda', 'cloud_run', 'ecs']
-    database_keywords = ['sql', 'database', 'db', 'cosmosdb', 'dynamo', 'rds', 'mysql', 'postgresql', 
-                        'postgres', 'mssql', 'bigtable', 'firestore']
-    storage_keywords = ['storage', 'blob', 'bucket', 's3', 'efs', 'disk', 'volume']
-    networking_keywords = ['network', 'subnet', 'vpc', 'vnet', 'firewall', 'gateway', 'load_balancer', 
-                          'alb', 'elb', 'frontdoor', 'cdn', 'cloudfront', 'public_ip', 'endpoint']
-    identity_keywords = ['key_vault', 'kms', 'secret', 'identity', 'iam', 'role', 'policy', 'service_account']
-    security_keywords = ['firewall', 'waf', 'security', 'guard', 'defender', 'sentinel']
-    monitoring_keywords = ['log', 'monitor', 'insights', 'cloudwatch', 'diagnostic']
-    
-    # Check keywords
-    for keyword in compute_keywords:
-        if keyword in resource_lower:
-            category = "compute"
-            break
-    else:
-        for keyword in database_keywords:
-            if keyword in resource_lower:
-                category = "database"
-                break
-        else:
-            for keyword in storage_keywords:
-                if keyword in resource_lower:
-                    category = "storage"
-                    break
-            else:
-                for keyword in networking_keywords:
-                    if keyword in resource_lower:
-                        category = "networking"
-                        break
-                else:
-                    for keyword in identity_keywords:
-                        if keyword in resource_lower:
-                            category = "identity"
-                            break
-                    else:
-                        for keyword in security_keywords:
-                            if keyword in resource_lower:
-                                category = "security"
-                                break
-                        else:
-                            for keyword in monitoring_keywords:
-                                if keyword in resource_lower:
-                                    category = "monitoring"
-                                    break
-                            else:
-                                category = "other"
-    
-    # Cache result
-    _cache.set(cache_key, {"category": category})
-    return category
+
+    lower = resource_type.lower()
+    for keyword, cat in _rtdb._CATEGORY_KEYWORDS:
+        if keyword in lower:
+            _cache.set(cache_key, {"category": cat})
+            return cat
+
+    _cache.set(cache_key, {"category": "other"})
+    return "other"
 
 
 def clear_cache():
