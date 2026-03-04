@@ -32,3 +32,29 @@ rules:
             pattern: security_groups = $SECURITY_GROUPS
       description: |
         Detects AWS Application/Network Load Balancers in Terraform to enable ingress/egress focused scans.
+
+  - id: context-aws-load-balancer-module
+    message: |
+      AWS Load Balancer IAM role detected via community Terraform module (terraform-aws-modules/iam).
+      Indicates an AWS Load Balancer Controller is deployed on EKS, managing an NLB/ALB.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      module "$NAME" {
+        ...
+        source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, load_balancer, module]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Load Balancer
+        resource_type: aws_lb
+        resource_name: $NAME
+      description: |
+        Detects the AWS Load Balancer Controller IAM role module, which signals an NLB or ALB
+        is managed by the Kubernetes AWS Load Balancer Controller rather than a direct aws_lb resource.

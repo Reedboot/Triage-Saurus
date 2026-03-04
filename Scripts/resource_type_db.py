@@ -78,11 +78,15 @@ _FALLBACK: dict[str, dict] = {
     # AWS — Compute
     "aws_instance":                               {"friendly_name": "EC2 Instance",             "category": "Compute",     "icon": "🖥️"},
     "aws_lambda_function":                        {"friendly_name": "Lambda Function",          "category": "Compute",     "icon": "⚡"},
+    "aws_eks_cluster":                            {"friendly_name": "EKS Cluster",              "category": "Container",   "icon": "☸️"},
+    "aws_eks_addon":                              {"friendly_name": "EKS Addon",                "category": "Container",   "icon": "☸️"},
     "aws_ecs_cluster":                            {"friendly_name": "ECS Cluster",              "category": "Container",   "icon": "☸️"},
     "aws_ecs_service":                            {"friendly_name": "ECS Service",              "category": "Container",   "icon": "☸️"},
+    "helm_release":                               {"friendly_name": "Helm Release",             "category": "Container",   "icon": "⎈"},
     # AWS — Network
     "aws_elb":                                    {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
     "aws_alb":                                    {"friendly_name": "App Load Balancer",        "category": "Network",     "icon": "🌐"},
+    "aws_lb":                                     {"friendly_name": "Network Load Balancer",    "category": "Network",     "icon": "🌐"},
     "aws_vpc":                                    {"friendly_name": "VPC",                      "category": "Network",     "icon": "🔷"},
     "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
     "aws_security_group":                         {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️"},

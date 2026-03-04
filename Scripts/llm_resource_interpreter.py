@@ -18,6 +18,7 @@ Usage:
 
 import json
 import hashlib
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Optional
@@ -95,19 +96,23 @@ def _call_llm(prompt: str, system_prompt: str = "") -> dict:
     """Call LLM for interpretation (placeholder - integrate with your LLM client).
     
     TODO: Replace with actual LLM integration (OpenAI, Anthropic, etc.)
-    For now, returns structured format that scripts expect.
+    For now, return a simple JSON payload so enrichment can proceed.
     """
-    # This is a placeholder. In production, this would call:
-    # - OpenAI API (gpt-4, gpt-3.5-turbo)
-    # - Anthropic API (claude-3)
-    # - Azure OpenAI
-    # - Local LLM (llama, mistral)
-    
-    # For now, return a structured response that maintains compatibility
+    match = re.search(r"\((\d+)/10\)", prompt)
+    severity_score = int(match.group(1)) if match else 5
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:6]
+    payload = {
+        "title": f"LLM placeholder {prompt_hash}",
+        "description": "Placeholder detail; replace with a real LLM output when available.",
+        "proposed_fix": "Run the actual LLM integration to generate precise remediation guidance.",
+        "severity_score": severity_score,
+        "confidence": 0.5,
+    }
     return {
+        "content": json.dumps(payload),
         "interpretation": "LLM interpretation placeholder",
-        "confidence": 0.85,
-        "reasoning": "Placeholder response - implement LLM integration"
+        "confidence": 0.5,
+        "reasoning": "Placeholder response - implement LLM integration",
     }
 
 

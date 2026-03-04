@@ -32,3 +32,36 @@ rules:
             pattern: role_arn = $ROLE_ARN
       description: |
         Detects AWS EKS clusters in Terraform to drive Kubernetes-specific context and rule gating.
+
+  - id: context-aws-eks-cluster-module
+    message: |
+      AWS EKS Cluster detected via community Terraform module (terraform-aws-modules/eks/aws).
+      Triggers the same Kubernetes-specific rule gating as a direct aws_eks_cluster resource.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      module "$NAME" {
+        ...
+        source = "terraform-aws-modules/eks/aws"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kubernetes
+      technology: [terraform, aws, eks, module]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: EKS Cluster
+        resource_type: aws_eks_cluster
+        resource_name: $NAME
+        properties:
+          - name: cluster_name
+            pattern: cluster_name = "$CLUSTER_NAME"
+          - name: cluster_version
+            pattern: cluster_version = "$VERSION"
+          - name: cluster_endpoint_public_access
+            pattern: cluster_endpoint_public_access = $PUBLIC_ACCESS
+      description: |
+        Detects AWS EKS clusters defined via the community terraform-aws-modules/eks/aws module,
+        which is the most common pattern in real-world EKS deployments.

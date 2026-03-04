@@ -31,7 +31,7 @@ MISCONFIGS   = RULES_ROOT / "Misconfigurations"
 
 DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     # Azure — Compute / Containers
-    "context-azure-aks-cluster":               ["Azure/AKS"],
+    "context-azure-aks-cluster":               ["Azure/AKS", "Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
     "context-azure-app-service-plan":          ["Azure/AppService"],
     "context-azure-app-service-environment":   ["Azure/AppService"],
     "context-azure-container-registry":        ["Azure/ContainerRegistry"],
@@ -60,14 +60,57 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-storage-connection":        ["Secrets"],
     "context-azure-servicebus-connection":     ["Secrets"],
 
-    # AWS
+    # AWS — Compute / Containers
+    "context-aws-eks-cluster":                 ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service", "AWS/IAM"],
+    "context-aws-eks-cluster-module":          ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service", "AWS/IAM"],
     "context-aws-ec2-instance":                ["AWS/EC2", "AWS/SecurityGroup"],
-    "context-aws-iam-role":                    ["AWS/IAM"],
-    "context-aws-rds-instance":                ["AWS/RDS"],
+    "context-aws-lambda-function":             ["AWS/IAM", "Secrets"],
+
+    # AWS — Networking
+    "context-aws-load-balancer":               ["AWS/SecurityGroup"],
+    "context-aws-load-balancer-module":        ["AWS/SecurityGroup", "Kubernetes/Ingress"],
     "context-aws-security-group":              ["AWS/SecurityGroup"],
+    "context-aws-vpc":                         ["AWS/SecurityGroup"],
+    "context-aws-vpc-module":                  ["AWS/SecurityGroup"],
+    "context-aws-api-gateway-rest":            ["AWS/IAM", "Secrets"],
+    "context-aws-cloudfront-distribution":     ["AWS/SecurityGroup"],
+
+    # AWS — Helm (ingress/LB controller trigger K8s rules)
+    "context-aws-helm-ingress-nginx":          ["Kubernetes/Ingress", "Kubernetes/Service", "AWS/SecurityGroup"],
+    "context-aws-helm-lb-controller":          ["Kubernetes/Ingress", "AWS/SecurityGroup"],
+    "context-helm-release-generic":            ["Kubernetes/Workload"],
+
+    # AWS — Data
+    "context-aws-rds-instance":                ["AWS/RDS"],
+    "context-aws-dynamodb-table":              ["AWS/IAM"],
+    "context-aws-s3-bucket":                   ["Secrets"],
+
+    # AWS — Identity & Secrets
+    "context-aws-iam-role":                    ["AWS/IAM"],
+    "context-aws-kms-key":                     ["AWS/IAM"],
 
     # GCP
     "context-gcp-cloud-sql-instance":          ["GCP/CloudSQL", "GCP/ComputeFirewall"],
+
+    # Framework / language detections → always add Secrets scan
+    "context-python-requirements":             ["Secrets"],
+    "context-nodejs-package-json":             ["Secrets"],
+    "context-dotnet-project":                  ["Secrets"],
+    "context-golang-module":                   ["Secrets"],
+    "context-java-maven-project":              ["Secrets"],
+
+    # Code-level auth pattern detections
+    "context-dotnet-jwt-addjwtbearer":         ["Secrets"],
+    "context-dotnet-jwt-parser":               ["Secrets"],
+    "context-dotnet-apim-redirect-middleware": ["Secrets"],
+    "context-node-jwt-auth":                   ["Secrets"],
+    "context-go-jwt-auth":                     ["Secrets"],
+    "context-java-spring-jwt":                 ["Secrets"],
+
+    # AppConfig — connection strings always imply secrets scan
+    "context-azure-appinsights-connection":    ["Secrets"],
+    "context-azure-redis-connection":          ["Secrets"],
+    "context-azure-servicebus-connection-appconfig": ["Secrets"],
 }
 
 # ── Always-on folders (run regardless of what was detected) ──────────────────
@@ -92,6 +135,10 @@ FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = [
                   ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"]),
     ("CI/CD pipelines", r"\.gitlab-ci\.yml|Jenkinsfile|\.github/workflows/",
                   ["CICD"]),
+    ("Dockerfiles",    r"^FROM\s+(scratch|alpine|ubuntu|debian|node|python|openjdk|golang|mcr\.microsoft\.com)",
+                  ["Kubernetes/Workload", "Secrets"]),
+    ("Hardcoded secrets (any file)", r"(password|secret|api_key|token)\s*=\s*[\"'][^\"']{6,}[\"']",
+                  ["Secrets"]),
 ]
 
 

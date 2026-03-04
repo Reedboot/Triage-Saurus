@@ -1,0 +1,103 @@
+rules:
+  - id: context-aws-helm-ingress-nginx
+    message: |
+      ingress-nginx Helm release detected.
+      This is the primary ingress controller for Kubernetes clusters — all external traffic
+      routes through it. Triggers Kubernetes/Ingress and Network & Security rule gating.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "helm_release" $NAME {
+        ...
+        chart = "ingress-nginx"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, kubernetes, helm, ingress]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Ingress Controller
+        resource_type: helm_release
+        resource_name: $NAME
+        properties:
+          - name: chart
+            pattern: chart = "$CHART"
+          - name: namespace
+            pattern: namespace = "$NAMESPACE"
+          - name: version
+            pattern: version = "$VERSION"
+      description: |
+        Detects ingress-nginx Helm releases in Terraform. ingress-nginx is the cluster's
+        external-facing ingress gateway — misconfigurations here directly affect attack surface.
+
+  - id: context-aws-helm-lb-controller
+    message: |
+      AWS Load Balancer Controller Helm release detected.
+      This controller manages AWS NLB/ALB resources from within Kubernetes.
+      Triggers Load Balancer and Network & Security rule gating.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "helm_release" $NAME {
+        ...
+        chart = "aws-load-balancer-controller"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, kubernetes, helm, aws, load_balancer]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Load Balancer
+        resource_type: helm_release
+        resource_name: $NAME
+        properties:
+          - name: chart
+            pattern: chart = "$CHART"
+          - name: namespace
+            pattern: namespace = "$NAMESPACE"
+          - name: version
+            pattern: version = "$VERSION"
+      description: |
+        Detects the AWS Load Balancer Controller Helm release, which provisions and manages
+        NLB/ALB resources on behalf of Kubernetes Ingress/Service objects.
+
+  - id: context-helm-release-generic
+    message: |
+      Helm release detected in Terraform.
+      Records all Helm-managed applications for architecture context.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "helm_release" $NAME {
+        ...
+        repository = "$REPO"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kubernetes
+      technology: [terraform, kubernetes, helm]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Helm Release
+        resource_type: helm_release
+        resource_name: $NAME
+        properties:
+          - name: chart
+            pattern: chart = "$CHART"
+          - name: repository
+            pattern: repository = "$REPO"
+          - name: namespace
+            pattern: namespace = "$NAMESPACE"
+          - name: version
+            pattern: version = "$VERSION"
+      description: |
+        Detects any Helm release managed via Terraform. Used to inventory all
+        Helm-deployed applications for architecture diagrams and context metadata.

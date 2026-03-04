@@ -32,3 +32,34 @@ rules:
             pattern: tags = $TAGS
       description: |
         Detects AWS VPC resources in Terraform to inform VPC and networking-focused scans.
+
+  - id: context-aws-vpc-module
+    message: |
+      AWS VPC detected via community Terraform module (terraform-aws-modules/vpc/aws).
+      Triggers the same networking-focused rule gating as a direct aws_vpc resource.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      module "$NAME" {
+        ...
+        source = "terraform-aws-modules/vpc/aws"
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, vpc, module]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC
+        resource_type: aws_vpc
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$VPC_NAME"
+          - name: cidr
+            pattern: cidr = "$CIDR"
+      description: |
+        Detects VPCs defined via the community terraform-aws-modules/vpc/aws module,
+        which is the most common pattern in real-world AWS VPC deployments.

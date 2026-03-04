@@ -114,6 +114,18 @@ def _ensure_schema(conn: sqlite3.Connection):
       rationale TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS context_metadata (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_id INTEGER,
+      namespace TEXT DEFAULT 'phase2',
+      key TEXT NOT NULL,
+      value TEXT,
+      source TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_id, namespace, key)
+    );
     """)
 
     # Ensure optional columns exist for backward compatibility.
@@ -240,6 +252,55 @@ def update_repository_stats(
                 code_files_count = ?
             WHERE experiment_id = ? AND repo_name = ?
         """, (files_scanned, iac_files, code_files, experiment_id, repo_name))
+
+
+def ensure_repository_entry(experiment_id: str, repo_name: str) -> int:
+    """Ensure a repository record exists for the experiment."""
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            INSERT OR IGNORE INTO repositories (experiment_id, repo_name)
+            VALUES (?, ?)
+        """, (experiment_id, repo_name))
+        if cursor.lastrowid:
+            return cursor.lastrowid
+        row = conn.execute("""
+            SELECT id FROM repositories
+            WHERE experiment_id = ? AND repo_name = ?
+        """, (experiment_id, repo_name)).fetchone()
+        return row[0]
+
+
+def get_repository_id(experiment_id: str, repo_name: str) -> Optional[int]:
+    """Return repository ID if registered."""
+    with get_db_connection() as conn:
+        row = conn.execute("""
+            SELECT id FROM repositories
+            WHERE experiment_id = ? AND repo_name = ?
+        """, (experiment_id, repo_name)).fetchone()
+        return row[0] if row else None
+
+
+def upsert_context_metadata(
+    experiment_id: str,
+    repo_name: str,
+    key: str,
+    value: str,
+    *,
+    namespace: str = "phase2",
+    source: str = "phase2_context_summary"
+):
+    """Store structured context metadata for Phase 2 discoveries."""
+    repo_id = ensure_repository_entry(experiment_id, repo_name)
+    with get_db_connection() as conn:
+        conn.execute("""
+            INSERT INTO context_metadata
+            (experiment_id, repo_id, namespace, key, value, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(experiment_id, repo_id, namespace, key) DO UPDATE SET
+              value = excluded.value,
+              source = excluded.source,
+              created_at = CURRENT_TIMESTAMP
+        """, (experiment_id, repo_id, namespace, key, value, source))
 
 
 # ============================================================================

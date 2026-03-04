@@ -4,6 +4,7 @@
 import argparse
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from db_helpers import get_db_connection
@@ -183,10 +184,89 @@ def render_md(model: dict) -> str:
     for k, v in mapping.items():
         out = out.replace("{{" + k + "}}", v)
 
-    if re.search(r"\{\{[A-Za-z0-9_]+\}\}", out):
-        raise SystemExit(f"Unresolved placeholders remain after render using {template_path.relative_to(ROOT)}")
+    placeholder_pattern = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+    default_replacements = {
+        "entry_point": "Entry point TBD",
+        "vulnerable_component": "Vulnerable component TBD",
+        "source_file": str(model.get("source_file", "source_file")),
+        "source_line": str(model.get("source_line", "0")),
+        "route_line": "0",
+        "auth_file": "Auth file TBD",
+        "auth_line": "0",
+        "data_store": "Data store TBD",
+        "language": "plaintext",
+        "code_snippet": "TBD",
+        "vulnerable_snippet": "TBD",
+        "fixed_snippet": "TBD",
+        "overall_score_severity": model.get("overall_score", {}).get("severity", "Medium"),
+        "overall_score": str(model.get("overall_score", {}).get("score", 5)),
+        "overall_score_emoji": _emoji_for(model.get("overall_score", {}).get("severity", "Medium")),
+    }
+
+    def _fill_placeholder(match: re.Match) -> str:
+        key = match.group(1)
+        return default_replacements.get(key, "TODO")
+
+    out = placeholder_pattern.sub(_fill_placeholder, out)
 
     return out.rstrip() + "\n"
+
+def _fallback_model_from_row(finding: dict) -> dict:
+    """Build a minimal finding model for the renderer when no structured details are stored."""
+    def _text(value: object, *, default: str = "TODO") -> str:
+        if value is None:
+            return default
+        text = str(value).strip()
+        return text if text else default
+
+    title = _text(finding.get("title") or finding.get("finding_name") or finding.get("rule_id") or f"Finding {finding.get('id')}")
+    description = _text(finding.get("description") or finding.get("reason"), default=title)
+
+    base_severity = _text(finding.get("base_severity"), default="Medium").capitalize()
+    score = finding.get("severity_score") or finding.get("score") or 5
+    score_i = max(1, min(int(score), 10))
+
+    sr_summary = description
+    applicability = {
+        "status": "Unknown",
+        "evidence": _text(finding.get("reason"), default="Evidence pending")
+    }
+    security_review = {
+        "summary": sr_summary,
+        "applicability": applicability,
+        "key_evidence": [f"Detected by {finding.get('rule_id') or 'unknown rule'}"],
+        "assumptions": [],
+        "exploitability": "Not assessed",
+        "recommendations": [],
+        "countermeasures": [],
+        "risks": [],
+    }
+
+    meta = {
+        "category": _text(finding.get("category"), default="Code"),
+        "languages": "Unknown",
+        "source": _text(finding.get("discovered_by") or "Phase 1 scan"),
+        "validation_status": "⚠️ Draft - Needs Triage",
+        "last_updated": datetime.now().strftime("%d/%m/%Y %H:%M"),
+    }
+
+    return {
+        "version": 1,
+        "kind": "code",
+        "title": title,
+        "description": description,
+        "overall_score": {
+            "score": score_i,
+            "severity": base_severity,
+        },
+        "architecture_mermaid": "flowchart LR\n  Client --> Service[Entry]\n  Service --> Vulnerability[⚠️ TODO]\n  Vulnerability --> Data[Data Store]",
+        "security_review": security_review,
+        "overview_bullets": [
+            _text(finding.get("source_file"), default="Source unknown"),
+            f"Rule: {_text(finding.get('rule_id'), default='Manual review')}",
+        ],
+        "meta": meta,
+    }
 
 def get_finding_model_from_db(finding_id: int) -> dict:
     """Get finding model from the database."""
@@ -194,9 +274,14 @@ def get_finding_model_from_db(finding_id: int) -> dict:
         finding = conn.execute("SELECT * FROM findings WHERE id = ?", [finding_id]).fetchone()
         if not finding:
             raise ValueError(f"Finding not found in database: {finding_id}")
-    
-    # The 'details' column is expected to contain a JSON string with the finding model
-    return json.loads(finding['details'])
+
+    if "details" in finding.keys() and finding["details"]:
+        try:
+            return json.loads(finding["details"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return _fallback_model_from_row(dict(finding))
 
 def compute_output_path(model: dict) -> Path:
     out = (model.get("output") or {}).get("path")

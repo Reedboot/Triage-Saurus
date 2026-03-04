@@ -20,17 +20,31 @@ This tells you:
 
 ## How to Run a Pending Experiment
 
-### Pipeline Overview (4 phases — minimize token usage)
+### Pipeline Overview (6 phases — minimize token usage)
 
 ```
-Phase 1 (scripts, no LLM) ──► Phase 2 (LLM once per finding) ──► Phase 3 (skeptics) ──► Phase 4 (reports)
-   opengrep scan                  enrich_findings.py                run_skeptics.py        report_generation.py
-   store_findings.py              writes: title, description,       writes: skeptic_reviews generate_diagram.py
-   discover_repo_context.py         proposed_fix, severity_score      risk_score_history
-   writes: resources, raw findings  sets: llm_enriched_at           final score = avg(3 skeptics)
+Phase 1 (scripts, no LLM)        Phase 2 (scripts, no LLM)         Phase 3 (opengrep rules scan)
+   discover_repo_context.py  ──►  discover_code_context.py    ──►   opengrep scan --config Rules/
+   targeted_scan.py               reads Phase 1 output              store_findings.py
+   writes: resources, arch        writes: Summary/Repos/*.md        writes: raw findings → DB
+   diagrams to DB & MD            updates DB (context_metadata)     render_finding.py (MD per finding)
+   → render_finding.py (MD)       generates repo summary MD         generate_diagram.py (update charts)
+   → generate_diagram.py          generate_diagram.py (update charts)
+
+Phase 4 (LLM enrichment)         Phase 5 (skeptic reviews)         Phase 6 (reports)
+   enrich_findings.py        ──►  run_skeptics.py            ──►   report_generation.py
+   writes: title, description,    writes: skeptic_reviews          risk_register.py
+   proposed_fix, severity_score   risk_score_history               render_finding.py (final MD)
+   sets: llm_enriched_at          final score = avg(3 skeptics)     generate_diagram.py (final charts)
+   render_finding.py (MD)         render_finding.py (MD update)
+   generate_diagram.py (charts)
 ```
 
-**Key principle:** After Phase 2 runs once, **never re-enrich**. Check `llm_enriched_at IS NOT NULL`. After Phase 3 runs, **never re-review** — check `(finding_id, reviewer_type)` in `skeptic_reviews`. Only re-run if new findings are added or context changes.
+**Key design principles:**
+- **After each phase**, run `render_finding.py` (for all findings) and `generate_diagram.py` so MD files and diagrams are always in sync with the DB.
+- **After Phase 4 runs once, never re-enrich**. Check `llm_enriched_at IS NOT NULL`.
+- **After Phase 5 runs, never re-review** — check `(finding_id, reviewer_type)` in `skeptic_reviews`. Only re-run if new findings are added or context changes.
+- **Phase 2 before Phase 3**: script-based code context discovery runs before opengrep so detected languages, frameworks, containers, and architecture inform which misconfig rule folders to target.
 
 When `status = "pending"`:
 
@@ -53,7 +67,7 @@ When `status = "pending"`:
    etc.
    ```
 
-4. **For each repo, execute the context discovery pipeline:**
+4. **For each repo, execute the pipeline:**
 
    **Phase 1: Automated Context Discovery - ~10 seconds**
    ```bash
@@ -61,64 +75,43 @@ When `status = "pending"`:
        --output-dir Output/Learning/experiments/001_baseline
    ```
    - Creates baseline summary with architecture diagram at `experiments/<id>/Summary/Repos/<RepoName>.md`
-   - Creates/updates knowledge at `experiments/<id>/Knowledge/Repos.md`
-   - Detects: languages, hosting, auth patterns, ingress/egress, IaC resources
-   - **Captures parent-child hierarchies:** SQL Server → Databases, Storage Account → Containers, AKS → Namespaces
-   - **Populates parent_resource_id in database** for downstream attack path analysis
-   
-   **Validate hierarchies detected:**
+   - Detects: IaC resource types, hosting platform, basic auth patterns
+   - Populates `resources` table and `repositories` table in DB
+   - **After Phase 1:** render findings and diagrams
+     ```bash
+     python3 Scripts/generate_diagram.py <id>
+     ```
+
+   **Phase 2: Deeper Context Discovery (scripts, no LLM) - ~5-15 seconds**
    ```bash
-   python3 -c "
-   import sqlite3
-   conn = sqlite3.connect('Output/Learning/triage.db')
-   cursor = conn.cursor()
-   cursor.execute('''
-     SELECT parent.resource_name, parent.resource_type, 
-            COUNT(child.id) AS child_count
-     FROM resources parent
-     LEFT JOIN resources child ON child.parent_resource_id = parent.id
-     WHERE parent.experiment_id = '001'
-     GROUP BY parent.id
-     HAVING child_count > 0
-   ''')
-   for row in cursor.fetchall():
-       print(f'{row[0]} ({row[1]}): {row[2]} children')
-   "
+   python3 Scripts/discover_code_context.py \
+       --experiment <id> \
+       --repo <repo_name> \
+       --target <repo_path> \
+       --output-dir Output/Learning/experiments/<id>_<name>
    ```
-   - Example output: "tycho (SQLServer): 2 children", "storage_labpallas (StorageAccount): 3 children"
-   
-   **Phase 2: Deeper Context Search (explore agent) - ~30-60 seconds**
-   Follow `experiments/001_baseline/Agents/ContextDiscoveryAgent.md`:
-   
-   - **IaC Understanding:** Read Terraform/Bicep to understand:
-     - What infrastructure is deployed
-     - Network topology (VNets, NSGs, private endpoints)
-     - Service dependencies
-   
-   - **Code Understanding:** Read application code to understand:
-     - Authentication mechanisms (JWT, OAuth, mTLS, API keys)
-     - Route handling and validation logic
-     - Potential broken auth / validation gaps
-     - Business logic flows
-   
-   - **Secrets Management:** Understand:
-     - Where secrets are stored (Key Vault, env vars, config)
-     - How secrets are accessed (managed identity, connection strings)
-     - Rotation patterns
-   
-   - **Traffic Flow:** Trace complete request path with:
-     - Middleware execution order
-     - Auth validation points
-     - Backend routing logic
+
+   Detects without any LLM calls:
+   - **Languages & Frameworks:** opengrep Detection/Frameworks/ rules + manifest parsing (requirements.txt, package.json, pom.xml, go.mod)
+   - **Auth patterns:** opengrep Detection/Code/ rules (JWT, Spring Security, Passport, etc.)
+   - **Containers:** Dockerfile base images, exposed ports, sensitive ENV vars
+   - **Kubernetes:** Deployments, Services, Ingress hosts, RBAC roles/bindings, privileged containers, host network
+   - **CI/CD:** GitHub Actions, GitLab CI, Jenkinsfile, Tekton
+
+   Writes all findings to `context_metadata` table (namespace: `phase2_code`) and generates `Summary/Repos/<repo>.md`.
+
+   ```bash
+   python3 Scripts/generate_diagram.py <id>
+   ```
 
    **Phase 3: Rules-Based Infrastructure Scanning (~5-10 minutes)**
-   
+
    **CRITICAL:** Apply ALL detection rules to achieve complete coverage.
-   
+
    **`triage_experiment.py run` handles this automatically:**
    - Runs `opengrep scan --config Rules/ <repo> --json --output scan_<repo>.json`
    - Immediately calls `store_findings.py scan_<repo>.json --experiment <id>` → raw findings in DB
-   
+
    **Manual run if needed:**
    ```bash
    opengrep scan --config /home/neil/code/Triage-Saurus/Rules/ <repo_path> \
@@ -126,7 +119,19 @@ When `status = "pending"`:
    python3 Scripts/store_findings.py Output/Learning/experiments/<id>/scan_<repo>.json \
        --experiment <id> --repo <repo_name>
    ```
-   
+
+   **After Phase 3, render all finding MDs and update diagrams:**
+   ```bash
+   python3 -c "
+   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
+   ids = [r[0] for r in conn.execute(\"SELECT id FROM findings WHERE experiment_id=?\", ['<id>']).fetchall()]
+   print(' '.join(map(str, ids)))
+   "
+   # Then for each ID:
+   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
+   python3 Scripts/generate_diagram.py <id>
+   ```
+
    **Verify DB findings stored:**
    ```bash
    python3 -c "
@@ -135,7 +140,7 @@ When `status = "pending"`:
    for r in rows: print(r)
    "
    ```
-   
+
    **Key Learning from Experiment 015:**
    - Selective rule application achieves only 50% detection
    - Applying ALL rules achieves 86%+ detection
@@ -144,7 +149,7 @@ When `status = "pending"`:
 
    **Phase 4: LLM Enrichment — run ONCE, findings stored in DB**
    Follow `experiments/<id>/Agents/SecurityAgent.md` → `## DB-First Enrichment Workflow`:
-   
+
    ```bash
    python3 Scripts/enrich_findings.py --experiment <id>
    ```
@@ -152,13 +157,11 @@ When `status = "pending"`:
    - Calls LLM once per finding; writes `title`, `description`, `proposed_fix`, `severity_score`
    - Sets `llm_enriched_at` — subsequent runs skip already-enriched findings
    - Also writes a `risk_score_history` row (`scored_by='llm'`)
-   
-   **After enrichment, generate finding MD files from DB:**
+
+   **After enrichment, regenerate finding MDs and diagrams:**
    ```bash
-   # Render individual findings (by ID, or loop):
-   python3 Scripts/render_finding.py --id <finding_id>
-   # Regenerate architecture diagrams:
-   python3 Scripts/generate_diagram.py --experiment-id <id>
+   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
+   python3 Scripts/generate_diagram.py <id>
    ```
    
    **Validation:** At end of Phase 4:
@@ -216,7 +219,7 @@ When `status = "pending"`:
    - Each file has blank Skeptic sections (not yet filled)
    
    **Phase 5: Skeptic Reviews — run ONCE, stored in DB**
-   
+
    ```bash
    python3 Scripts/run_skeptics.py --experiment <id> --reviewer all
    ```
@@ -236,18 +239,9 @@ When `status = "pending"`:
    
    **After skeptic reviews, regenerate diagrams and reports:**
    ```bash
-   python3 Scripts/generate_diagram.py --experiment-id <id>
-   python3 Scripts/render_finding.py --id <finding_id>
+   python3 Scripts/generate_diagram.py <id>
+   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
    python3 Scripts/risk_register.py
-   ```
-   
-   **Verify score history:**
-   ```bash
-   python3 -c "
-   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
-   for r in conn.execute(\"SELECT f.title, rsh.scored_by, rsh.score FROM risk_score_history rsh JOIN findings f ON f.id=rsh.finding_id WHERE f.experiment_id='<id>' ORDER BY f.id, rsh.id\").fetchall():
-       print(r)
-   "
    ```
 
    **Phase 6: Capture Metrics**
