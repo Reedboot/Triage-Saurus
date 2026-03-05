@@ -21,7 +21,7 @@ DB_PATH = ROOT / "Output/Learning/triage.db"
 # ---------------------------------------------------------------------------
 _FALLBACK: dict[str, dict] = {
     # Azure — Identity
-    "azurerm_key_vault":                          {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
+    "azurerm_key_vault":                          {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": True},
     "azurerm_key_vault_key":                      {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
     "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
     "azurerm_user_assigned_identity":             {"friendly_name": "Managed Identity",         "category": "Identity",    "icon": "👤"},
@@ -48,8 +48,17 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_kubernetes_cluster":                 {"friendly_name": "AKS Cluster",              "category": "Container",   "icon": "☸️"},
     "azurerm_container_registry":                 {"friendly_name": "Container Registry",       "category": "Container",   "icon": "📦"},
     "azurerm_container_group":                    {"friendly_name": "Container Instance",       "category": "Container",   "icon": "📦"},
-    # Azure — Network
+    # Azure — Network & Gateways
     "azurerm_application_gateway":                {"friendly_name": "Application Gateway",      "category": "Network",     "icon": "🌐"},
+    "azurerm_api_management":                     {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_api":                 {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_api_operation":       {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_api_policy":          {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_product":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_product_api":         {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_subscription":        {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_backend":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_named_value":         {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
     "azurerm_virtual_network":                    {"friendly_name": "Virtual Network",          "category": "Network",     "icon": "🔷"},
     "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
     "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔷"},
@@ -60,8 +69,12 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_firewall":                           {"friendly_name": "Azure Firewall",           "category": "Security",    "icon": "🛡️"},
     "azurerm_web_application_firewall_policy":    {"friendly_name": "WAF Policy",               "category": "Security",    "icon": "🛡️"},
     # Azure — Monitoring
+    "azurerm_application_insights":              {"friendly_name": "Application Insights",     "category": "Monitoring",  "icon": "📊"},
     "azurerm_monitor_diagnostic_setting":         {"friendly_name": "Diagnostic Settings",      "category": "Monitoring",  "icon": "📊"},
     "azurerm_log_analytics_workspace":            {"friendly_name": "Log Analytics Workspace",  "category": "Monitoring",  "icon": "📊"},
+    "azurerm_monitor_action_group":               {"friendly_name": "Monitor Action Group",     "category": "Monitoring",  "icon": "🔔"},
+    "azurerm_monitor_metric_alert":               {"friendly_name": "Metric Alert",             "category": "Monitoring",  "icon": "🔔"},
+    "azurerm_monitor_scheduled_query_rules_alert":{"friendly_name": "Query Alert",              "category": "Monitoring",  "icon": "🔔"},
     # AWS — Storage
     "aws_s3_bucket":                              {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
     "aws_s3_bucket_object":                       {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
@@ -83,7 +96,17 @@ _FALLBACK: dict[str, dict] = {
     "aws_ecs_cluster":                            {"friendly_name": "ECS Cluster",              "category": "Container",   "icon": "☸️"},
     "aws_ecs_service":                            {"friendly_name": "ECS Service",              "category": "Container",   "icon": "☸️"},
     "helm_release":                               {"friendly_name": "Helm Release",             "category": "Container",   "icon": "⎈"},
-    # AWS — Network
+    # AWS — Network & API Gateway
+    "aws_api_gateway_rest_api":                   {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_resource":                   {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_method":                     {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_integration":                {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_deployment":                 {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_stage":                      {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "aws_apigatewayv2_api":                       {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
+    "aws_apigatewayv2_integration":               {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
+    "aws_apigatewayv2_route":                     {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
+    "aws_apigatewayv2_stage":                     {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
     "aws_elb":                                    {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
     "aws_alb":                                    {"friendly_name": "App Load Balancer",        "category": "Network",     "icon": "🌐"},
     "aws_lb":                                     {"friendly_name": "Network Load Balancer",    "category": "Network",     "icon": "🌐"},
@@ -112,7 +135,12 @@ _FALLBACK: dict[str, dict] = {
     # GCP — Container
     "google_container_cluster":                   {"friendly_name": "GKE Cluster",              "category": "Container",   "icon": "☸️"},
     "google_container_node_pool":                 {"friendly_name": "GKE Node Pool",            "category": "Container",   "icon": "☸️"},
-    # GCP — Network
+    # GCP — Network & API Gateway
+    "google_api_gateway_api":                     {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "google_api_gateway_api_config":              {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "google_api_gateway_gateway":                 {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    "google_cloud_run_service":                   {"friendly_name": "Cloud Run Service",        "category": "Compute",     "icon": "🌐"},
+    "google_compute_url_map":                     {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "⚖️"},
     "google_compute_network":                     {"friendly_name": "VPC Network",              "category": "Network",     "icon": "🔷"},
     "google_compute_subnetwork":                  {"friendly_name": "Subnetwork",               "category": "Network",     "icon": "🔷"},
     "google_compute_firewall":                    {"friendly_name": "Firewall Rule",            "category": "Security",    "icon": "🛡️"},

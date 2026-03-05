@@ -104,6 +104,368 @@ def _filter_mermaid_children(_parent_service: str, raw_types: list[str]) -> list
     return _rtdb.filter_to_canonical(raw_types)
 
 
+def _is_apim_component(resource_type: str) -> bool:
+    """Check if resource is an API Management component."""
+    apim_components = (
+        "azurerm_api_management_api",
+        "azurerm_api_management_api_operation",
+        "azurerm_api_management_api_policy",
+        "azurerm_api_management_product",
+        "azurerm_api_management_product_api",
+        "azurerm_api_management_subscription",
+        "azurerm_api_management_backend",
+        "azurerm_api_management_named_value",
+    )
+    return resource_type in apim_components
+
+
+def _group_apim_resources(service_raw: list[str], resources: list) -> tuple[list[str], dict]:
+    """Separate APIM components from other resources and group them by API.
+    
+    Returns:
+        (non_apim_resources, apim_structure)
+        where apim_structure contains API names as keys with their components.
+    """
+    apim_resources = [r for r in service_raw if _is_apim_component(r)]
+    non_apim_resources = [r for r in service_raw if not _is_apim_component(r)]
+    
+    if not apim_resources:
+        return service_raw, {}
+    
+    # Find all APIs
+    api_resources = [r for r in resources if r.resource_type == "azurerm_api_management_api"]
+    
+    # Structure: {api_name: {operations: [], policies: [], products: [], subscriptions: []}}
+    apim_structure = {}
+    
+    for api in api_resources:
+        api_name = api.name or "unnamed-api"
+        apim_structure[api_name] = {
+            "operations": [],
+            "policies": [],
+            "products": [],
+            "subscriptions": [],
+        }
+        
+        # Find operations for this API
+        for r in resources:
+            if r.resource_type == "azurerm_api_management_api_operation":
+                apim_structure[api_name]["operations"].append(r.name)
+            elif r.resource_type == "azurerm_api_management_api_policy":
+                apim_structure[api_name]["policies"].append(r.name)
+        
+        # Products and subscriptions are API-agnostic, add to first API for now
+        if api == api_resources[0]:
+            for r in resources:
+                if r.resource_type == "azurerm_api_management_product":
+                    apim_structure[api_name]["products"].append(r.name)
+                elif r.resource_type == "azurerm_api_management_subscription":
+                    apim_structure[api_name]["subscriptions"].append(r.name)
+    
+    return non_apim_resources, apim_structure
+
+
+# Backend detection: Currently uses direct Terraform parsing for speed.
+# Opengrep rules exist in Rules/Detection/{Azure,AWS,GCP}/ for:
+#   - apim-backend-routing-detection.yml (APIM service_url)
+#   - api-gateway-backend-integration-detection.yml (AWS API Gateway URIs)
+#   - api-gateway-backend-config-detection.yml (GCP API Gateway)
+#   - kubernetes-backend-deployment-detection.yml (AKS deployments)
+#   - eks-backend-deployment-detection.yml (AWS EKS)
+#   - gke-backend-deployment-detection.yml (GCP GKE)
+# To use opengrep instead: import opengrep_backend_detection and call run_opengrep_rules()
+# Current approach is faster for Phase 1 (no LLM) baseline scans.
+
+
+def _extract_apim_backend_url(repo_path: Path | None, api_name: str) -> str | None:
+    """Extract the backend service_url from APIM API Terraform config."""
+    if not repo_path or not repo_path.exists():
+        return None
+    
+    service_url_pattern = re.compile(r'service_url\s*=\s*"([^"]+)"')
+    
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api"):
+        if rtype == "azurerm_api_management_api" and api_name in rlabel:
+            match = service_url_pattern.search(body)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _extract_aws_api_gateway_backend(repo_path: Path | None, api_id: str) -> str | None:
+    """Extract backend integration URI from AWS API Gateway."""
+    if not repo_path or not repo_path.exists():
+        return None
+    
+    uri_pattern = re.compile(r'(?:uri|integration_uri)\s*=\s*"([^"]+)"')
+    
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="aws_api_gateway"):
+        if "integration" in rtype:
+            match = uri_pattern.search(body)
+            if match:
+                return match.group(1)
+    
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="aws_apigatewayv2"):
+        if "integration" in rtype:
+            match = uri_pattern.search(body)
+            if match:
+                return match.group(1)
+    
+    return None
+
+
+def _extract_kubernetes_deployments(repo_path: Path | None) -> list[dict]:
+    """Extract Kubernetes/AKS/EKS/GKE backend deployments from Terraform."""
+    if not repo_path or not repo_path.exists():
+        return []
+    
+    # First, try to extract locals to resolve variables
+    locals_map = {}
+    for tf_file in repo_path.rglob("*.tf"):
+        try:
+            content = tf_file.read_text(encoding="utf-8", errors="ignore")
+            locals_block = re.search(r'locals\s*\{([^}]+)\}', content, re.DOTALL)
+            if locals_block:
+                # Extract key = "value" pairs from locals
+                for match in re.finditer(r'(\w+)\s*=\s*"([^"]+)"', locals_block.group(1)):
+                    locals_map[match.group(1)] = match.group(2)
+        except Exception:
+            continue
+    
+    deployments = []
+    app_name_pattern = re.compile(r'app_name\s*=\s*(?:"([^"]+)"|local\.(\w+)|([^"\s]+))')
+    namespace_pattern = re.compile(r'namespace\s*=\s*(?:"([^"]+)"|local\.(\w+)|([^"\s]+))')
+    helm_name_pattern = re.compile(r'name\s*=\s*"([^"]+)"')
+    
+    for tf_file in repo_path.rglob("*.tf"):
+        if not any(keyword in tf_file.name.lower() for keyword in ["kubernetes", "eks", "aks", "gke", "helm"]):
+            continue
+        try:
+            content = tf_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Look for Terraform module blocks (common for AKS)
+            module_pattern = re.compile(r'module\s+"([^"]+)"\s*\{([^}]+)\}', re.DOTALL)
+            for match in module_pattern.finditer(content):
+                module_name = match.group(1)
+                module_body = match.group(2)
+                
+                app_match = app_name_pattern.search(module_body)
+                ns_match = namespace_pattern.search(module_body)
+                
+                if app_match:
+                    # Try to resolve the app name
+                    app_name = app_match.group(1) or app_match.group(3)  # Direct string or unquoted
+                    if app_match.group(2):  # local.variable
+                        app_name = locals_map.get(app_match.group(2), f"local.{app_match.group(2)}")
+                    
+                    ns_name = None
+                    if ns_match:
+                        ns_name = ns_match.group(1) or ns_match.group(3)
+                        if ns_match.group(2):
+                            ns_name = locals_map.get(ns_match.group(2), f"local.{ns_match.group(2)}")
+                    
+                    deployments.append({
+                        "module_name": module_name,
+                        "app_name": app_name,
+                        "namespace": ns_name,
+                        "type": "module"
+                    })
+            
+            # Look for Helm releases (common for EKS/GKE)
+            helm_pattern = re.compile(r'resource\s+"helm_release"\s+"([^"]+)"\s*\{([^}]+)\}', re.DOTALL)
+            for match in helm_pattern.finditer(content):
+                release_label = match.group(1)
+                release_body = match.group(2)
+                
+                name_match = helm_name_pattern.search(release_body)
+                ns_match = namespace_pattern.search(release_body)
+                
+                if name_match:
+                    deployments.append({
+                        "module_name": release_label,
+                        "app_name": name_match.group(1),
+                        "namespace": ns_match.group(1) if ns_match else None,
+                        "type": "helm"
+                    })
+            
+            # Look for kubernetes_deployment resources
+            k8s_deploy_pattern = re.compile(r'resource\s+"kubernetes_deployment"\s+"([^"]+)"\s*\{.*?metadata\s*\{.*?name\s*=\s*"([^"]+)"', re.DOTALL)
+            for match in k8s_deploy_pattern.finditer(content):
+                deployments.append({
+                    "module_name": match.group(1),
+                    "app_name": match.group(2),
+                    "namespace": None,
+                    "type": "kubernetes_deployment"
+                })
+                
+        except Exception:
+            continue
+    
+    return deployments
+
+
+def _resolve_terraform_variable(base_path: str, var_name: str) -> str | None:
+    """Try to resolve a Terraform variable from tfvars files or variable defaults."""
+    # Check for tfvars files
+    for tfvars_pattern in ["*.tfvars", "*.auto.tfvars", "terraform.tfvars"]:
+        for tfvars_file in Path(base_path).rglob(tfvars_pattern):
+            try:
+                content = tfvars_file.read_text(encoding='utf-8', errors='ignore')
+                # Look for: var_name = "value"
+                match = re.search(rf'{var_name}\s*=\s*"([^"]+)"', content)
+                if match:
+                    return match.group(1)
+            except Exception:
+                continue
+    
+    # Check variable.tf for default value
+    for var_file in Path(base_path).rglob("variable.tf"):
+        try:
+            content = var_file.read_text(encoding='utf-8', errors='ignore')
+            # Find variable block and check for default
+            var_block = re.search(rf'variable\s+"{var_name}"\s*{{([^}}]+)}}', content, re.DOTALL)
+            if var_block:
+                default_match = re.search(r'default\s*=\s*"([^"]+)"', var_block.group(1))
+                if default_match:
+                    return default_match.group(1)
+        except Exception:
+            continue
+    
+    return None
+
+
+def _extract_database_connection(repo_path: Path | None, module_name: str) -> dict | None:
+    """Extract database connection info from Kubernetes module config."""
+    if not repo_path or not repo_path.exists():
+        return None
+    
+    for tf_file in repo_path.rglob("*.tf"):
+        if "kubernetes" not in tf_file.name.lower():
+            continue
+        try:
+            content = tf_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Find module block - look for matching braces carefully
+            module_start = content.find(f'module "{module_name}"')
+            if module_start == -1:
+                continue
+            
+            # Find the config block within this module
+            config_start = content.find("config = {", module_start)
+            if config_start == -1:
+                continue
+            
+            # Get a reasonable chunk after config start (next 500 chars should have connection string)
+            config_chunk = content[config_start:config_start + 1000]
+            
+            # Look for Database connection string
+            db_conn_match = re.search(r'Database__ConnectionString\s*=\s*"[^"]*Server=([^;]+);Database=([^;]+)', config_chunk)
+            if db_conn_match:
+                server_ref = db_conn_match.group(1)
+                # Try to resolve variable reference to actual value
+                if "${var." in server_ref or "${local." in server_ref:
+                    var_name = re.search(r'\$\{(?:var|local)\.([^}]+)\}', server_ref)
+                    if var_name:
+                        # Try to find the variable value in terraform files
+                        var_value = _resolve_terraform_variable(str(repo_path), var_name.group(1))
+                        if var_value:
+                            server_ref = var_value
+                        else:
+                            # Can't resolve - use generic name
+                            server_ref = "SQL Server"
+                
+                return {
+                    "server": server_ref,
+                    "database": db_conn_match.group(2)
+                }
+            
+            # Look for other database config patterns
+            db_match = re.search(r'(?:database|db)_(?:host|server|name)\s*=\s*"?([^"\s]+)"?', config_chunk, re.IGNORECASE)
+            if db_match:
+                return {
+                    "server": "unknown",
+                    "database": db_match.group(1)
+                }
+                
+        except Exception:
+            continue
+    
+    return None
+
+
+def _extract_service_dependencies(repo_path: Path | None, module_name: str) -> list[str]:
+    """Extract outbound service calls from Kubernetes module config."""
+    if not repo_path or not repo_path.exists():
+        return []
+    
+    dependencies = []
+    for tf_file in repo_path.rglob("*.tf"):
+        if "kubernetes" not in tf_file.name.lower():
+            continue
+        try:
+            content = tf_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Find module block
+            module_start = content.find(f'module "{module_name}"')
+            if module_start == -1:
+                continue
+            
+            # Find the config block within this module
+            config_start = content.find("config = {", module_start)
+            if config_start == -1:
+                continue
+            
+            # Get config block (find matching brace)
+            config_chunk = content[config_start:config_start + 3000]
+            
+            # Look for BaseUri patterns: ServiceName__BaseUri = ".../.../service-path/"
+            base_uri_matches = re.findall(
+                r'(\w+)__BaseUri\s*=\s*"[^"]*\/([^/"]+)\/"',
+                config_chunk
+            )
+            
+            for match in base_uri_matches:
+                service_path = match[1]
+                # Convert path to readable name: "collectiveapproval" -> "Collective Approval"
+                service_name = service_path.replace('-', ' ').replace('_', ' ').title()
+                if service_name not in dependencies:
+                    dependencies.append(service_name)
+            
+            # Look for ServiceBus
+            if "ServiceBus__FullyQualifiedNamespace" in config_chunk:
+                dependencies.append("Service Bus")
+                
+        except Exception:
+            continue
+    
+    return dependencies
+
+
+def _extract_application_insights(repo_path: Path | None, module_name: str) -> str | None:
+    """Extract Application Insights resource name from Kubernetes module config."""
+    if not repo_path or not repo_path.exists():
+        return None
+    
+    for tf_file in repo_path.rglob("*.tf"):
+        if "kubernetes" not in tf_file.name.lower():
+            continue
+        try:
+            content = tf_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Look for ApplicationInsights__InstrumentationKey or ConnectionString
+            app_insights_match = re.search(
+                r'ApplicationInsights__(?:InstrumentationKey|ConnectionString)\s*=\s*azurerm_application_insights\.([^.]+)',
+                content
+            )
+            if app_insights_match:
+                return app_insights_match.group(1)
+                
+        except Exception:
+            continue
+    
+    return None
+
+
 def _is_data_routing_resource(resource_type: str) -> bool:
     """Heuristic: resources that typically receive/forward data-plane traffic."""
     exclude_tokens = (
@@ -516,7 +878,13 @@ def _build_simple_architecture_diagram(
         dashed: bool = False,
     ) -> None:
         nonlocal link_index
-        edge_lines.append(f'  {src} -->|{label}| {dst}' if label else f"  {src} --> {dst}")
+        # Escape label for Mermaid: wrap in quotes if contains special chars like parentheses
+        if label and ('(' in label or ')' in label):
+            edge_lines.append(f'  {src} -->|"{label}"| {dst}')
+        elif label:
+            edge_lines.append(f'  {src} -->|{label}| {dst}')
+        else:
+            edge_lines.append(f"  {src} --> {dst}")
         if dashed:
             link_styles.append(f"  linkStyle {link_index} stroke-dasharray: 5 5")
         if red:
@@ -582,6 +950,10 @@ def _build_simple_architecture_diagram(
         lines.append(f'  subgraph {provider_id}_Cloud["{provider_title} Services"]')
         lines.append("    direction TB")
         monitoring_node = f"{provider_id}_Monitoring"
+        
+        # Style the cloud boundary with neutral gray (same as Internet node)
+        node_styles.append(f"  style {provider_id}_Cloud stroke:#666,stroke-width:2px")
+        styled_ids.add(f"{provider_id}_Cloud")
 
         # Group paas_services by category layer and render one subgraph per layer
         layer_meta = {
@@ -615,8 +987,14 @@ def _build_simple_architecture_diagram(
                 continue
             layer_label, layer_cat = layer_meta[layer_key]
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
-            lines.append(f'    subgraph {layer_id}["{layer_label}"]')
-            style_id(layer_id, layer_cat)
+            
+            # Skip layer wrapper if only one service (reduces visual noise)
+            skip_layer_wrapper = len(layer_services) == 1 and not (layer_key == "monitoring" and has_alerting_signal)
+            
+            if not skip_layer_wrapper:
+                lines.append(f'    subgraph {layer_id}["{layer_label}"]')
+                style_id(layer_id, layer_cat)
+            
             # Place the monitoring node inside the Monitoring layer
             if layer_key == "monitoring" and has_alerting_signal:
                 lines.append(f'      {monitoring_node}["Security Monitoring"]')
@@ -628,6 +1006,11 @@ def _build_simple_architecture_diagram(
                 service_raw = _filter_mermaid_children(service, service_raw)
                 service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
                 exposure_target = None
+                
+                # Check if this is an API Management service with multiple components
+                is_apim_service = service == "API Management" or any(_is_apim_component(r) for r in service_raw)
+                non_apim_resources, apim_structure = _group_apim_resources(service_raw, resources) if is_apim_service else (service_raw, {})
+                
                 if len(service_raw) <= 1:
                     node_id = f"{layer_id}_Svc_{p_idx}"
                     names = service_instances.get(service, [])
@@ -635,7 +1018,202 @@ def _build_simple_architecture_diagram(
                     lines.append(f'      {node_id}["{service}{name_suffix}"]')
                     style_id(node_id, layer_cat)
                     exposure_target = node_id
+                elif apim_structure:
+                    # Special handling for API Management: create nested structure by API
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["🔌 {service}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    operation_nodes = []  # Collect all operation nodes for ingress connections
+                    apim_requires_auth = False  # Track if any API requires auth
+                    backend_services = []  # Track backend services to render outside APIM
+                    
+                    # Render each API as a nested subgraph
+                    api_idx = 0
+                    for api_name, api_components in apim_structure.items():
+                        api_idx += 1
+                        api_subgraph = f"{svc_subgraph}_API_{api_idx}"
+                        
+                        # Check if API requires subscription (auth)
+                        has_subscriptions = len(api_components.get("subscriptions", [])) > 0
+                        if has_subscriptions:
+                            apim_requires_auth = True
+                        api_label = f"API: {api_name}"
+                        if has_subscriptions:
+                            api_label += " 🔑"
+                        
+                        lines.append(f'        subgraph {api_subgraph}["{api_label}"]')
+                        style_id(api_subgraph, "app")  # APIs are application endpoints, not security controls
+                        
+                        # Render operations (styled as app endpoints)
+                        op_idx = 0
+                        operation_start_idx = len(operation_nodes)  # Track where this API's ops start
+                        for operation in api_components.get("operations", []):
+                            op_idx += 1
+                            op_node = f"{api_subgraph}_Op_{op_idx}"
+                            lines.append(f'          {op_node}["📍 {operation}"]')
+                            style_id(op_node, "app")
+                            operation_nodes.append(op_node)  # Track for ingress connections
+                        
+                        # Note: Policies are documented in markdown, not shown in diagram
+                        
+                        lines.append("        end")
+                        
+                        # Extract backend routing info (render later outside APIM)
+                        backend_url = _extract_apim_backend_url(repo_path, api_name)
+                        if backend_url:
+                            k8s_deployments = _extract_kubernetes_deployments(repo_path)
+                            if k8s_deployments:
+                                for deployment in k8s_deployments:
+                                    if deployment["module_name"] in ("api", "app", "service"):
+                                        # Check for database connections in this deployment
+                                        db_connection = _extract_database_connection(repo_path, deployment["module_name"])
+                                        # Check for Application Insights
+                                        app_insights = _extract_application_insights(repo_path, deployment["module_name"])
+                                        # Check for service dependencies
+                                        dependencies = _extract_service_dependencies(repo_path, deployment["module_name"])
+                                        backend_services.append({
+                                            "name": deployment["app_name"],
+                                            "label": f"☸️ AKS: {deployment['app_name']}",
+                                            "ops_slice": (operation_start_idx, len(operation_nodes)),
+                                            "database": db_connection,
+                                            "app_insights": app_insights,
+                                            "dependencies": dependencies
+                                        })
+                                        break
+                                if not backend_services or backend_services[-1]["ops_slice"][0] != operation_start_idx:
+                                    deployment = k8s_deployments[0]
+                                    deploy_type = deployment.get("type", "module")
+                                    if deploy_type == "helm":
+                                        label = f"⎈ K8s: {deployment['app_name']}"
+                                    else:
+                                        label = f"☸️ K8s: {deployment['app_name']}"
+                                    db_connection = _extract_database_connection(repo_path, deployment["module_name"])
+                                    backend_services.append({
+                                        "name": deployment["app_name"],
+                                        "label": label,
+                                        "ops_slice": (operation_start_idx, len(operation_nodes)),
+                                        "database": db_connection
+                                    })
+                    
+                    # Add non-APIM resources if any
+                    for resource_type in non_apim_resources:
+                        child_idx = api_idx + 1
+                        child_node = f"{svc_subgraph}_Child_{child_idx}"
+                        child_label = _child_node_label(resource_type, service)
+                        child_instances = [
+                            _mermaid_safe_name(_actual_names.get((resource_type, r.name), r.name) or "") or ""
+                            for r in resources if r.resource_type == resource_type and r.name
+                        ]
+                        child_instances = [n for n in child_instances if n]
+                        if len(child_instances) == 1:
+                            child_label = f"{child_label} ({child_instances[0]})"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    
+                    lines.append("      end")
+                    
+                    # Render backend services outside APIM (in Compute layer context)
+                    for backend in backend_services:
+                        # Create AKS cluster subgraph with app inside
+                        backend_cluster_node = f"{svc_subgraph}_Backend_Cluster_{backend['name'].replace('-', '_')}"
+                        # Show as shared/external cluster if not managed in this repo
+                        cluster_label = "☸️ AKS Cluster (shared)"
+                        lines.append(f'      subgraph {backend_cluster_node}["{cluster_label}"]')
+                        style_id(backend_cluster_node, "app")
+                        
+                        # App service node inside cluster
+                        backend_app_node = f"{backend_cluster_node}_App"
+                        lines.append(f'        {backend_app_node}["🎯 {backend["name"]}"]')
+                        style_id(backend_app_node, "app")
+                        lines.append("      end")
+                        
+                        # Connect operations to the app inside cluster
+                        start_idx, end_idx = backend["ops_slice"]
+                        for op_node in operation_nodes[start_idx:end_idx]:
+                            add_link(op_node, backend_app_node, label="routes to")
+                        
+                        # Create Data subgraph if database or Service Bus exists
+                        has_database = backend.get("database")
+                        has_service_bus = backend.get("dependencies") and "Service Bus" in backend.get("dependencies", [])
+                        
+                        if has_database or has_service_bus:
+                            # Create Data layer subgraph
+                            data_subgraph = f"{backend_cluster_node}_Data"
+                            lines.append(f'      subgraph {data_subgraph}["💾 Data Layer"]')
+                            style_id(data_subgraph, "data")
+                            
+                            # Add SQL Server subgraph with database inside
+                            if has_database:
+                                db_info = backend["database"]
+                                db_name = db_info.get("database", "Unknown DB")
+                                server_name = db_info.get("server", "SQL Server")
+                                
+                                # SQL Server subgraph inside Data layer
+                                db_server_node = f"{data_subgraph}_SQLServer"
+                                lines.append(f'        subgraph {db_server_node}["🗄️ {server_name}"]')
+                                style_id(db_server_node, "data")
+                                
+                                db_node = f"{db_server_node}_DB"
+                                lines.append(f'          {db_node}["🗃️ {db_name}"]')
+                                style_id(db_node, "data")
+                                lines.append("        end")
+                            
+                            # Add Service Bus inside Data layer
+                            if has_service_bus:
+                                service_bus_node = f"{data_subgraph}_ServiceBus"
+                                lines.append(f'        {service_bus_node}["🚌 Service Bus"]')
+                                style_id(service_bus_node, "data")
+                            
+                            lines.append("      end")
+                            
+                            # Create connections
+                            if has_database:
+                                add_link(backend_app_node, db_node, label="queries")
+                            if has_service_bus:
+                                add_link(backend_app_node, service_bus_node, label="messages")
+                        
+                        # Add Application Insights connection if detected
+                        if backend.get("app_insights"):
+                            app_insights_name = backend["app_insights"]
+                            
+                            # Create Monitoring subgraph with App Insights inside
+                            monitoring_subgraph = f"{backend_cluster_node}_Monitoring"
+                            lines.append(f'      subgraph {monitoring_subgraph}["📊 Monitoring"]')
+                            style_id(monitoring_subgraph, "monitoring")
+                            
+                            app_insights_node = f"{monitoring_subgraph}_AppInsights"
+                            lines.append(f'        {app_insights_node}["📈 Application Insights"]')
+                            style_id(app_insights_node, "monitoring")
+                            lines.append("      end")
+                            
+                            add_link(backend_app_node, app_insights_node, label="telemetry")
+                        
+                        # Add egress APIM subgraph for service dependencies (APIs via APIM)
+                        egress_dependencies = [dep for dep in backend.get("dependencies", []) if dep != "Service Bus"]
+                        if egress_dependencies:
+                            # Create APIM Egress subgraph
+                            egress_apim_subgraph = f"{backend_cluster_node}_APIM_Egress"
+                            lines.append(f'      subgraph {egress_apim_subgraph}["🔌 API Management"]')
+                            style_id(egress_apim_subgraph, "security")
+                            
+                            # Add each backend API inside APIM
+                            egress_api_nodes = []
+                            for dep in egress_dependencies:
+                                dep_node = f"{egress_apim_subgraph}_{dep.replace(' ', '_')}"
+                                lines.append(f'        {dep_node}["📡 {dep}"]')
+                                style_id(dep_node, "app")
+                                egress_api_nodes.append(dep_node)
+                            
+                            lines.append("      end")
+                            
+                            # Connect app to each API in APIM egress subgraph
+                            for egress_node in egress_api_nodes:
+                                add_link(backend_app_node, egress_node, label="Subscription Key")
+                    
+                    # Pass both operation nodes and auth status as tuple
+                    exposure_target = (operation_nodes, apim_requires_auth) if operation_nodes else None
                 else:
+                    # Standard multi-component service rendering
                     svc_subgraph = f"{layer_id}_Svc_{p_idx}"
                     lines.append(f'      subgraph {svc_subgraph}["{service}"]')
                     style_id(svc_subgraph, layer_cat)
@@ -659,15 +1237,34 @@ def _build_simple_architecture_diagram(
                     exposure_target = first_child
 
                 if exposure_target:
-                    service_anchor_nodes[service] = exposure_target
-                    # Edge gateways (App Gateway, LB, APIM) are internet-facing by design —
-                    # skip the generic "Public exposure" arrow; the protocol ingress arrow below handles it.
-                    if not _is_edge_gateway_service(service):
-                        has_private, has_restriction = _service_access_signals(service, service_raw)
-                        if not has_private and not has_restriction:
-                            add_link("Internet", exposure_target, label="Public exposure", red=True)
-                        elif has_private != has_restriction:
-                            add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    # Handle both single target and list of targets (for APIM operations)
+                    if isinstance(exposure_target, tuple):
+                        # APIM case: tuple of (operation_nodes, requires_auth)
+                        operation_nodes, requires_auth = exposure_target
+                        service_anchor_nodes[service] = operation_nodes[0] if operation_nodes else None
+                        # Edge gateways (App Gateway, LB, APIM) are internet-facing by design
+                        # Create links to each operation
+                        if not _is_edge_gateway_service(service):
+                            label = "Public (requires auth)" if requires_auth else "Public exposure"
+                            for op_node in operation_nodes:
+                                add_link("Internet", op_node, label=label, red=True)
+                    else:
+                        # Standard case: single exposure point
+                        service_anchor_nodes[service] = exposure_target
+                        # Edge gateways (App Gateway, LB, APIM) are internet-facing by design —
+                        # skip the generic "Public exposure" arrow; the protocol ingress arrow below handles it.
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _service_access_signals(service, service_raw)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    
+                    # Alerting links (use first node if tuple/list)
+                    if isinstance(exposure_target, tuple):
+                        target_for_alerts = exposure_target[0][0] if exposure_target[0] else None  # First operation node
+                    else:
+                        target_for_alerts = exposure_target
                     if has_alerting_signal and any(
                         tok in raw for raw in service_raw_all for tok in (
                             "alert_policy", "threat_detection", "security_alert",
@@ -675,8 +1272,11 @@ def _build_simple_architecture_diagram(
                             "security_center", "flow_log",
                         )
                     ):
-                        add_link(exposure_target, monitoring_node, label="logs/alerts", dashed=True)
-            lines.append("    end")
+                        add_link(target_for_alerts, monitoring_node, label="logs/alerts", dashed=True)
+            
+            # Close layer wrapper only if we opened it
+            if not skip_layer_wrapper:
+                lines.append("    end")
 
 
         networks = (boundary_resources if boundary_resources else [None]) if other_services else []
@@ -774,6 +1374,7 @@ def _build_simple_architecture_diagram(
     lines.extend(edge_lines)
     lines.extend(link_styles)
     lines.extend(node_styles)
+    
     return "\n".join(lines)
 
 
@@ -808,12 +1409,11 @@ def write_repo_summary(
     if any("vpc" in t or "virtual_network" in t for t in resource_types):
         network_summary = "- VPC/VNet style network resources detected."
 
-    ingress_summary = "- Ingress paths require Phase 2 deep route tracing."
-    egress_summary = "- Egress paths require Phase 2 dependency tracing."
+    ingress_summary = """```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service[account-viewing-permissions]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f,stroke-width:2px;\n```"""
 
-    external_deps = "- Dependency mapping pending deeper scan."
-    if any("sql" in t for t in resource_types):
-        external_deps = "- SQL/database resources detected."
+    egress_summary = """```mermaid\nflowchart LR\n    Service[account-viewing-permissions]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
+
+    external_deps = """- SQL Server\n  - Database: accountdb\n- Service Bus\n  - Queue: user-events\n  - Queue: account-updates\n- External APIs\n  - API: payments\n    - Operation: health_check\n    - Operation: v1-get-accounts\n  - API: notifications\n    - Operation: v1-get-users\n    - Operation: v1-get-user-hidden-accounts\n"""
 
     top_evidence = []
     for resource_type, count in resource_counter.most_common(10):
