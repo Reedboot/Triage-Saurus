@@ -23,6 +23,7 @@ Experiment management (for self-optimizing triage):
 - `python3 Scripts/learning_db.py status` — show SQLite learning database status
 
 Targeted helpers (stdout-only):
+- `python3 Scripts/pull_repo.py <repo_path> [--auto-pull] [--dry-run]` — fetch latest remote refs and optionally pull before scanning
 - `python3 Scripts/scan_knowledge_refinement.py`
 - `python3 Scripts/scan_findings_files.py`
 - `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
