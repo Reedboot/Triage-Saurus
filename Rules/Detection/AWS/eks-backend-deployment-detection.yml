@@ -1,0 +1,42 @@
+rules:
+  - id: context-aws-eks-backend-deployment
+    message: |
+      EKS backend deployment detected via Terraform/Helm.
+      This indicates the application is deployed to EKS and serves as an API backend.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "helm_release" $RELEASE_NAME {
+            ...
+            name = $NAME
+            ...
+            namespace = $NAMESPACE
+            ...
+          }
+      - pattern: |
+          resource "kubernetes_deployment" $DEPLOYMENT_NAME {
+            ...
+            metadata {
+              name = $NAME
+              namespace = $NAMESPACE
+              ...
+            }
+            ...
+          }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: backend-deployment
+      technology: [terraform, kubernetes, eks, aws]
+      target_files: ["**/*kubernetes*.tf", "**/*eks*.tf", "**/*helm*.tf", "*.tf"]
+      extracts:
+        service_type: EKS Backend Service
+        deployment_type: kubernetes
+        properties:
+          - name: release_name
+            pattern: name = "$NAME"
+            description: Helm release or deployment name
+          - name: namespace
+            pattern: namespace = "$NS"
+            description: Kubernetes namespace

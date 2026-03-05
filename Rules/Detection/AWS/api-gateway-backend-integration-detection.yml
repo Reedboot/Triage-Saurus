@@ -1,0 +1,39 @@
+rules:
+  - id: context-aws-api-gateway-backend-integration
+    message: |
+      AWS API Gateway backend integration detected.
+      This rule extracts the backend service that API Gateway routes requests to.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_api_gateway_integration" $INTEGRATION_NAME {
+            ...
+            uri = $URI
+            ...
+          }
+      - pattern: |
+          resource "aws_apigatewayv2_integration" $INTEGRATION_NAME {
+            ...
+            integration_uri = $URI
+            ...
+          }
+    metadata:
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, aws, api-gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway Backend Integration
+        resource_type: aws_api_gateway_integration
+        routing_target: backend_service
+        properties:
+          - name: integration_uri
+            pattern: 'uri = "$URI"'
+            description: Backend URI (Lambda ARN, HTTP endpoint, AWS service)
+          - name: integration_type
+            pattern: 'type = "$TYPE"'
+            description: Integration type (AWS, AWS_PROXY, HTTP, HTTP_PROXY)
+          - name: http_method
+            pattern: 'http_method = "$METHOD"'
