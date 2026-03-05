@@ -9,6 +9,15 @@
 ${architecture_diagram}
 ```
 
+### Legend
+
+Border colors indicate resource categories:
+- 🟢 **Green** - Compute/Application (AKS, App Services, Functions)
+- 🔵 **Blue** - Data Services (SQL, Storage, Service Bus, Queues)
+- 🟣 **Purple** - Network/Security (API Management, Firewall, NSG, Gateway)
+- 🟡 **Yellow** - Monitoring (Application Insights, Log Analytics, Alerts)
+- 🟠 **Orange** - Identity/Secrets (Key Vault, Managed Identity)
+
 ## 📊 TL;DR
 
 | Aspect | Value |
