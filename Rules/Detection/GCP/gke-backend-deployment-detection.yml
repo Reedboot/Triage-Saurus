@@ -1,0 +1,42 @@
+rules:
+  - id: context-gcp-gke-backend-deployment
+    message: |
+      GKE backend deployment detected via Terraform/Helm.
+      This indicates the application is deployed to GKE and serves as an API backend.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "helm_release" $RELEASE_NAME {
+            ...
+            name = $NAME
+            ...
+            namespace = $NAMESPACE
+            ...
+          }
+      - pattern: |
+          resource "kubernetes_deployment" $DEPLOYMENT_NAME {
+            ...
+            metadata {
+              name = $NAME
+              namespace = $NAMESPACE
+              ...
+            }
+            ...
+          }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: backend-deployment
+      technology: [terraform, kubernetes, gke, gcp]
+      target_files: ["**/*kubernetes*.tf", "**/*gke*.tf", "**/*helm*.tf", "*.tf"]
+      extracts:
+        service_type: GKE Backend Service
+        deployment_type: kubernetes
+        properties:
+          - name: release_name
+            pattern: name = "$NAME"
+            description: Helm release or deployment name
+          - name: namespace
+            pattern: namespace = "$NS"
+            description: Kubernetes namespace

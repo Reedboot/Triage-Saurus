@@ -1,0 +1,41 @@
+rules:
+  - id: context-gcp-api-gateway-backend-config
+    message: |
+      GCP API Gateway backend configuration detected.
+      This rule extracts the backend service that API Gateway routes requests to.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_api_gateway_api_config" $CONFIG_NAME {
+            ...
+            openapi_documents {
+              document {
+                path = $PATH
+                contents = $CONTENTS
+              }
+            }
+            ...
+          }
+      - pattern: |
+          resource "google_cloud_run_service" $SERVICE_NAME {
+            ...
+            location = $LOCATION
+            ...
+          }
+    metadata:
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, gcp, api-gateway, cloud-run]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: GCP API Gateway Backend
+        routing_target: backend_service
+        properties:
+          - name: openapi_spec
+            pattern: contents = "$SPEC"
+            description: OpenAPI spec with backend service URLs
+          - name: cloud_run_service
+            pattern: 'resource "google_cloud_run_service" "$NAME"'
+            description: Cloud Run backend service
