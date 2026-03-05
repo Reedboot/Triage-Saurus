@@ -1,0 +1,39 @@
+rules:
+  - id: context-azure-apim-inter-service-calls
+    message: |
+      Inter-service API calls via APIM detected in application configuration.
+      This indicates service-to-service communication through API Management.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          config = {
+            ...
+            $SERVICE_NAME__BaseUri = "$API_MANAGER_URI/$PATH/"
+            ...
+          }
+      - pattern: |
+          secrets = {
+            ...
+            $SERVICE_NAME__SubscriptionKey = $SUBSCRIPTION_KEY
+            ...
+          }
+    metadata:
+      rule_type: context_discovery
+      category: service-dependencies
+      subcategory: inter-service-communication
+      technology: [terraform, azure, apim, microservices]
+      target_files: ["**/kubernetes.tf", "**/*app*.tf", "*.tf"]
+      extracts:
+        service_type: Inter-Service APIM Dependency
+        communication_type: apim_routed
+        properties:
+          - name: dependent_service
+            pattern: '$SERVICE__BaseUri = "...$PATH/"'
+            description: Downstream service called via APIM
+          - name: base_uri
+            pattern: BaseUri = "$URI"
+            description: APIM gateway URI for the dependent service
+          - name: subscription_key_ref
+            pattern: '$SERVICE__SubscriptionKey = $KEY'
+            description: Subscription key used for authentication

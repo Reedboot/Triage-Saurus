@@ -1,0 +1,45 @@
+rules:
+  - id: context-azure-apim-backend-routing
+    message: |
+      APIM API backend routing detected.
+      This rule extracts the backend service_url that APIM routes requests to.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_api" $API_NAME {
+        ...
+        service_url = $SERVICE_URL
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, azure, apim, api-management]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: APIM Backend Routing
+        resource_type: azurerm_api_management_api
+        routing_target: backend_service
+        properties:
+          - name: service_url
+            pattern: service_url = "$URL"
+            description: Backend service that APIM routes API requests to
+  - id: context-azure-apim-backend-resource
+    message: |
+      APIM backend resource detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_backend" $BACKEND_NAME {
+        ...
+        url = $URL
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, azure, apim, api-management]
+      target_files: ["*.tf", "**/*.tf"]
+

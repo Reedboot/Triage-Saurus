@@ -1,0 +1,20 @@
+rules:
+  - id: context-azure-kubernetes-backend-deployment
+    message: |
+      Kubernetes/AKS backend deployment detected via Terraform module.
+      This indicates the application is deployed to AKS and serves as an API backend.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      module $MODULE_NAME {
+        ...
+        app_name = $APP_NAME
+        ...
+      }
+    metadata:
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: backend-deployment
+      technology: [terraform, kubernetes, aks]
+      target_files: ["**/kubernetes.tf", "**/*kubernetes*.tf", "*.tf"]
+
