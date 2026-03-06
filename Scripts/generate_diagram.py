@@ -41,16 +41,16 @@ def get_node_style(resource: dict) -> Optional[str]:
     score = resource.get('max_finding_score', 0)
 
     if score >= 9:
-        return f"style {node_id} stroke:#ff0000,stroke-width:4px"
+        return f"style {node_id} stroke:#ff0000, stroke-width:4px"
     if score >= 7:
-        return f"style {node_id} stroke:#ff6b00,stroke-width:3px"
+        return f"style {node_id} stroke:#ff6b00, stroke-width:3px"
 
     conn = _get_lookup_db()
     if conn:
         category = _rtdb.get_category(conn, resource.get('resource_type', ''))
         colour = _CATEGORY_COLOURS.get(category)
         if colour:
-            return f"style {node_id} stroke:{colour},stroke-width:2px"
+            return f"style {node_id} stroke:{colour}, stroke-width:2px"
 
     return None
 
@@ -244,7 +244,7 @@ def generate_architecture_diagram(experiment_id: str) -> str:
             lines.append(f"  {style}")
     
     if has_internet_connections:
-        lines.append("  style internet stroke:#ff0000,stroke-width:3px")
+        lines.append("  style internet stroke:#ff0000, stroke-width:3px")
     
     return "\n".join(lines)
 
@@ -382,7 +382,7 @@ def generate_blast_radius_diagram(experiment_id: str, compromised_resource: str)
                 seen_edges.add(edge)
     
     lines.append("")
-    lines.append("  classDef compromised stroke:#ff0000,stroke-width:6px")
+    lines.append("  classDef compromised stroke:#ff0000, stroke-width:6px")
     
     return "\n".join(lines)
 
