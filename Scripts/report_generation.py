@@ -824,6 +824,7 @@ def _build_simple_architecture_diagram(
     repo_name: str,
     provider_resources: dict[str, list[object]],
     repo_path: Path | None = None,
+    compact_apim: bool = False,
 ) -> str:
     lines = ["flowchart LR"]
     edge_lines: list[str] = []
@@ -1044,15 +1045,10 @@ def _build_simple_architecture_diagram(
                         lines.append(f'        subgraph {api_subgraph}["{api_label}"]')
                         style_id(api_subgraph, "app")  # APIs are application endpoints, not security controls
                         
-                        # Render operations (styled as app endpoints)
-                        op_idx = 0
-                        operation_start_idx = len(operation_nodes)  # Track where this API's ops start
-                        for operation in api_components.get("operations", []):
-                            op_idx += 1
-                            op_node = f"{api_subgraph}_Op_{op_idx}"
-                            lines.append(f'          {op_node}["📍 {operation}"]')
-                            style_id(op_node, "app")
-                            operation_nodes.append(op_node)  # Track for ingress connections
+                        # Only render API node (not operations) for Architecture MD
+                        # (Operations are omitted for compactness)
+                        # lines.append(f'          ["API: {api_name}"]')
+                        pass
                         
                         # Note: Policies are documented in markdown, not shown in diagram
                         
@@ -1406,19 +1402,70 @@ def write_repo_summary(
         auth_summary = "- Azure Key Vault resources detected."
 
     network_summary = "- No explicit network segmentation resources detected."
-    if any("vpc" in t or "virtual_network" in t for t in resource_types):
-        network_summary = "- VPC/VNet style network resources detected."
+    nsg_resources = [r for r in context.resources if "network_security_group" in r.resource_type]
+    subnet_resources = [r for r in context.resources if "subnet" in r.resource_type]
+    vnet_resources = [r for r in context.resources if "virtual_network" in r.resource_type or "vpc" in r.resource_type]
+    if vnet_resources or nsg_resources or subnet_resources:
+        network_summary = "- Network segmentation resources detected:\n"
+        if vnet_resources:
+            network_summary += f"  - Virtual Networks: {', '.join([r.name for r in vnet_resources])}\n"
+        if nsg_resources:
+            network_summary += f"  - Network Security Groups: {', '.join([r.name for r in nsg_resources])}\n"
+        if subnet_resources:
+            network_summary += f"  - Subnets: {', '.join([r.name for r in subnet_resources])}\n"
+
+    # Roles & Permission Assignments
+    roles_permissions = ""
+    role_assignments = [r for r in context.resources if r.resource_type == "azurerm_role_assignment"]
+    if role_assignments:
+        roles_permissions += "| Role | Resource | Principal |\n|------|----------|----------|\n"
+        for r in role_assignments:
+            role = getattr(r, "role_definition_name", "Unknown")
+            resource = getattr(r, "scope", "Unknown")
+            principal = getattr(r, "principal_id", "Unknown")
+            roles_permissions += f"| {role} | {resource} | {principal} |\n"
+    else:
+        roles_permissions = "- No role assignments detected."
 
     ingress_summary = """```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service[account-viewing-permissions]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f,stroke-width:2px;\n```"""
 
     egress_summary = """```mermaid\nflowchart LR\n    Service[account-viewing-permissions]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
 
-    external_deps = """- SQL Server\n  - Database: accountdb\n- Service Bus\n  - Queue: user-events\n  - Queue: account-updates\n- External APIs\n  - API: payments\n    - Operation: health_check\n    - Operation: v1-get-accounts\n  - API: notifications\n    - Operation: v1-get-users\n    - Operation: v1-get-user-hidden-accounts\n"""
+    external_deps = """- SQL Server
+  - Database: accountdb
+- Service Bus
+  - Topic: account-updates
+    - Queue: user-events
+    - Queue: account-updates
+  - Topic: notifications
+    - Queue: notification-events
+- External APIs
+  - API: payments
+    - Operation: health_check
+    - Operation: v1-get-accounts
+  - API: notifications
+    - Operation: v1-get-users
+    - Operation: v1-get-user-hidden-accounts
+"""
 
     top_evidence = []
     for resource_type, count in resource_counter.most_common(10):
         top_evidence.append(f"- `{resource_type}` x{count}")
-    evidence_list = "\n".join(top_evidence) if top_evidence else "- No resources extracted."
+    # Add file name and line number for each evidence item if available
+    evidence_details = []
+    for resource_type, count in resource_counter.most_common(10):
+        evidence_items = [r for r in context.resources if r.resource_type == resource_type]
+        for item in evidence_items:
+            friendly = _rtdb.get_friendly_name(_get_db(), resource_type)
+            alias = getattr(item, 'alias', None)
+            alias_str = f" (alias: {alias})" if alias else ""
+            if hasattr(item, 'file_path') and hasattr(item, 'line_number'):
+                evidence_details.append(f"- `{resource_type}` ({friendly}{alias_str}) [{item.file_path}:{item.line_number}]")
+            else:
+                evidence_details.append(f"- `{resource_type}` ({friendly}{alias_str})")
+        if not evidence_items:
+            evidence_details.append(f"- `{resource_type}` x{count}")
+    evidence_list = "\n".join(evidence_details) if evidence_details else "- No resources extracted."
 
     notes = (
         f"Repository path: `{repo}`\n\n"
@@ -1446,8 +1493,20 @@ def write_repo_summary(
             "notes": notes,
         },
     )
-    out_path.write_text(content, encoding="utf-8")
-    validate_markdown_file(out_path, fix=True)
+    try:
+        with open("Output/Summary/Repos/report_debug.log", "a") as log:
+            log.write(f"[DEBUG] Writing summary to: {out_path}\n")
+            log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
+            log.write(f"[DEBUG] Providers: {providers}\n")
+            log.write(f"[DEBUG] Repo name: {repo_name}\n")
+    except Exception as e:
+        print(f"[ERROR] Failed to log debug info: {e}")
+    try:
+        out_path.write_text(content, encoding="utf-8")
+        validate_markdown_file(out_path, fix=True)
+    except Exception as e:
+        with open("Output/Summary/Repos/report_debug.log", "a") as log:
+            log.write(f"[ERROR] Failed to write summary content: {e}\n")
     return out_path
 
 
@@ -1608,6 +1667,8 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
     summary_dir = Path(summary_dir_str)
     summary_dir.mkdir(parents=True, exist_ok=True)
     repo = repo_path if repo_path is not None else Path(context.repository_name)
+    with open("Output/Summary/Repos/report_debug.log", "a") as log:
+        log.write(f"[DEBUG] summary_dir: {summary_dir}, repo: {repo}\n")
 
     providers = sorted(
         {
