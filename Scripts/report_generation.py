@@ -1423,17 +1423,14 @@ def _build_simple_architecture_diagram(
         lines.append("  end")
 
     lines.extend(edge_lines)
-    # Some Mermaid renderers choke on linkStyle/style blocks that include commas or extra formatting.
-    # Move link/node style lines into a fenced comment block to keep diagrams safe for parsers that expect strict tokens.
-    # This preserves the visual styling for manual inspection but avoids breaking automated Mermaid parsing.
+    # Append link and node style directives directly so Mermaid renders colored borders.
+    # NOTE: Some Mermaid parsers may be strict; enable at risk of parser incompatibility.
     if link_styles:
-        lines.append('  %% linkStyle directives (moved to comment to avoid parser issues)')
         for ls in link_styles:
-            lines.append(f'  %% {ls.strip()}')
+            lines.append(f'  {ls.strip()}')
     if node_styles:
-        lines.append('  %% style directives (moved to comment to avoid parser issues)')
         for ns in node_styles:
-            lines.append(f'  %% {ns.strip()}')
+            lines.append(f'  {ns.strip()}')
     
     diagram = "\n".join(lines)
     # Sanitize hyphens inside unquoted tokens (IDs) by replacing hyphens between word chars with underscores.
@@ -1509,26 +1506,87 @@ def write_repo_summary(
     else:
         roles_permissions = "- No role assignments detected."
 
-    ingress_summary = """```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service[account-viewing-permissions]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f, stroke-width:2px\n```"""
+    ingress_summary = f"""```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service["{repo_name}"]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f, stroke-width:2px\n```"""
 
-    egress_summary = """```mermaid\nflowchart LR\n    Service[account-viewing-permissions]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
+    egress_summary = f"""```mermaid\nflowchart LR\n    Service["{repo_name}"]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
 
-    external_deps = """- SQL Server
-  - Database: accountdb
-- Service Bus
-  - Topic: account-updates
-    - Queue: user-events
-    - Queue: account-updates
-  - Topic: notifications
-    - Queue: notification-events
-- External APIs
-  - API: payments
-    - Operation: health_check
-    - Operation: v1-get-accounts
-  - API: notifications
-    - Operation: v1-get-users
-    - Operation: v1-get-user-hidden-accounts
-"""
+    # Override ingress/egress examples with detected APIs (if present)
+    api_types = (
+        "azurerm_api_management_api",
+        "aws_api_gateway_rest_api",
+        "aws_apigatewayv2_api",
+        "google_api_gateway_api",
+    )
+    # Only include APIs whose resource blocks are present in this repo (context.resources)
+    apis = []
+    for r in context.resources:
+        if getattr(r, "resource_type", None) in api_types and getattr(r, "name", None):
+            # Prefer explicit API name if available, else use resource label
+            apis.append(getattr(r, "name") or getattr(r, "resource_type"))
+    if apis:
+        ingress_lines = [
+            "```mermaid",
+            "flowchart LR",
+            "    Internet[Internet] --> APIM[API Management APIM]",
+            f'    Service["{repo_name}"]',
+        ]
+        for i, api in enumerate(apis[:5], start=1):
+            api_id = f"API{i}"
+            ingress_lines.append(f'    APIM --> {api_id}["{api}"]')
+            ingress_lines.append(f'    {api_id} -->|Subscription Key| Service')
+        ingress_lines.append("```")
+        ingress_summary = "\n".join(ingress_lines)
+
+        egress_lines = [
+            "```mermaid",
+            "flowchart LR",
+            f'    Service["{repo_name}"]',
+        ]
+        for i, api in enumerate(apis[:5], start=1):
+            api_id = f"API{i}"
+            egress_lines.append(f'    Service --> {api_id}["{api}"]')
+        egress_lines.append("```")
+        egress_summary = "\n".join(egress_lines)
+    else:
+        # No APIs detected in this repository's IaC resources — avoid showing placeholder samples.
+        ingress_summary = "- No API Management APIs detected in IaC resources."
+
+        egress_summary = "- No APIM egress detected from IaC resources. External dependencies are listed below if found."
+
+    # Determine external dependencies from detected connections and Kubernetes module configs
+    external_targets: set[str] = set()
+    # Build set of local resource names to distinguish internal targets
+    local_resource_names = {r.name for r in context.resources if getattr(r, 'name', None)}
+
+    # Use explicit connections detected by context_extraction (if present)
+    for conn in context.connections:
+        try:
+            src = getattr(conn, 'source', '')
+            tgt = getattr(conn, 'target', '')
+            # If source is local (repo or a local resource) and target is not a local resource or Internet
+            if (src == repo_name or src in local_resource_names) and tgt and tgt not in local_resource_names and tgt != 'Internet':
+                external_targets.add(tgt)
+        except Exception:
+            continue
+
+    # Also inspect Kubernetes module configs for outbound service BaseUri patterns
+    try:
+        k8s_deps = []
+        deployments = _extract_kubernetes_deployments(repo_path) if repo_path is not None else []
+        for d in deployments:
+            deps = _extract_service_dependencies(repo_path, d.get('module_name')) if repo_path is not None else []
+            for dep in deps:
+                external_targets.add(dep)
+    except Exception:
+        pass
+
+    if external_targets:
+        lines = ["- External dependencies detected:"]
+        for t in sorted(external_targets):
+            lines.append(f"  - {t}")
+        external_deps = "\n".join(lines)
+    else:
+        external_deps = "- No external dependencies detected in Phase 1."
 
     top_evidence = []
     for resource_type, count in resource_counter.most_common(10):

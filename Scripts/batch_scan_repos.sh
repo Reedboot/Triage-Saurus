@@ -4,10 +4,13 @@
 
 set -e
 
-REPOS_ROOT="/mnt/c/Repos"
-INTAKE_FILE="/mnt/c/Repos/Triage-Saurus/Intake/ReposToScan.txt"
-DB_PATH="/mnt/c/Repos/Triage-Saurus/Output/Learning/triage.db"
-AUDIT_LOG="/mnt/c/Repos/Triage-Saurus/Output/Audit/Session_$(date +%Y-%m-%d_%H%M%S).md"
+# Use repository-relative paths
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPOS_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+INTAKE_FILE="$REPO_ROOT/Intake/ReposToScan.txt"
+DB_PATH="$REPO_ROOT/Output/Learning/triage.db"
+AUDIT_LOG="$REPO_ROOT/Output/Audit/Session_$(date +%Y-%m-%d_%H%M%S).md"
 TIMEOUT=120  # 2 minute timeout per repo
 
 # Parse arguments
@@ -132,7 +135,7 @@ while IFS= read -r repo_name || [ -n "$repo_name" ]; do
   
   # Phase 1-2: Context discovery with timeout
   log "  Phase 1-2: Context discovery..."
-  if timeout $TIMEOUT python3 /mnt/c/Repos/Triage-Saurus/Scripts/discover_repo_context.py "$REPO_PATH" --database "$DB_PATH" > /dev/null 2>&1; then
+  if timeout $TIMEOUT python3 "$REPO_ROOT/Scripts/discover_repo_context.py" "$REPO_PATH" --database "$DB_PATH" > /dev/null 2>&1; then
     log "  ✅ Complete"
     SUCCESS=$((SUCCESS + 1))
   else
