@@ -21,6 +21,12 @@ log() {
   echo "[$(date '+%H:%M:%S')] $*"
 }
 
+# Ensure triage.db exists
+if [ ! -f "$DB_PATH" ]; then
+  log "triage.db not found, initializing..."
+  python3 Scripts/learning_db.py init
+fi
+
 # Check if repo was scanned within last hour
 should_skip_repo() {
   local repo_name="$1"
@@ -80,15 +86,15 @@ cat > "$AUDIT_LOG" << AUDIT_EOF
 **AUDIT LOG ONLY — do not load into LLM triage context**
 
 ## Session Metadata
-- **Date:** $(date '+%d/%m/%Y')
-- **Start time:** $(date '+%H:%M')
-- **Triage type:** Repo scan (batch)
-- **Mode:** Phase 1-2 context discovery only (no LLM, opengrep skipped)
-- **Timeout:** ${TIMEOUT}s per repo
-- **Force mode:** $FORCE_SCAN
-- **Database:** $DB_PATH
-- **Source:** $INTAKE_FILE
-- **Total repos:** $(wc -l < "$INTAKE_FILE")
+- 🗓️ **Date:** $(date '+%d/%m/%Y')
+- ⏰ **Start time:** $(date '+%H:%M')
+- 🏷️ **Triage type:** Repo scan (batch)
+- 🦖 **Mode:** Phase 1-2 context discovery only (no LLM, opengrep skipped)
+- ⏳ **Timeout:** ${TIMEOUT}s per repo
+- 🚦 **Force mode:** $FORCE_SCAN
+- 🗃️ **Database:** $DB_PATH
+- 📂 **Source:** $INTAKE_FILE
+- 📊 **Total repos:** $(wc -l < "$INTAKE_FILE")
 
 ---
 
@@ -103,10 +109,12 @@ while IFS= read -r repo_name || [ -n "$repo_name" ]; do
   [[ "$repo_name" =~ ^# ]] && continue
   
   TOTAL=$((TOTAL + 1))
-  REPO_PATH="$REPOS_ROOT/$repo_name"
+  # Remove carriage returns and whitespace from repo_name
+  repo_name_clean=$(echo "$repo_name" | tr -d '\r' | xargs)
+  REPO_PATH="$REPOS_ROOT/$repo_name_clean"
   REPO_START=$(date +%s)
   
-  log "[$TOTAL] Processing: $repo_name"
+  log "[$TOTAL] Processing: $repo_name_clean"
   
   # Check if repo exists
   if [ ! -d "$REPO_PATH" ]; then
