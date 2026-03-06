@@ -1,0 +1,27 @@
+# Service Bus Topics & Queues Extraction Rule
+# Extracts all azurerm_servicebus_topic, azurerm_servicebus_queue, and azurerm_servicebus_subscription resources
+
+rules:
+  - id: servicebus_topics_queues
+    rule_id: servicebus_topics_queues
+    name: Extract Service Bus Topics and Queues
+    message: Extracted Service Bus Topics, Queues, and Subscriptions
+    severity: INFO
+    languages:
+      - terraform
+    resource_types:
+      - azurerm_servicebus_topic
+      - azurerm_servicebus_queue
+      - azurerm_servicebus_subscription
+    patterns:
+      - pattern: 'resource "azurerm_servicebus_topic" "(?P<topic_name>.*?)"'
+      - pattern: 'resource "azurerm_servicebus_queue" "(?P<queue_name>.*?)"'
+      - pattern: 'resource "azurerm_servicebus_subscription" "(?P<subscription_name>.*?)"'
+    outputs:
+      - summary: |
+          Service Bus Topics and Queues:
+          - Topic: {{topic_name}}
+            - Queue: {{queue_name}}
+              - Subscription: {{subscription_name}}
+          
+          Reference: {{file_path}}:{{line_number}}
