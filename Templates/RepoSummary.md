@@ -57,6 +57,10 @@ ${external_deps}
 
 ${evidence_list}
 
+## 🔧 Terraform modules
+
+${terraform_modules}
+
 ## 📝 Notes
 
 ${notes}
