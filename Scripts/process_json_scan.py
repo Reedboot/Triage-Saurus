@@ -52,7 +52,7 @@ for check_id, results in grouped.items():
       "title": title,
       "description": msg.split('\\n')[0],
       "overall_score": { "severity": sev_label, "score": score },
-      "architecture_mermaid": "flowchart TB\\n  Internet[Internet] --> Svc[Affected Service]\\n  style Svc stroke:#ff0000,stroke-width:4px",
+      "architecture_mermaid": "flowchart TB\\n  Internet[Internet] --> Svc[Affected Service]\\n  style Svc stroke:#ff0000, stroke-width:4px", 
       "security_review": {
         "summary": msg,
         "applicability": { "status": "Yes", "evidence": "Detected via opengrep." },
