@@ -119,7 +119,7 @@ def _is_apim_component(resource_type: str) -> bool:
     return resource_type in apim_components
 
 
-def _group_apim_resources(service_raw: list[str], resources: list) -> tuple[list[str], dict]:
+def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Path | None) -> tuple[list[str], dict]:
     """Separate APIM components from other resources and group them by API.
     
     Returns:
@@ -138,6 +138,14 @@ def _group_apim_resources(service_raw: list[str], resources: list) -> tuple[list
     # Structure: {api_name: {operations: [], policies: [], products: [], subscriptions: []}}
     apim_structure = {}
     
+    # Extract actual operation_id values from Terraform if available
+    operation_ids = {}  # {terraform_label: operation_id}
+    if repo_path:
+        for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api_operation"):
+            op_id_match = re.search(r'operation_id\s*=\s*"([^"]+)"', body)
+            if op_id_match:
+                operation_ids[rlabel] = op_id_match.group(1)
+    
     for api in api_resources:
         api_name = api.name or "unnamed-api"
         apim_structure[api_name] = {
@@ -150,7 +158,9 @@ def _group_apim_resources(service_raw: list[str], resources: list) -> tuple[list
         # Find operations for this API
         for r in resources:
             if r.resource_type == "azurerm_api_management_api_operation":
-                apim_structure[api_name]["operations"].append(r.name)
+                # Use actual operation_id from Terraform if available, else fall back to resource label
+                op_name = operation_ids.get(r.name, r.name)
+                apim_structure[api_name]["operations"].append(op_name)
             elif r.resource_type == "azurerm_api_management_api_policy":
                 apim_structure[api_name]["policies"].append(r.name)
         
@@ -731,6 +741,7 @@ def _mermaid_safe_name(raw: str) -> str | None:
     - Replaces Terraform interpolations (${...}) with '*' to preserve the pattern.
     - Returns None if the result is uninformative (only wildcards/punctuation).
     - Strips characters that break Mermaid label parsing (double-quotes, brackets).
+    - Ensures resulting IDs do not start with digits by prefixing 'n' when necessary.
     """
     sanitized = _INTERP_RE.sub("*", raw)
     # Collapse adjacent wildcards (e.g. ** → *)
@@ -745,6 +756,13 @@ def _mermaid_safe_name(raw: str) -> str | None:
     # Truncate long names
     if len(sanitized) > 40:
         sanitized = sanitized[:37] + "..."
+    # If the safe name starts with a digit, prefix with 'n' to ensure Mermaid accepts it as an ID
+    if re.match(r'^[0-9]', sanitized):
+        sanitized = 'n' + sanitized
+    # Replace hyphens between word chars with underscore to avoid strict token issues
+    sanitized = re.sub(r'(?<=\w)-(?=\w)', '_', sanitized)
+    # Replace dots with underscores to avoid ellipsis '...' in IDs which can break strict Mermaid parsers
+    sanitized = sanitized.replace('.', '_')
     return sanitized
 
 
@@ -831,6 +849,7 @@ def _build_simple_architecture_diagram(
     link_styles: list[str] = []
     node_styles: list[str] = []
     styled_ids: set[str] = set()
+    used_node_ids: set[str] = set()  # Track all node IDs to prevent duplicates
     link_index = 0
 
     category_colors = {
@@ -845,7 +864,7 @@ def _build_simple_architecture_diagram(
         if target_id in styled_ids:
             return
         color = category_colors.get(category, category_colors["app"])
-        node_styles.append(f"  style {target_id} stroke:{color},stroke-width:2px")
+        node_styles.append(f"  style {target_id} stroke:{color}, stroke-width:2px")
         styled_ids.add(target_id)
 
     # Maps DB category → diagram layer key
@@ -889,9 +908,9 @@ def _build_simple_architecture_diagram(
         if dashed:
             link_styles.append(f"  linkStyle {link_index} stroke-dasharray: 5 5")
         if red:
-            link_styles.append(f"  linkStyle {link_index} stroke:#ff0000,stroke-width:3px")
+            link_styles.append(f"  linkStyle {link_index} stroke:#ff0000, stroke-width:3px")
         elif orange:
-            link_styles.append(f"  linkStyle {link_index} stroke:#ff8c00,stroke-width:3px")
+            link_styles.append(f"  linkStyle {link_index} stroke:#ff8c00, stroke-width:3px")
         link_index += 1
 
     lines.append('  Internet[Internet Users]')
@@ -953,7 +972,7 @@ def _build_simple_architecture_diagram(
         monitoring_node = f"{provider_id}_Monitoring"
         
         # Style the cloud boundary with neutral gray (same as Internet node)
-        node_styles.append(f"  style {provider_id}_Cloud stroke:#666,stroke-width:2px")
+        node_styles.append(f"  style {provider_id}_Cloud stroke:#666, stroke-width:2px")
         styled_ids.add(f"{provider_id}_Cloud")
 
         # Group paas_services by category layer and render one subgraph per layer
@@ -1010,7 +1029,7 @@ def _build_simple_architecture_diagram(
                 
                 # Check if this is an API Management service with multiple components
                 is_apim_service = service == "API Management" or any(_is_apim_component(r) for r in service_raw)
-                non_apim_resources, apim_structure = _group_apim_resources(service_raw, resources) if is_apim_service else (service_raw, {})
+                non_apim_resources, apim_structure = _group_apim_resources(service_raw, resources, repo_path) if is_apim_service else (service_raw, {})
                 
                 if len(service_raw) <= 1:
                     node_id = f"{layer_id}_Svc_{p_idx}"
@@ -1025,6 +1044,7 @@ def _build_simple_architecture_diagram(
                     lines.append(f'      subgraph {svc_subgraph}["🔌 {service}"]')
                     style_id(svc_subgraph, layer_cat)
                     operation_nodes = []  # Collect all operation nodes for ingress connections
+                    operation_start_idx = 0  # Default start index for operation nodes (safe fallback)
                     apim_requires_auth = False  # Track if any API requires auth
                     backend_services = []  # Track backend services to render outside APIM
                     
@@ -1045,10 +1065,22 @@ def _build_simple_architecture_diagram(
                         lines.append(f'        subgraph {api_subgraph}["{api_label}"]')
                         style_id(api_subgraph, "app")  # APIs are application endpoints, not security controls
                         
-                        # Only render API node (not operations) for Architecture MD
-                        # (Operations are omitted for compactness)
-                        # lines.append(f'          ["API: {api_name}"]')
-                        pass
+                        # Render API node and its operations (so Internet → operation links can be drawn)
+                        lines.append(f'          {api_subgraph}_Node["API: {api_name}"]')
+                        style_id(f'{api_subgraph}_Node', 'app')
+                        operation_nodes.append(f'{api_subgraph}_Node')
+                        # Render operations as separate nodes beneath the API (if present)
+                        for op in api_components.get('operations', []):
+                            # Sanitize: replace hyphens with underscores
+                            safe_op_id = op.replace('-', '_')
+                            # Remove non-alphanumeric
+                            safe_op_id = re.sub(r'[^A-Za-z0-9_]', '', safe_op_id)
+                            # Prefix with 'op' to ensure node ID part doesn't start with digit
+                            safe_op_id = 'op' + safe_op_id
+                            op_node = f'{api_subgraph}_{safe_op_id}'
+                            lines.append(f'          {op_node}["{op}"]')
+                            style_id(op_node, 'app')
+                            operation_nodes.append(op_node)
                         
                         # Note: Policies are documented in markdown, not shown in diagram
                         
@@ -1154,19 +1186,42 @@ def _build_simple_architecture_diagram(
                                 style_id(db_node, "data")
                                 lines.append("        end")
                             
-                            # Add Service Bus inside Data layer
+                            # Add Service Bus inside Data layer as a subgraph with queues/topics
                             if has_service_bus:
-                                service_bus_node = f"{data_subgraph}_ServiceBus"
-                                lines.append(f'        {service_bus_node}["🚌 Service Bus"]')
-                                style_id(service_bus_node, "data")
-                            
+                                sb_subgraph = f"{data_subgraph}_ServiceBus"
+                                sb_root = f"{sb_subgraph}_Root"
+                                lines.append(f'        subgraph {sb_subgraph}["🚌 Service Bus"]')
+                                style_id(sb_subgraph, "data")
+                                # Root namespace node
+                                lines.append(f'          {sb_root}["Service Bus Namespace"]')
+                                style_id(sb_root, "data")
+                                # Render topics, queues, subscriptions found in provider resources
+                                for r in resources:
+                                    if r.resource_type in ("azurerm_servicebus_topic", "azurerm_servicebus_queue", "azurerm_servicebus_subscription"):
+                                        # Generate unique node ID by appending counter if duplicate
+                                        base_node_id = f"{sb_subgraph}_{_mermaid_safe_name(r.name) or 'res'}"
+                                        node_id = base_node_id
+                                        counter = 1
+                                        while node_id in used_node_ids:
+                                            node_id = f"{base_node_id}_{counter}"
+                                            counter += 1
+                                        used_node_ids.add(node_id)
+                                        
+                                        label = r.name or r.resource_type
+                                        lines.append(f'          {node_id}["{label}"]')
+                                        style_id(node_id, "data")
+                                        # connect namespace root to child
+                                        add_link(sb_root, node_id)
+                                lines.append("        end")
+                            # Close Data subgraph
                             lines.append("      end")
                             
                             # Create connections
                             if has_database:
                                 add_link(backend_app_node, db_node, label="queries")
                             if has_service_bus:
-                                add_link(backend_app_node, service_bus_node, label="messages")
+                                # Link app to Service Bus namespace root for messages
+                                add_link(backend_app_node, sb_root, label="messages")
                         
                         # Add Application Insights connection if detected
                         if backend.get("app_insights"):
@@ -1368,10 +1423,37 @@ def _build_simple_architecture_diagram(
         lines.append("  end")
 
     lines.extend(edge_lines)
-    lines.extend(link_styles)
-    lines.extend(node_styles)
+    # Some Mermaid renderers choke on linkStyle/style blocks that include commas or extra formatting.
+    # Move link/node style lines into a fenced comment block to keep diagrams safe for parsers that expect strict tokens.
+    # This preserves the visual styling for manual inspection but avoids breaking automated Mermaid parsing.
+    if link_styles:
+        lines.append('  %% linkStyle directives (moved to comment to avoid parser issues)')
+        for ls in link_styles:
+            lines.append(f'  %% {ls.strip()}')
+    if node_styles:
+        lines.append('  %% style directives (moved to comment to avoid parser issues)')
+        for ns in node_styles:
+            lines.append(f'  %% {ns.strip()}')
     
-    return "\n".join(lines)
+    diagram = "\n".join(lines)
+    # Sanitize hyphens inside unquoted tokens (IDs) by replacing hyphens between word chars with underscores.
+    # Keeps quoted labels intact.
+    def _sanitize_ids(text: str) -> str:
+        out_lines: list[str] = []
+        for line in text.splitlines():
+            # Split on quoted strings (with optional trailing space/punctuation)
+            parts = re.split(r'(".*?")', line)
+            # The regex splits quoted strings; odd-indexed parts are quoted, even-indexed are not
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    # Replace hyphens between word characters with underscore (v1-get -> v1_get)
+                    part = re.sub(r'(?<=\w)-(?=\w)', '_', part)
+                    parts[i] = part
+            out_lines.append(''.join(parts))
+        return '\n'.join(out_lines)
+
+    diagram = _sanitize_ids(diagram)
+    return diagram
 
 
 def write_repo_summary(
@@ -1427,7 +1509,7 @@ def write_repo_summary(
     else:
         roles_permissions = "- No role assignments detected."
 
-    ingress_summary = """```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service[account-viewing-permissions]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f,stroke-width:2px;\n```"""
+    ingress_summary = """```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service[account-viewing-permissions]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f, stroke-width:2px\n```"""
 
     egress_summary = """```mermaid\nflowchart LR\n    Service[account-viewing-permissions]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
 
@@ -1473,6 +1555,42 @@ def write_repo_summary(
         "Generated from Phase 1 local heuristics."
     )
 
+    # Fetch Terraform modules from DB/context if available
+    modules_list_md = "- None detected."
+    try:
+        from analyze_terraform_modules import extract_modules
+        modules = extract_modules(repo)
+        if modules:
+            lines = []
+            for m in modules:
+                lines.append(f"- **{m['name']}** — {m['source']} ({m['file']})")
+            modules_list_md = "\n".join(lines)
+    except Exception:
+        # Fall back to DB context metadata
+        try:
+            db = _get_db()
+            if db:
+                import sqlite3
+                conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"))
+                cur = conn.execute("SELECT key, value FROM context_metadata WHERE key LIKE 'module:%' AND repo_id IS NOT NULL")
+                rows = cur.fetchall()
+                if rows:
+                    lines = []
+                    for key, value in rows:
+                        import json
+                        name = key.split(':',1)[1]
+                        try:
+                            j = json.loads(value)
+                            src = j.get('source')
+                            file = j.get('file')
+                            lines.append(f"- **{name}** — {src} ({file})")
+                        except Exception:
+                            lines.append(f"- **{name}** — {value}")
+                    modules_list_md = "\n".join(lines)
+                conn.close()
+        except Exception:
+            pass
+
     content = render_template(
         "RepoSummary.md",
         {
@@ -1485,12 +1603,14 @@ def write_repo_summary(
             "ci_cd": ci_cd_text,
             "providers": provider_text,
             "auth_summary": auth_summary,
+            "roles_permissions": roles_permissions,
             "network_summary": network_summary,
             "ingress_summary": ingress_summary,
             "egress_summary": egress_summary,
             "external_deps": external_deps,
             "evidence_list": evidence_list,
             "notes": notes,
+            "terraform_modules": modules_list_md,
         },
     )
     try:
@@ -1517,11 +1637,29 @@ def write_experiment_cloud_architecture_summary(
     providers: list[str],
     context: RepositoryContext,
     summary_dir: Path,
+    repo_path: Path | None = None,
 ) -> list[Path]:
     out_files: list[Path] = []
     resource_types = [r.resource_type for r in context.resources]
 
     for provider in providers:
+        # Record module dependencies discovered in Terraform into DB if available
+        try:
+            from analyze_terraform_modules import extract_modules, classify_module_source
+            modules = extract_modules(repo_path or repo)
+            db = _get_db()
+            if db:
+                import json
+                conn = db
+                for mod in modules:
+                    # Insert as context metadata: module:<module_name> -> JSON data about source and file
+                    key = f"module:{mod['name']}"
+                    value = json.dumps({"source": mod['source'], "file": mod['file']})
+                    from db_helpers import upsert_context_metadata
+                    upsert_context_metadata(experiment_id="001", repo_name=repo_name, key=key, value=value, source="module_discovery")
+        except Exception:
+            # Non-critical; continue report generation without DB recording
+            pass
         provider_resource_objs = [r for r in context.resources if _rtdb.get_provider_key(_get_db(), r.resource_type) == provider]
         provider_resources = [r.resource_type for r in provider_resource_objs]
         unique_provider_resources = sorted(set(provider_resources))
@@ -1695,6 +1833,7 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
             providers=providers,
             context=context,
             summary_dir=summary_dir,
+            repo_path=repo_path,
         )
     )
     return generated
