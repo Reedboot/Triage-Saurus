@@ -724,7 +724,7 @@ def init_schema(conn: sqlite3.Connection):
         ("azurerm_mssql_server",                       "SQL Server",                 "Database",   "🗃️", "azure", 1, 1),
         ("azurerm_sql_server",                         "SQL Server",                 "Database",   "🗃️", "azure", 1, 1),
         ("azurerm_mssql_database",                     "SQL Database",               "Database",   "🗃️", "azure", 1, 0),
-        ("azurerm_mssql_server_security_alert_policy", "SQL Server",                 "Database",   "🗃️", "azure", 1, 0),
+        ("azurerm_mssql_server_security_alert_policy", "SQL Alert Policy",           "Security",   "🚨", "azure", 0, 0),
         ("azurerm_mysql_server",                       "MySQL Server",               "Database",   "🗃️", "azure", 1, 1),
         ("azurerm_postgresql_server",                  "PostgreSQL Server",          "Database",   "🗃️", "azure", 1, 1),
         ("azurerm_postgresql_configuration",           "PostgreSQL Server",          "Database",   "🗃️", "azure", 1, 0),

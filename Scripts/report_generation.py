@@ -89,7 +89,15 @@ def _resource_kind_label(resource_type: str) -> str:
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix):]
             break
-    return cleaned.replace("_", " ").title()
+    # Normalize mssql -> SQL for nicer labels (e.g., "Mssql Server" -> "SQL Server")
+    parts = cleaned.split("_")
+    normalized_parts = []
+    for p in parts:
+        if p.lower() in ("mssql", "sql"):
+            normalized_parts.append("SQL")
+        else:
+            normalized_parts.append(p.capitalize())
+    return " ".join(normalized_parts)
 
 
 def _child_node_label(resource_type: str, parent_service: str) -> str:
@@ -1699,6 +1707,8 @@ def _inventory_annotation(resource_type: str) -> str:
         return " `[RBAC role def — not on diagram]`"
     if "auditing_policy" in resource_type:
         return " `[audit policy — not on diagram]`"
+    if "alert_policy" in resource_type or "security_alert" in resource_type:
+        return " `[security alerting — not on diagram]`"
     if "_transparent_data_encryption" in resource_type:
         return " `[encryption config — not on diagram]`"
     if "_virtual_network_rule" in resource_type:
