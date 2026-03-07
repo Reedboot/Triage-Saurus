@@ -1,9 +1,161 @@
 # context_extraction.py
+import json
 import re
 from pathlib import Path
 from typing import List, Dict, Set, Tuple
 
-from models import Resource, Connection, RepositoryContext
+from models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
+
+
+# ---------------------------------------------------------------------------
+# Endpoint → (resource_type, name_group_index) patterns
+# name_group_index: which regex capture group holds the resource canonical name
+# ---------------------------------------------------------------------------
+_ENDPOINT_PATTERNS: list[tuple[re.Pattern, str, int]] = [
+    # Azure SQL / MSSQL  "Server=tycho-sql.database.windows.net"
+    (re.compile(r'(?:Server|Data Source)\s*=\s*([\w\-]+)\.database\.windows\.net', re.I),
+     "azurerm_mssql_server", 1),
+    # Azure Blob Storage  "https://labpallas.blob.core.windows.net"
+    (re.compile(r'https?://([\w\-]+)\.blob\.core\.windows\.net', re.I),
+     "azurerm_storage_account", 1),
+    # Azure Storage connection string  "AccountName=labpallas"
+    (re.compile(r'AccountName=([\w\-]+)', re.I),
+     "azurerm_storage_account", 1),
+    # Azure Key Vault  "https://ganymede-kv.vault.azure.net"
+    (re.compile(r'https?://([\w\-]+)\.vault\.azure\.net', re.I),
+     "azurerm_key_vault", 1),
+    # Azure Service Bus  "Endpoint=sb://mybus.servicebus.windows.net"
+    (re.compile(r'(?:Endpoint=sb|amqps)://([\w\-]+)\.servicebus\.windows\.net', re.I),
+     "azurerm_servicebus_namespace", 1),
+    # Azure Redis Cache  "myredis.redis.cache.windows.net"
+    (re.compile(r'([\w\-]+)\.redis\.cache\.windows\.net', re.I),
+     "azurerm_redis_cache", 1),
+    # Azure APIM  "https://myapim.azure-api.net"
+    (re.compile(r'https?://([\w\-]+)\.azure\-api\.net', re.I),
+     "azurerm_api_management", 1),
+    # Azure App Service / Function  "https://myapp.azurewebsites.net"
+    (re.compile(r'https?://([\w\-]+)\.azurewebsites\.net', re.I),
+     "azurerm_linux_web_app", 1),
+    # Azure Cosmos DB  "AccountEndpoint=https://mycosmos.documents.azure.com"
+    (re.compile(r'https?://([\w\-]+)\.documents\.azure\.com', re.I),
+     "azurerm_cosmosdb_account", 1),
+    # Azure Event Hub (shares servicebus namespace)
+    (re.compile(r'([\w\-]+)\.servicebus\.windows\.net', re.I),
+     "azurerm_eventhub_namespace", 1),
+    # AWS RDS  "mydb.abcdef.us-east-1.rds.amazonaws.com"
+    (re.compile(r'([\w\-]+)\.\w+\.[\w\-]+\.rds\.amazonaws\.com', re.I),
+     "aws_db_instance", 1),
+    # AWS S3 path-style  "s3.amazonaws.com/mybucket"
+    (re.compile(r's3\.amazonaws\.com/([\w\-\.]+)', re.I),
+     "aws_s3_bucket", 1),
+    # AWS S3 virtual-hosted  "mybucket.s3.amazonaws.com" / "mybucket.s3.us-east-1.amazonaws.com"
+    (re.compile(r'([\w\-]+)\.s3(?:\.[\w\-]+)?\.amazonaws\.com', re.I),
+     "aws_s3_bucket", 1),
+    # GCP Cloud SQL  "/<project>:<region>:<instance>"  (socket path pattern)
+    (re.compile(r'(?:/cloudsql/|socketPath.*?)([\w\-]+:[\w\-]+:[\w\-]+)', re.I),
+     "google_sql_database_instance", 1),
+]
+
+# Files worth scanning for connection strings (cheapest signal, checked first)
+_CONN_STRING_GLOBS = [
+    "appsettings*.json",
+    "appsettings*.yml",
+    "appsettings*.yaml",
+    ".env",
+    ".env.*",
+    "web.config",
+    "app.config",
+    "*.env",
+    "values.yaml",
+    "values*.yaml",
+    "**/configmap*.yaml",
+    "**/configmap*.yml",
+    "**/secret*.yaml",
+]
+# Code files scanned as lower-priority fallback
+_CODE_GLOBS = ["*.cs", "*.py", "*.js", "*.ts", "*.go", "*.java"]
+# Directories to skip
+_SKIP_DIRS = {".git", "node_modules", ".terraform", "__pycache__", "bin", "obj", "dist", "build"}
+
+
+def extract_connection_string_dependencies(
+    repo_path: Path,
+    context: RepositoryContext,
+) -> None:
+    """
+    Scan config files and code for endpoint patterns that imply a runtime
+    dependency on a cloud resource.  Appends inferred Relationship objects
+    (depends_on, confidence='inferred') to *context.relationships* and
+    creates synthetic Resource entries for each discovered external target
+    (so they appear in resource_nodes after persist_graph runs).
+    """
+    repo_name = context.repository_name
+
+    # Collect candidate files
+    def _walk(globs: list[str]) -> list[Path]:
+        seen: set[Path] = set()
+        for pattern in globs:
+            for p in repo_path.glob(f"**/{pattern}"):
+                if not any(part in _SKIP_DIRS for part in p.parts):
+                    if p not in seen:
+                        seen.add(p)
+                        yield p
+
+    already_found: set[tuple[str, str]] = set()  # (resource_type, canonical_name)
+
+    def _scan_text(text: str, source_file: str) -> None:
+        for pattern, rtype, grp in _ENDPOINT_PATTERNS:
+            for m in pattern.finditer(text):
+                canonical_name = m.group(grp).lower().rstrip("/")
+                key = (rtype, canonical_name)
+                if key in already_found:
+                    continue
+                already_found.add(key)
+
+                # Add a synthetic inferred resource so it gets a node in the graph
+                synth = Resource(
+                    name=f"__inferred__{canonical_name}",
+                    resource_type=rtype,
+                    file_path=source_file,
+                    line_number=text[:m.start()].count("\n") + 1,
+                    properties={"inferred": "true", "canonical_name": canonical_name},
+                )
+                context.resources.append(synth)
+
+                # Emit a depends_on from the repo itself (represented as a
+                # placeholder resource) to the inferred external resource
+                context.relationships.append(Relationship(
+                    source_type="repository",
+                    source_name=repo_name,
+                    target_type=rtype,
+                    target_name=f"__inferred__{canonical_name}",
+                    relationship_type=RelationshipType.DEPENDS_ON,
+                    source_repo=repo_name,
+                    confidence="inferred",
+                    notes=(
+                        f"Connection string in {source_file} references "
+                        f"{canonical_name} ({rtype.replace('azurerm_','').replace('aws_','').replace('_',' ').title()})"
+                    ),
+                ))
+
+    # Priority 1 — dedicated config files
+    for f in _walk(_CONN_STRING_GLOBS):
+        try:
+            _scan_text(f.read_text(errors="ignore"),
+                       str(f.relative_to(repo_path)))
+        except Exception:
+            continue
+
+    # Priority 2 — source code (only if not already a pure IaC repo)
+    has_tf = any(repo_path.rglob("*.tf"))
+    if not has_tf:
+        for f in _walk(_CODE_GLOBS):
+            try:
+                _scan_text(f.read_text(errors="ignore"),
+                           str(f.relative_to(repo_path)))
+            except Exception:
+                continue
+
 
 def iter_files(repo_path: Path) -> List[Path]:
     """Iterate over files in the repository, excluding certain directories."""
@@ -252,5 +404,124 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     if candidate.resource_type == parent_tf_type:
                         resource.parent = f"{candidate.resource_type}.{candidate.name}"
                         break
+
+    # -------------------------------------------------------------------------
+    # Third pass: emit typed Relationship objects from block attributes
+    # -------------------------------------------------------------------------
+
+    # Patterns that signal specific relationship types within a block:
+    #   (attr_regex, relationship_type, swap_direction)
+    # swap_direction=True means target→source (block resource IS the target)
+    _ATTR_RELATIONSHIP_PATTERNS = [
+        # contains — resource references a parent by ID/name attribute
+        (re.compile(r'(?:storage_account_name|server_name|vault_name|cluster_name|account_name)\s*=\s*(?:azurerm_[a-z_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.CONTAINS, True),
+
+        # depends_on — explicit TF depends_on block
+        (re.compile(r'depends_on\s*=\s*\[([^\]]+)\]', re.S),
+         RelationshipType.DEPENDS_ON, False),
+
+        # encrypts — key_vault_key_id attribute points at a KV key
+        (re.compile(r'key_vault_key_id\s*=\s*(?:azurerm_key_vault_key)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.ENCRYPTS, False),
+
+        # restricts_access — VNet rule / private endpoint targets
+        (re.compile(r'(?:virtual_network_subnet_id|subnet_id)\s*=\s*(?:azurerm_subnet)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.RESTRICTS_ACCESS, False),
+
+        # monitors — diagnostic setting source_resource_id
+        (re.compile(r'target_resource_id\s*=\s*(?:azurerm_[a-z_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.MONITORS, False),
+
+        # routes_ingress_to — backend_address_pool / backend pointing at a resource
+        (re.compile(r'backend_[a-z_]*address[a-z_]*\s*=\s*(?:azurerm_[a-z_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.ROUTES_INGRESS_TO, False),
+
+        # grants_access_to — role_assignment scope points at a resource
+        (re.compile(r'scope\s*=\s*(?:azurerm_[a-z_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.GRANTS_ACCESS_TO, False),
+
+        # authenticates_via — managed identity / identity block reference
+        (re.compile(r'(?:identity_ids|user_assigned_identity_id)\s*=\s*\[?\s*(?:azurerm_user_assigned_identity)\.([a-z][a-z0-9_\-]+)\.', re.I),
+         RelationshipType.AUTHENTICATES_VIA, False),
+    ]
+
+    # Regex to extract type from a reference string like "azurerm_foo.bar.id"
+    _full_ref_re = re.compile(r'\b(azurerm_[a-z_]+)\.([a-z][a-z0-9_\-]+)\.')
+    # Regex to detect variable references (gap candidates)
+    _var_re = re.compile(r'\bvar\.([a-z][a-z0-9_\-]+)\b')
+
+    for resource, block_text in resource_blocks:
+        rtype = resource.resource_type
+        rname = resource.name
+
+        # --- contains: derive from resolved parent reference ---
+        if resource.parent:
+            parts = resource.parent.split(".", 1)
+            if len(parts) == 2:
+                p_type, p_name = parts
+                context.relationships.append(Relationship(
+                    source_type=p_type,
+                    source_name=p_name,
+                    target_type=rtype,
+                    target_name=rname,
+                    relationship_type=RelationshipType.CONTAINS,
+                    source_repo=repo_name,
+                    confidence="extracted",
+                ))
+
+        # --- attribute-pattern relationships ---
+        for pattern, rel_type, swap in _ATTR_RELATIONSHIP_PATTERNS:
+            if rel_type == RelationshipType.DEPENDS_ON:
+                # depends_on lists refs like [azurerm_foo.bar, azurerm_baz.qux]
+                m = pattern.search(block_text)
+                if m:
+                    for ref_m in _full_ref_re.finditer(m.group(1)):
+                        t_type, t_name = ref_m.group(1), ref_m.group(2)
+                        if t_type != rtype or t_name != rname:
+                            context.relationships.append(Relationship(
+                                source_type=rtype, source_name=rname,
+                                target_type=t_type, target_name=t_name,
+                                relationship_type=rel_type,
+                                source_repo=repo_name, confidence="extracted",
+                            ))
+            else:
+                for m in pattern.finditer(block_text):
+                    ref_name = m.group(1)
+                    # Find the matching resource type from the full block text
+                    full_m = _full_ref_re.search(block_text[max(0, m.start()-5):m.end()+30])
+                    ref_type = full_m.group(1) if full_m else "unknown"
+                    if swap:
+                        src_type, src_name, tgt_type, tgt_name = ref_type, ref_name, rtype, rname
+                    else:
+                        src_type, src_name, tgt_type, tgt_name = rtype, rname, ref_type, ref_name
+                    if src_name != tgt_name or src_type != tgt_type:
+                        context.relationships.append(Relationship(
+                            source_type=src_type, source_name=src_name,
+                            target_type=tgt_type, target_name=tgt_name,
+                            relationship_type=rel_type,
+                            source_repo=repo_name, confidence="extracted",
+                        ))
+
+        # --- enrichment gaps: variable references in security-relevant attrs ---
+        _SENSITIVE_ATTRS = re.compile(
+            r'(?:key_vault_key_id|scope|principal_id|storage_account_name|server_name'
+            r'|backend_address|subnet_id|target_resource_id)\s*=\s*(var\.[a-z][a-z0-9_\-]+)',
+            re.I,
+        )
+        for gap_m in _SENSITIVE_ATTRS.finditer(block_text):
+            var_ref = gap_m.group(1)
+            context.relationships.append(Relationship(
+                source_type=rtype, source_name=rname,
+                target_type="unknown", target_name=var_ref,
+                relationship_type=RelationshipType.DEPENDS_ON,
+                source_repo=repo_name, confidence="inferred",
+                notes=f"Variable reference — actual target unknown: {var_ref}",
+            ))
+
+    # -------------------------------------------------------------------------
+    # Fourth pass: scan config/code files for connection string dependencies
+    # -------------------------------------------------------------------------
+    extract_connection_string_dependencies(repo_path, context)
 
     return context

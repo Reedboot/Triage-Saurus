@@ -494,6 +494,11 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "_configuration",
         "_plan",
         "_node_pool",
+        "_sas",                         # SAS tokens are credentials, not infrastructure services
+        "auditing_policy",              # Audit config (e.g. extended_auditing_policy)
+        "_transparent_data_encryption", # TDE is config, not a service endpoint
+        "_virtual_network_rule",        # VNet access rules are network controls, not services
+        "_machine_extension",           # VM extensions are agents installed on VMs, not separate services
     )
     if any(token in resource_type for token in exclude_tokens):
         return False
@@ -595,12 +600,17 @@ def _service_signal_tokens(service: str) -> tuple[tuple[str, ...], tuple[str, ..
     if any(t in service for t in ("sql", "mysql", "postgres", "rds", "neptune")):
         return (
             ("private_endpoint", "private_link", "private_service_connect", "db_subnet_group", "subnet"),
-            ("firewall", "sql_firewall_rule", "security_group", "network_security_group", "authorized_networks"),
+            ("firewall", "sql_firewall_rule", "security_group", "network_security_group", "authorized_networks", "virtual_network_rule"),
         )
     if any(t in service for t in ("container_cluster", "gke", "app_service", "function_app")):
         return (
             ("private_endpoint", "private_link", "private_cluster", "private_service_connect"),
             ("compute_firewall", "firewall", "security_group", "network_security_group", "network_policy", "master_authorized_networks"),
+        )
+    if any(t in service for t in ("kubernetes_cluster", "aks")):
+        return (
+            ("private_cluster_enabled", "private_endpoint", "private_dns_zone"),
+            ("authorized_ip_ranges", "network_security_group", "network_policy", "api_server_access_profile"),
         )
     if any(t in service for t in ("bigquery",)):
         return (
@@ -677,6 +687,15 @@ def _relationship_label(src_type: str, dst_type: str) -> tuple[str, bool] | None
 
 
 def _is_edge_gateway_service(service_name: str) -> bool:
+    """
+    Returns True for resources that ARE the internet boundary — they receive
+    inbound traffic on behalf of backends (App Gateway, APIM, Load Balancer,
+    Ingress controller). These should not get an auto Internet arrow because
+    they ARE the entry point, not a target behind one.
+
+    AKS Cluster is NOT an edge gateway — it is a workload platform that may
+    be directly internet-exposed via its attached public IPs / load balancer.
+    """
     tokens = (
         "Application Gateway",
         "Load Balancing",
@@ -684,6 +703,52 @@ def _is_edge_gateway_service(service_name: str) -> bool:
         "Ingress",
     )
     return any(tok in service_name for tok in tokens)
+
+
+def _compute_exposure_signals(
+    service_name: str,
+    raw_types: list[str],
+    repo_path: "Path | None",
+) -> tuple[bool, bool]:
+    """
+    Returns (is_private, has_restriction) for compute/cluster resources by
+    inspecting actual Terraform block properties — not just resource type presence.
+
+    Augments the raw-type-based _service_access_signals with property-level
+    checks so resources like AKS are assessed correctly based on their config.
+    """
+    # Start with the existing signal tokens as a baseline
+    has_private, has_restriction = _service_access_signals(service_name, raw_types)
+
+    if not repo_path:
+        return has_private, has_restriction
+
+    _AKS_TYPES = {"azurerm_kubernetes_cluster", "azurerm_kubernetes_cluster_node_pool"}
+    if not any(rt in _AKS_TYPES for rt in raw_types):
+        return has_private, has_restriction
+
+    # Property-level inspection of the AKS cluster block
+    try:
+        blocks = _terraform_resource_blocks(repo_path, prefix="azurerm_kubernetes_cluster")
+        for _, _, body in blocks:
+            body_lower = body.lower()
+
+            # Private cluster: explicit flag or private DNS zone config
+            if re.search(r'private_cluster_enabled\s*=\s*true', body_lower):
+                has_private = True
+
+            # Authorized IP ranges restrict API server access (partial control)
+            if re.search(r'authorized_ip_ranges\s*=', body_lower):
+                has_restriction = True
+
+            # Standard LB with no private cluster = internet-facing load balancer
+            if (re.search(r'load_balancer_sku\s*=\s*"standard"', body_lower)
+                    and not has_private):
+                has_private = False   # explicitly reaffirm: NOT private
+    except Exception:
+        pass
+
+    return has_private, has_restriction
 
 
 def _terraform_resource_blocks(repo_path: Path, prefix: str | None = None) -> list[tuple[str, str, str]]:
@@ -1008,8 +1073,68 @@ def _build_simple_architecture_diagram(
             layer_label, layer_cat = layer_meta[layer_key]
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
             
+            # Identify Storage hierarchy: Container and Blob nested inside Storage Account
+            _STORAGE_PARENT = "Storage Account"
+            _STORAGE_CONTAINER = "Storage Container"
+            _STORAGE_BLOB = "Storage Blob"
+            storage_nested_services: set[str] = set()
+            if _STORAGE_PARENT in layer_services:
+                if _STORAGE_CONTAINER in layer_services:
+                    storage_nested_services.add(_STORAGE_CONTAINER)
+                if _STORAGE_BLOB in layer_services:
+                    storage_nested_services.add(_STORAGE_BLOB)
+
+            # Identify SQL hierarchy: Database nested inside SQL Server
+            # Detected by raw resource types so it works regardless of DB friendly-name drift
+            _SQL_PARENT_TYPES = frozenset({
+                "azurerm_mssql_server", "azurerm_sql_server",
+                "azurerm_mysql_server", "azurerm_postgresql_server",
+            })
+            _SQL_CHILD_TYPES = frozenset({
+                "azurerm_mssql_database", "azurerm_sql_database",
+                "azurerm_mysql_database",
+            })
+            sql_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _SQL_PARENT_TYPES),
+                None,
+            )
+            sql_nested_services: set[str] = set()
+            if sql_parent_service:
+                for s in layer_services:
+                    if s == sql_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_SQL_CHILD_TYPES):
+                        sql_nested_services.add(s)
+
+            # Identify Key Vault hierarchy: keys/secrets nested inside Key Vault
+            _KV_PARENT_TYPES = frozenset({"azurerm_key_vault"})
+            _KV_CHILD_TYPES = frozenset({
+                "azurerm_key_vault_key", "azurerm_key_vault_secret",
+                "azurerm_key_vault_certificate",
+            })
+            kv_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _KV_PARENT_TYPES),
+                None,
+            )
+            kv_nested_services: set[str] = set()
+            if kv_parent_service:
+                for s in layer_services:
+                    if s == kv_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_KV_CHILD_TYPES):
+                        kv_nested_services.add(s)
+
+            all_nested = storage_nested_services | sql_nested_services | kv_nested_services
+
+            # Adjust layer service count to account for all nested services
+            visible_layer_services = [s for s in layer_services if s not in all_nested]
+
             # Skip layer wrapper if only one service (reduces visual noise)
-            skip_layer_wrapper = len(layer_services) == 1 and not (layer_key == "monitoring" and has_alerting_signal)
+            skip_layer_wrapper = len(visible_layer_services) == 1 and not (layer_key == "monitoring" and has_alerting_signal)
             
             if not skip_layer_wrapper:
                 lines.append(f'    subgraph {layer_id}["{layer_label}"]')
@@ -1020,6 +1145,9 @@ def _build_simple_architecture_diagram(
                 lines.append(f'      {monitoring_node}["Security Monitoring"]')
                 style_id(monitoring_node, layer_cat)
             for service in layer_services:
+                # Nested services are rendered inside their parent — skip standalone rendering
+                if service in all_nested:
+                    continue
                 svc_global_idx += 1
                 p_idx = svc_global_idx
                 service_raw = sorted(set(routable_parents.get(service, [])))
@@ -1030,6 +1158,114 @@ def _build_simple_architecture_diagram(
                 # Check if this is an API Management service with multiple components
                 is_apim_service = service == "API Management" or any(_is_apim_component(r) for r in service_raw)
                 non_apim_resources, apim_structure = _group_apim_resources(service_raw, resources, repo_path) if is_apim_service else (service_raw, {})
+
+                # Check if this is a Storage Account that has child services to nest
+                is_storage_with_children = service == _STORAGE_PARENT and storage_nested_services
+                if is_storage_with_children:
+                    sa_names = service_instances.get(service, [])
+                    sa_label = f"Storage Account ({sa_names[0]})" if len(sa_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{sa_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+
+                    if _STORAGE_CONTAINER in storage_nested_services:
+                        container_names = service_instances.get(_STORAGE_CONTAINER, [])
+                        container_label = (
+                            f"Storage Container ({container_names[0]})"
+                            if len(container_names) == 1
+                            else _STORAGE_CONTAINER
+                        )
+                        if _STORAGE_BLOB in storage_nested_services:
+                            container_subgraph = f"{svc_subgraph}_Container"
+                            lines.append(f'        subgraph {container_subgraph}["{container_label}"]')
+                            style_id(container_subgraph, layer_cat)
+                            blob_names = service_instances.get(_STORAGE_BLOB, [])
+                            blob_label = (
+                                f"Storage Blob ({blob_names[0]})"
+                                if len(blob_names) == 1
+                                else "Storage Blob"
+                            )
+                            blob_node = f"{svc_subgraph}_Blob"
+                            lines.append(f'          {blob_node}["{blob_label}"]')
+                            style_id(blob_node, layer_cat)
+                            lines.append("        end")
+                        else:
+                            container_node = f"{svc_subgraph}_Container"
+                            lines.append(f'        {container_node}["{container_label}"]')
+                            style_id(container_node, layer_cat)
+                    elif _STORAGE_BLOB in storage_nested_services:
+                        blob_names = service_instances.get(_STORAGE_BLOB, [])
+                        blob_label = (
+                            f"Storage Blob ({blob_names[0]})" if len(blob_names) == 1 else "Storage Blob"
+                        )
+                        blob_node = f"{svc_subgraph}_Blob"
+                        lines.append(f'        {blob_node}["{blob_label}"]')
+                        style_id(blob_node, layer_cat)
+
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    # Jump to exposure handling; skip the standard rendering branches below
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    continue
+
+                # SQL Server with nested databases
+                is_sql_with_children = service == sql_parent_service and bool(sql_nested_services)
+                if is_sql_with_children:
+                    sa_names = service_instances.get(service, [])
+                    sql_label = f"SQL Server ({sa_names[0]})" if len(sa_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{sql_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for db_svc in sorted(sql_nested_services):
+                        db_names = service_instances.get(db_svc, [])
+                        db_label = f"DB: {db_names[0]}" if len(db_names) == 1 else db_svc
+                        db_node = f"{svc_subgraph}_DB"
+                        lines.append(f'        {db_node}["{db_label}"]')
+                        style_id(db_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw_all, repo_path)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    continue
+
+                # Key Vault with nested keys/secrets
+                is_kv_with_children = service == kv_parent_service and bool(kv_nested_services)
+                if is_kv_with_children:
+                    kv_names = service_instances.get(service, [])
+                    kv_label = f"Key Vault ({kv_names[0]})" if len(kv_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{kv_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for kv_child in sorted(kv_nested_services):
+                        child_names = service_instances.get(kv_child, [])
+                        child_label = f"{kv_child} ({child_names[0]})" if len(child_names) == 1 else kv_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', kv_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    continue
                 
                 if len(service_raw) <= 1:
                     node_id = f"{layer_id}_Svc_{p_idx}"
@@ -1305,7 +1541,7 @@ def _build_simple_architecture_diagram(
                         # Edge gateways (App Gateway, LB, APIM) are internet-facing by design —
                         # skip the generic "Public exposure" arrow; the protocol ingress arrow below handles it.
                         if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _service_access_signals(service, service_raw)
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
                             if not has_private and not has_restriction:
                                 add_link("Internet", exposure_target, label="Public exposure", red=True)
                             elif has_private != has_restriction:
@@ -1451,6 +1687,168 @@ def _build_simple_architecture_diagram(
 
     diagram = _sanitize_ids(diagram)
     return diagram
+
+
+def _inventory_annotation(resource_type: str) -> str:
+    """Return a short annotation tag for resources excluded from the Mermaid diagram."""
+    if "_sas" in resource_type:
+        return " `[authentication — see Roles & Permissions]`"
+    if "role_assignment" in resource_type:
+        return " `[RBAC — see Roles & Permissions]`"
+    if "role_definition" in resource_type:
+        return " `[RBAC role def — not on diagram]`"
+    if "auditing_policy" in resource_type:
+        return " `[audit policy — not on diagram]`"
+    if "_transparent_data_encryption" in resource_type:
+        return " `[encryption config — not on diagram]`"
+    if "_virtual_network_rule" in resource_type:
+        return " `[network control — restricts public access]`"
+    if "_machine_extension" in resource_type or "_vm_extension" in resource_type:
+        return " `[VM agent/extension — not on diagram]`"
+    if "firewall_rule" in resource_type or "sql_firewall" in resource_type:
+        return " `[firewall rule — not on diagram]`"
+    if "policy_" in resource_type or "_policy" in resource_type:
+        return " `[policy — not on diagram]`"
+    if "diagnostic" in resource_type or "monitor" in resource_type:
+        return " `[monitoring config — not on diagram]`"
+    return ""
+
+
+def _build_enrichment_assumptions(repo_name: str) -> str:
+    """
+    Query the enrichment_queue for pending assumptions tied to this repo's nodes
+    and format them as a readable section for human review.
+    """
+    try:
+        from persist_graph import query_graph_for_repo
+        graph = query_graph_for_repo(repo_name)
+        assumptions = graph.get("assumptions", [])
+    except Exception:
+        return "- Knowledge graph not yet populated for this repo."
+
+    if not assumptions:
+        return "- No unresolved assumptions. All extracted relationships are confirmed."
+
+    high   = [a for a in assumptions if a.get("confidence") == "high"]
+    medium = [a for a in assumptions if a.get("confidence") == "medium"]
+    low    = [a for a in assumptions if a.get("confidence") == "low"]
+
+    lines: list[str] = []
+    if high:
+        lines.append("#### 🟠 Likely — please confirm")
+        for a in high:
+            text = a.get("assumption_text") or a.get("context", "Unknown")
+            hint = a.get("suggested_value", "")
+            lines.append(f"- **{text}**")
+            if hint:
+                lines.append(f"  - *Suggestion:* {hint}")
+    if medium:
+        lines.append("\n#### 🟡 Possible — needs input")
+        for a in medium:
+            text = a.get("assumption_text") or a.get("context", "Unknown")
+            basis = a.get("assumption_basis", "")
+            lines.append(f"- {text}" + (f" *(basis: {basis})*" if basis else ""))
+    if low:
+        lines.append("\n#### ⚪ Unclear — variable references")
+        for a in low:
+            ctx = a.get("context", "Unknown")
+            lines.append(f"- {ctx}")
+
+    return "\n".join(lines)
+
+
+def _build_resource_inventory(
+    provider_resources: dict,
+    repo_path: "Path | None" = None,
+) -> str:
+    """Build a full indented Markdown resource inventory, including items excluded from the diagram."""
+    if not provider_resources:
+        return "- No cloud resources detected."
+
+    _DB_CAT_TO_LAYER: dict[str, str] = {
+        "Database": "data",
+        "Storage":  "data",
+        "Identity": "identity",
+        "Monitoring": "monitoring",
+        "Security": "security",
+        "Network":  "security",
+        "Compute":  "app",
+        "Container": "app",
+    }
+    _LAYER_LABEL: dict[str, str] = {
+        "data":       "🗄️ Data Layer",
+        "identity":   "🔐 Identity & Secrets",
+        "monitoring": "📈 Monitoring & Telemetry",
+        "security":   "🛡️ Network & Security",
+        "app":        "⚙️ Compute Layer",
+        "other":      "⚙️ Other Resources",
+    }
+    layer_order = ["data", "identity", "monitoring", "security", "app", "other"]
+
+    db = _get_db()
+    actual_names = _terraform_actual_names(repo_path)
+
+    lines: list[str] = []
+    for provider, resources in provider_resources.items():
+        if not resources:
+            continue
+
+        # Build instance names: friendly_name → [actual_names]
+        service_instances: dict[str, list[str]] = {}
+        # Also build raw_type → [actual_names] for individual raw types
+        raw_instances: dict[str, list[str]] = {}
+        for r in resources:
+            friendly = _rtdb.get_friendly_name(db, r.resource_type)
+            raw_actual = actual_names.get((r.resource_type, r.name), r.name) if r.name else None
+            actual = _mermaid_safe_name(raw_actual) if raw_actual else r.name
+            if actual:
+                service_instances.setdefault(friendly, [])
+                if actual not in service_instances[friendly]:
+                    service_instances[friendly].append(actual)
+                raw_instances.setdefault(r.resource_type, [])
+                if actual not in raw_instances[r.resource_type]:
+                    raw_instances[r.resource_type].append(actual)
+
+        # Group ALL resource types (not filtered) into parent services
+        resource_types = sorted({r.resource_type for r in resources})
+        all_groups = _group_parent_services(resource_types)
+
+        # Bucket parent services by layer
+        by_layer: dict[str, list[str]] = {k: [] for k in layer_order}
+        for friendly, raw_types in all_groups.items():
+            layer = "other"
+            for rtype in raw_types:
+                cat = _rtdb.get_resource_type(db, rtype).get("category", "")
+                mapped = _DB_CAT_TO_LAYER.get(cat)
+                if mapped:
+                    layer = mapped
+                    break
+            by_layer[layer].append(friendly)
+
+        for layer_key in layer_order:
+            services = sorted(by_layer[layer_key])
+            if not services:
+                continue
+            lines.append(f"\n### {_LAYER_LABEL[layer_key]}\n")
+            for friendly in services:
+                raw_types = all_groups[friendly]
+                inst_names = service_instances.get(friendly, [])
+                inst_suffix = f" *({', '.join(inst_names[:3])}{'...' if len(inst_names) > 3 else ''})*" if inst_names else ""
+                on_diagram = any(_is_data_routing_resource(rt) for rt in raw_types)
+                annotation = "" if on_diagram else _inventory_annotation(raw_types[0])
+                if len(raw_types) == 1:
+                    lines.append(f"- **{friendly}**{inst_suffix}{annotation}")
+                else:
+                    # Multiple raw types share the same friendly name — show parent + children
+                    lines.append(f"- **{friendly}**{inst_suffix}")
+                    for rtype in sorted(raw_types):
+                        child_inst = raw_instances.get(rtype, [])
+                        child_suffix = f" *({', '.join(child_inst[:2])}{'...' if len(child_inst) > 2 else ''})*" if child_inst else ""
+                        child_ann = _inventory_annotation(rtype) if not _is_data_routing_resource(rtype) else ""
+                        type_label = _resource_kind_label(rtype)
+                        lines.append(f"  - {type_label}{child_suffix}{child_ann}")
+
+    return "\n".join(lines).strip() if lines else "- No resources detected."
 
 
 def write_repo_summary(
@@ -1669,6 +2067,8 @@ def write_repo_summary(
             "evidence_list": evidence_list,
             "notes": notes,
             "terraform_modules": modules_list_md,
+            "resource_inventory": _build_resource_inventory(provider_resources, repo_path=repo),
+            "enrichment_assumptions": _build_enrichment_assumptions(repo_name),
         },
     )
     try:

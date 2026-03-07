@@ -1,0 +1,45 @@
+rules:
+  - id: azure-aks-private-cluster-disabled
+    message: |
+      AKS cluster does not have private_cluster_enabled = true.
+      The Kubernetes API server endpoint is publicly accessible over the internet.
+      A private cluster routes all API server traffic through a private endpoint
+      inside the VNet, removing it from public exposure entirely.
+      Without this, the API server is reachable from any IP (unless restricted
+      by api_server_authorized_ip_ranges, which is weaker than private mode).
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+                private_cluster_enabled = true
+                ...
+              }
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" "$NAME" {
+            ...
+            private_cluster_enabled = false
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud, kubernetes]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure, kubernetes, aks]
+      five_pillars: Pillar 1 (Network Security)
+      references:
+        - https://learn.microsoft.com/en-us/azure/aks/private-cluster
+      remediation: |
+        Set private_cluster_enabled = true on the azurerm_kubernetes_cluster resource.
+        This requires a VNet with sufficient address space for the private endpoint.
+        If private cluster is not feasible, set api_server_authorized_ip_ranges to
+        restrict access to known CIDR ranges as a compensating control.

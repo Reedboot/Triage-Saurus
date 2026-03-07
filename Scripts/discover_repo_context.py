@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from context_extraction import extract_context
 from report_generation import generate_reports, write_to_database
+from persist_graph import persist_context
 
 
 def update_repos_knowledge(repo_path: Path) -> None:
@@ -87,13 +88,21 @@ def main() -> int:
     # 1. Data Extraction
     print("== Starting context extraction ==")
     context_model = extract_context(str(repo_path))
-    print(f"== Extracted {len(context_model.resources)} resources ==")
+    print(f"== Extracted {len(context_model.resources)} resources, {len(context_model.relationships)} relationships ==")
 
     # 2. Database Population
     print("== Writing to database ==")
     db_path = args.database if args.database else None
     write_to_database(context_model, db_path, experiment_id=args.experiment_id)
     print("== Database write complete ==")
+
+    # 2b. Persist knowledge graph (nodes, typed relationships, enrichment queue)
+    print("== Persisting knowledge graph ==")
+    try:
+        persist_context(context_model)
+        print(f"== Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships ==")
+    except Exception as e:
+        print(f"[WARN] Knowledge graph persist failed (non-fatal): {e}")
 
     # 3. Report Generation
     print("== Generating reports ==")

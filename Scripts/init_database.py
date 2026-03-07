@@ -615,6 +615,86 @@ def init_schema(conn: sqlite3.Connection):
         )
     """)
 
+    # ============================================================================
+    # KNOWLEDGE GRAPH — cross-repo resource nodes + typed relationships
+    # ============================================================================
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS resource_nodes (
+          id               INTEGER PRIMARY KEY,
+          resource_type    TEXT NOT NULL,
+          terraform_name   TEXT NOT NULL,
+          canonical_name   TEXT,
+          friendly_name    TEXT,
+          display_label    TEXT,
+          provider         TEXT,
+          source_repo      TEXT,
+          aliases          TEXT DEFAULT '[]',
+          confidence       TEXT DEFAULT 'extracted'
+                             CHECK(confidence IN ('extracted','inferred','user_confirmed')),
+          properties       TEXT DEFAULT '{}',
+          created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(resource_type, terraform_name, source_repo)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS resource_relationships (
+          id                INTEGER PRIMARY KEY,
+          source_id         INTEGER NOT NULL,
+          target_id         INTEGER NOT NULL,
+          relationship_type TEXT NOT NULL
+                              CHECK(relationship_type IN (
+                                'contains',
+                                'grants_access_to',
+                                'routes_ingress_to',
+                                'depends_on',
+                                'encrypts',
+                                'restricts_access',
+                                'monitors',
+                                'authenticates_via'
+                              )),
+          source_repo       TEXT,
+          confidence        TEXT DEFAULT 'extracted'
+                              CHECK(confidence IN ('extracted','inferred','user_confirmed')),
+          notes             TEXT,
+          created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(source_id, target_id, relationship_type),
+          FOREIGN KEY(source_id) REFERENCES resource_nodes(id) ON DELETE CASCADE,
+          FOREIGN KEY(target_id) REFERENCES resource_nodes(id) ON DELETE CASCADE
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS enrichment_queue (
+          id                  INTEGER PRIMARY KEY,
+          resource_node_id    INTEGER,
+          relationship_id     INTEGER,
+          gap_type            TEXT NOT NULL
+                                CHECK(gap_type IN (
+                                  'unknown_name',
+                                  'ambiguous_ref',
+                                  'cross_repo_link',
+                                  'missing_target',
+                                  'assumption'
+                                )),
+          context             TEXT,
+          assumption_text     TEXT,
+          assumption_basis    TEXT,
+          confidence          TEXT DEFAULT 'medium'
+                                CHECK(confidence IN ('high','medium','low')),
+          suggested_value     TEXT,
+          status              TEXT DEFAULT 'pending_review'
+                                CHECK(status IN ('pending_review','confirmed','rejected')),
+          resolved_by         TEXT,
+          resolved_at         TIMESTAMP,
+          rejection_reason    TEXT,
+          created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(resource_node_id) REFERENCES resource_nodes(id) ON DELETE CASCADE,
+          FOREIGN KEY(relationship_id)  REFERENCES resource_relationships(id) ON DELETE CASCADE
+        )
+    """)
+
     # Seed providers
     conn.executemany(
         "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
@@ -653,6 +733,19 @@ def init_schema(conn: sqlite3.Connection):
         ("azurerm_storage_account",                    "Storage Account",            "Storage",    "🗄️", "azure", 1, 1),
         ("azurerm_storage_account_network_rules",      "Storage Account",            "Storage",    "🗄️", "azure", 1, 0),
         ("azurerm_storage_container",                  "Storage Container",          "Storage",    "🗄️", "azure", 1, 0),
+        ("azurerm_storage_blob",                       "Storage Blob",               "Storage",    "🗄️", "azure", 1, 0),
+        # Auth/Credentials — Identity layer, excluded from diagram nodes
+        ("azurerm_storage_account_sas",                "Storage Account SAS",        "Identity",   "🔑", "azure", 0, 0),
+        # Database governance config — excluded from diagram via routing filter
+        ("azurerm_mssql_database_extended_auditing_policy",        "SQL Auditing Policy",        "",  "📋", "azure", 0, 0),
+        ("azurerm_mssql_server_extended_auditing_policy",          "SQL Auditing Policy",        "",  "📋", "azure", 0, 0),
+        ("azurerm_mssql_server_microsoft_support_auditing_policy", "SQL Auditing Policy",        "",  "📋", "azure", 0, 0),
+        ("azurerm_mssql_server_transparent_data_encryption",       "SQL Transparent Encryption", "",  "📋", "azure", 0, 0),
+        ("azurerm_mssql_virtual_network_rule",                     "SQL VNet Rule",              "Security", "🛡️", "azure", 0, 0),
+        # VM extensions — agents installed on VMs, excluded from diagram
+        ("azurerm_virtual_machine_extension",         "VM Extension", "", "🔧", "azure", 0, 0),
+        ("azurerm_linux_virtual_machine_extension",   "VM Extension", "", "🔧", "azure", 0, 0),
+        ("azurerm_windows_virtual_machine_extension", "VM Extension", "", "🔧", "azure", 0, 0),
         # Azure — Compute
         ("azurerm_linux_virtual_machine",              "Linux VM",                   "Compute",    "🖥️", "azure", 0, 1),
         ("azurerm_windows_virtual_machine",            "Windows VM",                 "Compute",    "🖥️", "azure", 0, 1),

@@ -38,6 +38,19 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_storage_account":                    {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_account_network_rules":      {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_container":                  {"friendly_name": "Storage Container",        "category": "Storage",     "icon": "🗄️"},
+    "azurerm_storage_blob":                       {"friendly_name": "Storage Blob",             "category": "Storage",     "icon": "🗄️"},
+    # Azure — Auth/Credentials (classified as Identity; excluded from diagram via _is_data_routing_resource)
+    "azurerm_storage_account_sas":                {"friendly_name": "Storage Account SAS",      "category": "Identity",    "icon": "🔑"},
+    # Azure — Database governance config (excluded from diagram via _is_data_routing_resource)
+    "azurerm_mssql_database_extended_auditing_policy":        {"friendly_name": "SQL Auditing Policy",        "category": "",   "icon": "📋"},
+    "azurerm_mssql_server_extended_auditing_policy":          {"friendly_name": "SQL Auditing Policy",        "category": "",   "icon": "📋"},
+    "azurerm_mssql_server_microsoft_support_auditing_policy": {"friendly_name": "SQL Auditing Policy",        "category": "",   "icon": "📋"},
+    "azurerm_mssql_server_transparent_data_encryption":       {"friendly_name": "SQL Transparent Encryption", "category": "",   "icon": "📋"},
+    "azurerm_mssql_virtual_network_rule":                     {"friendly_name": "SQL VNet Rule",              "category": "Security", "icon": "🛡️"},
+    # Azure — VM extensions (agents on VMs; excluded from diagram via _is_data_routing_resource)
+    "azurerm_virtual_machine_extension":                      {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
+    "azurerm_linux_virtual_machine_extension":                {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
+    "azurerm_windows_virtual_machine_extension":              {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
     # Azure — Compute
     "azurerm_linux_virtual_machine":              {"friendly_name": "Linux VM",                 "category": "Compute",     "icon": "🖥️"},
     "azurerm_windows_virtual_machine":            {"friendly_name": "Windows VM",               "category": "Compute",     "icon": "🖥️"},

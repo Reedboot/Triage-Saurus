@@ -27,6 +27,14 @@ Border colors indicate resource categories:
 
 **Top Risks:** PHASE 2 TODO - Run security scan to identify risks
 
+## 🗂️ Resource Inventory
+
+${resource_inventory}
+
+## 🔍 Assumptions & Unresolved References
+
+${enrichment_assumptions}
+
 ## 🧭 Overview
 
 ### 🔐 Authentication & Identity
