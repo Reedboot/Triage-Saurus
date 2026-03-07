@@ -1,0 +1,35 @@
+# OPENGREP rule: Detect Azure ARM template resources and key types
+# Matches resource definitions inside Azure Resource Manager (ARM) JSON templates
+# Captures resource type strings like "Microsoft.Storage/storageAccounts" and common sensitive configs
+id: azure-arm-resource-detection
+title: Detect Azure ARM template resource types
+description: |
+  Finds Azure Resource Manager (ARM) template resource blocks and extracts the resource type.
+  Useful for scanning repositories that use ARM JSON templates rather than Terraform.
+author: Copilot
+enabled: true
+file_patterns:
+  - "**/*.json"
+languages:
+  - json
+# Simple regex to find resource objects and their 'type' fields
+patterns:
+  - name: arm_resource_type
+    description: Capture ARM resource type values in JSON templates
+    regex: '"type"\s*:\s*"([A-Za-z0-9._\-/]+)"'
+    capture_group: 1
+# Extra patterns for known resource types / risky configs
+  - name: storage_account_public_access
+    description: Detect storage account public access settings or SAS token values
+    regex: '"allowBlobPublicAccess"\s*:\s*(true|false)|"publicAccess"\s*:\s*"(Blob|Container|None)"'
+  - name: key_vault
+    description: Detect Key Vault resources
+    regex: '"type"\s*:\s*"Microsoft.KeyVault/.+"'
+  - name: sql_server
+    description: Detect SQL server resources
+    regex: '"type"\s*:\s*"Microsoft.Sql/servers|Microsoft.DBforMySQL/servers|Microsoft.DBforPostgreSQL/servers"'
+  - name: mssql_firewall_rule_allow_all
+    description: Detect wildcard firewall rules or allow-all IP ranges in ARM SQL firewall configurations
+    regex: '"startIpAddress"\s*:\s*"0.0.0.0"|"endIpAddress"\s*:\s*"0.0.0.0"'
+# Notes: This ruleset is intentionally conservative; property extraction is best-effort and
+# should be combined with more specific rules or script-level parsing for full fidelity.

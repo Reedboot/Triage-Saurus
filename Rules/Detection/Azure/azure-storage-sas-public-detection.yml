@@ -1,0 +1,48 @@
+# OPENGREP rule: Detect Storage Account public access combined with SAS tokens
+# Flags repositories where a storage account is configured to allow public access and a SAS token or azurerm_storage_account_sas is present in the repo.
+# Heuristic: matches both signals within the same file (best-effort). Use script fallback for cross-file correlation.
+id: azure-storage-sas-public-detection
+title: Detect Azure Storage public access combined with SAS tokens
+description: |
+  Detects cases where a Storage Account is configured with public access (allowBlobPublicAccess / publicAccess / allow_blob_public_access)
+  and a SAS token or storage account SAS resource is present nearby. This is a high risk finding because a provisioned SAS on a public storage account allows broad access if the token is leaked.
+  The rule uses heuristic "same-file" detection; run the repo-level script extractor to correlate signals across files for higher confidence.
+author: Copilot
+enabled: true
+file_patterns:
+  - "**/*.tf"
+  - "**/*.json"
+  - "**/*.bicep"
+  - "**/*.yaml"
+  - "**/*.yml"
+  - "**/*.env"
+  - "**/*.ps1"
+  - "**/*.sh"
+
+# Combined pattern: SAS token / azurerm_storage_account_sas and public access within ~2000 chars
+patterns:
+  - name: sas_plus_public_in_file
+    description: Match files that contain both a SAS signal and a public-access signal nearby
+    regex: '(?s)(sharedAccessSignature|sasToken|sharedAccessSignature|azurerm_storage_account_sas|\bSAS\b).{0,2000}(allowBlobPublicAccess\s*[:=]\s*(?:true|True)|allow_blob_public_access\s*=\s*true|"publicAccess"\s*:\s*"(?:Blob|Container)"|public_access\s*=\s*"?(?:blob|container)"?)'
+    capture_group: 0
+
+  - name: sas_token_or_resource
+    description: Detect SAS tokens or explicit storage-account-sas Terraform resources
+    regex: '(sharedAccessSignature|sasToken|azurerm_storage_account_sas|SharedAccessSignature)'
+    capture_group: 1
+
+  - name: storage_public_access
+    description: Detect storage public access properties
+    regex: '(allowBlobPublicAccess\s*[:=]\s*(?:true|True)|allow_blob_public_access\s*=\s*true|"publicAccess"\s*:\s*"(?:Blob|Container)"|public_access\s*=\s*"?(?:blob|container)")'
+    capture_group: 1
+
+# Severity guidance
+severity: HIGH
+tags:
+  - azure
+  - storage
+  - sas
+  - public-access
+
+notes: |
+  This rule is heuristic: it reports when a SAS-related artifact and a public-access setting appear close together in a file. For complete coverage the script-level extractor correlates signals across files and Terraform/ARM/Bicep constructs. Consider adding automated remediation guidance (revoke SAS, disable public access, restrict via SAS IP/network restrictions).
