@@ -1739,6 +1739,130 @@ def _build_enrichment_assumptions(repo_name: str) -> str:
     if not assumptions:
         return "- No unresolved assumptions. All extracted relationships are confirmed."
 
+
+def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> str:
+    """Auto-detect simple high-risk configurations and format as Markdown.
+
+    Current checks:
+    - SQL auditing/alert policies present but disabled + permissive SQL firewall (0.0.0.0) => HIGH RISK
+    - Presence of Transparent Data Encryption (TDE) noted as a positive control
+    """
+    lines: list[str] = []
+    try:
+        import re
+        from pathlib import Path as _Path
+
+        has_audit_policy = []
+        audit_disabled = False
+        has_alert_policy = []
+        alert_disabled = False
+        has_tde = False
+        open_sql_fw = []
+
+        for r in context.resources:
+            t = r.resource_type.lower()
+            if "auditing_policy" in t or "auditing" in t:
+                has_audit_policy.append(r)
+            if "security_alert_policy" in t or "alert_policy" in t or "security_alert" in t:
+                has_alert_policy.append(r)
+            if "transparent_data_encryption" in t or "transparent" in t and "encryption" in t:
+                has_tde = True
+            if "firewall_rule" in t and "mssql" in t:
+                open_sql_fw.append(r)
+
+        # Helper: inspect TF block for a resource name to find disabled flags
+        def _block_has_disabled(repo_p, name):
+            if not repo_p:
+                return False
+            repo_p = _Path(repo_p)
+            blk_re = re.compile(rf'resource\s+"[^"]+"\s+"{re.escape(name)}"\s*\{{', re.I)
+            for tf in repo_p.rglob('*.tf'):
+                try:
+                    txt = tf.read_text(errors='ignore')
+                except Exception:
+                    continue
+                m = blk_re.search(txt)
+                if not m:
+                    continue
+                start = m.start()
+                # crude block capture: from m.start() to next closing brace at same level
+                i = m.end()
+                brace = 1
+                while i < len(txt) and brace > 0:
+                    if txt[i] == '{':
+                        brace += 1
+                    elif txt[i] == '}':
+                        brace -= 1
+                    i += 1
+                block = txt[m.start():i]
+                if re.search(r"^\s*enabled\s*=\s*false", block, re.I | re.M):
+                    return True
+                if re.search(r"state\s*=\s*\"Disabled\"", block, re.I):
+                    return True
+                if re.search(r"log_monitoring_enabled\s*=\s*false", block, re.I):
+                    return True
+            return False
+
+        for a in has_audit_policy:
+            if _block_has_disabled(repo_path, a.name):
+                audit_disabled = True
+        for a in has_alert_policy:
+            if _block_has_disabled(repo_path, a.name):
+                alert_disabled = True
+        for fw in open_sql_fw:
+            if not repo_path:
+                continue
+            # check firewall block for 0.0.0.0
+            if _block_has_disabled(repo_path, fw.name):
+                # reuse helper incorrectly named; do a direct scan for 0.0.0.0
+                pass
+            repo_p = _Path(repo_path)
+            blk_re = re.compile(rf'resource\s+"[^"]+"\s+"{re.escape(fw.name)}"\s*\{{', re.I)
+            for tf in repo_p.rglob('*.tf'):
+                try:
+                    txt = tf.read_text(errors='ignore')
+                except Exception:
+                    continue
+                m = blk_re.search(txt)
+                if not m:
+                    continue
+                start = m.start()
+                i = m.end()
+                brace = 1
+                while i < len(txt) and brace > 0:
+                    if txt[i] == '{':
+                        brace += 1
+                    elif txt[i] == '}':
+                        brace -= 1
+                    i += 1
+                block = txt[m.start():i]
+                if re.search(r"0\.0\.0\.0", block):
+                    open_sql_fw.append(fw)
+                    break
+
+        # Build findings
+        if (audit_disabled or alert_disabled) and open_sql_fw:
+            lines.append("### 🔥 High risk: Auditing/alerts disabled with permissive SQL firewall")
+            if audit_disabled:
+                lines.append("- SQL auditing resources are present but disabled (enabled = false or log_monitoring_enabled = false). This removes logging/forensics.")
+            if alert_disabled:
+                lines.append("- SQL server security alert policy is disabled (state = \"Disabled\"). Alerts will not be raised.")
+            lines.append("- Found SQL firewall rule(s) with 0.0.0.0 allowing broad access:")
+            for fw in open_sql_fw:
+                lines.append(f"  - {fw.name} ({fw.resource_type})")
+            lines.append("")
+            lines.append("Recommendation: enable auditing (enabled = true, log_monitoring_enabled = true), set server security alert policy state to \"Enabled\", and remove or restrict any 0.0.0.0 firewall rules. Send diagnostics to Log Analytics or Storage for retention.")
+        else:
+            lines.append("- No immediate high-risk policy misconfigurations detected by automated heuristics.")
+
+        if has_tde:
+            lines.append("\n- Note: Transparent Data Encryption (TDE) is configured — this protects data at rest but does not replace auditing/alerting.")
+
+    except Exception as e:
+        return f"- Error building auto-findings: {e}"
+
+    return "\n".join(lines)
+
     high   = [a for a in assumptions if a.get("confidence") == "high"]
     medium = [a for a in assumptions if a.get("confidence") == "medium"]
     low    = [a for a in assumptions if a.get("confidence") == "low"]
@@ -2078,6 +2202,7 @@ def write_repo_summary(
             "notes": notes,
             "terraform_modules": modules_list_md,
             "resource_inventory": _build_resource_inventory(provider_resources, repo_path=repo),
+            "auto_findings": _build_auto_findings(context, repo),
             "enrichment_assumptions": _build_enrichment_assumptions(repo_name),
         },
     )

@@ -31,6 +31,10 @@ Border colors indicate resource categories:
 
 ${resource_inventory}
 
+## ⚠️ Auto-Detected Findings
+
+${auto_findings}
+
 ## 🔍 Assumptions & Unresolved References
 
 ${enrichment_assumptions}
