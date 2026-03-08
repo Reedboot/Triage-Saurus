@@ -34,3 +34,15 @@ jobs:
 
       - name: Verify opengrep installation
         run: opengrep --version
+
+      - name: Run opengrep security scan
+        run: |
+          opengrep scan --config Rules/ "Sample Findings/Repos/TestRepo" --json --output scan_results.json
+
+      - name: Upload scan results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results
+          path: scan_results.json
+          if-no-files-found: warn
