@@ -34,3 +34,81 @@ jobs:
 
       - name: Verify opengrep installation
         run: opengrep --version
+
+      - name: Set up mock environment
+        run: |
+          # batch_scan_repos.sh sets REPOS_ROOT to the directory one level above the
+          # Triage-Saurus repo (i.e. the parent of $GITHUB_WORKSPACE).
+          REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+
+          # Place TestRepo where the script will look for it.
+          cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$REPOS_ROOT/TestRepo"
+
+          # Tell the script which repos to scan.
+          echo "TestRepo" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
+
+          # Ensure the Learning output directory exists so the DB can be written.
+          mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
+
+      - name: Initialise triage database
+        working-directory: ${{ github.workspace }}
+        run: python3 Scripts/learning_db.py init
+
+      - name: Run batch repo scan
+        working-directory: ${{ github.workspace }}
+        run: bash Scripts/batch_scan_repos.sh --force
+
+      - name: Quality gate – verify triage.db has repository entries
+        working-directory: ${{ github.workspace }}
+        run: |
+          DB="Output/Learning/triage.db"
+          if [ ! -f "$DB" ]; then
+            echo "❌ triage.db not found at $DB"
+            exit 1
+          fi
+          # Confirm the repositories table exists before counting rows.
+          TABLE_EXISTS=$(sqlite3 "$DB" ".tables" 2>/dev/null | grep -c "repositories" || true)
+          if [ "$TABLE_EXISTS" -lt 1 ]; then
+            echo "❌ 'repositories' table not found in triage.db – the database may be corrupted or uninitialised"
+            exit 1
+          fi
+          ROW_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM repositories;")
+          echo "Repositories table row count: $ROW_COUNT"
+          if [ "$ROW_COUNT" -lt 1 ]; then
+            echo "❌ No entries found in the repositories table"
+            exit 1
+          fi
+          echo "✅ triage.db exists and contains $ROW_COUNT repository record(s)"
+
+      - name: Check opengrep rule syntax against TestRepo
+        working-directory: ${{ github.workspace }}
+        run: |
+          opengrep scan \
+            --config Rules/ \
+            --json \
+            "Sample Findings/Repos/TestRepo" \
+          | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          results = data.get('results', [])
+          errors  = data.get('errors', [])
+          print(f'opengrep findings: {len(results)}, errors: {len(errors)}')
+          if errors:
+              print('Rule errors detected:', json.dumps(errors, indent=2))
+          "
+
+      - name: Upload triage database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-db
+          path: Output/Learning/triage.db
+          if-no-files-found: warn
+
+      - name: Upload session audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-logs
+          path: Output/Audit/
+          if-no-files-found: warn
