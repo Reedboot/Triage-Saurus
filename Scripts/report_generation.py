@@ -1048,6 +1048,10 @@ def _build_simple_architecture_diagram(
         node_styles.append(f"  style {provider_id}_Cloud stroke:#666, stroke-width:2px")
         styled_ids.add(f"{provider_id}_Cloud")
 
+        # Identity resources will be rendered in the Identity layer during layer iteration.
+        identity_resources = [r for r in resources if "key_vault" in r.resource_type]
+        identity_rendered = False
+
         # Group paas_services by category layer and render one subgraph per layer
         layer_meta = {
             "data":       ("🗄️ Data Layer",                "data"),
@@ -1063,6 +1067,60 @@ def _build_simple_architecture_diagram(
             raw_for_cat = sorted(set(non_boundary_parents.get(service, [])))
             cat = category_for_raw_types(raw_for_cat)
             services_by_layer.setdefault(cat, []).append(service)
+
+        # Ensure identity resources (e.g., Key Vault, Managed Identity) appear in the Identity layer
+        try:
+            db = _get_db()
+            identity_raw_types = [rt for rt in resource_types if _rtdb.get_resource_type(db, rt).get('category') == 'Identity']
+            # Build mapping friendly_name -> raw types so filtering later can check display flags
+            identity_map: dict[str, list[str]] = {}
+            for rt in identity_raw_types:
+                fn = _rtdb.get_friendly_name(db, rt)
+                if not fn:
+                    continue
+                identity_map.setdefault(fn, []).append(rt)
+                # ensure friendly name present in services_by_layer
+                if fn not in services_by_layer.get('identity', []):
+                    services_by_layer.setdefault('identity', []).append(fn)
+            # Merge identity_map into non_boundary_parents so later filtering sees the raw types
+            for fn, rts in identity_map.items():
+                existing = non_boundary_parents.get(fn, [])
+                merged = sorted(set(existing + rts))
+                non_boundary_parents[fn] = merged
+        except Exception:
+            pass
+
+        # Debugging: capture a small snapshot of services_by_layer to aid troubleshooting
+        try:
+            dbg = {
+                'provider': provider,
+                'layer_counts': {k: len(v) for k,v in services_by_layer.items()},
+                'identity_contents': services_by_layer.get('identity', [])
+            }
+            with open('Output/Summary/report_generation_debug.log','a') as _dbg:
+                _dbg.write(str(dbg) + "\n")
+        except Exception:
+            pass
+
+        # Filter out service entries that should not appear on the architecture chart
+        try:
+            db = _get_db()
+            for layer_key, svc_list in list(services_by_layer.items()):
+                filtered = []
+                for svc in svc_list:
+                    raw_types = non_boundary_parents.get(svc, [])
+                    # If any raw_type is allowed to display, keep the service
+                    keep = False
+                    for rt in raw_types:
+                        rt_meta = _rtdb.get_resource_type(db, rt)
+                        if rt_meta.get('display_on_architecture_chart', True):
+                            keep = True
+                            break
+                    if keep:
+                        filtered.append(svc)
+                services_by_layer[layer_key] = filtered
+        except Exception:
+            pass
 
         svc_global_idx = 0
         for layer_key in layer_order:
@@ -1136,13 +1194,55 @@ def _build_simple_architecture_diagram(
                     if svc_types and svc_types.issubset(_KV_CHILD_TYPES):
                         kv_nested_services.add(s)
 
-            all_nested = storage_nested_services | sql_nested_services | kv_nested_services
+            # Identify Load Balancer hierarchy: listeners and target groups nested inside LB
+            _LB_PARENT_TYPES = frozenset({"aws_elb", "aws_alb", "aws_lb", "azurerm_lb", "azurerm_application_gateway"})
+            _LB_CHILD_TYPES = frozenset({
+                "aws_lb_listener", "aws_alb_listener", "aws_lb_target_group", "aws_alb_target_group",
+                "aws_lb_target_group_attachment", "aws_lb_listener_rule", "azurerm_lb_backend_address_pool", "azurerm_lb_rule",
+                "azurerm_application_gateway_http_listener",
+            })
+            lb_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _LB_PARENT_TYPES),
+                None,
+            )
+            lb_nested_services: set[str] = set()
+            if lb_parent_service:
+                for s in layer_services:
+                    if s == lb_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_LB_CHILD_TYPES):
+                        lb_nested_services.add(s)
+
+            # Identify ECS clustering: nest EC2 instances inside ECS Cluster when EC2-backed
+            _ECS_PARENT_TYPES = frozenset({"aws_ecs_cluster"})
+            _ECS_INSTANCE_TYPES = frozenset({"aws_instance", "aws_autoscaling_group", "aws_launch_configuration", "aws_launch_template"})
+            ecs_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _ECS_PARENT_TYPES),
+                None,
+            )
+            ecs_nested_instances: set[str] = set()
+            if ecs_parent_service:
+                # If the repo contains instance-like resources, assume EC2-backed cluster
+                for s in layer_services:
+                    if s == ecs_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types & _ECS_INSTANCE_TYPES:
+                        ecs_nested_instances.add(s)
+
+            all_nested = storage_nested_services | sql_nested_services | kv_nested_services | lb_nested_services | ecs_nested_instances
 
             # Adjust layer service count to account for all nested services
             visible_layer_services = [s for s in layer_services if s not in all_nested]
 
             # Skip layer wrapper if only one service (reduces visual noise)
             skip_layer_wrapper = len(visible_layer_services) == 1 and not (layer_key == "monitoring" and has_alerting_signal)
+            # Force Identity layer wrapper even when there's a single identity service (improves clarity)
+            if layer_key == "identity":
+                skip_layer_wrapper = False
             
             if not skip_layer_wrapper:
                 lines.append(f'    subgraph {layer_id}["{layer_label}"]')
@@ -1263,6 +1363,58 @@ def _build_simple_architecture_diagram(
                         child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', kv_child)}"
                         lines.append(f'        {child_node}["{child_label}"]')
                         style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    continue
+
+                # Load Balancer with nested listeners/target groups
+                is_lb_with_children = service == lb_parent_service and bool(lb_nested_services)
+                if is_lb_with_children:
+                    lb_names = service_instances.get(service, [])
+                    lb_label = f"{service} ({lb_names[0]})" if len(lb_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{lb_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for lb_child in sorted(lb_nested_services):
+                        child_names = service_instances.get(lb_child, [])
+                        child_label = f"{lb_child} ({child_names[0]})" if len(child_names) == 1 else lb_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', lb_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        if not _is_edge_gateway_service(service):
+                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
+                            if not has_private and not has_restriction:
+                                add_link("Internet", exposure_target, label="Public exposure", red=True)
+                            elif has_private != has_restriction:
+                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                    continue
+
+                # ECS Cluster with EC2-backed instances nested
+                is_ecs_with_instances = service == ecs_parent_service and bool(ecs_nested_instances)
+                if is_ecs_with_instances:
+                    ecs_names = service_instances.get(service, [])
+                    ecs_label = f"{service} ({ecs_names[0]})" if len(ecs_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{ecs_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for inst_svc in sorted(ecs_nested_instances):
+                        inst_names = service_instances.get(inst_svc, [])
+                        inst_label = f"{inst_svc} ({inst_names[0]})" if len(inst_names) == 1 else inst_svc
+                        inst_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', inst_svc)}"
+                        lines.append(f'        {inst_node}["{inst_label}"]')
+                        style_id(inst_node, layer_cat)
                     lines.append("      end")
                     exposure_target = svc_subgraph
                     if exposure_target:
@@ -2031,9 +2183,11 @@ def write_repo_summary(
     if role_assignments:
         roles_permissions += "| Role | Resource | Principal |\n|------|----------|----------|\n"
         for r in role_assignments:
-            role = getattr(r, "role_definition_name", "Unknown")
-            resource = getattr(r, "scope", "Unknown")
-            principal = getattr(r, "principal_id", "Unknown")
+            # role assignment properties are recorded in r.properties by the extractor
+            props = getattr(r, 'properties', {}) or {}
+            role = props.get('role_definition_name') or props.get('role_definition_id') or props.get('role_name') or 'Unknown'
+            resource = props.get('scope') or props.get('resource_id') or 'Unknown'
+            principal = props.get('principal_id') or props.get('principal') or props.get('principal_name') or 'Unknown'
             roles_permissions += f"| {role} | {resource} | {principal} |\n"
     else:
         roles_permissions = "- No role assignments detected."

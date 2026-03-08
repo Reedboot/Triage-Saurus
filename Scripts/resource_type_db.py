@@ -22,9 +22,15 @@ DB_PATH = ROOT / "Output/Learning/triage.db"
 _FALLBACK: dict[str, dict] = {
     # Azure — Identity
     "azurerm_key_vault":                          {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": True},
-    "azurerm_key_vault_key":                      {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
-    "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑"},
-    "azurerm_user_assigned_identity":             {"friendly_name": "Managed Identity",         "category": "Identity",    "icon": "👤"},
+    "azurerm_key_vault_key":                      {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
+    "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
+    "azurerm_user_assigned_identity":             {"friendly_name": "Managed Identity",         "category": "Identity",    "icon": "👤", "display_on_architecture_chart": True},
+    # Azure — RBAC / Policy (don't display as architecture nodes)
+    "azurerm_role_definition":                    {"friendly_name": "Role Definition",         "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "azurerm_role_assignment":                    {"friendly_name": "Role Assignment",         "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "azurerm_policy_definition":                  {"friendly_name": "Policy Definition",       "category": "Identity",    "icon": "📜", "display_on_architecture_chart": False},
+    "azurerm_policy_assignment":                  {"friendly_name": "Policy Assignment",       "category": "Identity",    "icon": "📜", "display_on_architecture_chart": False},
+    "azurerm_policy_set_definition":              {"friendly_name": "Policy Set",              "category": "Identity",    "icon": "📜", "display_on_architecture_chart": False},
     # Azure — Database
     "azurerm_mssql_server":                       {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
     "azurerm_sql_server":                         {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
@@ -91,6 +97,7 @@ _FALLBACK: dict[str, dict] = {
     # AWS — Storage
     "aws_s3_bucket":                              {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
     "aws_s3_bucket_object":                       {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
+    "aws_s3_bucket_public_access_block":          {"friendly_name": "Public Access Block",      "category": "Storage",     "icon": "🔒", "display_on_architecture_chart": False},
     "aws_ebs_volume":                             {"friendly_name": "EBS Volume",               "category": "Storage",     "icon": "💾"},
     # AWS — Database
     "aws_rds_cluster":                            {"friendly_name": "RDS Cluster",              "category": "Database",    "icon": "🗃️"},
@@ -123,18 +130,25 @@ _FALLBACK: dict[str, dict] = {
     "aws_elb":                                    {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
     "aws_alb":                                    {"friendly_name": "App Load Balancer",        "category": "Network",     "icon": "🌐"},
     "aws_lb":                                     {"friendly_name": "Network Load Balancer",    "category": "Network",     "icon": "🌐"},
+    # AWS — Load Balancer components (listeners/target groups shown nested inside LB)
+    "aws_lb_listener":                             {"friendly_name": "Load Balancer Listener",  "category": "Network",     "icon": "🎧", "display_on_architecture_chart": True},
+    "aws_alb_listener":                            {"friendly_name": "Load Balancer Listener",  "category": "Network",     "icon": "🎧", "display_on_architecture_chart": True},
+    "aws_lb_target_group":                         {"friendly_name": "Target Group",            "category": "Network",     "icon": "🎯", "display_on_architecture_chart": True},
+    "aws_alb_target_group":                        {"friendly_name": "Target Group",            "category": "Network",     "icon": "🎯", "display_on_architecture_chart": True},
+    "aws_lb_target_group_attachment":              {"friendly_name": "Target Attachment",       "category": "Network",     "icon": "🔗", "display_on_architecture_chart": False},
+
     "aws_vpc":                                    {"friendly_name": "VPC",                      "category": "Network",     "icon": "🔷"},
     "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
     "aws_security_group":                         {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️"},
     "aws_security_group_rule":                    {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "🛡️"},
     "aws_internet_gateway":                       {"friendly_name": "Internet Gateway",         "category": "Network",     "icon": "🌍"},
     # AWS — Identity
-    "aws_iam_role":                               {"friendly_name": "IAM Role",                 "category": "Identity",    "icon": "👤"},
-    "aws_iam_policy":                             {"friendly_name": "IAM Policy",               "category": "Identity",    "icon": "👤"},
-    "aws_iam_user":                               {"friendly_name": "IAM User",                 "category": "Identity",    "icon": "👤"},
-    "aws_iam_instance_profile":                   {"friendly_name": "IAM Instance Profile",     "category": "Identity",    "icon": "👤"},
-    "aws_kms_key":                                {"friendly_name": "KMS Key",                  "category": "Identity",    "icon": "🔑"},
-    "aws_kms_alias":                              {"friendly_name": "KMS Key Alias",            "category": "Identity",    "icon": "🔑"},
+    "aws_iam_role":                               {"friendly_name": "IAM Role",                 "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "aws_iam_policy":                             {"friendly_name": "IAM Policy",               "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "aws_iam_user":                               {"friendly_name": "IAM User",                 "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "aws_iam_instance_profile":                   {"friendly_name": "IAM Instance Profile",     "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "aws_kms_key":                                {"friendly_name": "KMS Key",                  "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
+    "aws_kms_alias":                              {"friendly_name": "KMS Key Alias",            "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
     # GCP — Storage
     "google_storage_bucket":                      {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},
     "google_storage_bucket_iam_binding":          {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},

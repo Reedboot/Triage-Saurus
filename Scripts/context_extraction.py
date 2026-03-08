@@ -195,6 +195,93 @@ def detect_terraform_resources(files: List[Path], repo_path: Path) -> Set[str]:
                 continue
     return resource_types
 
+
+def detect_arm_resources(files: List[Path], repo_path: Path) -> dict:
+    """Detect Azure ARM template resources and extract basic properties.
+
+    Returns a dict with keys:
+      - resource_types: set of resource type strings (e.g., 'Microsoft.Storage/storageAccounts')
+      - resources: list of dicts {"type": type, "name": name, "properties": {...}, "file": path}
+
+    This is best-effort and tolerant of non-JSON files; it will skip files that cannot
+    be parsed as JSON and fall back to regex searches for '"type"' entries.
+    """
+    types: set = set()
+    resources: list = []
+    for f in files:
+        if f.suffix.lower() != ".json":
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+            # Try structured parse first
+            parsed = None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+
+            if isinstance(parsed, dict) and "resources" in parsed and isinstance(parsed["resources"], list):
+                for res in parsed["resources"]:
+                    rtype = res.get("type")
+                    name = res.get("name") or res.get("name", "")
+                    props = res.get("properties", {}) if isinstance(res.get("properties", {}), dict) else {}
+                    if rtype:
+                        types.add(rtype)
+                        resources.append({"type": rtype, "name": name, "properties": props, "file": str(f)})
+            else:
+                # Heuristic regex: find occurrences of "type": "Microsoft.X/Y"
+                for m in re.finditer(r'"type"\s*:\s*"([A-Za-z0-9._\-/]+)"', text):
+                    rtype = m.group(1)
+                    types.add(rtype)
+                    resources.append({"type": rtype, "name": None, "properties": {}, "file": str(f)})
+
+            # Property heuristics: look for public access / SAS tokens
+            if re.search(r'"allowBlobPublicAccess"\s*:\s*true', text, re.I) or re.search(r'"publicAccess"\s*:\s*"(Blob|Container)"', text, re.I):
+                types.add("Microsoft.Storage/storageAccounts")
+            if re.search(r'sharedAccessSignature|sasToken|sharedAccessSignature', text, re.I):
+                # Record presence as heuristic
+                types.add("sas_token_detected")
+
+            # SQL firewall wildcard detection
+            if re.search(r'"startIpAddress"\s*:\s*"0\.0\.0\.0"', text):
+                types.add("mssql_firewall_allow_all")
+        except Exception:
+            continue
+
+    return {"resource_types": types, "resources": resources}
+
+
+def detect_bicep_resources(files: List[Path], repo_path: Path) -> dict:
+    """Detect resource declarations in Bicep files and extract simple properties.
+
+    Returns same schema as detect_arm_resources.
+    """
+    types: set = set()
+    resources: list = []
+    bicep_res_re = re.compile(r"^\s*resource\s+([A-Za-z0-9_]+)\s+'([^']+)@[^']+'\s*=\s*\{", re.I | re.M)
+    for f in files:
+        if f.suffix.lower() != ".bicep":
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+            for m in bicep_res_re.finditer(text):
+                rtype = m.group(2)
+                types.add(rtype)
+                resources.append({"type": rtype, "name": None, "properties": {}, "file": str(f)})
+
+            # Heuristics for public access and SAS
+            if re.search(r'allowBlobPublicAccess|publicAccess', text, re.I):
+                types.add("Microsoft.Storage/storageAccounts")
+            if re.search(r'sharedAccessSignature|sasToken|sharedAccessSignature', text, re.I):
+                types.add("sas_token_detected")
+
+            # SQL firewall heuristic
+            if re.search(r"startIpAddress\s*:\s*'0.0.0.0'|startIpAddress\s*=\s*'0.0.0.0'", text, re.I):
+                types.add("mssql_firewall_allow_all")
+        except Exception:
+            continue
+    return {"resource_types": types, "resources": resources}
+
 def detect_hosting_from_terraform(files: List[Path], repo_path: Path) -> Dict:
     """Detect hosting platform from Terraform files."""
     # Simplified for brevity

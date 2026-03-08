@@ -522,19 +522,17 @@ def insert_finding(
 
         cursor = conn.execute("""
             INSERT INTO findings
-            (experiment_id, repo_id, finding_name, resource_id, score, base_severity,
-             category, discovered_by, evidence_location, validation_status,
-             title, description, severity_score, source_file, source_line_start,
-             source_line_end, code_snippet, reason, rule_id, proposed_fix)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (experiment_id, repo_id, resource_id, title, description, category,
+             severity_score, base_severity, evidence_location, source_file, source_line_start,
+             source_line_end, detected_by, detection_method, rule_id, proposed_fix,
+             code_snippet, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
         """, (
-            experiment_id, repo_id, finding_name, resource_id, score, severity,
-            category, discovered_by, evidence_location,
-            effective_title, description, effective_severity_score,
-            source_file, source_line_start, source_line_end,
-            code_snippet, reason, rule_id, proposed_fix,
+            experiment_id, repo_id, resource_id, effective_title, description, category,
+            effective_severity_score, severity, evidence_location, source_file, source_line_start,
+            source_line_end, discovered_by, None, rule_id, proposed_fix,
+            code_snippet, reason,
         ))
 
         return cursor.fetchone()[0]
@@ -799,7 +797,7 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
-                   COALESCE(MAX(f.severity_score), MAX(f.score), 0) as max_finding_score
+                   COALESCE(MAX(f.severity_score), 0) as max_finding_score
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
             LEFT JOIN findings f ON r.id = f.resource_id
@@ -859,6 +857,7 @@ def get_connections_for_diagram(experiment_id: str) -> List[Dict]:
               r_src.resource_name as source,
               r_tgt.resource_name as target,
               rc.protocol,
+              rc.port,
               rc.is_cross_repo,
               repo_src.repo_name as source_repo,
               repo_tgt.repo_name as target_repo

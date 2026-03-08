@@ -78,7 +78,7 @@ def sanitize_id(name: str) -> str:
     return name.replace('-', '_').replace('.', '_').replace(' ', '_')
 
 
-def generate_architecture_diagram(experiment_id: str) -> str:
+def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
     with _get_db_conn() as _conn:
@@ -96,6 +96,10 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id)
+    # If a specific repo is requested, filter resources and connections to that repo
+    if repo_name:
+        resources = [r for r in resources if r.get('repo_name') == repo_name]
+        connections = [c for c in connections if c.get('source_repo') == repo_name or c.get('target_repo') == repo_name]
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -218,19 +222,69 @@ def generate_architecture_diagram(experiment_id: str) -> str:
     lines.append("")
     
     # Add connections
+    # Build a quick lookup of resources by name for property inspection
+    resource_map = {r['resource_name']: r for r in resources}
+
+    # Track which resource nodes have been emitted so we can create missing endpoints
+    node_names_present = {r['resource_name'] for r in resources}
+
+    # Helper to ensure a resource node exists in the diagram for a given resource name
+    def _ensure_node_exists(resource_name: str):
+        if not resource_name or resource_name in node_names_present:
+            return
+        # Try to fetch minimal info from DB if available
+        from db_helpers import get_db_connection
+        with get_db_connection() as _conn:
+            row = _conn.execute("SELECT resource_name, resource_type FROM resources WHERE experiment_id = ? AND resource_name = ? LIMIT 1", [experiment_id, resource_name]).fetchone()
+            if row:
+                node_id = sanitize_id(row['resource_name'])
+                lines.append(f"  {node_id}[{row['resource_name']}]")
+                node_names_present.add(row['resource_name'])
+
     for conn in connections:
+        # Ensure endpoint nodes exist so arrows are drawn
+        _ensure_node_exists(conn.get('source'))
+        _ensure_node_exists(conn.get('target'))
+
         src = sanitize_id(conn['source'])
         tgt = sanitize_id(conn['target'])
         
         # Add protocol/port label if available
         label = ""
-        if conn['protocol'] and conn['port']:
-            label = f"|{conn['protocol']}:{conn['port']}|"
-        elif conn['protocol']:
-            label = f"|{conn['protocol']}|"
-        
-        # Cross-repo connections use dashed line
-        if conn['is_cross_repo']:
+        # Use safe access to avoid KeyError if columns are missing
+        proto = conn.get('protocol') if isinstance(conn, dict) else (conn['protocol'] if 'protocol' in conn.keys() else None)
+        port = conn.get('port') if isinstance(conn, dict) else (conn['port'] if 'port' in conn.keys() else None)
+        if proto and port:
+            label_text = f"{proto}:{port}"
+        elif proto:
+            label_text = f"{proto}"
+        else:
+            label_text = ""
+
+        # If target resource has network ACLs or firewall rules, mark as IP-restricted
+        ip_restricted = False
+        target_name = conn.get('target')
+        if target_name and target_name in resource_map:
+            tgt_res = resource_map[target_name]
+            if tgt_res.get('network_acls'):
+                ip_restricted = True
+            elif tgt_res.get('firewall_rules'):
+                ip_restricted = True
+
+        if label_text:
+            if ip_restricted:
+                label = f"|{label_text} (IP-restricted)|"
+            else:
+                label = f"|{label_text}|"
+        else:
+            if ip_restricted:
+                label = "|(IP-restricted)|"
+            else:
+                label = ""
+
+        # Cross-repo connections use dashed line; safe access for is_cross_repo
+        is_cross = conn.get('is_cross_repo') if isinstance(conn, dict) else conn['is_cross_repo']
+        if is_cross:
             lines.append(f"  {src} -.{label}.> {tgt}")
         else:
             lines.append(f"  {src} -->{label} {tgt}")
@@ -471,11 +525,12 @@ def main():
                         help="Minimum score for security view")
     parser.add_argument("--compromised", help="Compromised resource for blast radius")
     parser.add_argument("--output", type=Path, help="Output file (default: stdout)")
+    parser.add_argument("--repo", help="Repository name to limit diagram to (optional)")
     
     args = parser.parse_args()
     
     if args.type == 'architecture':
-        diagram = generate_architecture_diagram(args.experiment_id)
+        diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo)
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
     elif args.type == 'blast-radius':
