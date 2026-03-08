@@ -2,7 +2,7 @@ rules:
   - id: azure-storage-sas-public-detection
     message: Detect Azure Storage public access combined with SAS tokens
     severity: HIGH
-    languages: [terraform, json, bicep, yaml, powershell, sh]
+    languages: [terraform, json, generic, yaml, generic, sh]
     pattern-regex: |
       (?s)(sharedAccessSignature|sasToken|sharedAccessSignature|azurerm_storage_account_sas|\bSAS\b).{0,2000}(allowBlobPublicAccess\s*[:=]\s*(?:true|True)|allow_blob_public_access\s*=\s*true|"publicAccess"\s*:\s*"(?:Blob|Container)"|public_access\s*=\s*"?(?:blob|container)")
     metadata:
@@ -11,7 +11,7 @@ rules:
   - id: azure-storage-sas-token-or-resource
     message: Detect SAS tokens or explicit storage-account-sas resources
     severity: INFO
-    languages: [terraform, json, bicep, yaml, powershell, sh]
+    languages: [terraform, json, generic, yaml, generic, sh]
     pattern-regex: |
       (sharedAccessSignature|sasToken|azurerm_storage_account_sas|SharedAccessSignature)
     metadata:
@@ -19,7 +19,7 @@ rules:
   - id: azure-storage-public-access-properties
     message: Detect storage public access properties
     severity: INFO
-    languages: [terraform, json, bicep, yaml]
+    languages: [terraform, json, generic, yaml]
     pattern-regex: |
       (allowBlobPublicAccess\s*[:=]\s*(?:true|True)|allow_blob_public_access\s*=\s*true|"publicAccess"\s*:\s*"(?:Blob|Container)"|public_access\s*=\s*"?(?:blob|container)")
     metadata:

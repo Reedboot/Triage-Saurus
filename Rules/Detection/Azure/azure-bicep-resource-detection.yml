@@ -1,37 +1,37 @@
 rules:
-  - id: azure-bicep-resource-declaration
+  - id: azure-generic-resource-declaration
     message: Detect Bicep resource declarations and extract resource types
     severity: INFO
-    languages: [bicep]
+    languages: [generic]
     pattern-regex: |
       ^\s*resource\s+([A-Za-z0-9_]+)\s+'([A-Za-z0-9_.\-/]+)@[0-9T:\-]+'\s*=\s*\{
     metadata:
       rule_type: detection
       category: infrastructure
-      technology: [azure, bicep]
-      target_files: ["**/*.bicep"]
-  - id: azure-bicep-storage-public-access
+      technology: [azure, generic]
+      target_files: ["**/*.generic"]
+  - id: azure-generic-storage-public-access
     message: Detect storage public access or SAS-related patterns in Bicep files
     severity: WARNING
-    languages: [bicep]
+    languages: [generic]
     pattern-regex: |
       \b(allowBlobPublicAccess|publicAccess|sharedAccessSignature|sasToken)\b
     metadata:
       category: misconfiguration
       technology: [azure, storage]
-  - id: azure-bicep-key-vault
+  - id: azure-generic-key-vault
     message: Detect Key Vault resource types in Bicep
     severity: INFO
-    languages: [bicep]
+    languages: [generic]
     pattern-regex: |
       'Microsoft.KeyVault/.+'
     metadata:
       category: infrastructure
       technology: [azure, keyvault]
-  - id: azure-bicep-sql-server
+  - id: azure-generic-sql-server
     message: Detect SQL server resource types in Bicep
     severity: INFO
-    languages: [bicep]
+    languages: [generic]
     pattern-regex: |
       Microsoft\.(Sql|DBforMySQL|DBforPostgreSQL)/servers
     metadata:
