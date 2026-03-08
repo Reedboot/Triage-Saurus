@@ -1,174 +1,135 @@
-# Triage Pipeline
+# Triage Pipeline (DB-first Topology)
 
-Describes the four-phase scan pipeline, which scripts run at each phase, and idempotency rules.
-
----
-
-## Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE 1 — Scripts only (zero LLM)                                  │
-│                                                                     │
-│  opengrep scan ──────────────────► findings (raw)                   │
-│  store_findings.py               (rule_id, source_file, snippet,    │
-│                                   reason, severity_score)           │
-│  discover_repo_context.py ───────► resources                        │
-│                                    resource_properties              │
-│                                    resource_connections             │
-│                                    trust_boundaries                 │
-│                                    repositories                     │
-│                                                                     │
-│  generate_diagram.py ────────────► Architecture diagram (Mermaid)  │
-│  risk_register.py ───────────────► Finding list (raw scores)        │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE 2 — LLM enrichment (once per finding)                        │
-│                                                                     │
-│  enrich_findings.py queries: findings WHERE llm_enriched_at IS NULL │
-│  LLM writes back:                                                   │
-│    findings     ── title, description, proposed_fix, severity_score │
-│    remediations ── fix description, effort, priority                │
-│    data_flows   ── named flows (auth, API request, ingress)         │
-│    data_flow_steps ─ ordered hops with auth/encryption per step     │
-│    resource_connections ─ auth_method, is_encrypted updates         │
-│    risk_score_history   ─ initial score snapshot (scored_by='llm')  │
-│                                                                     │
-│  Sets llm_enriched_at timestamp — never re-processed after this.   │
-│                                                                     │
-│  render_finding.py ──────────────► Enriched finding MD files        │
-│  generate_diagram.py ────────────► Architecture diagram (annotated) │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE 3 — Skeptic reviews (one row per reviewer per finding)       │
-│                                                                     │
-│  run_skeptics.py --reviewer dev      → skeptic_reviews (role=dev)   │
-│  run_skeptics.py --reviewer platform → skeptic_reviews (role=plat.) │
-│  run_skeptics.py --reviewer security → skeptic_reviews (role=sec.)  │
-│  Each review also writes: risk_score_history snapshot               │
-│  When all 3 done: findings.severity_score = avg(adjusted scores)    │
-│                                                                     │
-│  render_finding.py ──────────────► Final scored finding MD files    │
-│  risk_register.py ───────────────► Risk register (final scores)     │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  PHASE 4 — Reporting (scripts only, zero LLM)                       │
-│                                                                     │
-│  generate_diagram.py ────────────► Mermaid architecture diagrams    │
-│  risk_register.py ───────────────► Risk register spreadsheet        │
-│  render_finding.py ──────────────► Individual finding MD files      │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  SUBSEQUENT RUNS — only re-enrich if invalidated                    │
-│                                                                     │
-│  New opengrep hit    → new findings row → LLM enriches that row     │
-│  New context answer  → re-score affected findings only              │
-│  New countermeasure  → adjust score, append risk_score_history row  │
-│  No changes          → all reports from DB, zero LLM calls          │
-└─────────────────────────────────────────────────────────────────────┘
-```
+This document tracks the **current scripted workflow** and where topology signals are captured, persisted, and (only when required) generated via fallback logic.
 
 ---
 
-## Scripts Reference
+## Canonical Topology Model
 
-| Script | Phase | Reads | Writes |
-|--------|-------|-------|--------|
-| `triage_experiment.py run` | 1 | experiment config | orchestrates phases 1–4 |
-| `targeted_scan.py` | 1 | repo files | calls detection scan → targeted misconfig scan → `store_findings.py` |
-| `discover_repo_context.py` | 1 | repo files (IaC, code) | `resources`, `resource_properties`, `resource_connections`, `trust_boundaries`, `repositories` |
-| `store_findings.py` | 1 | opengrep JSON | `findings` (raw), `risk_score_history` (scored_by='script') |
-| `enrich_findings.py` | 2 | `findings WHERE llm_enriched_at IS NULL` | `findings` enrichment cols, `remediations`, `data_flows`, `data_flow_steps`, `risk_score_history` |
-| `run_skeptics.py` | 3 | enriched `findings` | `skeptic_reviews`, `risk_score_history`; updates `findings.severity_score` |
-| `render_finding.py` | 4 | `findings` + DB | individual finding MD files |
-| `generate_diagram.py` | 4 | `resources`, `resource_connections`, `findings` | Mermaid diagram MD files |
-| `risk_register.py` | 4 | `findings`, `resources` | risk register report |
-| `init_database.py` | Setup | — | creates/migrates all tables, seeds `providers` + `resource_types` |
+- **Primary topology table:** `resource_connections`
+- **Typed graph + confidence:** `resource_nodes` + `resource_relationships`
+- **Cross-repo alias evidence:** `resource_equivalences`
+- **Unresolved gaps/assumptions:** `enrichment_queue`
+
+`resource_connections` is the canonical source for ingress/egress views used by query and reporting scripts.
 
 ---
 
-## Idempotency Rules
+## Execution Paths
 
-All write scripts are safe to re-run:
+### 1) Experiment path: `triage_experiment.py run <id>`
 
-| Script | Skip condition |
-|--------|---------------|
-| `store_findings.py` | `(experiment_id, rule_id, source_file, source_line_start)` already exists |
-| `enrich_findings.py` | `findings.llm_enriched_at IS NOT NULL` |
-| `run_skeptics.py` | `skeptic_reviews` row for `(finding_id, reviewer_type)` already exists |
-| `discover_repo_context.py` | Uses `INSERT OR REPLACE` — safe to re-run, updates in place |
+For each repo in the experiment, Phase 1 currently runs:
+
+1. `targeted_scan.py`  
+   - Runs detection + targeted misconfiguration scans and stores findings.
+2. `discover_repo_context.py`  
+   - `context_extraction.extract_context()` builds in-memory `RepositoryContext` (`resources`, `relationships`, optional legacy `connections`).
+   - `report_generation.write_to_database()` writes relational topology/data:
+     - `repositories`, `resources`, `resource_properties`
+     - `resource_connections` (from concrete links)
+   - `persist_graph.persist_context()` writes graph + review queue:
+     - `resource_nodes`, `resource_relationships`, `resource_equivalences`, `enrichment_queue`
+   - `report_generation.generate_reports()` writes repo/cloud summaries.
+
+At the end of this path, topology is queryable from DB without re-reading source files.
+
+### 2) Offline pipeline path: `run_pipeline.py --repo <path>`
+
+`run_pipeline.py` orchestrates:
+
+1. **Phase 1**: `triage_experiment.py run <id>` (same topology capture path above)
+2. **Phase 2**: `discover_code_context.py` (writes `context_metadata` in namespace `phase2_code`)
+3. **Phase 3a**: `render_finding.py` (finding markdown)
+4. **Phase 3b**: `generate_diagram.py` (DB-backed architecture diagram)
 
 ---
 
-## Running a Full Scan
+## Where Topology Signals Are Captured
+
+### A) Concrete DB topology edges (`resource_connections`)
+
+Captured in `report_generation.write_to_database()`:
+
+- Existing `context.connections` (legacy shape) are inserted directly.
+- Typed `context.relationships` are also persisted as concrete connections when source/target are resolvable resources.
+- Relationship-derived enrichments populate connection fields:
+  - `auth_method` / `authentication` (e.g. `authenticates_via`)
+  - `authorization` (e.g. `grants_access_to` → `rbac`)
+  - `is_encrypted` (e.g. `encrypts`)
+  - `via_component` (edge gateway signals for ingress routes)
+  - `notes`
+
+**Important behavior:** relationships with `target_type == "unknown"` are intentionally not written to `resource_connections`.
+
+### B) Typed graph and unresolved gaps
+
+Captured in `persist_graph.persist_context()`:
+
+- `resource_relationships` stores typed edges and confidence.
+- `resource_equivalences` stores cross-repo alias/equivalence evidence.
+- `enrichment_queue` stores unresolved graph assumptions/gaps (`ambiguous_ref`, `missing_target`, `cross_repo_link`, `assumption`, etc.).
+
+---
+
+## Fallback Behavior (Current Code)
+
+Fallback is applied only when DB topology signals are missing or incomplete.
+
+| Area | Primary signal | Fallback path |
+|---|---|---|
+| Ingress/Egress summaries (`report_generation._build_ingress_egress_summaries`) | `resource_connections` edges for repo | 1) extracted `context.relationships` edges → 2) unresolved target list (egress) → 3) explicit “no DB-backed signals” message |
+| API topology snippets in repo summary | DB or relationship edges present | If API resources exist and no ingress/egress edges were captured, emit explicit fallback assumption Mermaid snippets |
+| External dependency summary (`_build_external_dependencies_summary`) | Outbound external targets from DB connections | Fallback to extracted `context.connections`, then Kubernetes dependency hints |
+| Unknown/ambiguous relationship targets | Concrete DB connection row | Routed to `enrichment_queue` for human confirmation |
+
+### Architecture Mermaid rendering policy (`report_generation._build_simple_architecture_diagram`)
+
+- Resource visibility and hierarchy are DB-driven from `resource_types` metadata:
+  - `display_on_architecture_chart` controls whether a resource type is shown as an architecture node.
+  - `parent_type` controls parent-child nesting for component resources.
+- IAM/policy/role resources remain in markdown inventory and roles/permissions sections but are excluded from architecture Mermaid by default.
+- Child component nodes are shown nested under their parent only when the child has linked findings with `severity_score > 0`.
+- Internet accessibility is evaluated for every rendered service/resource group using persisted evidence (DB-first, evidence-driven).
+- Public-access signal families include Key Vault, SQL, AKS, S3, compute, and edge gateway/public IP indicators.
+- Internet arrows are emitted only when explicit public evidence exists and are labeled `Known ingress` (with protocol/auth qualifiers when available).
+- When public evidence is absent or unknown, no Internet arrow is drawn (no inverse heuristic from missing private controls).
+
+---
+
+## Query + Confirmation Loop
+
+### Query resource graph views (DB-first)
 
 ```bash
-# Recommended — targeted_scan.py handles both detection and misconfigurations automatically
-python3 Scripts/targeted_scan.py /path/to/repo --experiment 003 --repo terragoat
-
-# Or via the experiment orchestrator (calls targeted_scan.py internally)
-python3 Scripts/triage_experiment.py run 003
-
-# Dry-run to preview which misconfig folders would be targeted
-python3 Scripts/targeted_scan.py /path/to/repo --experiment 003 --repo terragoat --dry-run
-
-# If targeted_scan was already run but store_findings wasn't called:
-python3 Scripts/store_findings.py \
-    Output/Learning/experiments/003_a_new_dawn/scan_terragoat.json \
-    --experiment 003 --repo terragoat
-
-# Phase 2 — LLM enrichment (run once)
-python3 Scripts/enrich_findings.py --experiment 003
-
-# Phase 3 — Skeptic reviews (run once)
-python3 Scripts/run_skeptics.py --experiment 003 --reviewer all
-
-# Phase 4 — Reports from DB (instant, no LLM)
-python3 Scripts/generate_diagram.py --experiment-id 003
-python3 Scripts/risk_register.py
-
-# Dry-run any phase to preview without writing
-python3 Scripts/enrich_findings.py --experiment 003 --dry-run
-python3 Scripts/run_skeptics.py --experiment 003 --reviewer dev --dry-run
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query all
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query ingress
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query egress
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query parent
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query related
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query assumptions
 ```
+
+`query_resource_graph.py` uses `db_helpers.get_resource_query_view()` to return:
+- `parent`
+- `ingress`
+- `egress`
+- `related`
+- `pending_assumptions`
+
+### Resolve pending assumptions
+
+```bash
+python3 Scripts/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
+python3 Scripts/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
+```
+
+Resolution writes auditable `context_answers` records and updates `enrichment_queue` status; confirmation can promote confidence on related graph records.
 
 ---
 
-## Maintenance
+## Idempotency Notes
 
-```bash
-# Initialise or migrate schema (safe on existing DB — CREATE IF NOT EXISTS + ALTER TABLE)
-python3 Scripts/init_database.py
-
-# Backup before migrations
-cp Output/Learning/triage.db Output/Learning/triage_backup_$(date +%Y%m%d).db
-
-# Check finding counts per experiment
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('Output/Learning/triage.db')
-for row in conn.execute('SELECT experiment_id, COUNT(*) FROM findings GROUP BY experiment_id').fetchall():
-    print(row)
-"
-
-# Check enrichment status
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('Output/Learning/triage.db')
-for row in conn.execute('''
-    SELECT experiment_id,
-           COUNT(*) total,
-           SUM(CASE WHEN llm_enriched_at IS NOT NULL THEN 1 ELSE 0 END) enriched
-    FROM findings GROUP BY experiment_id
-''').fetchall():
-    print(row)
-"
-```
+- `insert_connection()` upserts by experiment/source/target/connection type and merge-updates non-null topology metadata.
+- Enrichment queue insertion is deduplicated by pending `context`.
+- `init_database.py` / `db_helpers._ensure_schema()` apply additive migrations (`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` guards).

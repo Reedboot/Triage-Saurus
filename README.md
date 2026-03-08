@@ -91,6 +91,12 @@ python3 Scripts/run_skeptics.py --experiment <id> --reviewer all  # Phase 5 — 
 python3 Scripts/triage_experiment.py complete <id>            # Mark done
 ```
 
+Inspect DB-first topology relationships for a resource:
+
+```bash
+python3 Scripts/query_resource_graph.py --experiment <id> --resource <resource_name> --query all
+```
+
 ---
 
 ## Security Rules Library

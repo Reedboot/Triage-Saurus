@@ -705,12 +705,18 @@ def _is_edge_gateway_service(service_name: str) -> bool:
     be directly internet-exposed via its attached public IPs / load balancer.
     """
     tokens = (
-        "Application Gateway",
-        "Load Balancing",
-        "Api Management",
-        "Ingress",
+        "application gateway",
+        "load balancer",
+        "load balancing",
+        "api management",
+        "api gateway",
+        "front door",
+        "ingress",
+        "cloudfront",
+        "gateway",
     )
-    return any(tok in service_name for tok in tokens)
+    service_name_lower = service_name.lower()
+    return any(tok in service_name_lower for tok in tokens)
 
 
 def _compute_exposure_signals(
@@ -845,9 +851,9 @@ def _ingress_posture_for_service(repo_path: Path | None, provider: str, service_
     insecure_http=True when listener explicitly permits HTTP.
     """
     if repo_path is None or not repo_path.exists():
-        return ("ingress", False)
+        return ("Known ingress", False)
     if provider != "azure" or "application gateway" not in service_name.lower():
-        return ("ingress", False)
+        return ("Known ingress", False)
 
     protocols: set[str] = set()
     listener_re = re.compile(r"http_listener\s*\{(.*?)\}", re.DOTALL)
@@ -862,14 +868,148 @@ def _ingress_posture_for_service(repo_path: Path | None, provider: str, service_
                 protocols.add(pm.group(1).strip().lower())
 
     if not protocols:
-        return ("ingress", False)
+        return ("Known ingress", False)
     if protocols == {"https"}:
-        return ("HTTPS ingress", False)
+        return ("Known ingress (HTTPS)", False)
     if protocols == {"http"}:
-        return ("HTTP ingress", True)
+        return ("Known ingress (HTTP)", True)
     if "http" in protocols and "https" in protocols:
-        return ("HTTP/HTTPS ingress", True)
-    return (f"{'/'.join(sorted(p.upper() for p in protocols))} ingress", False)
+        return ("Known ingress (HTTP/HTTPS)", True)
+    return (f"Known ingress ({'/'.join(sorted(p.upper() for p in protocols))})", False)
+
+
+def _boolish(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().strip('"').strip("'").lower()
+    if normalized in {"1", "true", "yes", "enabled", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "disabled", "off"}:
+        return False
+    return None
+
+
+def _has_nonempty_public_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        if _boolish(value.get("is_public")) is True:
+            return True
+        for key in ("ip_address", "domain_name_label", "public_ip_address_id", "public_dns"):
+            if value.get(key):
+                return True
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_nonempty_public_value(v) for v in value)
+    normalized = str(value).strip().lower()
+    return normalized not in {"", "0", "false", "no", "none", "null", "disabled", "off"}
+
+
+def _is_iam_policy_role_type(resource_type: str) -> bool:
+    lower = (resource_type or "").lower()
+    if (
+        "policy" in lower
+        or "iam_" in lower
+        or "_iam_" in lower
+        or "binding" in lower
+        or "rbac" in lower
+    ):
+        return True
+    return bool(re.search(r"(?:^|[_-])role(?:$|[_-])", lower))
+
+
+def _is_non_endpoint_control_service(raw_types: list[str]) -> bool:
+    if not raw_types:
+        return True
+    control_tokens = (
+        "security_group",
+        "network_security_group",
+        "firewall",
+        "route_table",
+        "monitor",
+        "diagnostic",
+    )
+    return all(
+        _is_iam_policy_role_type(rt) or any(token in rt.lower() for token in control_tokens)
+        for rt in raw_types
+    )
+
+
+def _resource_has_explicit_public_signal(resource: object) -> bool:
+    props = getattr(resource, "properties", {}) or {}
+
+    for key in (
+        "internet_access",
+        "public",
+        "public_access",
+        "publicly_accessible",
+        "public_network_access_enabled",
+        "internet_facing",
+        "allow_blob_public_access",
+        "s3_public_acl",
+        "s3_public_policy",
+        "sql_firewall_public",
+        "has_public_ip",
+        "public_fqdn_enabled",
+    ):
+        if _boolish(props.get(key)) is True:
+            return True
+
+    if _boolish(props.get("private_cluster_enabled")) is False:
+        return True
+    if _boolish(props.get("internal")) is False:
+        return True
+
+    public_network_access = str(props.get("public_network_access", "")).strip().lower()
+    if public_network_access in {"enabled", "public", "true", "yes", "1"}:
+        return True
+
+    scheme = str(props.get("scheme", "")).strip().lower()
+    if scheme == "internet-facing":
+        return True
+
+    acl = str(props.get("acl", "")).strip().lower()
+    if acl.startswith("public-"):
+        return True
+
+    for key in ("public_ip", "public_ip_id", "public_ip_address_id", "public_ip_address", "public_dns", "public_dns_name"):
+        if _has_nonempty_public_value(props.get(key)):
+            return True
+
+    return getattr(resource, "resource_type", "") in {"azurerm_public_ip", "aws_eip"}
+
+
+def _evaluate_service_internet_access(
+    *,
+    repo_path: Path | None,
+    provider: str,
+    service_name: str,
+    service_raw_types: list[str],
+    provider_scoped_resources: list[object],
+) -> tuple[bool, str, bool]:
+    """
+    Return (is_public, label, insecure_http) based on explicit per-resource evidence.
+    """
+    if not service_raw_types or _is_non_endpoint_control_service(service_raw_types):
+        return (False, "Known ingress", False)
+
+    service_type_set = set(service_raw_types)
+    service_resources = [
+        res for res in provider_scoped_resources
+        if getattr(res, "resource_type", "") in service_type_set
+    ]
+    if not service_resources:
+        return (False, "Known ingress", False)
+
+    if not any(_resource_has_explicit_public_signal(res) for res in service_resources):
+        return (False, "Known ingress", False)
+
+    if _is_edge_gateway_service(service_name):
+        label, insecure_http = _ingress_posture_for_service(repo_path, provider, service_name)
+        return (True, label, insecure_http)
+    return (True, "Known ingress", False)
 
 
 def _ingress_security_warnings(repo_path: Path | None, provider: str) -> list[str]:
@@ -911,6 +1051,49 @@ def _extract_service_relationships(repo_path: Path, provider: str) -> list[tuple
     return sorted(rels)
 
 
+def _load_vulnerable_resource_keys(repo_name: str) -> set[tuple[str, str]]:
+    """
+    Return {(resource_type, resource_name)} for resources in the latest repo scan
+    that have at least one linked finding with severity_score > 0.
+    """
+    from db_helpers import get_db_connection
+
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute(
+                """
+                SELECT id
+                FROM repositories
+                WHERE repo_name = ?
+                ORDER BY scanned_at DESC, id DESC
+                LIMIT 1
+                """,
+                (repo_name,),
+            ).fetchone()
+            if not repo_row:
+                return set()
+            repo_id = repo_row["id"]
+            rows = conn.execute(
+                """
+                SELECT r.resource_type, r.resource_name
+                FROM resources r
+                JOIN findings f ON f.resource_id = r.id
+                WHERE r.repo_id = ?
+                GROUP BY r.id
+                HAVING MAX(COALESCE(f.severity_score, 0)) > 0
+                """,
+                (repo_id,),
+            ).fetchall()
+    except Exception:
+        return set()
+
+    return {
+        (str(row["resource_type"]), str(row["resource_name"]))
+        for row in rows
+        if row["resource_type"] and row["resource_name"]
+    }
+
+
 def _build_simple_architecture_diagram(
     repo_name: str,
     provider_resources: dict[str, list[object]],
@@ -924,6 +1107,7 @@ def _build_simple_architecture_diagram(
     styled_ids: set[str] = set()
     used_node_ids: set[str] = set()  # Track all node IDs to prevent duplicates
     link_index = 0
+    vulnerable_resource_keys = _load_vulnerable_resource_keys(repo_name)
 
     category_colors = {
         "app": "#5a9e5a",         # green  (Compute)
@@ -988,7 +1172,7 @@ def _build_simple_architecture_diagram(
 
     lines.append('  Internet[Internet Users]')
     if not provider_resources:
-        lines.append("  Internet --> Unknown[No cloud provider resources detected]")
+        lines.append('  Internet -->|No cloud provider evidence| Unknown[No cloud provider resources detected]')
         style_id("Unknown", "security")
         return "\n".join(lines)
 
@@ -1016,6 +1200,54 @@ def _build_simple_architecture_diagram(
             for parent, raw_types in parent_groups.items()
             if not any(_is_network_boundary_resource(provider, raw) for raw in raw_types)
         }
+
+        _internet_posture_cache: dict[tuple[str, tuple[str, ...]], tuple[bool, str, bool]] = {}
+
+        def _service_internet_posture(service_name: str, service_raw_types: list[str]) -> tuple[bool, str, bool]:
+            cache_key = (service_name, tuple(sorted(service_raw_types)))
+            if cache_key not in _internet_posture_cache:
+                _internet_posture_cache[cache_key] = _evaluate_service_internet_access(
+                    repo_path=repo_path,
+                    provider=provider,
+                    service_name=service_name,
+                    service_raw_types=service_raw_types,
+                    provider_scoped_resources=resources,
+                )
+            return _internet_posture_cache[cache_key]
+
+        def _raw_types_have_vulnerability(raw_types: list[str]) -> bool:
+            if not raw_types or not vulnerable_resource_keys:
+                return False
+            raw_type_set = set(raw_types)
+            for res in resources:
+                res_type = str(getattr(res, "resource_type", "") or "")
+                res_name = str(getattr(res, "name", "") or "")
+                if res_type in raw_type_set and (res_type, res_name) in vulnerable_resource_keys:
+                    return True
+            return False
+
+
+        def _is_non_visual_control_service(raw_types: list[str]) -> bool:
+            control_tokens = (
+                "security_group",
+                "network_security_group",
+                "firewall",
+                "route_table",
+                "monitor",
+                "diagnostic",
+            )
+            for rt in raw_types:
+                lower = rt.lower()
+                if _is_iam_policy_role_type(lower) or any(token in lower for token in control_tokens):
+                    return True
+            return False
+
+        def _is_vulnerable_child_candidate(raw_types: list[str]) -> bool:
+            if not raw_types or _is_non_visual_control_service(raw_types):
+                return False
+            db = _get_db()
+            return any(bool(_rtdb.get_resource_type(db, rt).get("parent_type")) for rt in raw_types)
+
         routable_parents = {}
         for parent, raw_types in non_boundary_parents.items():
             routable_children = [raw for raw in raw_types if _is_data_routing_resource(raw)]
@@ -1109,6 +1341,8 @@ def _build_simple_architecture_diagram(
                 filtered = []
                 for svc in svc_list:
                     raw_types = non_boundary_parents.get(svc, [])
+                    if _is_non_visual_control_service(raw_types):
+                        continue
                     # If any raw_type is allowed to display, keep the service
                     keep = False
                     for rt in raw_types:
@@ -1116,6 +1350,13 @@ def _build_simple_architecture_diagram(
                         if rt_meta.get('display_on_architecture_chart', True):
                             keep = True
                             break
+                    # Hidden child components can still be rendered when vulnerable and parented.
+                    if (
+                        not keep
+                        and _raw_types_have_vulnerability(raw_types)
+                        and _is_vulnerable_child_candidate(raw_types)
+                    ):
+                        keep = True
                     if keep:
                         filtered.append(svc)
                 services_by_layer[layer_key] = filtered
@@ -1139,7 +1380,9 @@ def _build_simple_architecture_diagram(
             layer_label, layer_cat = layer_meta[layer_key]
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
             
-            # Identify Storage hierarchy: Container and Blob nested inside Storage Account
+            # Identify storage hierarchies:
+            # - Storage Account -> Storage Container/Blob
+            # - S3 Bucket -> Public Access Block/S3 Bucket Policy
             _STORAGE_PARENT = "Storage Account"
             _STORAGE_CONTAINER = "Storage Container"
             _STORAGE_BLOB = "Storage Blob"
@@ -1149,6 +1392,15 @@ def _build_simple_architecture_diagram(
                     storage_nested_services.add(_STORAGE_CONTAINER)
                 if _STORAGE_BLOB in layer_services:
                     storage_nested_services.add(_STORAGE_BLOB)
+
+            _S3_PARENT = "S3 Bucket"
+            # Policy resources remain context-only; do not render policy nodes on architecture.
+            _S3_CHILDREN = {"Public Access Block"}
+            s3_nested_services: set[str] = set()
+            if _S3_PARENT in layer_services:
+                for s in layer_services:
+                    if s in _S3_CHILDREN:
+                        s3_nested_services.add(s)
 
             # Identify SQL hierarchy: Database nested inside SQL Server
             # Detected by raw resource types so it works regardless of DB friendly-name drift
@@ -1233,7 +1485,29 @@ def _build_simple_architecture_diagram(
                     if svc_types and svc_types & _ECS_INSTANCE_TYPES:
                         ecs_nested_instances.add(s)
 
-            all_nested = storage_nested_services | sql_nested_services | kv_nested_services | lb_nested_services | ecs_nested_instances
+            # Keep child services hidden as standalone nodes; render them inside their parents.
+            storage_child_candidates = set(storage_nested_services)
+            s3_child_candidates = set(s3_nested_services)
+            sql_child_candidates = set(sql_nested_services)
+            kv_child_candidates = set(kv_nested_services)
+            lb_child_candidates = set(lb_nested_services)
+            ecs_child_candidates = set(ecs_nested_instances)
+
+            storage_nested_services = storage_child_candidates
+            s3_nested_services = s3_child_candidates
+            sql_nested_services = sql_child_candidates
+            kv_nested_services = kv_child_candidates
+            lb_nested_services = lb_child_candidates
+            ecs_nested_instances = ecs_child_candidates
+
+            all_nested = (
+                storage_child_candidates
+                | s3_child_candidates
+                | sql_child_candidates
+                | kv_child_candidates
+                | lb_child_candidates
+                | ecs_child_candidates
+            )
 
             # Adjust layer service count to account for all nested services
             visible_layer_services = [s for s in layer_services if s not in all_nested]
@@ -1315,12 +1589,32 @@ def _build_simple_architecture_diagram(
                     # Jump to exposure handling; skip the standard rendering branches below
                     if exposure_target:
                         service_anchor_nodes[service] = exposure_target
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
+                    continue
+
+                # S3 bucket with nested vulnerable child controls (policy/public-access-block)
+                is_s3_with_children = service == _S3_PARENT and bool(s3_nested_services)
+                if is_s3_with_children:
+                    s3_names = service_instances.get(service, [])
+                    s3_label = f"S3 Bucket ({s3_names[0]})" if len(s3_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{s3_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for s3_child in sorted(s3_nested_services):
+                        child_names = service_instances.get(s3_child, [])
+                        child_label = f"{s3_child} ({child_names[0]})" if len(child_names) == 1 else s3_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', s3_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
 
                 # SQL Server with nested databases
@@ -1341,12 +1635,9 @@ def _build_simple_architecture_diagram(
                     exposure_target = svc_subgraph
                     if exposure_target:
                         service_anchor_nodes[service] = exposure_target
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw_all, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
 
                 # Key Vault with nested keys/secrets
@@ -1367,12 +1658,9 @@ def _build_simple_architecture_diagram(
                     exposure_target = svc_subgraph
                     if exposure_target:
                         service_anchor_nodes[service] = exposure_target
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
 
                 # Load Balancer with nested listeners/target groups
@@ -1393,12 +1681,9 @@ def _build_simple_architecture_diagram(
                     exposure_target = svc_subgraph
                     if exposure_target:
                         service_anchor_nodes[service] = exposure_target
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
 
                 # ECS Cluster with EC2-backed instances nested
@@ -1419,12 +1704,15 @@ def _build_simple_architecture_diagram(
                     exposure_target = svc_subgraph
                     if exposure_target:
                         service_anchor_nodes[service] = exposure_target
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        ecs_exposure_raw_types = set(service_raw_all)
+                        for instance_service in ecs_nested_instances:
+                            ecs_exposure_raw_types.update(non_boundary_parents.get(instance_service, []))
+                        is_public, ingress_label, insecure_http = _service_internet_posture(
+                            service,
+                            sorted(ecs_exposure_raw_types),
+                        )
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
                 
                 if len(service_raw) <= 1:
@@ -1689,23 +1977,17 @@ def _build_simple_architecture_diagram(
                         # APIM case: tuple of (operation_nodes, requires_auth)
                         operation_nodes, requires_auth = exposure_target
                         service_anchor_nodes[service] = operation_nodes[0] if operation_nodes else None
-                        # Edge gateways (App Gateway, LB, APIM) are internet-facing by design
-                        # Create links to each operation
-                        if not _is_edge_gateway_service(service):
-                            label = "Public (requires auth)" if requires_auth else "Public exposure"
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            label = f"{ingress_label} (auth)" if requires_auth else ingress_label
                             for op_node in operation_nodes:
-                                add_link("Internet", op_node, label=label, red=True)
+                                add_link("Internet", op_node, label=label, red=insecure_http)
                     else:
                         # Standard case: single exposure point
                         service_anchor_nodes[service] = exposure_target
-                        # Edge gateways (App Gateway, LB, APIM) are internet-facing by design —
-                        # skip the generic "Public exposure" arrow; the protocol ingress arrow below handles it.
-                        if not _is_edge_gateway_service(service):
-                            has_private, has_restriction = _compute_exposure_signals(service, service_raw, repo_path)
-                            if not has_private and not has_restriction:
-                                add_link("Internet", exposure_target, label="Public exposure", red=True)
-                            elif has_private != has_restriction:
-                                add_link("Internet", exposure_target, label="Partial controls", orange=True)
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     
                     # Alerting links (use first node if tuple/list)
                     if isinstance(exposure_target, tuple):
@@ -1812,11 +2094,18 @@ def _build_simple_architecture_diagram(
 
         # Explicitly show ingress to gateway-like edge services.
         for service_name, node_id in service_anchor_nodes.items():
-            if _is_edge_gateway_service(service_name):
-                ingress_label, insecure_http = _ingress_posture_for_service(repo_path, provider, service_name)
+            if not node_id or not _is_edge_gateway_service(service_name):
+                continue
+            service_raw_all = sorted(set(non_boundary_parents.get(service_name, [])))
+            is_public, ingress_label, insecure_http = _service_internet_posture(service_name, service_raw_all)
+            if is_public:
                 add_link("Internet", node_id, label=ingress_label, red=insecure_http)
 
         lines.append("  end")
+
+    has_internet_edges = any(line.strip().startswith("Internet -->") for line in edge_lines)
+    if not has_internet_edges:
+        lines = [line for line in lines if line.strip() != "Internet[Internet Users]"]
 
     lines.extend(edge_lines)
     # Append link and node style directives directly so Mermaid renders colored borders.
@@ -1891,6 +2180,18 @@ def _build_enrichment_assumptions(repo_name: str) -> str:
     if not assumptions:
         return "- No unresolved assumptions. All extracted relationships are confirmed."
 
+    lines: list[str] = []
+    for item in assumptions[:20]:
+        gap = item.get("gap_type", "assumption")
+        confidence = item.get("confidence", "unknown")
+        assumption_text = item.get("assumption_text") or item.get("context") or "Unspecified assumption"
+        suggested = item.get("suggested_value")
+        suffix = f" (suggested next step: {suggested})" if suggested else ""
+        lines.append(f"- [{gap} / {confidence}] {assumption_text}{suffix}")
+    if len(assumptions) > 20:
+        lines.append(f"- ... {len(assumptions) - 20} more pending assumptions")
+    return "\n".join(lines)
+
 
 def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> str:
     """Auto-detect simple high-risk configurations and format as Markdown.
@@ -1909,7 +2210,16 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
         has_alert_policy = []
         alert_disabled = False
         has_tde = False
-        open_sql_fw = []
+        sql_firewall_resources = []
+        open_sql_firewalls = []
+        tf_blocks: list[str] = []
+        if repo_path:
+            repo_p = _Path(repo_path)
+            for tf in repo_p.rglob("*.tf"):
+                try:
+                    tf_blocks.append(tf.read_text(errors="ignore"))
+                except Exception:
+                    continue
 
         for r in context.resources:
             t = r.resource_type.lower()
@@ -1920,19 +2230,14 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
             if "transparent_data_encryption" in t or "transparent" in t and "encryption" in t:
                 has_tde = True
             if "firewall_rule" in t and "mssql" in t:
-                open_sql_fw.append(r)
+                sql_firewall_resources.append(r)
 
         # Helper: inspect TF block for a resource name to find disabled flags
-        def _block_has_disabled(repo_p, name):
-            if not repo_p:
+        def _block_has_disabled(name: str) -> bool:
+            if not tf_blocks:
                 return False
-            repo_p = _Path(repo_p)
             blk_re = re.compile(rf'resource\s+"[^"]+"\s+"{re.escape(name)}"\s*\{{', re.I)
-            for tf in repo_p.rglob('*.tf'):
-                try:
-                    txt = tf.read_text(errors='ignore')
-                except Exception:
-                    continue
+            for txt in tf_blocks:
                 m = blk_re.search(txt)
                 if not m:
                     continue
@@ -1956,25 +2261,17 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
             return False
 
         for a in has_audit_policy:
-            if _block_has_disabled(repo_path, a.name):
+            if _block_has_disabled(a.name):
                 audit_disabled = True
         for a in has_alert_policy:
-            if _block_has_disabled(repo_path, a.name):
+            if _block_has_disabled(a.name):
                 alert_disabled = True
-        for fw in open_sql_fw:
-            if not repo_path:
+        for fw in sql_firewall_resources:
+            if not tf_blocks:
                 continue
             # check firewall block for 0.0.0.0
-            if _block_has_disabled(repo_path, fw.name):
-                # reuse helper incorrectly named; do a direct scan for 0.0.0.0
-                pass
-            repo_p = _Path(repo_path)
             blk_re = re.compile(rf'resource\s+"[^"]+"\s+"{re.escape(fw.name)}"\s*\{{', re.I)
-            for tf in repo_p.rglob('*.tf'):
-                try:
-                    txt = tf.read_text(errors='ignore')
-                except Exception:
-                    continue
+            for txt in tf_blocks:
                 m = blk_re.search(txt)
                 if not m:
                     continue
@@ -1989,18 +2286,18 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
                     i += 1
                 block = txt[m.start():i]
                 if re.search(r"0\.0\.0\.0", block):
-                    open_sql_fw.append(fw)
+                    open_sql_firewalls.append(fw)
                     break
 
         # Build findings
-        if (audit_disabled or alert_disabled) and open_sql_fw:
+        if (audit_disabled or alert_disabled) and open_sql_firewalls:
             lines.append("### 🔥 High risk: Auditing/alerts disabled with permissive SQL firewall")
             if audit_disabled:
                 lines.append("- SQL auditing resources are present but disabled (enabled = false or log_monitoring_enabled = false). This removes logging/forensics.")
             if alert_disabled:
                 lines.append("- SQL server security alert policy is disabled (state = \"Disabled\"). Alerts will not be raised.")
             lines.append("- Found SQL firewall rule(s) with 0.0.0.0 allowing broad access:")
-            for fw in open_sql_fw:
+            for fw in open_sql_firewalls:
                 lines.append(f"  - {fw.name} ({fw.resource_type})")
             lines.append("")
             lines.append("Recommendation: enable auditing (enabled = true, log_monitoring_enabled = true), set server security alert policy state to \"Enabled\", and remove or restrict any 0.0.0.0 firewall rules. Send diagnostics to Log Analytics or Storage for retention.")
@@ -2012,33 +2309,6 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
 
     except Exception as e:
         return f"- Error building auto-findings: {e}"
-
-    return "\n".join(lines)
-
-    high   = [a for a in assumptions if a.get("confidence") == "high"]
-    medium = [a for a in assumptions if a.get("confidence") == "medium"]
-    low    = [a for a in assumptions if a.get("confidence") == "low"]
-
-    lines: list[str] = []
-    if high:
-        lines.append("#### 🟠 Likely — please confirm")
-        for a in high:
-            text = a.get("assumption_text") or a.get("context", "Unknown")
-            hint = a.get("suggested_value", "")
-            lines.append(f"- **{text}**")
-            if hint:
-                lines.append(f"  - *Suggestion:* {hint}")
-    if medium:
-        lines.append("\n#### 🟡 Possible — needs input")
-        for a in medium:
-            text = a.get("assumption_text") or a.get("context", "Unknown")
-            basis = a.get("assumption_basis", "")
-            lines.append(f"- {text}" + (f" *(basis: {basis})*" if basis else ""))
-    if low:
-        lines.append("\n#### ⚪ Unclear — variable references")
-        for a in low:
-            ctx = a.get("context", "Unknown")
-            lines.append(f"- {ctx}")
 
     return "\n".join(lines)
 
@@ -2137,6 +2407,338 @@ def _build_resource_inventory(
     return "\n".join(lines).strip() if lines else "- No resources detected."
 
 
+def _relationship_kind_value(rel: object) -> str:
+    kind = getattr(rel, "relationship_type", "")
+    return kind.value if hasattr(kind, "value") else str(kind)
+
+
+def _normalize_optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y", "t"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "f"}:
+        return False
+    return None
+
+
+def _load_repo_topology_connections(repo_name: str) -> list[dict]:
+    from db_helpers import get_connections_for_diagram, get_db_connection
+
+    with get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT experiment_id
+            FROM repositories
+            WHERE repo_name = ?
+            ORDER BY scanned_at DESC, id DESC
+            LIMIT 1
+            """,
+            [repo_name],
+        ).fetchone()
+
+    if not row:
+        return []
+
+    experiment_id = row["experiment_id"]
+    return get_connections_for_diagram(experiment_id, repo_name=repo_name)
+
+
+def _is_edge_gateway_signal(resource_type: str, resource_name: str) -> bool:
+    signal = f"{resource_type}.{resource_name}".lower()
+    edge_tokens = (
+        "api_management",
+        "api_gateway",
+        "application_gateway",
+        "front_door",
+        "load_balancer",
+        "ingress",
+        "gateway",
+        "waf",
+        "cloudfront",
+    )
+    return any(token in signal for token in edge_tokens)
+
+
+def _mermaid_node_id(label: str, used_ids: set[str]) -> str:
+    base = re.sub(r"[^A-Za-z0-9_]", "_", label.strip()) or "node"
+    if base[0].isdigit():
+        base = f"n_{base}"
+    node_id = base
+    idx = 2
+    while node_id in used_ids:
+        node_id = f"{base}_{idx}"
+        idx += 1
+    used_ids.add(node_id)
+    return node_id
+
+
+def _build_flow_mermaid(edges: list[tuple[str, str, str]], *, include_internet: bool) -> str:
+    if not edges:
+        return ""
+
+    lines = ["```mermaid", "flowchart LR"]
+    if include_internet:
+        lines.append("    Internet[Internet]")
+
+    node_ids: dict[str, str] = {}
+    used_ids: set[str] = set()
+    for src, dst, _ in edges:
+        for raw in (src, dst):
+            if raw in node_ids:
+                continue
+            node_ids[raw] = _mermaid_node_id(raw, used_ids)
+            pretty = raw.replace("__inferred__", "").replace('"', "'")
+            if not pretty.strip():
+                pretty = "Unresolved target"
+            lines.append(f'    {node_ids[raw]}["{pretty}"]')
+
+    if include_internet:
+        linked_sources: set[str] = set()
+        for src, _, _ in edges:
+            src_id = node_ids[src]
+            if src_id in linked_sources:
+                continue
+            lines.append(f"    Internet --> {src_id}")
+            linked_sources.add(src_id)
+
+    for src, dst, label in edges:
+        src_id = node_ids[src]
+        dst_id = node_ids[dst]
+        edge_label = (label or "").replace("_", " ")
+        if edge_label:
+            lines.append(f"    {src_id} -->|{edge_label}| {dst_id}")
+        else:
+            lines.append(f"    {src_id} --> {dst_id}")
+
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _collect_relationship_topology(
+    context: RepositoryContext,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]], set[str]]:
+    relationships = list(getattr(context, "relationships", []) or [])
+    ingress_rel_types = {"routes_ingress_to"}
+    egress_rel_types = {
+        "depends_on",
+        "grants_access_to",
+        "authenticates_via",
+        "encrypts",
+        "restricts_access",
+        "monitors",
+    }
+
+    ingress_seen: set[tuple[str, str, str]] = set()
+    egress_seen: set[tuple[str, str, str]] = set()
+    ingress_edges: list[tuple[str, str, str]] = []
+    egress_edges: list[tuple[str, str, str]] = []
+    unresolved_targets: set[str] = set()
+
+    for rel in relationships:
+        src_name = str(getattr(rel, "source_name", "") or "").strip()
+        dst_name = str(getattr(rel, "target_name", "") or "").strip()
+        src_type = str(getattr(rel, "source_type", "") or "")
+        dst_type = str(getattr(rel, "target_type", "") or "")
+        rel_type = _relationship_kind_value(rel)
+        if not src_name or not dst_name:
+            continue
+
+        if dst_type == "unknown":
+            unresolved_targets.add(dst_name)
+            continue
+
+        edge = (src_name, dst_name, rel_type)
+        if rel_type in ingress_rel_types or _is_edge_gateway_signal(src_type, src_name):
+            if edge not in ingress_seen:
+                ingress_seen.add(edge)
+                ingress_edges.append(edge)
+        if rel_type in egress_rel_types:
+            if edge not in egress_seen:
+                egress_seen.add(edge)
+                egress_edges.append(edge)
+
+    return ingress_edges, egress_edges, unresolved_targets
+
+
+def _connection_summary_label(connection: dict) -> str:
+    connection_type = str(connection.get("connection_type") or "").strip().replace("_", " ")
+    auth_method = str(connection.get("auth_method") or "").strip()
+    via_component = str(connection.get("via_component") or "").strip()
+    source_name = str(connection.get("source") or "").strip()
+    target_name = str(connection.get("target") or "").strip()
+    encryption = _normalize_optional_bool(connection.get("is_encrypted"))
+
+    parts: list[str] = []
+    if connection_type:
+        parts.append(connection_type)
+    if auth_method:
+        parts.append(f"auth={auth_method}")
+    if encryption is True:
+        parts.append("encrypted")
+    elif encryption is False:
+        parts.append("not encrypted")
+    if via_component and via_component not in {source_name, target_name}:
+        parts.append(f"via {via_component}")
+    return ", ".join(parts)
+
+
+def _collect_db_topology_edges(
+    repo_name: str,
+    db_connections: list[dict],
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
+    ingress_types = {"routes_ingress_to", "ingress", "public_ingress", "internet_ingress"}
+    egress_types = {
+        "depends_on",
+        "grants_access_to",
+        "authenticates_via",
+        "encrypts",
+        "restricts_access",
+        "monitors",
+        "egress",
+    }
+
+    ingress_seen: set[tuple[str, str, str]] = set()
+    egress_seen: set[tuple[str, str, str]] = set()
+    ingress_edges: list[tuple[str, str, str]] = []
+    egress_edges: list[tuple[str, str, str]] = []
+
+    for connection in db_connections:
+        src_name = str(connection.get("source") or "").strip()
+        dst_name = str(connection.get("target") or "").strip()
+        if not src_name or not dst_name:
+            continue
+
+        source_repo = str(connection.get("source_repo") or "").strip()
+        target_repo = str(connection.get("target_repo") or "").strip()
+        connection_type = str(connection.get("connection_type") or "").strip()
+        label = _connection_summary_label(connection) or connection_type.replace("_", " ")
+        edge = (src_name, dst_name, label)
+
+        is_cross_repo_ingress = target_repo == repo_name and source_repo and source_repo != repo_name
+        is_cross_repo_egress = source_repo == repo_name and target_repo and target_repo != repo_name
+        is_ingress = (
+            is_cross_repo_ingress
+            or connection_type in ingress_types
+            or _is_edge_gateway_signal(str(connection.get("source_type") or ""), src_name)
+        )
+        is_egress = is_cross_repo_egress or connection_type in egress_types
+
+        if is_ingress and edge not in ingress_seen:
+            ingress_seen.add(edge)
+            ingress_edges.append(edge)
+        if is_egress and edge not in egress_seen:
+            egress_seen.add(edge)
+            egress_edges.append(edge)
+
+    return ingress_edges, egress_edges
+
+
+def _build_ingress_egress_summaries(
+    context: RepositoryContext,
+    *,
+    repo_name: str,
+    db_connections: list[dict] | None = None,
+) -> tuple[str, str, dict[str, bool]]:
+    rel_ingress_edges, rel_egress_edges, unresolved_targets = _collect_relationship_topology(context)
+    connections = db_connections if db_connections is not None else _load_repo_topology_connections(repo_name)
+    db_ingress_edges, db_egress_edges = _collect_db_topology_edges(repo_name, connections)
+
+    if db_ingress_edges:
+        ingress_summary = _build_flow_mermaid(db_ingress_edges[:12], include_internet=True)
+    elif rel_ingress_edges:
+        ingress_summary = (
+            "Fallback (no DB-backed ingress topology signals detected):\n"
+            + _build_flow_mermaid(rel_ingress_edges[:12], include_internet=True)
+        )
+    else:
+        ingress_summary = "- Fallback: no DB-backed ingress topology signals detected."
+
+    if db_egress_edges:
+        egress_summary = _build_flow_mermaid(db_egress_edges[:12], include_internet=False)
+    elif rel_egress_edges:
+        egress_summary = (
+            "Fallback (no DB-backed egress topology signals detected):\n"
+            + _build_flow_mermaid(rel_egress_edges[:12], include_internet=False)
+        )
+    elif unresolved_targets:
+        lines = ["- Fallback: no DB-backed egress topology signals; unresolved extracted dependencies:"]
+        for target in sorted(unresolved_targets)[:10]:
+            lines.append(f"  - {target}")
+        egress_summary = "\n".join(lines)
+    else:
+        egress_summary = "- Fallback: no DB-backed egress topology signals detected."
+
+    return ingress_summary, egress_summary, {
+        "ingress_from_db": bool(db_ingress_edges),
+        "egress_from_db": bool(db_egress_edges),
+        "ingress_has_edges": bool(db_ingress_edges or rel_ingress_edges),
+        "egress_has_edges": bool(db_egress_edges or rel_egress_edges),
+    }
+
+
+def _build_external_dependencies_summary(
+    context: RepositoryContext,
+    *,
+    repo_name: str,
+    repo_path: Path | None,
+    db_connections: list[dict],
+) -> str:
+    local_resource_names = {r.name for r in context.resources if getattr(r, "name", None)}
+    db_external_targets: set[str] = set()
+
+    for connection in db_connections:
+        src_name = str(connection.get("source") or "").strip()
+        dst_name = str(connection.get("target") or "").strip()
+        source_repo = str(connection.get("source_repo") or "").strip()
+        target_repo = str(connection.get("target_repo") or "").strip()
+        if not src_name or not dst_name or dst_name == "Internet":
+            continue
+
+        if source_repo == repo_name and target_repo and target_repo != repo_name:
+            db_external_targets.add(dst_name)
+            continue
+        if src_name in local_resource_names and dst_name not in local_resource_names:
+            db_external_targets.add(dst_name)
+
+    if db_external_targets:
+        lines = ["- External dependencies detected from DB topology:"]
+        for target in sorted(db_external_targets):
+            lines.append(f"  - {target}")
+        return "\n".join(lines)
+
+    fallback_targets: set[str] = set()
+    for connection in context.connections:
+        src_name = str(getattr(connection, "source", "") or "").strip()
+        dst_name = str(getattr(connection, "target", "") or "").strip()
+        if not dst_name or dst_name == "Internet":
+            continue
+        if (src_name == repo_name or src_name in local_resource_names) and dst_name not in local_resource_names:
+            fallback_targets.add(dst_name)
+
+    if repo_path and repo_path.exists():
+        deployments = _extract_kubernetes_deployments(repo_path)
+        for deployment in deployments:
+            module_name = deployment.get("module_name")
+            for dependency in _extract_service_dependencies(repo_path, module_name):
+                fallback_targets.add(dependency)
+
+    if fallback_targets:
+        lines = [
+            "- Fallback external dependencies (DB topology had no outbound external dependency signals):"
+        ]
+        for target in sorted(fallback_targets):
+            lines.append(f"  - {target}")
+        return "\n".join(lines)
+
+    return "- No external dependencies detected from DB topology."
+
+
 def write_repo_summary(
     *,
     repo: Path,
@@ -2192,11 +2794,14 @@ def write_repo_summary(
     else:
         roles_permissions = "- No role assignments detected."
 
-    ingress_summary = f"""```mermaid\nflowchart LR\n    Internet[Internet] --> APIM[API Management APIM]\n    Service["{repo_name}"]\n    APIM -->|Subscription Key| Service\n    %% Styling for red edge\n    linkStyle 0 stroke:#e3342f, stroke-width:2px\n```"""
+    db_topology_connections = _load_repo_topology_connections(repo_name)
+    ingress_summary, egress_summary, topology_flags = _build_ingress_egress_summaries(
+        context,
+        repo_name=repo_name,
+        db_connections=db_topology_connections,
+    )
 
-    egress_summary = f"""```mermaid\nflowchart LR\n    Service["{repo_name}"]\n    subgraph APIM_Egress[🔌 API Management]\n      subgraph Payments[payments]\n        Payments_health_check[health_check]\n        Payments_v1_get_accounts[v1-get-accounts]\n      end\n      subgraph Notifications[notifications]\n        Notifications_v1_get_users[v1-get-users]\n        Notifications_v1_get_user_hidden_accounts[v1-get-user-hidden-accounts]\n      end\n    end\n    Service -->|APIM Subscription Key| Payments_health_check\n    Service -->|APIM Subscription Key| Payments_v1_get_accounts\n    Service -->|APIM Subscription Key| Notifications_v1_get_users\n    Service -->|APIM Subscription Key| Notifications_v1_get_user_hidden_accounts\n```"""
-
-    # Override ingress/egress examples with detected APIs (if present)
+    # Optional fallback when APIs exist but no topology edges were captured from DB/extraction.
     api_types = (
         "azurerm_api_management_api",
         "aws_api_gateway_rest_api",
@@ -2209,8 +2814,9 @@ def write_repo_summary(
         if getattr(r, "resource_type", None) in api_types and getattr(r, "name", None):
             # Prefer explicit API name if available, else use resource label
             apis.append(getattr(r, "name") or getattr(r, "resource_type"))
-    if apis:
+    if apis and not topology_flags["ingress_has_edges"]:
         ingress_lines = [
+            "- Fallback assumption (no DB-backed ingress topology signals detected):",
             "```mermaid",
             "flowchart LR",
             "    Internet[Internet] --> APIM[API Management APIM]",
@@ -2223,7 +2829,9 @@ def write_repo_summary(
         ingress_lines.append("```")
         ingress_summary = "\n".join(ingress_lines)
 
+    if apis and not topology_flags["egress_has_edges"]:
         egress_lines = [
+            "- Fallback assumption (no DB-backed egress topology signals detected):",
             "```mermaid",
             "flowchart LR",
             f'    Service["{repo_name}"]',
@@ -2233,46 +2841,13 @@ def write_repo_summary(
             egress_lines.append(f'    Service --> {api_id}["{api}"]')
         egress_lines.append("```")
         egress_summary = "\n".join(egress_lines)
-    else:
-        # No APIs detected in this repository's IaC resources — avoid showing placeholder samples.
-        ingress_summary = "- No API Management APIs detected in IaC resources."
 
-        egress_summary = "- No APIM egress detected from IaC resources. External dependencies are listed below if found."
-
-    # Determine external dependencies from detected connections and Kubernetes module configs
-    external_targets: set[str] = set()
-    # Build set of local resource names to distinguish internal targets
-    local_resource_names = {r.name for r in context.resources if getattr(r, 'name', None)}
-
-    # Use explicit connections detected by context_extraction (if present)
-    for conn in context.connections:
-        try:
-            src = getattr(conn, 'source', '')
-            tgt = getattr(conn, 'target', '')
-            # If source is local (repo or a local resource) and target is not a local resource or Internet
-            if (src == repo_name or src in local_resource_names) and tgt and tgt not in local_resource_names and tgt != 'Internet':
-                external_targets.add(tgt)
-        except Exception:
-            continue
-
-    # Also inspect Kubernetes module configs for outbound service BaseUri patterns
-    try:
-        k8s_deps = []
-        deployments = _extract_kubernetes_deployments(repo_path) if repo_path is not None else []
-        for d in deployments:
-            deps = _extract_service_dependencies(repo_path, d.get('module_name')) if repo_path is not None else []
-            for dep in deps:
-                external_targets.add(dep)
-    except Exception:
-        pass
-
-    if external_targets:
-        lines = ["- External dependencies detected:"]
-        for t in sorted(external_targets):
-            lines.append(f"  - {t}")
-        external_deps = "\n".join(lines)
-    else:
-        external_deps = "- No external dependencies detected in Phase 1."
+    external_deps = _build_external_dependencies_summary(
+        context,
+        repo_name=repo_name,
+        repo_path=repo,
+        db_connections=db_topology_connections,
+    )
 
     top_evidence = []
     for resource_type, count in resource_counter.most_common(10):
@@ -2587,47 +3162,85 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
 
 
 def write_to_database(context: RepositoryContext, db_path: str = None, experiment_id: str = "001") -> None:
-    from db_helpers import insert_repository, insert_resource, insert_connection, get_db_connection
+    from db_helpers import insert_repository, insert_resource, insert_connection
 
-    with get_db_connection(db_path):
-        insert_repository(
+    # Keep DB writes scoped to each helper call; holding a long-lived bootstrap
+    # connection here causes sqlite write-lock contention in nested inserts.
+    insert_repository(
+        experiment_id=experiment_id,
+        repo_path=Path(context.repository_name),
+    )
+
+    # First pass: insert all resources, collect type.name → db_id map
+    res_db_ids: dict[str, int] = {}
+    for resource in context.resources:
+        db_id = insert_resource(
             experiment_id=experiment_id,
-            repo_path=Path(context.repository_name),
+            repo_name=context.repository_name,
+            resource_name=resource.name,
+            resource_type=resource.resource_type,
+            provider=_rtdb.get_provider_key(_get_db(), resource.resource_type),
+            source_file=resource.file_path,
+            source_line=resource.line_number,
+            properties=getattr(resource, 'properties', None),
+        )
+        res_db_ids[f"{resource.resource_type}.{resource.name}"] = db_id
+
+    # Second pass: resolve parent references and update parent_resource_id
+    from db_helpers import get_db_connection as _gdb
+    for resource in context.resources:
+        if not resource.parent:
+            continue
+        parent_db_id = res_db_ids.get(resource.parent)
+        if parent_db_id:
+            child_db_id = res_db_ids.get(f"{resource.resource_type}.{resource.name}")
+            if child_db_id:
+                with _gdb(db_path) as conn:
+                    conn.execute(
+                        "UPDATE resources SET parent_resource_id=? WHERE id=?",
+                        (parent_db_id, child_db_id),
+                    )
+
+    for connection in context.connections:
+        insert_connection(
+            experiment_id=experiment_id,
+            source_name=connection.source,
+            target_name=connection.target,
+            connection_type=connection.connection_type,
         )
 
-        # First pass: insert all resources, collect type.name → db_id map
-        res_db_ids: dict[str, int] = {}
-        for resource in context.resources:
-            db_id = insert_resource(
-                experiment_id=experiment_id,
-                repo_name=context.repository_name,
-                resource_name=resource.name,
-                resource_type=resource.resource_type,
-                provider=_rtdb.get_provider_key(_get_db(), resource.resource_type),
-                source_file=resource.file_path,
-                source_line=resource.line_number,
-            )
-            res_db_ids[f"{resource.resource_type}.{resource.name}"] = db_id
+    # Persist typed relationships as concrete connections for DB-first queries/diagrams.
+    for rel in getattr(context, "relationships", []) or []:
+        src_name = str(getattr(rel, "source_name", "") or "").strip()
+        tgt_name = str(getattr(rel, "target_name", "") or "").strip()
+        src_type = str(getattr(rel, "source_type", "") or "")
+        tgt_type = str(getattr(rel, "target_type", "") or "")
+        if not src_name or not tgt_name:
+            continue
+        if tgt_type == "unknown":
+            # Ambiguous refs are tracked in enrichment_queue, not resource_connections.
+            continue
 
-        # Second pass: resolve parent references and update parent_resource_id
-        from db_helpers import get_db_connection as _gdb
-        for resource in context.resources:
-            if not resource.parent:
-                continue
-            parent_db_id = res_db_ids.get(resource.parent)
-            if parent_db_id:
-                child_db_id = res_db_ids.get(f"{resource.resource_type}.{resource.name}")
-                if child_db_id:
-                    with _gdb(db_path) as conn:
-                        conn.execute(
-                            "UPDATE resources SET parent_resource_id=? WHERE id=?",
-                            (parent_db_id, child_db_id),
-                        )
+        rel_type = _relationship_kind_value(rel)
+        relation_notes = str(getattr(rel, "notes", "") or "")
+        inferred_auth = "inferred" if rel_type == "authenticates_via" else None
+        inferred_authorization = "rbac" if rel_type == "grants_access_to" else None
+        inferred_encryption = True if rel_type == "encrypts" else None
+        inferred_via_component = src_name if (
+            rel_type == "routes_ingress_to" and _is_edge_gateway_signal(src_type, src_name)
+        ) else None
 
-        for connection in context.connections:
-            insert_connection(
-                experiment_id=experiment_id,
-                source_name=connection.source,
-                target_name=connection.target,
-                connection_type=connection.connection_type,
-            )
+        insert_connection(
+            experiment_id=experiment_id,
+            source_name=src_name,
+            target_name=tgt_name,
+            connection_type=rel_type,
+            authentication=inferred_auth,
+            source_repo=context.repository_name,
+            target_repo=context.repository_name,
+            authorization=inferred_authorization,
+            auth_method=inferred_auth,
+            is_encrypted=inferred_encryption,
+            via_component=inferred_via_component,
+            notes=relation_notes or None,
+        )

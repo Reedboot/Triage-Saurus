@@ -11,6 +11,263 @@ from contextlib import contextmanager
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "Output/Learning/triage.db"
 
+ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
+ENRICHMENT_DECISION_MAP = {
+    "confirm": "confirmed",
+    "confirmed": "confirmed",
+    "reject": "rejected",
+    "rejected": "rejected",
+}
+ENRICHMENT_CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
+def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Backfill additive topology columns for legacy rows (safe + idempotent)."""
+    updates: Dict[str, int] = {}
+
+    def _run(label: str, statement: str) -> None:
+        cursor = conn.execute(statement)
+        updates[label] = max(cursor.rowcount, 0)
+
+    _run(
+        "resource_connections_source_repo_id",
+        """
+        UPDATE resource_connections
+        SET source_repo_id = (
+            SELECT r.repo_id
+            FROM resources r
+            WHERE r.id = resource_connections.source_resource_id
+        )
+        WHERE source_repo_id IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM resources r
+              WHERE r.id = resource_connections.source_resource_id
+                AND r.repo_id IS NOT NULL
+          )
+        """,
+    )
+    _run(
+        "resource_connections_target_repo_id",
+        """
+        UPDATE resource_connections
+        SET target_repo_id = (
+            SELECT r.repo_id
+            FROM resources r
+            WHERE r.id = resource_connections.target_resource_id
+        )
+        WHERE target_repo_id IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM resources r
+              WHERE r.id = resource_connections.target_resource_id
+                AND r.repo_id IS NOT NULL
+          )
+        """,
+    )
+    _run(
+        "resource_connections_is_cross_repo",
+        """
+        UPDATE resource_connections
+        SET is_cross_repo = CASE WHEN source_repo_id != target_repo_id THEN 1 ELSE 0 END
+        WHERE source_repo_id IS NOT NULL
+          AND target_repo_id IS NOT NULL
+          AND COALESCE(is_cross_repo, -1) != CASE WHEN source_repo_id != target_repo_id THEN 1 ELSE 0 END
+        """,
+    )
+    _run(
+        "resource_connections_auth_method",
+        """
+        UPDATE resource_connections
+        SET auth_method = authentication
+        WHERE (auth_method IS NULL OR TRIM(auth_method) = '')
+          AND (authentication IS NOT NULL AND TRIM(authentication) != '')
+        """,
+    )
+    _run(
+        "resource_connections_authentication",
+        """
+        UPDATE resource_connections
+        SET authentication = auth_method
+        WHERE (authentication IS NULL OR TRIM(authentication) = '')
+          AND (auth_method IS NOT NULL AND TRIM(auth_method) != '')
+        """,
+    )
+    _run(
+        "findings_repo_id",
+        """
+        UPDATE findings
+        SET repo_id = (
+            SELECT r.repo_id
+            FROM resources r
+            WHERE r.id = findings.resource_id
+        )
+        WHERE repo_id IS NULL
+          AND resource_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1
+              FROM resources r
+              WHERE r.id = findings.resource_id
+                AND r.repo_id IS NOT NULL
+          )
+        """,
+    )
+    _run(
+        "resource_nodes_aliases",
+        """
+        UPDATE resource_nodes
+        SET aliases = '[]'
+        WHERE aliases IS NULL OR TRIM(aliases) = ''
+        """,
+    )
+    _run(
+        "resource_nodes_confidence",
+        """
+        UPDATE resource_nodes
+        SET confidence = 'extracted'
+        WHERE confidence IS NULL
+           OR TRIM(confidence) = ''
+           OR confidence NOT IN ('extracted', 'inferred', 'user_confirmed')
+        """,
+    )
+    _run(
+        "resource_nodes_properties",
+        """
+        UPDATE resource_nodes
+        SET properties = '{}'
+        WHERE properties IS NULL OR TRIM(properties) = ''
+        """,
+    )
+    _run(
+        "resource_nodes_created_at",
+        """
+        UPDATE resource_nodes
+        SET created_at = CURRENT_TIMESTAMP
+        WHERE created_at IS NULL
+        """,
+    )
+    _run(
+        "resource_nodes_updated_at",
+        """
+        UPDATE resource_nodes
+        SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+        WHERE updated_at IS NULL
+        """,
+    )
+    _run(
+        "resource_equivalences_candidate_source_repo",
+        """
+        UPDATE resource_equivalences
+        SET candidate_source_repo = (
+            SELECT rn.source_repo
+            FROM resource_nodes rn
+            WHERE rn.id = resource_equivalences.resource_node_id
+        )
+        WHERE (candidate_source_repo IS NULL OR TRIM(candidate_source_repo) = '')
+          AND EXISTS (
+              SELECT 1
+              FROM resource_nodes rn
+              WHERE rn.id = resource_equivalences.resource_node_id
+                AND rn.source_repo IS NOT NULL
+                AND TRIM(rn.source_repo) != ''
+          )
+        """,
+    )
+    _run(
+        "resource_equivalences_equivalence_kind",
+        """
+        UPDATE resource_equivalences
+        SET equivalence_kind = 'cross_repo_alias'
+        WHERE (equivalence_kind IS NULL
+               OR TRIM(equivalence_kind) = ''
+               OR equivalence_kind NOT IN ('cross_repo_alias', 'placeholder_promotion'))
+          AND NOT EXISTS (
+              SELECT 1
+              FROM resource_equivalences dup
+              WHERE dup.id != resource_equivalences.id
+                AND dup.resource_node_id = resource_equivalences.resource_node_id
+                AND dup.candidate_resource_type = resource_equivalences.candidate_resource_type
+                AND dup.candidate_terraform_name = resource_equivalences.candidate_terraform_name
+                AND dup.candidate_source_repo = resource_equivalences.candidate_source_repo
+                AND COALESCE(dup.equivalence_kind, 'cross_repo_alias') = 'cross_repo_alias'
+          )
+        """,
+    )
+    _run(
+        "resource_equivalences_confidence",
+        """
+        UPDATE resource_equivalences
+        SET confidence = 'medium'
+        WHERE confidence IS NULL
+           OR TRIM(confidence) = ''
+           OR confidence NOT IN ('high', 'medium', 'low')
+        """,
+    )
+    _run(
+        "resource_equivalences_evidence_level",
+        """
+        UPDATE resource_equivalences
+        SET evidence_level = 'inferred'
+        WHERE evidence_level IS NULL
+           OR TRIM(evidence_level) = ''
+           OR evidence_level NOT IN ('extracted', 'inferred', 'user_confirmed')
+        """,
+    )
+    _run(
+        "resource_equivalences_provenance",
+        """
+        UPDATE resource_equivalences
+        SET provenance = 'legacy_backfill'
+        WHERE provenance IS NULL OR TRIM(provenance) = ''
+        """,
+    )
+    _run(
+        "resource_equivalences_created_at",
+        """
+        UPDATE resource_equivalences
+        SET created_at = CURRENT_TIMESTAMP
+        WHERE created_at IS NULL
+        """,
+    )
+    _run(
+        "resource_equivalences_updated_at",
+        """
+        UPDATE resource_equivalences
+        SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+        WHERE updated_at IS NULL
+        """,
+    )
+    _run(
+        "enrichment_queue_confidence",
+        """
+        UPDATE enrichment_queue
+        SET confidence = 'medium'
+        WHERE confidence IS NULL
+           OR TRIM(confidence) = ''
+           OR confidence NOT IN ('high', 'medium', 'low')
+        """,
+    )
+    _run(
+        "enrichment_queue_status",
+        """
+        UPDATE enrichment_queue
+        SET status = 'pending_review'
+        WHERE status IS NULL
+           OR TRIM(status) = ''
+           OR status NOT IN ('pending_review', 'confirmed', 'rejected')
+        """,
+    )
+    _run(
+        "enrichment_queue_created_at",
+        """
+        UPDATE enrichment_queue
+        SET created_at = CURRENT_TIMESTAMP
+        WHERE created_at IS NULL
+        """,
+    )
+
+    return updates
+
 
 def _ensure_schema(conn: sqlite3.Connection):
     """Ensure tables used by db_helpers exist on the active database."""
@@ -70,7 +327,53 @@ def _ensure_schema(conn: sqlite3.Connection):
       connection_type TEXT,
       protocol TEXT,
       port TEXT,
-      authentication TEXT
+      authentication TEXT,
+      authorization TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      via_component TEXT,
+      notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS trust_boundaries (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      boundary_type TEXT,
+      provider TEXT,
+      region TEXT,
+      description TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS trust_boundary_members (
+      trust_boundary_id INTEGER NOT NULL,
+      resource_id INTEGER NOT NULL,
+      PRIMARY KEY (trust_boundary_id, resource_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS data_flows (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      flow_type TEXT,
+      description TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS data_flow_steps (
+      id INTEGER PRIMARY KEY,
+      flow_id INTEGER NOT NULL,
+      step_order INTEGER NOT NULL,
+      resource_id INTEGER,
+      component_label TEXT,
+      protocol TEXT,
+      port TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      notes TEXT
     );
 
     CREATE TABLE IF NOT EXISTS context_questions (
@@ -126,6 +429,74 @@ def _ensure_schema(conn: sqlite3.Connection):
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(experiment_id, repo_id, namespace, key)
     );
+
+    CREATE TABLE IF NOT EXISTS resource_nodes (
+      id INTEGER PRIMARY KEY,
+      resource_type TEXT NOT NULL,
+      terraform_name TEXT NOT NULL,
+      canonical_name TEXT,
+      friendly_name TEXT,
+      display_label TEXT,
+      provider TEXT,
+      source_repo TEXT,
+      aliases TEXT DEFAULT '[]',
+      confidence TEXT DEFAULT 'extracted',
+      properties TEXT DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(resource_type, terraform_name, source_repo)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_relationships (
+      id INTEGER PRIMARY KEY,
+      source_id INTEGER NOT NULL,
+      target_id INTEGER NOT NULL,
+      relationship_type TEXT NOT NULL,
+      source_repo TEXT,
+      confidence TEXT DEFAULT 'extracted',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(source_id, target_id, relationship_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_equivalences (
+      id INTEGER PRIMARY KEY,
+      resource_node_id INTEGER NOT NULL,
+      candidate_resource_type TEXT NOT NULL,
+      candidate_terraform_name TEXT NOT NULL,
+      candidate_source_repo TEXT NOT NULL,
+      equivalence_kind TEXT NOT NULL DEFAULT 'cross_repo_alias',
+      confidence TEXT DEFAULT 'medium',
+      evidence_level TEXT DEFAULT 'inferred',
+      provenance TEXT NOT NULL,
+      context TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(
+        resource_node_id,
+        candidate_resource_type,
+        candidate_terraform_name,
+        candidate_source_repo,
+        equivalence_kind
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_queue (
+      id INTEGER PRIMARY KEY,
+      resource_node_id INTEGER,
+      relationship_id INTEGER,
+      gap_type TEXT NOT NULL,
+      context TEXT,
+      assumption_text TEXT,
+      assumption_basis TEXT,
+      confidence TEXT DEFAULT 'medium',
+      suggested_value TEXT,
+      status TEXT DEFAULT 'pending_review',
+      resolved_by TEXT,
+      resolved_at TIMESTAMP,
+      rejection_reason TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     """)
 
     # Ensure optional columns exist for backward compatibility.
@@ -134,10 +505,126 @@ def _ensure_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
 
     connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
-    if "source_repo_id" not in connection_columns:
-        conn.execute("ALTER TABLE resource_connections ADD COLUMN source_repo_id INTEGER")
-    if "target_repo_id" not in connection_columns:
-        conn.execute("ALTER TABLE resource_connections ADD COLUMN target_repo_id INTEGER")
+    for col_name, col_type in (
+        ("source_repo_id", "INTEGER"),
+        ("target_repo_id", "INTEGER"),
+        ("is_cross_repo", "BOOLEAN DEFAULT 0"),
+        ("connection_type", "TEXT"),
+        ("protocol", "TEXT"),
+        ("port", "TEXT"),
+        ("authentication", "TEXT"),
+        ("authorization", "TEXT"),
+        ("auth_method", "TEXT"),
+        ("is_encrypted", "BOOLEAN"),
+        ("via_component", "TEXT"),
+        ("notes", "TEXT"),
+    ):
+        if col_name not in connection_columns:
+            conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
+
+    flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flows)").fetchall()}
+    for col_name, col_type in (
+        ("flow_type", "TEXT"),
+        ("description", "TEXT"),
+        ("notes", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+    ):
+        if col_name not in flow_columns:
+            conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
+
+    flow_step_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flow_steps)").fetchall()}
+    for col_name, col_type in (
+        ("resource_id", "INTEGER"),
+        ("component_label", "TEXT"),
+        ("protocol", "TEXT"),
+        ("port", "TEXT"),
+        ("auth_method", "TEXT"),
+        ("is_encrypted", "BOOLEAN"),
+        ("notes", "TEXT"),
+    ):
+        if col_name not in flow_step_columns:
+            conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
+
+    node_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_nodes)").fetchall()}
+    for col_name, col_type in (
+        ("canonical_name", "TEXT"),
+        ("friendly_name", "TEXT"),
+        ("display_label", "TEXT"),
+        ("provider", "TEXT"),
+        ("source_repo", "TEXT"),
+        ("aliases", "TEXT DEFAULT '[]'"),
+        ("confidence", "TEXT DEFAULT 'extracted'"),
+        ("properties", "TEXT DEFAULT '{}'"),
+        ("created_at", "TIMESTAMP"),
+        ("updated_at", "TIMESTAMP"),
+    ):
+        if col_name not in node_columns:
+            conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
+
+    relationship_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_relationships)").fetchall()}
+    for col_name, col_type in (
+        ("source_repo", "TEXT"),
+        ("confidence", "TEXT DEFAULT 'extracted'"),
+        ("notes", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+    ):
+        if col_name not in relationship_columns:
+            conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
+
+    equivalence_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
+    for col_name, col_type in (
+        ("resource_node_id", "INTEGER"),
+        ("candidate_resource_type", "TEXT"),
+        ("candidate_terraform_name", "TEXT"),
+        ("candidate_source_repo", "TEXT"),
+        ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
+        ("confidence", "TEXT DEFAULT 'medium'"),
+        ("evidence_level", "TEXT DEFAULT 'inferred'"),
+        ("provenance", "TEXT"),
+        ("context", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+        ("updated_at", "TIMESTAMP"),
+    ):
+        if col_name not in equivalence_columns:
+            conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
+        "ON resource_equivalences(resource_node_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
+        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
+    )
+
+    queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment_queue)").fetchall()}
+    for col_name, col_type in (
+        ("assumption_basis", "TEXT"),
+        ("confidence", "TEXT DEFAULT 'medium'"),
+        ("suggested_value", "TEXT"),
+        ("status", "TEXT DEFAULT 'pending_review'"),
+        ("resolved_by", "TEXT"),
+        ("resolved_at", "TIMESTAMP"),
+        ("rejection_reason", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+    ):
+        if col_name not in queue_columns:
+            conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
+
+    resource_types_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
+    ).fetchone()
+    if resource_types_exists:
+        resource_type_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+        for col_name, col_type in (
+            ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
+            ("parent_type", "TEXT"),
+        ):
+            if col_name not in resource_type_columns:
+                conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
+        conn.execute(
+            "UPDATE resource_types SET display_on_architecture_chart = 1 "
+            "WHERE display_on_architecture_chart IS NULL"
+        )
 
     findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
     if "repo_id" not in findings_columns:
@@ -172,6 +659,8 @@ def _ensure_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
     if "llm_enriched_at" not in findings_columns:
         conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+
+    apply_topology_backfills(conn)
 
 
 @contextmanager
@@ -415,9 +904,14 @@ def insert_connection(
     port: Optional[str] = None,
     authentication: Optional[str] = None,
     source_repo: Optional[str] = None,
-    target_repo: Optional[str] = None
+    target_repo: Optional[str] = None,
+    authorization: Optional[str] = None,
+    auth_method: Optional[str] = None,
+    is_encrypted: Optional[bool] = None,
+    via_component: Optional[str] = None,
+    notes: Optional[str] = None,
 ):
-    """Insert resource connection with cross-repo detection."""
+    """Insert or update a resource connection with cross-repo detection."""
     with get_db_connection() as conn:
         # Get source resource
         if source_repo:
@@ -447,14 +941,88 @@ def insert_connection(
         
         if source_result and target_result:
             is_cross_repo = source_result[1] != target_result[1]
-            
-            conn.execute("""
+
+            source_repo_id = source_result[1]
+            target_repo_id = target_result[1]
+            effective_auth_method = auth_method or authentication
+            effective_authentication = authentication or auth_method
+
+            existing = conn.execute(
+                """
+                SELECT id FROM resource_connections
+                WHERE experiment_id = ?
+                  AND source_resource_id = ?
+                  AND target_resource_id = ?
+                  AND COALESCE(connection_type, '') = COALESCE(?, '')
+                LIMIT 1
+                """,
+                (experiment_id, source_result[0], target_result[0], connection_type),
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE resource_connections
+                    SET source_repo_id = ?,
+                        target_repo_id = ?,
+                        is_cross_repo = ?,
+                        protocol = COALESCE(?, protocol),
+                        port = COALESCE(?, port),
+                        authentication = COALESCE(?, authentication),
+                        authorization = COALESCE(?, authorization),
+                        auth_method = COALESCE(?, auth_method),
+                        is_encrypted = COALESCE(?, is_encrypted),
+                        via_component = COALESCE(?, via_component),
+                        notes = COALESCE(?, notes)
+                    WHERE id = ?
+                    """,
+                    (
+                        source_repo_id,
+                        target_repo_id,
+                        is_cross_repo,
+                        protocol,
+                        port,
+                        effective_authentication,
+                        authorization,
+                        effective_auth_method,
+                        is_encrypted,
+                        via_component,
+                        notes,
+                        existing[0],
+                    ),
+                )
+                return existing[0]
+
+            cursor = conn.execute(
+                """
                 INSERT INTO resource_connections
-                (experiment_id, source_resource_id, target_resource_id, 
-                 is_cross_repo, connection_type, protocol, port, authentication)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (experiment_id, source_result[0], target_result[0], 
-                  is_cross_repo, connection_type, protocol, port, authentication))
+                (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
+                 is_cross_repo, connection_type, protocol, port, authentication, authorization,
+                 auth_method, is_encrypted, via_component, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    experiment_id,
+                    source_result[0],
+                    target_result[0],
+                    source_repo_id,
+                    target_repo_id,
+                    is_cross_repo,
+                    connection_type,
+                    protocol,
+                    port,
+                    effective_authentication,
+                    authorization,
+                    effective_auth_method,
+                    is_encrypted,
+                    via_component,
+                    notes,
+                ),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+    return None
 
 
 # ============================================================================
@@ -713,34 +1281,93 @@ def insert_context_answer(
     answer_value: str,
     evidence_source: str,
     confidence: str = 'confirmed',
-    answered_by: str = 'ContextDiscoveryAgent'
-):
-    """Record context answer."""
+    answered_by: str = 'ContextDiscoveryAgent',
+    question_text: Optional[str] = None,
+    question_category: str = 'General',
+    evidence_type: str = 'code',
+) -> int:
+    """Record context answer and return inserted context_answers.id."""
     with get_db_connection() as conn:
-        # Get or create question
-        question_id = conn.execute("""
-            SELECT id FROM context_questions WHERE question_key = ?
-        """, (question_key,)).fetchone()
-        
-        if not question_id:
-            # Question doesn't exist, create it
-            cursor = conn.execute("""
-                INSERT INTO context_questions 
-                (question_key, question_text, question_category)
-                VALUES (?, ?, 'General')
-                RETURNING id
-            """, (question_key, question_key.replace('_', ' ').title()))
-            question_id = cursor.fetchone()[0]
-        else:
-            question_id = question_id[0]
-        
-        conn.execute("""
-            INSERT INTO context_answers
-            (experiment_id, question_id, answer_value, answer_confidence,
-             evidence_source, evidence_type, answered_by)
-            VALUES (?, ?, ?, ?, ?, 'code', ?)
-        """, (experiment_id, question_id, answer_value, confidence, 
-              evidence_source, answered_by))
+        return _insert_context_answer_with_conn(
+            conn,
+            experiment_id=experiment_id,
+            question_key=question_key,
+            answer_value=answer_value,
+            evidence_source=evidence_source,
+            confidence=confidence,
+            answered_by=answered_by,
+            question_text=question_text,
+            question_category=question_category,
+            evidence_type=evidence_type,
+        )
+
+
+def _upsert_context_question(
+    conn: sqlite3.Connection,
+    *,
+    question_key: str,
+    question_text: Optional[str] = None,
+    question_category: str = 'General',
+) -> int:
+    """Return context_questions.id, creating the question if it doesn't exist."""
+    existing = conn.execute(
+        "SELECT id FROM context_questions WHERE question_key = ?",
+        (question_key,),
+    ).fetchone()
+    if existing:
+        return int(existing[0])
+
+    resolved_question_text = question_text or question_key.replace('_', ' ').title()
+    cursor = conn.execute(
+        """
+        INSERT INTO context_questions
+        (question_key, question_text, question_category)
+        VALUES (?, ?, ?)
+        """,
+        (question_key, resolved_question_text, question_category),
+    )
+    return int(cursor.lastrowid)
+
+
+def _insert_context_answer_with_conn(
+    conn: sqlite3.Connection,
+    *,
+    experiment_id: str,
+    question_key: str,
+    answer_value: str,
+    evidence_source: str,
+    confidence: str = 'confirmed',
+    answered_by: str = 'ContextDiscoveryAgent',
+    question_text: Optional[str] = None,
+    question_category: str = 'General',
+    evidence_type: str = 'code',
+) -> int:
+    """Insert a context answer using an existing connection."""
+    question_id = _upsert_context_question(
+        conn,
+        question_key=question_key,
+        question_text=question_text,
+        question_category=question_category,
+    )
+
+    cursor = conn.execute(
+        """
+        INSERT INTO context_answers
+        (experiment_id, question_id, answer_value, answer_confidence,
+         evidence_source, evidence_type, answered_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            experiment_id,
+            question_id,
+            answer_value,
+            confidence,
+            evidence_source,
+            evidence_type,
+            answered_by,
+        ),
+    )
+    return int(cursor.lastrowid)
 
 
 # ============================================================================
@@ -849,27 +1476,553 @@ def _prop_bool(val):
     return s in ('1','true','yes','y','t')
 
 
-def get_connections_for_diagram(experiment_id: str) -> List[Dict]:
-    """Get all connections for diagram generation."""
+def get_connections_for_diagram(experiment_id: str, repo_name: Optional[str] = None) -> List[Dict]:
+    """Get connections for diagram generation, optionally scoped to a repository."""
     with get_db_connection() as conn:
-        cursor = conn.execute("""
+        query = """
             SELECT 
               r_src.resource_name as source,
+              r_src.resource_type as source_type,
               r_tgt.resource_name as target,
+              r_tgt.resource_type as target_type,
+              rc.connection_type,
               rc.protocol,
               rc.port,
+              COALESCE(rc.auth_method, rc.authentication) as auth_method,
+              rc.is_encrypted,
+              rc.via_component,
+              rc.notes,
               rc.is_cross_repo,
               repo_src.repo_name as source_repo,
               repo_tgt.repo_name as target_repo
             FROM resource_connections rc
             JOIN resources r_src ON rc.source_resource_id = r_src.id
-            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
-            JOIN repositories repo_src ON r_src.repo_id = repo_src.id
-            JOIN repositories repo_tgt ON r_tgt.repo_id = repo_tgt.id
-            WHERE rc.experiment_id = ?
-        """, [experiment_id])
+              JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
+              JOIN repositories repo_src ON r_src.repo_id = repo_src.id
+              JOIN repositories repo_tgt ON r_tgt.repo_id = repo_tgt.id
+              WHERE rc.experiment_id = ?
+        """
+        params: list[Any] = [experiment_id]
+        if repo_name:
+            query += " AND (repo_src.repo_name = ? OR repo_tgt.repo_name = ?)"
+            params.extend([repo_name, repo_name])
+        query += " ORDER BY rc.id"
+
+        cursor = conn.execute(query, params)
         
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_resource_query_view(
+    experiment_id: str,
+    resource_name: str,
+    repo_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return parent/child/ingress/egress/related view for a resource."""
+    with get_db_connection() as conn:
+        base_query = """
+            SELECT r.id, r.resource_name, r.resource_type, repo.repo_name,
+                   p.resource_name AS parent_name, p.resource_type AS parent_type
+            FROM resources r
+            JOIN repositories repo ON r.repo_id = repo.id
+            LEFT JOIN resources p ON r.parent_resource_id = p.id
+            WHERE r.experiment_id = ? AND r.resource_name = ?
+        """
+        params: list[Any] = [experiment_id, resource_name]
+        if repo_name:
+            base_query += " AND repo.repo_name = ?"
+            params.append(repo_name)
+        base_query += " ORDER BY r.id LIMIT 1"
+
+        resource = conn.execute(base_query, params).fetchone()
+        if not resource:
+            return None
+
+        resource_id = resource["id"]
+        owning_repo = resource["repo_name"]
+
+        children = conn.execute(
+            """
+            SELECT c.resource_name, c.resource_type
+            FROM resources c
+            WHERE c.parent_resource_id = ?
+            ORDER BY c.resource_name
+            """,
+            (resource_id,),
+        ).fetchall()
+
+        ingress = conn.execute(
+            """
+            SELECT src.resource_name AS from_resource,
+                   src.resource_type AS from_type,
+                   repo_src.repo_name AS from_repo,
+                   rc.connection_type,
+                   rc.protocol,
+                   rc.port,
+                   COALESCE(rc.auth_method, rc.authentication) AS auth_method,
+                   rc.is_encrypted,
+                   rc.via_component,
+                   rc.notes
+            FROM resource_connections rc
+            JOIN resources src ON rc.source_resource_id = src.id
+            JOIN repositories repo_src ON src.repo_id = repo_src.id
+            WHERE rc.experiment_id = ? AND rc.target_resource_id = ?
+            ORDER BY src.resource_name
+            """,
+            (experiment_id, resource_id),
+        ).fetchall()
+
+        egress = conn.execute(
+            """
+            SELECT dst.resource_name AS to_resource,
+                   dst.resource_type AS to_type,
+                   repo_dst.repo_name AS to_repo,
+                   rc.connection_type,
+                   rc.protocol,
+                   rc.port,
+                   COALESCE(rc.auth_method, rc.authentication) AS auth_method,
+                   rc.is_encrypted,
+                   rc.via_component,
+                   rc.notes
+            FROM resource_connections rc
+            JOIN resources dst ON rc.target_resource_id = dst.id
+            JOIN repositories repo_dst ON dst.repo_id = repo_dst.id
+            WHERE rc.experiment_id = ? AND rc.source_resource_id = ?
+            ORDER BY dst.resource_name
+            """,
+            (experiment_id, resource_id),
+        ).fetchall()
+
+        assumptions = conn.execute(
+            """
+            SELECT eq.id, eq.gap_type, eq.context, eq.assumption_text,
+                   eq.confidence, eq.suggested_value
+            FROM enrichment_queue eq
+            JOIN resource_nodes rn ON rn.id = eq.resource_node_id
+            WHERE eq.status = 'pending_review'
+              AND rn.terraform_name IN (?, ?)
+              AND (rn.source_repo = ? OR rn.aliases LIKE ?)
+            ORDER BY eq.confidence DESC, eq.created_at ASC
+            """,
+            (
+                resource_name,
+                f"__inferred__{resource_name.lower()}",
+                owning_repo,
+                f'%"{owning_repo}"%',
+            ),
+        ).fetchall()
+
+        related: list[dict[str, Any]] = []
+        for row in ingress:
+            related.append(
+                {
+                    "resource": row["from_resource"],
+                    "resource_type": row["from_type"],
+                    "repo": row["from_repo"],
+                    "direction": "ingress",
+                    "connection_type": row["connection_type"],
+                }
+            )
+        for row in egress:
+            related.append(
+                {
+                    "resource": row["to_resource"],
+                    "resource_type": row["to_type"],
+                    "repo": row["to_repo"],
+                    "direction": "egress",
+                    "connection_type": row["connection_type"],
+                }
+            )
+
+        return {
+            "resource": {
+                "name": resource["resource_name"],
+                "type": resource["resource_type"],
+                "repo": owning_repo,
+            },
+            "parent": (
+                {
+                    "name": resource["parent_name"],
+                    "type": resource["parent_type"],
+                }
+                if resource["parent_name"]
+                else None
+            ),
+            "children": [dict(row) for row in children],
+            "ingress": [dict(row) for row in ingress],
+            "egress": [dict(row) for row in egress],
+            "related": related,
+            "pending_assumptions": [dict(row) for row in assumptions],
+        }
+
+
+def _normalize_queue_status(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized == "all":
+        return normalized
+    if normalized not in ENRICHMENT_QUEUE_STATUSES:
+        valid = ", ".join(sorted(ENRICHMENT_QUEUE_STATUSES | {"all"}))
+        raise ValueError(f"Invalid enrichment_queue status '{status}'. Expected one of: {valid}")
+    return normalized
+
+
+def _normalize_enrichment_decision(decision: str) -> str:
+    normalized = (decision or "").strip().lower()
+    resolved = ENRICHMENT_DECISION_MAP.get(normalized)
+    if not resolved:
+        valid = ", ".join(sorted(ENRICHMENT_DECISION_MAP))
+        raise ValueError(f"Invalid decision '{decision}'. Expected one of: {valid}")
+    return resolved
+
+
+def _load_repo_aliases(raw_aliases: Optional[str], *, field_name: str) -> list[str]:
+    if not raw_aliases:
+        return []
+    try:
+        parsed = json.loads(raw_aliases)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid aliases JSON in {field_name}: {raw_aliases}") from exc
+    if not isinstance(parsed, list):
+        raise ValueError(f"Expected aliases list in {field_name}, got: {type(parsed).__name__}")
+    aliases: list[str] = []
+    for alias in parsed:
+        if alias is None:
+            continue
+        alias_text = str(alias).strip()
+        if alias_text:
+            aliases.append(alias_text)
+    return aliases
+
+
+def _list_experiment_repos(conn: sqlite3.Connection, experiment_id: str) -> list[str]:
+    repo_rows = conn.execute(
+        "SELECT repo_name FROM repositories WHERE experiment_id = ? ORDER BY repo_name",
+        (experiment_id,),
+    ).fetchall()
+    repo_names = [str(row["repo_name"]) for row in repo_rows if row["repo_name"]]
+    if not repo_names:
+        raise ValueError(f"No repositories found for experiment '{experiment_id}'.")
+    return repo_names
+
+
+def _fetch_enrichment_rows(
+    conn: sqlite3.Connection,
+    *,
+    status: str = "pending_review",
+    assumption_id: Optional[int] = None,
+) -> list[sqlite3.Row]:
+    query = """
+        SELECT eq.id,
+               eq.resource_node_id,
+               eq.relationship_id,
+               eq.gap_type,
+               eq.context,
+               eq.assumption_text,
+               eq.assumption_basis,
+               eq.confidence,
+               eq.suggested_value,
+               eq.status,
+               eq.resolved_by,
+               eq.resolved_at,
+               eq.rejection_reason,
+               eq.created_at,
+               rn.resource_type AS node_resource_type,
+               rn.terraform_name AS node_terraform_name,
+               rn.source_repo AS node_source_repo,
+               rn.aliases AS node_aliases,
+               rn.confidence AS node_confidence,
+               rr.relationship_type AS relationship_type,
+               rr.confidence AS relationship_confidence,
+               src.resource_type AS rel_source_resource_type,
+               src.terraform_name AS rel_source_terraform_name,
+               src.source_repo AS rel_source_repo,
+               src.aliases AS rel_source_aliases,
+               tgt.resource_type AS rel_target_resource_type,
+               tgt.terraform_name AS rel_target_terraform_name,
+               tgt.source_repo AS rel_target_repo,
+               tgt.aliases AS rel_target_aliases
+        FROM enrichment_queue eq
+        LEFT JOIN resource_nodes rn ON rn.id = eq.resource_node_id
+        LEFT JOIN resource_relationships rr ON rr.id = eq.relationship_id
+        LEFT JOIN resource_nodes src ON src.id = rr.source_id
+        LEFT JOIN resource_nodes tgt ON tgt.id = rr.target_id
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    normalized_status = _normalize_queue_status(status)
+    if normalized_status != "all":
+        clauses.append("eq.status = ?")
+        params.append(normalized_status)
+    if assumption_id is not None:
+        clauses.append("eq.id = ?")
+        params.append(assumption_id)
+
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+
+    query += (
+        " ORDER BY CASE eq.confidence "
+        "WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC, "
+        "eq.created_at ASC, eq.id ASC"
+    )
+    return conn.execute(query, params).fetchall()
+
+
+def _enrichment_assumption_question_key(assumption_id: int) -> str:
+    return f"enrichment_queue_assumption_{assumption_id}_decision"
+
+
+def _assumption_repo_scope(row: sqlite3.Row) -> set[str]:
+    repos: set[str] = set()
+    for key in ("node_source_repo", "rel_source_repo", "rel_target_repo"):
+        value = row[key]
+        if value:
+            repos.add(str(value))
+
+    for key in ("node_aliases", "rel_source_aliases", "rel_target_aliases"):
+        repos.update(_load_repo_aliases(row[key], field_name=key))
+    return repos
+
+
+def _serialize_assumption_row(row: sqlite3.Row, repo_scope: set[str]) -> Dict[str, Any]:
+    relationship_summary: Optional[str] = None
+    if row["relationship_type"] and row["rel_source_resource_type"] and row["rel_target_resource_type"]:
+        relationship_summary = (
+            f"{row['rel_source_resource_type']}.{row['rel_source_terraform_name']} "
+            f"--[{row['relationship_type']}]--> "
+            f"{row['rel_target_resource_type']}.{row['rel_target_terraform_name']}"
+        )
+
+    return {
+        "id": row["id"],
+        "resource_node_id": row["resource_node_id"],
+        "relationship_id": row["relationship_id"],
+        "gap_type": row["gap_type"],
+        "context": row["context"],
+        "assumption_text": row["assumption_text"],
+        "assumption_basis": row["assumption_basis"],
+        "confidence": row["confidence"],
+        "suggested_value": row["suggested_value"],
+        "status": row["status"],
+        "resolved_by": row["resolved_by"],
+        "resolved_at": row["resolved_at"],
+        "rejection_reason": row["rejection_reason"],
+        "created_at": row["created_at"],
+        "node": {
+            "resource_type": row["node_resource_type"],
+            "terraform_name": row["node_terraform_name"],
+            "source_repo": row["node_source_repo"],
+            "confidence": row["node_confidence"],
+        },
+        "relationship": {
+            "type": row["relationship_type"],
+            "confidence": row["relationship_confidence"],
+            "source": {
+                "resource_type": row["rel_source_resource_type"],
+                "terraform_name": row["rel_source_terraform_name"],
+                "source_repo": row["rel_source_repo"],
+            },
+            "target": {
+                "resource_type": row["rel_target_resource_type"],
+                "terraform_name": row["rel_target_terraform_name"],
+                "source_repo": row["rel_target_repo"],
+            },
+            "summary": relationship_summary,
+        },
+        "repo_scope": sorted(repo_scope),
+        "question_key": _enrichment_assumption_question_key(int(row["id"])),
+    }
+
+
+def list_enrichment_assumptions(
+    experiment_id: str,
+    repo_name: Optional[str] = None,
+    status: str = "pending_review",
+) -> List[Dict[str, Any]]:
+    """
+    List enrichment queue assumptions scoped to an experiment and optional repo.
+
+    Scope is derived from repositories registered to the experiment and matched
+    against node source_repo + aliases.
+    """
+    with get_db_connection() as conn:
+        experiment_repos = _list_experiment_repos(conn, experiment_id)
+        repo_scope = set(experiment_repos)
+        if repo_name and repo_name not in repo_scope:
+            raise ValueError(
+                f"Repository '{repo_name}' is not registered under experiment '{experiment_id}'."
+            )
+
+        rows = _fetch_enrichment_rows(conn, status=status)
+        records: list[Dict[str, Any]] = []
+        for row in rows:
+            assumption_scope = _assumption_repo_scope(row)
+            if not assumption_scope.intersection(repo_scope):
+                continue
+            if repo_name and repo_name not in assumption_scope:
+                continue
+            records.append(_serialize_assumption_row(row, assumption_scope))
+        return records
+
+
+def _apply_confirmation_confidence_updates(conn: sqlite3.Connection, row: sqlite3.Row) -> list[str]:
+    updates: list[str] = []
+    relationship_id = row["relationship_id"]
+    resource_node_id = row["resource_node_id"]
+    gap_type = (row["gap_type"] or "").strip().lower()
+
+    if relationship_id:
+        rel_cursor = conn.execute(
+            "UPDATE resource_relationships "
+            "SET confidence='user_confirmed' "
+            "WHERE id=? AND confidence!='user_confirmed'",
+            (relationship_id,),
+        )
+        if rel_cursor.rowcount:
+            updates.append(f"resource_relationships[{relationship_id}] confidence=user_confirmed")
+
+    if resource_node_id and gap_type in {"cross_repo_link", "unknown_name"}:
+        node_cursor = conn.execute(
+            "UPDATE resource_nodes "
+            "SET confidence='user_confirmed', updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND confidence!='user_confirmed'",
+            (resource_node_id,),
+        )
+        if node_cursor.rowcount:
+            updates.append(f"resource_nodes[{resource_node_id}] confidence=user_confirmed")
+
+        equiv_cursor = conn.execute(
+            "UPDATE resource_equivalences "
+            "SET evidence_level='user_confirmed', updated_at=CURRENT_TIMESTAMP "
+            "WHERE resource_node_id=? AND evidence_level!='user_confirmed'",
+            (resource_node_id,),
+        )
+        if equiv_cursor.rowcount:
+            updates.append(
+                f"resource_equivalences[resource_node_id={resource_node_id}] "
+                f"evidence_level=user_confirmed ({equiv_cursor.rowcount} rows)"
+            )
+
+    return updates
+
+
+def resolve_enrichment_assumption(
+    experiment_id: str,
+    assumption_id: int,
+    decision: str,
+    resolved_by: str,
+    *,
+    repo_name: Optional[str] = None,
+    resolution_note: Optional[str] = None,
+    evidence_source: str = "user_confirmation_cli",
+) -> Dict[str, Any]:
+    """
+    Resolve a pending enrichment assumption and persist an auditable context answer.
+
+    Confirmation upgrades graph confidence where an explicit rule exists.
+    Rejections preserve existing graph confidence and record rejection reason.
+    """
+    normalized_decision = _normalize_enrichment_decision(decision)
+    resolver = (resolved_by or "").strip()
+    if not resolver:
+        raise ValueError("resolved_by must be provided.")
+    note = (resolution_note or "").strip()
+    if normalized_decision == "rejected" and not note:
+        raise ValueError("A rejection requires --note explaining why the assumption was rejected.")
+    if not evidence_source.strip():
+        raise ValueError("evidence_source must be provided.")
+
+    with get_db_connection() as conn:
+        experiment_repos = _list_experiment_repos(conn, experiment_id)
+        experiment_scope = set(experiment_repos)
+        if repo_name and repo_name not in experiment_scope:
+            raise ValueError(
+                f"Repository '{repo_name}' is not registered under experiment '{experiment_id}'."
+            )
+
+        rows = _fetch_enrichment_rows(conn, status="all", assumption_id=assumption_id)
+        if not rows:
+            raise ValueError(f"Assumption id {assumption_id} was not found in enrichment_queue.")
+        row = rows[0]
+
+        assumption_scope = _assumption_repo_scope(row)
+        if not assumption_scope.intersection(experiment_scope):
+            raise ValueError(
+                f"Assumption id {assumption_id} is not associated with experiment '{experiment_id}'."
+            )
+        if repo_name and repo_name not in assumption_scope:
+            raise ValueError(
+                f"Assumption id {assumption_id} is outside repository scope '{repo_name}'."
+            )
+
+        if row["status"] != "pending_review":
+            raise ValueError(
+                f"Assumption id {assumption_id} is already resolved with status '{row['status']}'."
+            )
+
+        question_key = _enrichment_assumption_question_key(assumption_id)
+        assumption_text = row["assumption_text"] or row["context"] or f"Assumption #{assumption_id}"
+        answer_payload = json.dumps(
+            {
+                "assumption_id": assumption_id,
+                "decision": normalized_decision,
+                "note": note or None,
+                "assumption_text": assumption_text,
+                "resolver": resolver,
+            },
+            sort_keys=True,
+        )
+        answer_id = _insert_context_answer_with_conn(
+            conn,
+            experiment_id=experiment_id,
+            question_key=question_key,
+            question_text=f"Resolve enrichment assumption #{assumption_id}: {assumption_text}",
+            question_category="EnrichmentQueue",
+            answer_value=answer_payload,
+            evidence_source=evidence_source,
+            evidence_type="user_confirmation",
+            confidence="confirmed",
+            answered_by=resolver,
+        )
+
+        rejection_reason = note if normalized_decision == "rejected" else None
+        queue_cursor = conn.execute(
+            """
+            UPDATE enrichment_queue
+            SET status = ?,
+                resolved_by = ?,
+                resolved_at = CURRENT_TIMESTAMP,
+                rejection_reason = ?
+            WHERE id = ? AND status = 'pending_review'
+            """,
+            (
+                normalized_decision,
+                resolver,
+                rejection_reason,
+                assumption_id,
+            ),
+        )
+        if queue_cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Failed to resolve assumption id {assumption_id}; status changed during update."
+            )
+
+        confidence_updates: list[str] = []
+        if normalized_decision == "confirmed":
+            confidence_updates = _apply_confirmation_confidence_updates(conn, row)
+
+        return {
+            "assumption_id": assumption_id,
+            "experiment_id": experiment_id,
+            "repo_name": repo_name,
+            "status": normalized_decision,
+            "resolved_by": resolver,
+            "resolution_note": note or None,
+            "question_key": question_key,
+            "context_answer_id": answer_id,
+            "confidence_updates": confidence_updates,
+        }
 
 
 if __name__ == "__main__":

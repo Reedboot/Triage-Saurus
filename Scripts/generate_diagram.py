@@ -78,6 +78,59 @@ def sanitize_id(name: str) -> str:
     return name.replace('-', '_').replace('.', '_').replace(' ', '_')
 
 
+def _normalize_optional_bool(value: object) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y", "t"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "f"}:
+        return False
+    return None
+
+
+def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
+    protocol = str(connection.get("protocol") or "").strip()
+    port = str(connection.get("port") or "").strip()
+    connection_type = str(connection.get("connection_type") or "").strip().replace("_", " ")
+    auth_method = str(connection.get("auth_method") or "").strip()
+    source_name = str(connection.get("source") or "").strip()
+    target_name = str(connection.get("target") or "").strip()
+    via_component = str(connection.get("via_component") or "").strip()
+    encrypted = _normalize_optional_bool(connection.get("is_encrypted"))
+
+    details: List[str] = []
+    transport = ""
+    if protocol and port:
+        transport = f"{protocol}:{port}"
+    elif protocol:
+        transport = protocol
+    elif connection_type:
+        transport = connection_type
+    if transport:
+        details.append(transport)
+    if connection_type and connection_type.lower() != transport.lower():
+        details.append(connection_type)
+    if auth_method:
+        details.append(f"auth={auth_method}")
+    if encrypted is True:
+        details.append("encrypted")
+    elif encrypted is False:
+        details.append("unencrypted")
+    if via_component and via_component not in {source_name, target_name}:
+        details.append(f"via {via_component}")
+    if ip_restricted:
+        details.append("IP-restricted")
+
+    if not details:
+        return ""
+    return f"|{'; '.join(details)}|"
+
+
 def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
@@ -95,11 +148,10 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
-    connections = get_connections_for_diagram(experiment_id)
-    # If a specific repo is requested, filter resources and connections to that repo
+    connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
+    # If a specific repo is requested, filter resources to that repo
     if repo_name:
         resources = [r for r in resources if r.get('repo_name') == repo_name]
-        connections = [c for c in connections if c.get('source_repo') == repo_name or c.get('target_repo') == repo_name]
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -248,18 +300,6 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
 
         src = sanitize_id(conn['source'])
         tgt = sanitize_id(conn['target'])
-        
-        # Add protocol/port label if available
-        label = ""
-        # Use safe access to avoid KeyError if columns are missing
-        proto = conn.get('protocol') if isinstance(conn, dict) else (conn['protocol'] if 'protocol' in conn.keys() else None)
-        port = conn.get('port') if isinstance(conn, dict) else (conn['port'] if 'port' in conn.keys() else None)
-        if proto and port:
-            label_text = f"{proto}:{port}"
-        elif proto:
-            label_text = f"{proto}"
-        else:
-            label_text = ""
 
         # If target resource has network ACLs or firewall rules, mark as IP-restricted
         ip_restricted = False
@@ -271,16 +311,7 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
             elif tgt_res.get('firewall_rules'):
                 ip_restricted = True
 
-        if label_text:
-            if ip_restricted:
-                label = f"|{label_text} (IP-restricted)|"
-            else:
-                label = f"|{label_text}|"
-        else:
-            if ip_restricted:
-                label = "|(IP-restricted)|"
-            else:
-                label = ""
+        label = _connection_label(conn, ip_restricted=ip_restricted)
 
         # Cross-repo connections use dashed line; safe access for is_cross_repo
         is_cross = conn.get('is_cross_repo') if isinstance(conn, dict) else conn['is_cross_repo']
@@ -487,7 +518,12 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
               repo_tgt.repo_name as tgt_repo,
               r_tgt.resource_name as tgt_name,
               rc.is_cross_repo,
-              rc.protocol
+              rc.connection_type,
+              rc.protocol,
+              rc.port,
+              COALESCE(rc.auth_method, rc.authentication) as auth_method,
+              rc.is_encrypted,
+              rc.via_component
             FROM resource_connections rc
             JOIN resources r_src ON rc.source_resource_id = r_src.id
             JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
@@ -501,8 +537,18 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
             tgt_repo_node = sanitize_id(c['tgt_repo'])
             src = f"{src_repo_node}_{sanitize_id(c['src_name'])}"
             tgt = f"{tgt_repo_node}_{sanitize_id(c['tgt_name'])}"
-            
-            label = f"|{c['protocol']}|" if c['protocol'] else ""
+            label = _connection_label(
+                {
+                    "source": c["src_name"],
+                    "target": c["tgt_name"],
+                    "connection_type": c["connection_type"],
+                    "protocol": c["protocol"],
+                    "port": c["port"],
+                    "auth_method": c["auth_method"],
+                    "is_encrypted": c["is_encrypted"],
+                    "via_component": c["via_component"],
+                }
+            )
             
             # Style cross-repo connections differently
             if c['is_cross_repo']:

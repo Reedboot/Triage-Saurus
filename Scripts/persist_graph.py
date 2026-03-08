@@ -2,11 +2,14 @@
 """
 persist_graph.py
 Upserts resource nodes and typed relationships from a RepositoryContext into
-the knowledge graph tables (resource_nodes, resource_relationships, enrichment_queue).
+the knowledge graph tables (resource_nodes, resource_relationships,
+resource_equivalences, enrichment_queue).
 
 Cross-repo identity: if a (resource_type, terraform_name) pair already exists from
 a different repo, the new repo name is merged into the aliases JSON array and an
 enrichment assumption is queued for user confirmation if canonical_name is still null.
+Possible alias/equivalence matches are persisted in resource_equivalences so they are
+explicitly queryable beyond queue text.
 """
 
 from __future__ import annotations
@@ -28,6 +31,177 @@ def _get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+_LINK_CONFIDENCE_RANK = {"low": 1, "medium": 2, "high": 3}
+_EVIDENCE_LEVEL_RANK = {"inferred": 1, "extracted": 2, "user_confirmed": 3}
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return bool(row)
+
+
+def _ensure_equivalence_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS resource_equivalences (
+          id                        INTEGER PRIMARY KEY,
+          resource_node_id          INTEGER NOT NULL,
+          candidate_resource_type   TEXT NOT NULL,
+          candidate_terraform_name  TEXT NOT NULL,
+          candidate_source_repo     TEXT NOT NULL,
+          equivalence_kind          TEXT NOT NULL DEFAULT 'cross_repo_alias'
+                                      CHECK(equivalence_kind IN ('cross_repo_alias','placeholder_promotion')),
+          confidence                TEXT DEFAULT 'medium'
+                                      CHECK(confidence IN ('high','medium','low')),
+          evidence_level            TEXT DEFAULT 'inferred'
+                                      CHECK(evidence_level IN ('extracted','inferred','user_confirmed')),
+          provenance                TEXT NOT NULL,
+          context                   TEXT,
+          created_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(
+            resource_node_id,
+            candidate_resource_type,
+            candidate_terraform_name,
+            candidate_source_repo,
+            equivalence_kind
+          ),
+          FOREIGN KEY(resource_node_id) REFERENCES resource_nodes(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
+        "ON resource_equivalences(resource_node_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
+        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
+    )
+
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
+    for col_name, col_type in (
+        ("resource_node_id", "INTEGER"),
+        ("candidate_resource_type", "TEXT"),
+        ("candidate_terraform_name", "TEXT"),
+        ("candidate_source_repo", "TEXT"),
+        ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
+        ("confidence", "TEXT DEFAULT 'medium'"),
+        ("evidence_level", "TEXT DEFAULT 'inferred'"),
+        ("provenance", "TEXT"),
+        ("context", "TEXT"),
+        ("created_at", "TIMESTAMP"),
+        ("updated_at", "TIMESTAMP"),
+    ):
+        if col_name not in existing_cols:
+            conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
+
+
+def _upsert_equivalence(
+    conn: sqlite3.Connection,
+    *,
+    resource_node_id: int,
+    candidate_resource_type: str,
+    candidate_terraform_name: str,
+    candidate_source_repo: str,
+    equivalence_kind: str,
+    confidence: str,
+    evidence_level: str,
+    provenance: str,
+    context_text: str = "",
+) -> Optional[int]:
+    if not _table_exists(conn, "resource_equivalences"):
+        return None
+
+    now = datetime.utcnow().isoformat()
+    existing = conn.execute(
+        """
+        SELECT id, confidence, evidence_level, provenance, context
+        FROM resource_equivalences
+        WHERE resource_node_id=?
+          AND candidate_resource_type=?
+          AND candidate_terraform_name=?
+          AND candidate_source_repo=?
+          AND equivalence_kind=?
+        """,
+        (
+            resource_node_id,
+            candidate_resource_type,
+            candidate_terraform_name,
+            candidate_source_repo,
+            equivalence_kind,
+        ),
+    ).fetchone()
+
+    if existing:
+        best_confidence = existing["confidence"] or "low"
+        if _LINK_CONFIDENCE_RANK.get(confidence, 0) > _LINK_CONFIDENCE_RANK.get(best_confidence, 0):
+            best_confidence = confidence
+
+        best_evidence = existing["evidence_level"] or "inferred"
+        if _EVIDENCE_LEVEL_RANK.get(evidence_level, 0) > _EVIDENCE_LEVEL_RANK.get(best_evidence, 0):
+            best_evidence = evidence_level
+
+        provenance_chain = [p.strip() for p in (existing["provenance"] or "").split(",") if p.strip()]
+        if provenance and provenance not in provenance_chain:
+            provenance_chain.append(provenance)
+        merged_provenance = ", ".join(provenance_chain) if provenance_chain else provenance
+        merged_context = context_text or existing["context"] or ""
+
+        if (
+            best_confidence != existing["confidence"]
+            or best_evidence != existing["evidence_level"]
+            or merged_provenance != (existing["provenance"] or "")
+            or merged_context != (existing["context"] or "")
+        ):
+            conn.execute(
+                """
+                UPDATE resource_equivalences
+                SET confidence=?, evidence_level=?, provenance=?, context=?, updated_at=?
+                WHERE id=?
+                """,
+                (best_confidence, best_evidence, merged_provenance, merged_context, now, existing["id"]),
+            )
+        return existing["id"]
+
+    cur = conn.execute(
+        """
+        INSERT INTO resource_equivalences
+        (
+          resource_node_id,
+          candidate_resource_type,
+          candidate_terraform_name,
+          candidate_source_repo,
+          equivalence_kind,
+          confidence,
+          evidence_level,
+          provenance,
+          context,
+          created_at,
+          updated_at
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            resource_node_id,
+            candidate_resource_type,
+            candidate_terraform_name,
+            candidate_source_repo,
+            equivalence_kind,
+            confidence,
+            evidence_level,
+            provenance,
+            context_text,
+            now,
+            now,
+        ),
+    )
+    return cur.lastrowid
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +255,42 @@ def _upsert_node(
             (resource_type, f"__inferred__{canonical_name}", source_repo),
         ).fetchone()
         if cross:
+            inferred_name = f"__inferred__{canonical_name}"
             # Promote the placeholder to a real extracted node
             conn.execute(
                 "UPDATE resource_nodes SET terraform_name=?, canonical_name=?, "
                 "confidence='extracted', friendly_name=?, provider=?, updated_at=? WHERE id=?",
                 (terraform_name, canonical_name, friendly_name or "", provider, now, cross["id"]),
+            )
+            _upsert_equivalence(
+                conn,
+                resource_node_id=cross["id"],
+                candidate_resource_type=resource_type,
+                candidate_terraform_name=terraform_name,
+                candidate_source_repo=source_repo,
+                equivalence_kind="cross_repo_alias",
+                confidence="high",
+                evidence_level="extracted",
+                provenance="placeholder_promotion",
+                context_text=(
+                    f"Promoted inferred placeholder '{inferred_name}' in repo '{cross['source_repo']}' "
+                    f"using extracted resource '{resource_type}.{terraform_name}' from repo '{source_repo}'"
+                ),
+            )
+            _upsert_equivalence(
+                conn,
+                resource_node_id=cross["id"],
+                candidate_resource_type=resource_type,
+                candidate_terraform_name=inferred_name,
+                candidate_source_repo=cross["source_repo"],
+                equivalence_kind="placeholder_promotion",
+                confidence="high",
+                evidence_level="extracted",
+                provenance="inferred_placeholder",
+                context_text=(
+                    f"Placeholder '{resource_type}.{inferred_name}' was promoted after cross-repo match "
+                    f"with '{resource_type}.{terraform_name}'"
+                ),
             )
             # Auto-resolve any enrichment queue items for this node
             conn.execute(
@@ -103,6 +308,21 @@ def _upsert_node(
         conn.execute(
             "UPDATE resource_nodes SET aliases=?, updated_at=? WHERE id=?",
             (json.dumps(aliases), now, cross["id"]),
+        )
+        _upsert_equivalence(
+            conn,
+            resource_node_id=cross["id"],
+            candidate_resource_type=resource_type,
+            candidate_terraform_name=terraform_name,
+            candidate_source_repo=source_repo,
+            equivalence_kind="cross_repo_alias",
+            confidence="high" if cross["canonical_name"] else "medium",
+            evidence_level="extracted" if cross["canonical_name"] else "inferred",
+            provenance="cross_repo_reference",
+            context_text=(
+                f"Resource {resource_type}.{terraform_name} appears in both "
+                f"'{cross['source_repo']}' and '{source_repo}'"
+            ),
         )
         # Queue an enrichment assumption if canonical name is still unknown
         if not cross["canonical_name"]:
@@ -219,6 +439,7 @@ def persist_context(context: RepositoryContext, db_path: Path = DB_PATH) -> None
     import resource_type_db as _rtdb
 
     conn = _get_conn(db_path)
+    _ensure_equivalence_schema(conn)
     # Lazy DB connection for friendly name lookups (reuse existing helper pattern)
     _rt_conn: Optional[sqlite3.Connection] = None
     try:
@@ -304,6 +525,47 @@ def persist_context(context: RepositoryContext, db_path: Path = DB_PATH) -> None
                 notes=rel.notes,
             )
 
+            # Also persist as a resource_connections entry when both source/target resources
+            # exist in the resources table so diagrams can draw arrows.
+            try:
+                # Find repo experiment id for this repo
+                repo_row = conn.execute("SELECT experiment_id, id as repo_id FROM repositories WHERE repo_name = ? LIMIT 1", (repo_name,)).fetchone()
+                if repo_row:
+                    experiment_id = repo_row['experiment_id']
+                else:
+                    experiment_id = None
+
+                src_res = conn.execute(
+                    "SELECT r.id as id, r.repo_id as repo_id FROM resources r JOIN repositories repo ON r.repo_id = repo.id WHERE repo.repo_name = ? AND r.resource_name = ? LIMIT 1",
+                    (repo_name, rel.source_name),
+                ).fetchone()
+                tgt_res = conn.execute(
+                    "SELECT r.id as id, r.repo_id as repo_id FROM resources r JOIN repositories repo ON r.repo_id = repo.id WHERE repo.repo_name = ? AND r.resource_name = ? LIMIT 1",
+                    (repo_name, rel.target_name),
+                ).fetchone()
+                if src_res and tgt_res and experiment_id:
+                    # Check for existing connection to avoid duplicates
+                    exists = conn.execute(
+                        "SELECT id FROM resource_connections WHERE experiment_id = ? AND source_resource_id = ? AND target_resource_id = ?",
+                        (experiment_id, src_res['id'], tgt_res['id']),
+                    ).fetchone()
+                    if not exists:
+                        conn.execute(
+                            "INSERT INTO resource_connections (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id, is_cross_repo, connection_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                experiment_id,
+                                src_res['id'],
+                                tgt_res['id'],
+                                src_res['repo_id'],
+                                tgt_res['repo_id'],
+                                1 if src_res['repo_id'] != tgt_res['repo_id'] else 0,
+                                rel.relationship_type.value,
+                            ),
+                        )
+            except Exception:
+                # Non-fatal: diagram connections are best-effort
+                pass
+
             # Queue low-confidence inferred relationships for confirmation
             if rel.confidence == "inferred" and rel_id:
                 src_friendly = _rtdb.get_friendly_name(_rt_conn, rel.source_type)
@@ -352,7 +614,7 @@ def query_graph_for_repo(repo_name: str, db_path: Path = DB_PATH) -> dict:
 
         node_ids = [n["id"] for n in nodes]
         if not node_ids:
-            return {"nodes": [], "relationships": [], "assumptions": []}
+            return {"nodes": [], "relationships": [], "assumptions": [], "equivalences": []}
 
         placeholders = ",".join("?" * len(node_ids))
         relationships = conn.execute(
@@ -368,10 +630,24 @@ def query_graph_for_repo(repo_name: str, db_path: Path = DB_PATH) -> dict:
             node_ids,
         ).fetchall()
 
+        equivalences: list[sqlite3.Row] = []
+        if _table_exists(conn, "resource_equivalences"):
+            equivalences = conn.execute(
+                f"SELECT * FROM resource_equivalences "
+                f"WHERE resource_node_id IN ({placeholders}) OR candidate_source_repo=? "
+                f"ORDER BY CASE confidence "
+                f"    WHEN 'high' THEN 3 "
+                f"    WHEN 'medium' THEN 2 "
+                f"    WHEN 'low' THEN 1 "
+                f"    ELSE 0 END DESC, created_at ASC",
+                node_ids + [repo_name],
+            ).fetchall()
+
         return {
             "nodes": [dict(n) for n in nodes],
             "relationships": [dict(r) for r in relationships],
             "assumptions": [dict(a) for a in assumptions],
+            "equivalences": [dict(e) for e in equivalences],
         }
     finally:
         conn.close()

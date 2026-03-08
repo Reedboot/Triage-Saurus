@@ -8,11 +8,11 @@
 
 ## Design Principles
 
-1. **Scripts first, LLM second.** opengrep and discovery scripts populate the DB without any LLM calls. A useful (if plain) report can always be generated from scan data alone.
-2. **LLM enriches once.** The LLM reads raw DB rows, adds description, reasoning, severity, flows and remediations, and writes back. Subsequent report renders read the DB — no LLM needed.
-3. **Scores are snapshots.** `findings.severity_score` is the *current* score. Every change (initial scan, Dev Skeptic, Platform Skeptic, new context) appends a row to `risk_score_history` so the full audit trail is preserved.
-4. **Context is structured.** Auth method, encryption, trust boundary membership, and data flows are first-class columns/rows — not free text buried in markdown.
-5. **Re-run is cheap.** Before calling the LLM, scripts check `findings.llm_enriched_at IS NOT NULL`. If already enriched and no invalidating context has changed, skip.
+1. **DB-first topology is canonical.** Scripts persist concrete topology into `resource_connections` first, then reports/queries read from DB (not markdown heuristics).
+2. **Knowledge graph captures uncertainty.** Typed relationships and cross-repo aliases are stored in `resource_relationships` / `resource_equivalences`; unresolved gaps are queued in `enrichment_queue`.
+3. **Fallback is explicit.** Reporting uses DB topology when available; only falls back to extracted relationships or assumption text when DB signals are missing.
+4. **Scores are snapshots.** `findings.severity_score` is the *current* score. Every change appends a row to `risk_score_history` for auditability.
+5. **Re-run is idempotent.** Schema and topology writes are additive/upsert-based (`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` + dedupe checks).
 
 ---
 
@@ -21,39 +21,28 @@
 
 ---
 
-## Entity Relationship Diagram
+## Entity Relationship Diagram (Topology + Graph)
 
 ```mermaid
 erDiagram
-    experiments ||--o{ repositories        : "scans"
-    experiments ||--o{ resources           : "discovers"
-    experiments ||--o{ findings            : "produces"
-    experiments ||--o{ data_flows          : "defines"
+    experiments   ||--o{ repositories          : "scans"
+    experiments   ||--o{ resources             : "discovers"
+    experiments   ||--o{ resource_connections  : "records topology"
+    experiments   ||--o{ data_flows            : "defines"
 
-    repositories ||--o{ resources          : "contains"
+    repositories  ||--o{ resources             : "contains"
+    repositories  ||--o{ resource_connections  : "source_repo_id/target_repo_id"
 
-    providers         ||--o{ resource_types     : "defines"
-    resource_types    ||--o{ resources          : "typed_as"
-    trust_boundaries  ||--o{ resources          : "hosts"
-    trust_boundaries  ||--o{ trust_boundaries   : "nested_in"
+    resources     ||--o{ resource_connections  : "is_source"
+    resources     ||--o{ resource_connections  : "is_target"
+    data_flows    ||--o{ data_flow_steps       : "ordered_steps"
+    resources     ||--o{ data_flow_steps       : "optional hop"
 
-    resources ||--o{ resource_properties   : "has"
-    resources ||--o{ resource_connections  : "is_source"
-    resources ||--o{ resource_connections  : "is_target"
-    resources ||--o{ findings              : "affected_by"
-    resources ||--o{ countermeasures       : "protected_by"
-
-    resource_connections ||--o{ data_flow_steps : "used_in"
-    data_flows           ||--o{ data_flow_steps : "ordered_steps"
-
-    findings        ||--o{ risk_score_history : "score_trail"
-    findings        ||--o{ remediations       : "fixed_by"
-    findings        ||--o{ skeptic_reviews    : "reviewed_by"
-    findings        }o--o{ countermeasures    : "mitigated_by"
-
-    context_questions ||--o{ context_answers  : "answered"
-    context_answers   }o--o| resources        : "about_resource"
-    context_answers   }o--o| findings         : "affects_finding"
+    resource_nodes         ||--o{ resource_relationships : "source_id"
+    resource_nodes         ||--o{ resource_relationships : "target_id"
+    resource_nodes         ||--o{ resource_equivalences  : "alias candidates"
+    resource_nodes         ||--o{ enrichment_queue       : "node-level gaps"
+    resource_relationships ||--o{ enrichment_queue       : "relationship gaps"
 ```
 
 ---
@@ -157,6 +146,8 @@ Maps Terraform/ARM resource type strings to human-readable labels, categories, a
 | `icon` | TEXT | Emoji for diagram labels, e.g. `🔑` |
 | `is_data_store` | BOOLEAN | True for databases, storage, queues — affects blast radius weighting |
 | `is_internet_facing_capable` | BOOLEAN | True if this type can be exposed publicly (helps filter for review) |
+| `display_on_architecture_chart` | BOOLEAN | Architecture visibility control (`0` = hide from Mermaid architecture, keep in inventory/permissions context) |
+| `parent_type` | TEXT | Optional parent resource type for structural nesting (e.g. listener → load balancer, public-access-block → bucket) |
 
 **Sample seed rows:**
 
@@ -180,6 +171,13 @@ Maps Terraform/ARM resource type strings to human-readable labels, categories, a
 | `google_container_cluster` | GKE Cluster | Container | ☸️ |
 
 > **Auto-insert for unknown types:** If `discover_repo_context.py` encounters a `terraform_type` not in this table, it inserts a row with `friendly_name = terraform_type` and `category = 'Unknown'`. This row can be corrected manually or by the LLM enrichment pass.
+
+**Architecture rendering usage notes:**
+- IAM/policy/control-plane resources are normally seeded with `display_on_architecture_chart = 0` and remain visible in markdown inventory/roles sections.
+- Child components should define `parent_type` and are rendered as nested architecture nodes only when linked findings indicate vulnerability (`severity_score > 0`).
+- Internet accessibility is evaluated for every rendered service/resource group from persisted evidence (DB-first evaluator behavior).
+- Public-access signal families include Key Vault, SQL, AKS, S3, compute, and edge gateway/public IP indicators.
+- `Known ingress` arrows are rendered only when explicit public evidence exists; if evidence is absent or unknown, no Internet arrow is drawn.
 
 ---
 
@@ -243,7 +241,9 @@ Key-value attributes for a resource. Populated by scripts from IaC; no schema ch
 ---
 
 ### `resource_connections`
-Topology links between assets — network paths, data access, management relationships.
+Canonical DB-first topology edges between concrete resources.
+
+> Defined in `Scripts/init_database.py` and `Scripts/db_helpers.py`; primarily written via `db_helpers.insert_connection()` (directly and through `report_generation.write_to_database()`).
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -251,52 +251,125 @@ Topology links between assets — network paths, data access, management relatio
 | `experiment_id` | TEXT FK | → `experiments.id` |
 | `source_resource_id` | INT FK | → `resources.id` |
 | `target_resource_id` | INT FK | → `resources.id` |
-| `connection_type` | TEXT | `accesses` / `routes_to` / `manages` / `reads_from` / `writes_to` / `authenticates_via` |
+| `source_repo_id` | INT FK | → `repositories.id` (for cross-repo tracing) |
+| `target_repo_id` | INT FK | → `repositories.id` (for cross-repo tracing) |
+| `is_cross_repo` | BOOLEAN | Auto-derived from source/target repo IDs |
+| `connection_type` | TEXT | Free-form edge type (commonly relationship types such as `routes_ingress_to`, `depends_on`, `authenticates_via`) |
 | `protocol` | TEXT | HTTPS / TDS / AMQP / gRPC / SSH / etc. |
 | `port` | TEXT | |
-| `auth_method` | TEXT | `ManagedIdentity` / `JWT` / `SASToken` / `APIKey` / `SQLAuth` / `None` |
+| `authentication` | TEXT | Raw auth hint captured during extraction (`JWT`, `ManagedIdentity`, etc.) |
+| `authorization` | TEXT | AuthZ model, e.g. `rbac` |
+| `auth_method` | TEXT | Normalized auth method (diagram/query friendly) |
 | `is_encrypted` | BOOLEAN | |
-| `ip_restricted` | BOOLEAN | True if access list / private endpoint enforced |
 | `via_component` | TEXT | Intermediate component name, e.g. `"WAF"`, `"App Gateway"`, `"API Management"` |
-| `is_cross_repo` | BOOLEAN | |
 | `notes` | TEXT | |
 
-**Example — request path to an API:**
-```
-Internet → (via_component=WAF) → App Gateway → API App Service
-  connection_type: routes_to
-  auth_method: JWT
-  is_encrypted: true
-  ip_restricted: false
-```
+**Current write behavior:**
+- Upsert key is `(experiment_id, source_resource_id, target_resource_id, connection_type)` with null-safe matching.
+- `auth_method` / `authentication` are mirrored (`effective_auth_method = auth_method or authentication`; inverse for `authentication`).
+- Updates are merge-style (`COALESCE`): new non-null values enrich existing rows without wiping prior fields.
+- `is_cross_repo` is recomputed from repo IDs on each upsert.
+- Relationships with unknown targets are **not** inserted here; they are captured as pending assumptions in `enrichment_queue`.
 
 ---
 
 ### `data_flows`
-Named end-to-end flows describing how data or requests move through the system.
+Named end-to-end flows. Table exists in canonical schema; population is optional per workflow.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | INTEGER PK | |
 | `experiment_id` | TEXT FK | → `experiments.id` |
 | `name` | TEXT | e.g. `"User Authentication Flow"`, `"Storage Write Flow"` |
-| `flow_type` | TEXT | `auth` / `data` / `admin` / `ingress` / `egress` |
-| `description` | TEXT | LLM-authored plain-English description |
-| `populated_by` | TEXT | `script` / `llm` |
+| `flow_type` | TEXT | e.g. `ingress`, `egress`, `internal`, `auth` |
+| `description` | TEXT | Optional narrative |
+| `notes` | TEXT | Optional operator notes |
+| `created_at` | TIMESTAMP | Row creation time |
 
 ---
 
 ### `data_flow_steps`
-Ordered hops within a data flow. Each step references a `resource_connection`.
+Ordered hops within a flow (`db_helpers.add_data_flow_step`).
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | INTEGER PK | |
 | `flow_id` | INT FK | → `data_flows.id` |
 | `step_order` | INT | 1, 2, 3… |
-| `connection_id` | INT FK | → `resource_connections.id` |
-| `step_label` | TEXT | Human label, e.g. `"TLS termination at WAF"` |
-| `security_note` | TEXT | Any security observation at this hop |
+| `resource_id` | INT FK | → `resources.id` (nullable for abstract hops like Internet/WAF) |
+| `component_label` | TEXT | Human label for non-resource hops |
+| `protocol` | TEXT | HTTPS / AMQP / etc. |
+| `port` | TEXT | |
+| `auth_method` | TEXT | Hop-specific auth detail |
+| `is_encrypted` | BOOLEAN | |
+| `notes` | TEXT | Any security observation at this hop |
+
+---
+
+### `resource_relationships`
+Typed graph edges persisted by `persist_graph.persist_context()`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PK | |
+| `source_id` | INT FK | → `resource_nodes.id` |
+| `target_id` | INT FK | → `resource_nodes.id` |
+| `relationship_type` | TEXT | Canonical values: `contains`, `grants_access_to`, `routes_ingress_to`, `depends_on`, `encrypts`, `restricts_access`, `monitors`, `authenticates_via` |
+| `source_repo` | TEXT | Origin repo of extracted relationship |
+| `confidence` | TEXT | `extracted` / `inferred` / `user_confirmed` |
+| `notes` | TEXT | Supporting context |
+| `created_at` | TIMESTAMP | |
+
+**Behavior:** unique on `(source_id, target_id, relationship_type)`; later writes can upgrade confidence.
+
+---
+
+### `resource_equivalences`
+Cross-repo alias/equivalence evidence for resource nodes.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PK | |
+| `resource_node_id` | INT FK | → `resource_nodes.id` |
+| `candidate_resource_type` | TEXT | Candidate matching type |
+| `candidate_terraform_name` | TEXT | Candidate matching name |
+| `candidate_source_repo` | TEXT | Repo where candidate was seen |
+| `equivalence_kind` | TEXT | `cross_repo_alias` / `placeholder_promotion` |
+| `confidence` | TEXT | `high` / `medium` / `low` |
+| `evidence_level` | TEXT | `extracted` / `inferred` / `user_confirmed` |
+| `provenance` | TEXT | Comma-merged evidence sources |
+| `context` | TEXT | Human-readable context |
+| `created_at` | TIMESTAMP | |
+| `updated_at` | TIMESTAMP | |
+
+**Behavior:** `persist_graph` upserts these rows and keeps the strongest confidence/evidence level.
+
+---
+
+### `enrichment_queue`
+Pending topology assumptions/gaps requiring review.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PK | |
+| `resource_node_id` | INT FK | → `resource_nodes.id` (nullable) |
+| `relationship_id` | INT FK | → `resource_relationships.id` (nullable) |
+| `gap_type` | TEXT | `unknown_name`, `ambiguous_ref`, `cross_repo_link`, `missing_target`, `assumption` |
+| `context` | TEXT | Deduplication anchor + context |
+| `assumption_text` | TEXT | Reviewer-facing statement |
+| `assumption_basis` | TEXT | Why this assumption exists |
+| `confidence` | TEXT | `high` / `medium` / `low` |
+| `suggested_value` | TEXT | Suggested next step |
+| `status` | TEXT | `pending_review` / `confirmed` / `rejected` |
+| `resolved_by` | TEXT | Resolver identity |
+| `resolved_at` | TIMESTAMP | |
+| `rejection_reason` | TEXT | Required reason for rejections |
+| `created_at` | TIMESTAMP | |
+
+**Behavior:**
+- New queue entries are deduped by `(context, status='pending_review')`.
+- `Scripts/enrichment_confirmation.py resolve ...` writes an auditable `context_answers` entry and updates queue status.
+- Confirmed decisions can promote confidence on linked `resource_relationships`, `resource_nodes`, and `resource_equivalences`.
 
 ---
 
@@ -442,103 +515,121 @@ Reusable questions that improve scoring accuracy. Answers link to specific resou
 
 ## Useful Queries
 
-### Current risk score for all findings
-```sql
-SELECT f.title, r.display_label, rt.friendly_name AS asset_type,
-       h.score, h.snapshot_reason, h.recorded_at
-FROM findings f
-JOIN resources r ON f.resource_id = r.id
-JOIN resource_types rt ON r.resource_type_id = rt.id
-JOIN risk_score_history h ON h.finding_id = f.id
-WHERE h.id IN (
-  SELECT MAX(id) FROM risk_score_history GROUP BY finding_id
-)
-ORDER BY h.score DESC;
+### CLI-first resource graph checks
+```bash
+# All graph views (parent + ingress + egress + related + pending assumptions)
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query all
+
+# Targeted views
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query ingress
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query egress
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query parent
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query related
+python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query assumptions
+
+# List/resolve pending assumptions (confirmation loop)
+python3 Scripts/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
+python3 Scripts/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
 ```
 
-### Findings not yet LLM-enriched (ready to process)
+### Parent resource for a given node
 ```sql
-SELECT f.id, f.rule_id, f.source_file, f.source_line_start, r.resource_name
-FROM findings f
-JOIN resources r ON f.resource_id = r.id
-WHERE f.llm_enriched_at IS NULL
-ORDER BY f.created_at;
+SELECT child.resource_name AS child_name,
+       child.resource_type AS child_type,
+       parent.resource_name AS parent_name,
+       parent.resource_type AS parent_type
+FROM resources child
+LEFT JOIN resources parent ON parent.id = child.parent_resource_id
+WHERE child.experiment_id = '003'
+  AND child.resource_name = 'my-api';
 ```
 
-### Findings needing skeptic review
+### Ingress edges into a resource (DB-first)
 ```sql
-SELECT f.id, f.title, f.severity_score, f.status
-FROM findings f
-WHERE f.status = 'enriched'
-  AND NOT EXISTS (
-    SELECT 1 FROM skeptic_reviews s WHERE s.finding_id = f.id AND s.role = 'dev'
-  );
+SELECT src.resource_name AS from_resource,
+       src.resource_type AS from_type,
+       repo_src.repo_name AS from_repo,
+       rc.connection_type,
+       rc.protocol,
+       rc.port,
+       COALESCE(rc.auth_method, rc.authentication) AS auth_method,
+       rc.is_encrypted,
+       rc.via_component,
+       rc.notes
+FROM resources target
+JOIN resource_connections rc
+  ON rc.experiment_id = target.experiment_id
+ AND rc.target_resource_id = target.id
+JOIN resources src ON src.id = rc.source_resource_id
+JOIN repositories repo_src ON repo_src.id = src.repo_id
+WHERE target.experiment_id = '003'
+  AND target.resource_name = 'my-api'
+ORDER BY src.resource_name;
 ```
 
-### Full request path for a service (data flow trace)
+### Egress edges from a resource (DB-first)
 ```sql
-SELECT df.name, dfs.step_order, dfs.step_label,
-       src.resource_name AS from_resource,
-       tgt.resource_name AS to_resource,
-       rc.auth_method, rc.is_encrypted, rc.via_component
-FROM data_flows df
-JOIN data_flow_steps dfs ON dfs.flow_id = df.id
-JOIN resource_connections rc ON rc.id = dfs.connection_id
-JOIN resources src ON rc.source_resource_id = src.id
-JOIN resources tgt ON rc.target_resource_id = tgt.id
-WHERE df.name = 'User Authentication Flow'
-ORDER BY dfs.step_order;
+SELECT dst.resource_name AS to_resource,
+       dst.resource_type AS to_type,
+       repo_dst.repo_name AS to_repo,
+       rc.connection_type,
+       rc.protocol,
+       rc.port,
+       COALESCE(rc.auth_method, rc.authentication) AS auth_method,
+       rc.is_encrypted,
+       rc.via_component,
+       rc.notes
+FROM resources src
+JOIN resource_connections rc
+  ON rc.experiment_id = src.experiment_id
+ AND rc.source_resource_id = src.id
+JOIN resources dst ON dst.id = rc.target_resource_id
+JOIN repositories repo_dst ON repo_dst.id = dst.repo_id
+WHERE src.experiment_id = '003'
+  AND src.resource_name = 'my-api'
+ORDER BY dst.resource_name;
 ```
 
-### Assets in a trust boundary with open findings
+### Related resources (ingress + egress union)
 ```sql
-SELECT tb.name AS boundary, tb.boundary_type,
-       r.display_label, rt.friendly_name AS asset_type, rt.icon,
-       COUNT(f.id) AS open_findings,
-       MAX(f.severity_score) AS highest_score
-FROM trust_boundaries tb
-JOIN resources r ON r.trust_boundary_id = tb.id
-JOIN resource_types rt ON r.resource_type_id = rt.id
-LEFT JOIN findings f ON f.resource_id = r.id AND f.status NOT IN ('fixed','false_positive')
-GROUP BY tb.id, r.id
-ORDER BY highest_score DESC NULLS LAST;
+SELECT 'ingress' AS direction, src.resource_name AS related_resource, src.resource_type, repo_src.repo_name AS related_repo, rc.connection_type
+FROM resources target
+JOIN resource_connections rc
+  ON rc.experiment_id = target.experiment_id
+ AND rc.target_resource_id = target.id
+JOIN resources src ON src.id = rc.source_resource_id
+JOIN repositories repo_src ON repo_src.id = src.repo_id
+WHERE target.experiment_id = '003' AND target.resource_name = 'my-api'
+UNION ALL
+SELECT 'egress' AS direction, dst.resource_name AS related_resource, dst.resource_type, repo_dst.repo_name AS related_repo, rc.connection_type
+FROM resources src
+JOIN resource_connections rc
+  ON rc.experiment_id = src.experiment_id
+ AND rc.source_resource_id = src.id
+JOIN resources dst ON dst.id = rc.target_resource_id
+JOIN repositories repo_dst ON repo_dst.id = dst.repo_id
+WHERE src.experiment_id = '003' AND src.resource_name = 'my-api'
+ORDER BY direction, related_resource;
 ```
 
-### Score change history for a finding
+### Pending assumptions scoped to a resource/repo
 ```sql
-SELECT h.recorded_at, h.score, h.delta, h.snapshot_reason, h.recorded_by, h.notes
-FROM risk_score_history h
-WHERE h.finding_id = ?
-ORDER BY h.recorded_at;
+SELECT eq.id,
+       eq.gap_type,
+       eq.confidence,
+       eq.assumption_text,
+       eq.suggested_value,
+       rn.resource_type,
+       rn.terraform_name,
+       rn.source_repo
+FROM enrichment_queue eq
+JOIN resource_nodes rn ON rn.id = eq.resource_node_id
+WHERE eq.status = 'pending_review'
+  AND rn.terraform_name IN ('my-api', '__inferred__my-api')
+  AND (rn.source_repo = 'my-repo' OR rn.aliases LIKE '%"my-repo"%')
+ORDER BY CASE eq.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+         eq.created_at ASC;
 ```
-
-### Countermeasure coverage — which findings have mitigating controls
-```sql
-SELECT f.title, f.severity_score,
-       GROUP_CONCAT(c.control_name, ', ') AS controls,
-       AVG(c.effectiveness) AS avg_effectiveness
-FROM findings f
-LEFT JOIN countermeasures c ON c.finding_id = f.id
-GROUP BY f.id
-ORDER BY f.severity_score DESC;
-```
-
-### Blast radius from a compromised resource
-```sql
-WITH RECURSIVE blast(resource_id, depth) AS (
-  SELECT id, 0 FROM resources WHERE resource_name = 'my-api'
-  UNION
-  SELECT rc.target_resource_id, b.depth + 1
-  FROM resource_connections rc
-  JOIN blast b ON rc.source_resource_id = b.resource_id
-  WHERE b.depth < 5
-)
-SELECT DISTINCT r.resource_name, r.resource_type, b.depth,
-       COUNT(f.id) AS findings
-FROM blast b
-JOIN resources r ON r.id = b.resource_id
-LEFT JOIN findings f ON f.resource_id = r.id
-GROUP BY r.id
 
 ---
 
@@ -547,6 +638,10 @@ GROUP BY r.id
 ```bash
 # Initialise or migrate schema (safe on existing DB)
 python3 Scripts/init_database.py
+# Includes additive/idempotent legacy backfills for topology fields:
+# - resource_connections repo IDs when derivable + auth_method/authentication parity
+# - findings.repo_id when derivable from resource_id
+# - resource_equivalences / enrichment_queue default normalization
 
 # Backup before migrations
 cp Output/Learning/triage.db Output/Learning/triage_backup_$(date +%Y%m%d).db
