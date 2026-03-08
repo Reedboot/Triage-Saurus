@@ -189,19 +189,27 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 ## Answering questions quickly
 - When the agent asks a multiple-choice question in plain chat, it should provide **numbered options** so you can reply with just `1`, `2`, etc.
 
-**Tools & Requirements**
-- **Python 3.8+:** Required to run all scripts
+**Required tools**
+- **Python 3.8+** — Required to run all scripts and helpers:
   - `Scripts/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
   - `Scripts/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
   - `Scripts/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
-- **SQLite 3:** Built into Python standard library
+- **SQLite 3** — Required (used by the pipeline and accessible from Python):
   - Database location: `Output/Learning/triage.db`
-  - Stores: experiments, resources, connections, findings, properties, context Q&A, knowledge facts
-  - Initialize: `python3 Scripts/init_database.py`
-  - See `Docs/DatabaseSchema.md` for table details
-- **Dependencies:** Uses only the Python standard library; no extra packages required.
-  - Optional helper: `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+  - Initialize the DB: `python3 Scripts/init_database.py`
+  - CLI (optional but useful): `sqlite3` (Debian/Ubuntu: `sudo apt update && sudo apt install -y sqlite3`; macOS Homebrew: `brew install sqlite`)
+- **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
+  - Used by: `opengrep scan --config Rules/ /path/to/repo`
+  - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
+- **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
+- **Optional / Helpers**:
+  - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
+  - Other standard Unix tooling: `grep`, `awk`, `sed`, `python3`, etc.
+
+Notes:
+- The repository and scripts are designed to work with the Python standard library where possible; third-party binaries listed above (opengrep, sqlite3 CLI) are required for full functionality and for parity with experiments and rule-based scans.
+- See `Rules/README.md` for details about the rules engine and `Docs/DatabaseSchema.md` for DB layout.
 
 ## Auto-regenerate risk register
 - Run `python3 Scripts/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
