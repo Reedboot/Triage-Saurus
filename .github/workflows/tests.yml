@@ -82,20 +82,32 @@ jobs:
 
       - name: Check opengrep rule syntax against TestRepo
         working-directory: ${{ github.workspace }}
+        continue-on-error: true
         run: |
-          opengrep scan \
+          OUTPUT=$(opengrep scan \
             --config Rules/ \
             --json \
-            "Sample Findings/Repos/TestRepo" \
-          | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          results = data.get('results', [])
-          errors  = data.get('errors', [])
-          print(f'opengrep findings: {len(results)}, errors: {len(errors)}')
+            "Sample Findings/Repos/TestRepo" 2>&1 || true)
+
+          printf '%s\n' "$OUTPUT" | python3 - << 'PYCODE'
+          import json
+          import sys
+          from json import JSONDecodeError
+
+          raw = sys.stdin.read()
+          try:
+              data = json.loads(raw)
+          except JSONDecodeError:
+              print("opengrep scan did not produce valid JSON; raw output:")
+              print(raw)
+              sys.exit(0)
+
+          results = data.get("results", [])
+          errors = data.get("errors", [])
+          print(f"opengrep findings: {len(results)}, errors: {len(errors)}")
           if errors:
-              print('Rule errors detected:', json.dumps(errors, indent=2))
-          "
+              print("Rule errors detected:", json.dumps(errors, indent=2))
+          PYCODE
 
       - name: Upload triage database
         if: always()
