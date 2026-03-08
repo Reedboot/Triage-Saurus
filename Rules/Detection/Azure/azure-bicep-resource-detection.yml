@@ -1,29 +1,41 @@
-# OPENGREP rule: Detect Azure Bicep resource declarations and key types
-# Matches resource declarations inside Bicep files (Azure native IaC language)
-id: azure-bicep-resource-detection
-title: Detect Azure Bicep resource types
-description: |
-  Finds Azure resource declarations in Bicep files and extracts their resource types and names.
-  This enables detection of resources authored in Bicep alongside Terraform and ARM templates.
-author: Copilot
-enabled: true
-file_patterns:
-  - "**/*.bicep"
-languages:
-  - bicep
-patterns:
-  - name: bicep_resource_declaration
-    description: Capture resource declarations like: resource myVault 'Microsoft.KeyVault/vaults@2019-09-01' = {
-    regex: '^\s*resource\s+([A-Za-z0-9_]+)\s+\'([A-Za-z0-9_.\-/]+)\@[0-9T:\-]+\'\s*=\s*\{'
-    capture_group: 2
-  - name: bicep_storage_public_access
-    description: Detect storage public access or SAS-related patterns in Bicep files
-    regex: '\b(allowBlobPublicAccess|publicAccess|sharedAccessSignature|sasToken)\b'
-  - name: bicep_key_vault
-    description: Detect Key Vault resource types in Bicep
-    regex: "\'Microsoft.KeyVault/.+\'"
-  - name: bicep_sql_server
-    description: Detect SQL server resource types in Bicep
-    regex: "\'Microsoft.Sql/servers|Microsoft.DBforMySQL/servers|Microsoft.DBforPostgreSQL/servers\'"
+rules:
+  - id: azure-bicep-resource-declaration
+    message: Detect Bicep resource declarations and extract resource types
+    severity: INFO
+    languages: [bicep]
+    pattern-regex: |
+      ^\s*resource\s+([A-Za-z0-9_]+)\s+'([A-Za-z0-9_.\-/]+)@[0-9T:\-]+'\s*=\s*\{
+    metadata:
+      rule_type: detection
+      category: infrastructure
+      technology: [azure, bicep]
+      target_files: ["**/*.bicep"]
+  - id: azure-bicep-storage-public-access
+    message: Detect storage public access or SAS-related patterns in Bicep files
+    severity: WARNING
+    languages: [bicep]
+    pattern-regex: |
+      \b(allowBlobPublicAccess|publicAccess|sharedAccessSignature|sasToken)\b
+    metadata:
+      category: misconfiguration
+      technology: [azure, storage]
+  - id: azure-bicep-key-vault
+    message: Detect Key Vault resource types in Bicep
+    severity: INFO
+    languages: [bicep]
+    pattern-regex: |
+      'Microsoft.KeyVault/.+'
+    metadata:
+      category: infrastructure
+      technology: [azure, keyvault]
+  - id: azure-bicep-sql-server
+    message: Detect SQL server resource types in Bicep
+    severity: INFO
+    languages: [bicep]
+    pattern-regex: |
+      Microsoft\.(Sql|DBforMySQL|DBforPostgreSQL)/servers
+    metadata:
+      category: infrastructure
+      technology: [azure, sql]
 # Notes: Bicep file parsing via regex is a heuristic; consider adding a Bicep AST-based extractor
 # or script fallback for richer property extraction when high fidelity is required.
