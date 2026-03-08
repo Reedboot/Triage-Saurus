@@ -29,6 +29,45 @@ def _provider_title(provider: str) -> str:
     return {"azure": "Azure", "aws": "AWS", "gcp": "GCP"}.get(provider, provider.upper())
 
 
+_K8S_PROVIDER_PREFERENCE = ("azure", "aws", "gcp")
+_K8S_CLUSTER_RESOURCE_TYPES: dict[str, set[str]] = {
+    "azure": {"azurerm_kubernetes_cluster"},
+    "aws": {"aws_eks_cluster"},
+    "gcp": {"google_container_cluster"},
+}
+_INFERRED_K8S_CLUSTER_RAW_TYPES = ("helm_release", "kubernetes_deployment")
+_INFERRED_K8S_CLUSTER_LABEL = "☸️ Kubernetes Cluster (inferred)"
+
+
+def _infer_k8s_provider_hint(text: str | None) -> str | None:
+    if not text:
+        return None
+    lower = text.lower()
+    if any(token in lower for token in ("azurerm", "aks", "azure")):
+        return "azure"
+    if any(token in lower for token in ("eks", "aws")):
+        return "aws"
+    if any(token in lower for token in ("gke", "google")):
+        return "gcp"
+    return None
+
+
+def _format_inferred_k8s_cluster_label(deployments: list[dict], base_label: str = _INFERRED_K8S_CLUSTER_LABEL) -> str:
+    names: list[str] = []
+    for deployment in deployments:
+        raw_name = deployment.get("app_name") or deployment.get("module_name")
+        if not raw_name:
+            continue
+        clean_name = raw_name.replace('"', "").replace("'", "").strip()
+        if clean_name and clean_name not in names:
+            names.append(clean_name)
+    if not names:
+        return base_label
+    if len(names) == 1:
+        return f"{base_label} ({names[0]})"
+    return f"{base_label} ({len(names)} apps)"
+
+
 def _is_key_service_type(resource_type: str) -> bool:
     # Exclude helper/data/control artifacts from executive "Key services" list.
     excluded_exact = {
@@ -281,12 +320,14 @@ def _extract_kubernetes_deployments(repo_path: Path | None) -> list[dict]:
                         ns_name = ns_match.group(1) or ns_match.group(3)
                         if ns_match.group(2):
                             ns_name = locals_map.get(ns_match.group(2), f"local.{ns_match.group(2)}")
-                    
+
+                    provider_hint = _infer_k8s_provider_hint(f"{module_name} {module_body}")
                     deployments.append({
                         "module_name": module_name,
                         "app_name": app_name,
                         "namespace": ns_name,
-                        "type": "module"
+                        "type": "module",
+                        "provider_hint": provider_hint,
                     })
             
             # Look for Helm releases (common for EKS/GKE)
@@ -299,21 +340,25 @@ def _extract_kubernetes_deployments(repo_path: Path | None) -> list[dict]:
                 ns_match = namespace_pattern.search(release_body)
                 
                 if name_match:
+                    provider_hint = _infer_k8s_provider_hint(f"{release_label} {release_body}")
                     deployments.append({
                         "module_name": release_label,
                         "app_name": name_match.group(1),
                         "namespace": ns_match.group(1) if ns_match else None,
-                        "type": "helm"
+                        "type": "helm",
+                        "provider_hint": provider_hint,
                     })
             
             # Look for kubernetes_deployment resources
             k8s_deploy_pattern = re.compile(r'resource\s+"kubernetes_deployment"\s+"([^"]+)"\s*\{.*?metadata\s*\{.*?name\s*=\s*"([^"]+)"', re.DOTALL)
             for match in k8s_deploy_pattern.finditer(content):
+                provider_hint = _infer_k8s_provider_hint(f"{tf_file.name} {match.group(0)}")
                 deployments.append({
                     "module_name": match.group(1),
                     "app_name": match.group(2),
                     "namespace": None,
-                    "type": "kubernetes_deployment"
+                    "type": "kubernetes_deployment",
+                    "provider_hint": provider_hint,
                 })
                 
         except Exception:
@@ -526,6 +571,8 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "app_service",
         "function",
         "container",
+        "kubernetes",
+        "helm",
         "cluster",
         "virtual_machine",
         "instance",
@@ -1108,6 +1155,22 @@ def _build_simple_architecture_diagram(
     used_node_ids: set[str] = set()  # Track all node IDs to prevent duplicates
     link_index = 0
     vulnerable_resource_keys = _load_vulnerable_resource_keys(repo_name)
+    repo_k8s_deployments = _extract_kubernetes_deployments(repo_path)
+    k8s_deployments_by_provider = {prov: [] for prov in _K8S_PROVIDER_PREFERENCE}
+    for deployment in repo_k8s_deployments:
+        hint = deployment.get("provider_hint")
+        if hint in k8s_deployments_by_provider:
+            k8s_deployments_by_provider[hint].append(deployment)
+    k8s_hint_present = any(k8s_deployments_by_provider.values())
+    k8s_deployments_without_hint = [
+        deployment for deployment in repo_k8s_deployments if not deployment.get("provider_hint")
+    ]
+    available_providers = list(provider_resources.keys())
+    k8s_fallback_provider = next(
+        (p for p in _K8S_PROVIDER_PREFERENCE if p in available_providers),
+        available_providers[0] if available_providers else None,
+    )
+    k8s_deployments_present = bool(repo_k8s_deployments)
 
     category_colors = {
         "app": "#5a9e5a",         # green  (Compute)
@@ -1200,6 +1263,21 @@ def _build_simple_architecture_diagram(
             for parent, raw_types in parent_groups.items()
             if not any(_is_network_boundary_resource(provider, raw) for raw in raw_types)
         }
+        provider_deployments = k8s_deployments_by_provider.get(provider, [])
+        fallback_allowed = (
+            not k8s_hint_present and k8s_deployments_present and provider == k8s_fallback_provider
+        )
+        should_infer_cluster = k8s_deployments_present and (
+            bool(provider_deployments) or fallback_allowed
+        )
+        provider_cluster_types = _K8S_CLUSTER_RESOURCE_TYPES.get(provider, frozenset())
+        has_cluster_resource = bool(set(resource_types) & provider_cluster_types)
+        if should_infer_cluster and not has_cluster_resource:
+            cluster_deployments = provider_deployments or k8s_deployments_without_hint or repo_k8s_deployments
+            cluster_label = _format_inferred_k8s_cluster_label(cluster_deployments)
+            if cluster_label not in non_boundary_parents:
+                non_boundary_parents[cluster_label] = list(_INFERRED_K8S_CLUSTER_RAW_TYPES)
+                parent_groups[cluster_label] = list(_INFERRED_K8S_CLUSTER_RAW_TYPES)
 
         _internet_posture_cache: dict[tuple[str, tuple[str, ...]], tuple[bool, str, bool]] = {}
 
@@ -1772,10 +1850,8 @@ def _build_simple_architecture_diagram(
                         
                         # Extract backend routing info (render later outside APIM)
                         backend_url = _extract_apim_backend_url(repo_path, api_name)
-                        if backend_url:
-                            k8s_deployments = _extract_kubernetes_deployments(repo_path)
-                            if k8s_deployments:
-                                for deployment in k8s_deployments:
+                        if backend_url and repo_k8s_deployments:
+                            for deployment in repo_k8s_deployments:
                                     if deployment["module_name"] in ("api", "app", "service"):
                                         # Check for database connections in this deployment
                                         db_connection = _extract_database_connection(repo_path, deployment["module_name"])
