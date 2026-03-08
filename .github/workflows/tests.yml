@@ -34,3 +34,28 @@ jobs:
 
       - name: Verify opengrep installation
         run: opengrep --version
+
+      - name: Rule Syntax Check
+        run: |
+          opengrep scan --validate --config Rules/
+
+      - name: Context Extraction Test
+        run: |
+          opengrep scan --config Rules/ "Sample Findings/Repos/TestRepo" \
+            --json -o context.json
+
+      - name: Extraction Quality Gate
+        run: |
+          count=$(jq '.results | length' context.json) || { echo "Error: Failed to parse context.json"; exit 1; }
+          echo "Findings extracted: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "Quality Gate Failed: Zero context markers extracted from TestRepo"
+            exit 1
+          fi
+
+      - name: Upload context.json artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-json
+          path: context.json
