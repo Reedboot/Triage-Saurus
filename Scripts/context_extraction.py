@@ -710,8 +710,7 @@ def _load_parent_type_map() -> Dict[str, str]:
     try:
         from pathlib import Path as _Path
         db_path = _Path(__file__).parent.parent / "Output" / "Learning" / "triage.db"
-        import sqlite3
-        conn = sqlite3.connect(str(db_path))
+                conn = sqlite3.connect(str(db_path))
         rows = conn.execute(
             "SELECT terraform_type, parent_type FROM resource_types WHERE parent_type IS NOT NULL"
         ).fetchall()

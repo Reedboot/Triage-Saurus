@@ -2,7 +2,6 @@
 """Generate Mermaid diagrams from database queries."""
 
 import sys
-import sqlite3
 from pathlib import Path
 from typing import List, Dict, Optional
 

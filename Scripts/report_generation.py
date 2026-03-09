@@ -10,15 +10,7 @@ from markdown_validator import validate_markdown_file
 import resource_type_db as _rtdb
 
 # Lazy DB connection — initialised on first use, None if DB unavailable
-_db_conn: sqlite3.Connection | None = None
 
-def _get_db() -> sqlite3.Connection | None:
-    global _db_conn
-    if _db_conn is None:
-        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
-        if db_path.exists():
-            _db_conn = sqlite3.connect(str(db_path))
-    return _db_conn
 
 
 def now_uk() -> str:
@@ -2965,10 +2957,6 @@ def write_repo_summary(
         try:
             db = _get_db()
             if db:
-                import sqlite3
-                conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"))
-                cur = conn.execute("SELECT key, value FROM context_metadata WHERE key LIKE 'module:%' AND repo_id IS NOT NULL")
-                rows = cur.fetchall()
                 if rows:
                     lines = []
                     for key, value in rows:

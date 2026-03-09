@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Initialize the SQLite schema for Triage-Saurus learning database."""
 
-import sqlite3
 from pathlib import Path
 import sys
 from db_helpers import apply_topology_backfills

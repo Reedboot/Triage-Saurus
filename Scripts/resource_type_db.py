@@ -9,7 +9,6 @@ Query order:
 All scripts should import from here instead of maintaining their own dicts.
 """
 
-import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

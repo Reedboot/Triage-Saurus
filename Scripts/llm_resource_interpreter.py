@@ -19,7 +19,6 @@ Usage:
 import json
 import hashlib
 import re
-import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timedelta

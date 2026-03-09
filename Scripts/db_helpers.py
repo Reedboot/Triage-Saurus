@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Database helper functions for Triage-Saurus."""
 
-import sqlite3
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple

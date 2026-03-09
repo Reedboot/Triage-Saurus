@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from output_paths import OUTPUT_FINDINGS_DIR
+from cozo_helpers import insert_task_node
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,10 +33,19 @@ class FindingRow:
     severity: str
     is_draft: bool
     missing: list[str]
+    def record_as_task(self):
+        task_id = f"finding-{self.path.stem}"
+        insert_task_node(task_id, self.title, f"Score: {self.score}, Severity: {self.severity}", "draft" if self.is_draft else "done")
 
 
 def _read_lines(path: Path) -> list[str]:
-    return path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    # Record as workflow task in Cozo
+    if lines:
+        task_id = f"finding-{path.stem}"
+        title = lines[0].lstrip("# ").strip()
+        insert_task_node(task_id, title, f"Path: {path}", "pending")
+    return lines
 
 
 def _first_line_value(lines: list[str], prefix: str) -> str | None:
