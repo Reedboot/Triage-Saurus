@@ -61,24 +61,46 @@ jobs:
       - name: Quality gate – verify triage.db has repository entries
         working-directory: ${{ github.workspace }}
         run: |
-          DB="Output/Learning/triage.db"
-          if [ ! -f "$DB" ]; then
-            echo "❌ triage.db not found at $DB"
-            exit 1
-          fi
-          # Confirm the repositories table exists before counting rows.
-          TABLE_EXISTS=$(sqlite3 "$DB" ".tables" 2>/dev/null | grep -c "repositories" || true)
-          if [ "$TABLE_EXISTS" -lt 1 ]; then
-            echo "❌ 'repositories' table not found in triage.db – the database may be corrupted or uninitialised"
-            exit 1
-          fi
-          ROW_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM repositories;")
-          echo "Repositories table row count: $ROW_COUNT"
-          if [ "$ROW_COUNT" -lt 1 ]; then
-            echo "❌ No entries found in the repositories table"
-            exit 1
-          fi
-          echo "✅ triage.db exists and contains $ROW_COUNT repository record(s)"
+          python3 - << 'PYCODE'
+          import os
+          import sqlite3
+          import sys
+
+          db_path = os.path.join("Output", "Learning", "triage.db")
+
+          if not os.path.isfile(db_path):
+              print(f"❌ triage.db not found at {db_path}")
+              sys.exit(1)
+
+          try:
+              conn = sqlite3.connect(db_path)
+          except sqlite3.Error as exc:
+              print(f"❌ Failed to open triage.db at {db_path}: {exc}")
+              sys.exit(1)
+
+          try:
+              cur = conn.cursor()
+              # Confirm the repositories table exists before counting rows.
+              cur.execute(
+                  "SELECT name FROM sqlite_master WHERE type='table' AND name='repositories';"
+              )
+              table = cur.fetchone()
+              if table is None:
+                  print("❌ 'repositories' table not found in triage.db – the database may be corrupted or uninitialised")
+                  sys.exit(1)
+
+              cur.execute("SELECT COUNT(*) FROM repositories;")
+              row = cur.fetchone()
+              row_count = int(row[0]) if row is not None else 0
+              print(f"Repositories table row count: {row_count}")
+              if row_count < 1:
+                  print("❌ No entries found in the repositories table")
+                  sys.exit(1)
+
+              print(f"✅ triage.db exists and contains {row_count} repository record(s)")
+          finally:
+              conn.close()
+          PYCODE
 
       - name: Check opengrep rule syntax against TestRepo
         working-directory: ${{ github.workspace }}
