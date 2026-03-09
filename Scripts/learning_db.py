@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""CozoDB schema and helpers for the Triage-Saurus learning system.
+"""SQLite schema and helpers for the Triage-Saurus learning system.
 
-Creates and manages the learning database at Output/Learning/triage.cozo
-using the RocksDB storage engine via pycozo.
+Creates and manages the learning database at Output/Learning/triage.db.
 
-Relations:
+Tables:
 - experiments: Metadata for each experiment run
 - findings: Per-finding data within experiments
 - scan_effectiveness: Metrics per scan type
 - question_effectiveness: Metrics per question asked
 - path_effectiveness: Metrics per file pattern
 - validations: Human feedback on findings
-- weight_history: Learned weights evolution
 
 Usage:
     python3 Scripts/learning_db.py init      # Create/reset database
@@ -22,401 +20,342 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-
-from pycozo.client import Client
 
 from output_paths import OUTPUT_ROOT
 
 LEARNING_DIR = OUTPUT_ROOT / "Learning"
-DB_PATH = LEARNING_DIR / "triage.cozo"
+DB_PATH = LEARNING_DIR / "triage.db"
 
-# ── Relation schemas ──────────────────────────────────────────────────────────
+SCHEMA = """
+-- Experiments table
+CREATE TABLE IF NOT EXISTS experiments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    strategy_version TEXT,
+    repos TEXT,  -- JSON array of repo names
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    duration_sec INTEGER,
+    tokens_used INTEGER,
+    findings_count INTEGER,
+    high_value_count INTEGER,
+    avg_score REAL,
+    false_positives INTEGER,
+    accuracy_rate REAL,
+    human_reviewed INTEGER DEFAULT 0,
+    promoted_at TIMESTAMP,  -- When learnings were promoted to production
+    promoted_by TEXT,  -- manual, automated, or user identifier
+    notes TEXT
+);
 
-_RELATIONS: dict[str, str] = {
-    "ts_seqs": ":create ts_seqs { name: String => value: Int }",
-    "experiments": """
-        :create experiments {
-            id: String =>
-            name: String,
-            status: String,
-            strategy_version: String?,
-            repos: String?,
-            started_at: String?,
-            completed_at: String?,
-            duration_sec: Int?,
-            tokens_used: Int?,
-            findings_count: Int?,
-            high_value_count: Int?,
-            avg_score: Float?,
-            false_positives: Int?,
-            accuracy_rate: Float?,
-            human_reviewed: Int,
-            promoted_at: String?,
-            promoted_by: String?,
-            notes: String?
-        }
-    """,
-    "findings_learning": """
-        :create findings_learning {
-            id: Int =>
-            experiment_id: String,
-            finding_name: String,
-            repo: String?,
-            score: Int?,
-            resource_type: String?,
-            discovered_by: String?,
-            validation_status: String?,
-            human_feedback: String?
-        }
-    """,
-    "scan_effectiveness": """
-        :create scan_effectiveness {
-            id: Int =>
-            experiment_id: String,
-            scan_type: String,
-            duration_sec: Int?,
-            findings_count: Int?,
-            high_value_count: Int?,
-            false_positive_count: Int?,
-            files_examined: Int?,
-            created_at: String?
-        }
-    """,
-    "question_effectiveness": """
-        :create question_effectiveness {
-            id: Int =>
-            experiment_id: String,
-            question_key: String,
-            question_text: String?,
-            findings_impacted: Int?,
-            avg_score_delta: Float?,
-            time_to_answer_sec: Int?,
-            created_at: String?
-        }
-    """,
-    "path_effectiveness": """
-        :create path_effectiveness {
-            id: Int =>
-            experiment_id: String,
-            pattern: String,
-            files_matched: Int?,
-            security_hits: Int?,
-            hit_rate: Float?,
-            created_at: String?
-        }
-    """,
-    "validations": """
-        :create validations {
-            id: Int =>
-            experiment_id: String,
-            finding_name: String,
-            verdict: String,
-            reason: String?,
-            correct_score: Int?,
-            evidence_location: String?,
-            learning_action: String?,
-            validated_at: String?
-        }
-    """,
-    "weight_history": """
-        :create weight_history {
-            id: Int =>
-            weight_key: String,
-            old_value: Float?,
-            new_value: Float?,
-            reason: String?,
-            experiment_id: String?,
-            created_at: String?
-        }
-    """,
-}
+-- Findings within experiments
+CREATE TABLE IF NOT EXISTS findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    finding_name TEXT NOT NULL,
+    repo TEXT,
+    score INTEGER,
+    resource_type TEXT,
+    discovered_by TEXT,  -- which scan found it
+    validation_status TEXT,  -- CONFIRMED, FALSE_POSITIVE, PENDING
+    human_feedback TEXT,  -- JSON blob
+    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+);
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+-- Scan effectiveness metrics
+CREATE TABLE IF NOT EXISTS scan_effectiveness (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    scan_type TEXT NOT NULL,  -- iac, sca, sast, secrets
+    duration_sec INTEGER,
+    findings_count INTEGER,
+    high_value_count INTEGER,
+    false_positive_count INTEGER,
+    files_examined INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+);
 
-_db_cache: dict[str, Client] = {}
+-- Question effectiveness metrics
+CREATE TABLE IF NOT EXISTS question_effectiveness (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    question_key TEXT NOT NULL,
+    question_text TEXT,
+    findings_impacted INTEGER,
+    avg_score_delta REAL,
+    time_to_answer_sec INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+);
 
+-- Path pattern effectiveness
+CREATE TABLE IF NOT EXISTS path_effectiveness (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    files_matched INTEGER,
+    security_hits INTEGER,
+    hit_rate REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+);
 
-def _get_db(path: Path = DB_PATH) -> Client:
-    """Return (or lazily open) the CozoDB client for *path*."""
-    key = str(path)
-    if key not in _db_cache:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _db_cache[key] = Client("rocksdb", str(path), dataframe=False)
-    return _db_cache[key]
+-- Human validations/feedback
+CREATE TABLE IF NOT EXISTS validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id TEXT NOT NULL,
+    finding_name TEXT NOT NULL,
+    verdict TEXT NOT NULL,  -- correct, score_too_high, score_too_low, false_positive, false_negative
+    reason TEXT,
+    correct_score INTEGER,
+    evidence_location TEXT,
+    learning_action TEXT,
+    validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+);
 
+-- Learned weights history
+CREATE TABLE IF NOT EXISTS weight_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    weight_key TEXT NOT NULL,
+    old_value REAL,
+    new_value REAL,
+    reason TEXT,
+    experiment_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-def _rows_to_dicts(result: dict) -> list[dict]:
-    """Convert a CozoDB query result to a list of dicts."""
-    headers = result["headers"]
-    return [dict(zip(headers, row)) for row in result["rows"]]
-
-
-def _next_id(db: Client, seq_name: str) -> int:
-    """Return the next auto-increment ID for *seq_name*."""
-    result = db.run("?[v] := *ts_seqs[$name, v]", {"name": seq_name})
-    current = result["rows"][0][0] if result["rows"] else 0
-    new_id = current + 1
-    db.put("ts_seqs", [{"name": seq_name, "value": new_id}])
-    return new_id
-
-
-def _now() -> str:
-    return datetime.now().isoformat()
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_findings_experiment ON findings(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_scan_experiment ON scan_effectiveness(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_validations_experiment ON validations(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_validations_verdict ON validations(verdict);
+"""
 
 
 def init_db() -> None:
-    """Create or upgrade the learning database."""
-    db = _get_db()
-    existing = {row[0] for row in db.relations()["rows"]}
-    for name, schema in _RELATIONS.items():
-        if name not in existing:
-            db.run(schema)
-        # Seed zero-value counters for each sequence-based relation
-    seq_relations = {
-        "findings_learning",
-        "scan_effectiveness",
-        "question_effectiveness",
-        "path_effectiveness",
-        "validations",
-        "weight_history",
-    }
-    for rel in seq_relations:
-        existing_seq = db.run("?[v] := *ts_seqs[$n, v]", {"n": rel})
-        if not existing_seq["rows"]:
-            db.put("ts_seqs", [{"name": rel, "value": 0}])
+    """Create or reset the learning database."""
+    LEARNING_DIR.mkdir(parents=True, exist_ok=True)
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
+    
     print(f"Database initialized at {DB_PATH}")
 
 
-def get_connection() -> Client:
-    """Return the CozoDB client, initialising if needed."""
+def get_connection() -> sqlite3.Connection:
+    """Get a connection to the learning database."""
     if not DB_PATH.exists():
         init_db()
-    return _get_db()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def get_status() -> dict:
-    """Return current learning status."""
-    db = get_connection()
-
+    """Get current learning status."""
+    conn = get_connection()
+    
     # Count experiments by status
-    exp_rows = _rows_to_dicts(
-        db.run("?[status, count(id)] := *experiments[id, _, status, _, _, _, _, _, _, _, _, _, _, _, _, _, _]")
-    )
-
-    # Latest experiment
-    latest_rows = _rows_to_dicts(
-        db.run(
-            "?[id, name, status, findings_count, accuracy_rate, started_at] := "
-            "*experiments[id, name, status, _, _, _, started_at, _, _, _, findings_count, _, _, accuracy_rate, _, _, _] "
-            ":order -started_at :limit 1"
-        )
-    )
-
-    # Aggregate metrics
-    totals_rows = _rows_to_dicts(
-        db.run(
-            "?[total_experiments, total_findings, avg_accuracy, avg_duration] := "
-            "total_experiments = count(id), "
-            "total_findings = sum(coalesce(fc, 0)), "
-            "avg_accuracy = mean(ar), "
-            "avg_duration = mean(coalesce(ds, 0)) "
-            ":- *experiments[id, _, status, _, _, _, _, _, ds, _, fc, _, _, ar, _, _, _], "
-            "status != 'pending'"
-        )
-    )
-
-    # Top false positive patterns
-    fp_rows = _rows_to_dicts(
-        db.run(
-            "?[finding_name, fp_count] := "
-            "fp_count = count(id), "
-            ":- *validations[id, _, finding_name, verdict, _, _, _, _, _], "
-            "verdict = 'false_positive' "
-            ":order -fp_count :limit 5"
-        )
-    )
-
+    experiments = conn.execute(
+        "SELECT status, COUNT(*) as count FROM experiments GROUP BY status"
+    ).fetchall()
+    
+    # Get latest experiment
+    latest = conn.execute(
+        "SELECT * FROM experiments ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    
+    # Get aggregate metrics
+    totals = conn.execute("""
+        SELECT 
+            COUNT(*) as total_experiments,
+            SUM(findings_count) as total_findings,
+            AVG(accuracy_rate) as avg_accuracy,
+            AVG(duration_sec) as avg_duration
+        FROM experiments
+        WHERE status != 'pending'
+    """).fetchone()
+    
+    # Get false positive patterns (if validations table exists)
+    try:
+        fp_patterns = conn.execute("""
+            SELECT finding_name, COUNT(*) as fp_count
+            FROM validations
+            WHERE verdict = 'false_positive'
+            GROUP BY finding_name
+            ORDER BY fp_count DESC
+            LIMIT 5
+        """).fetchall()
+    except sqlite3.OperationalError:
+        # validations table doesn't exist yet
+        fp_patterns = []
+    
+    conn.close()
+    
     return {
-        "experiments_by_status": {row["status"]: row["count(id)"] for row in exp_rows},
-        "latest_experiment": latest_rows[0] if latest_rows else None,
-        "totals": totals_rows[0] if totals_rows else {},
-        "top_false_positive_patterns": fp_rows,
+        "experiments_by_status": {row["status"]: row["count"] for row in experiments},
+        "latest_experiment": dict(latest) if latest else None,
+        "totals": dict(totals) if totals else {},
+        "top_false_positive_patterns": [dict(row) for row in fp_patterns],
     }
 
 
 def print_status() -> None:
     """Print current learning status to stdout."""
-    db = get_connection()
-
+    status = get_status()
+    
     print("== Learning Database Status ==")
     print(f"Database: {DB_PATH}")
     print()
-
-    exp_rows = _rows_to_dicts(
-        db.run(
-            "?[status, n] := n = count(id) :- *experiments[id, _, status, _, _, _, _, _, _, _, _, _, _, _, _, _, _]"
-        )
-    )
+    
     print("Experiments by status:")
-    for row in exp_rows:
-        print(f"  {row['status']}: {row['n']}")
+    for s, count in status.get("experiments_by_status", {}).items():
+        print(f"  {s}: {count}")
     print()
-
-    latest_rows = _rows_to_dicts(
-        db.run(
-            "?[id, name, status, findings_count, accuracy_rate] := "
-            "*experiments[id, name, status, _, _, _, started_at, _, _, _, findings_count, _, _, accuracy_rate, _, _, _] "
-            ":order -started_at :limit 1"
-        )
-    )
-    if latest_rows:
-        exp = latest_rows[0]
+    
+    if status.get("latest_experiment"):
+        exp = status["latest_experiment"]
         print(f"Latest experiment: {exp.get('id')} ({exp.get('status')})")
         if exp.get("findings_count"):
             print(f"  Findings: {exp['findings_count']}")
         if exp.get("accuracy_rate"):
             print(f"  Accuracy: {exp['accuracy_rate']:.1%}")
     print()
+    
+    totals = status.get("totals", {})
+    if totals.get("total_experiments"):
+        print("Aggregate metrics:")
+        print(f"  Total experiments: {totals['total_experiments']}")
+        print(f"  Total findings: {totals['total_findings'] or 0}")
+        if totals.get("avg_accuracy"):
+            print(f"  Average accuracy: {totals['avg_accuracy']:.1%}")
+        if totals.get("avg_duration"):
+            print(f"  Average duration: {totals['avg_duration']:.0f}s")
+    print()
+    
+    if status.get("top_false_positive_patterns"):
+        print("Top false positive patterns:")
+        for row in status["top_false_positive_patterns"]:
+            print(f"  {row['finding_name']}: {row['fp_count']} times")
 
-    total_rows = _rows_to_dicts(
-        db.run(
-            "?[n] := n = count(id) :- *experiments[id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _]"
-        )
-    )
-    if total_rows and total_rows[0].get("n", 0):
-        print(f"Aggregate metrics:")
-        print(f"  Total experiments: {total_rows[0]['n']}")
 
-
-def create_experiment(
-    exp_id: str,
-    name: str,
-    repos: list[str],
-    strategy: str = "default",
-) -> None:
+def create_experiment(exp_id: str, name: str, repos: list[str], strategy: str = "default") -> None:
     """Create a new experiment record."""
-    db = get_connection()
-    db.put(
-        "experiments",
-        [
-            {
-                "id": exp_id,
-                "name": name,
-                "status": "pending",
-                "strategy_version": strategy,
-                "repos": json.dumps(repos),
-                "started_at": _now(),
-                "completed_at": None,
-                "duration_sec": None,
-                "tokens_used": None,
-                "findings_count": None,
-                "high_value_count": None,
-                "avg_score": None,
-                "false_positives": None,
-                "accuracy_rate": None,
-                "human_reviewed": 0,
-                "promoted_at": None,
-                "promoted_by": None,
-                "notes": None,
-            }
-        ],
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO experiments (id, name, status, strategy_version, repos, started_at)
+        VALUES (?, ?, 'pending', ?, ?, ?)
+        """,
+        (exp_id, name, strategy, json.dumps(repos), datetime.now().isoformat())
     )
+    conn.commit()
+    conn.close()
 
 
 def update_experiment(exp_id: str, **kwargs) -> None:
     """Update experiment fields."""
-    db = get_connection()
-    db.update("experiments", [{"id": exp_id, **kwargs}])
+    conn = get_connection()
+    
+    # Build SET clause dynamically
+    set_parts = []
+    values = []
+    for key, value in kwargs.items():
+        set_parts.append(f"{key} = ?")
+        values.append(value)
+    
+    values.append(exp_id)
+    
+    conn.execute(
+        f"UPDATE experiments SET {', '.join(set_parts)} WHERE id = ?",
+        values
+    )
+    conn.commit()
+    conn.close()
 
 
 def record_validation(
     experiment_id: str,
     finding_name: str,
     verdict: str,
-    reason: Optional[str] = None,
-    correct_score: Optional[int] = None,
-    evidence_location: Optional[str] = None,
-    learning_action: Optional[str] = None,
+    reason: str = None,
+    correct_score: int = None,
+    evidence_location: str = None,
+    learning_action: str = None,
 ) -> None:
     """Record human validation feedback."""
-    db = get_connection()
-    new_id = _next_id(db, "validations")
-    db.put(
-        "validations",
-        [
-            {
-                "id": new_id,
-                "experiment_id": experiment_id,
-                "finding_name": finding_name,
-                "verdict": verdict,
-                "reason": reason,
-                "correct_score": correct_score,
-                "evidence_location": evidence_location,
-                "learning_action": learning_action,
-                "validated_at": _now(),
-            }
-        ],
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO validations 
+        (experiment_id, finding_name, verdict, reason, correct_score, evidence_location, learning_action)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (experiment_id, finding_name, verdict, reason, correct_score, evidence_location, learning_action)
     )
+    conn.commit()
+    conn.close()
 
 
 def get_scan_effectiveness_summary() -> list[dict]:
     """Get aggregated scan effectiveness across all experiments."""
-    db = get_connection()
-    rows = _rows_to_dicts(
-        db.run(
-            "?[scan_type, run_count, avg_findings, avg_high_value, avg_fp_rate, avg_duration] := "
-            "run_count = count(id), "
-            "avg_findings = mean(coalesce(findings_count, 0)), "
-            "avg_high_value = mean(coalesce(high_value_count, 0)), "
-            "avg_fp_rate = mean(coalesce(false_positive_count, 0)), "
-            "avg_duration = mean(coalesce(duration_sec, 0)) "
-            ":- *scan_effectiveness[id, eid, scan_type, duration_sec, findings_count, "
-            "high_value_count, false_positive_count, _, _] "
-            ":order -avg_high_value"
-        )
-    )
-    return rows
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT 
+            scan_type,
+            COUNT(*) as run_count,
+            AVG(findings_count) as avg_findings,
+            AVG(high_value_count) as avg_high_value,
+            AVG(CAST(false_positive_count AS REAL) / NULLIF(findings_count, 0)) as avg_fp_rate,
+            AVG(duration_sec) as avg_duration
+        FROM scan_effectiveness
+        GROUP BY scan_type
+        ORDER BY avg_high_value DESC
+    """).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_question_effectiveness_summary() -> list[dict]:
     """Get aggregated question effectiveness across all experiments."""
-    db = get_connection()
-    rows = _rows_to_dicts(
-        db.run(
-            "?[question_key, times_asked, total_findings_impacted, overall_avg_delta, avg_answer_time] := "
-            "times_asked = count(id), "
-            "total_findings_impacted = sum(coalesce(findings_impacted, 0)), "
-            "overall_avg_delta = mean(coalesce(avg_score_delta, 0.0)), "
-            "avg_answer_time = mean(coalesce(time_to_answer_sec, 0)) "
-            ":- *question_effectiveness[id, _, question_key, _, findings_impacted, avg_score_delta, time_to_answer_sec, _] "
-            ":order -total_findings_impacted"
-        )
-    )
-    return rows
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT 
+            question_key,
+            COUNT(*) as times_asked,
+            SUM(findings_impacted) as total_findings_impacted,
+            AVG(avg_score_delta) as overall_avg_delta,
+            AVG(time_to_answer_sec) as avg_answer_time
+        FROM question_effectiveness
+        GROUP BY question_key
+        ORDER BY total_findings_impacted DESC
+    """).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Manage the Triage-Saurus learning database."
-    )
+    parser = argparse.ArgumentParser(description="Manage the Triage-Saurus learning database.")
     parser.add_argument(
         "command",
         choices=["init", "status"],
         help="Command to run",
     )
     args = parser.parse_args()
-
+    
     if args.command == "init":
         init_db()
     elif args.command == "status":
         print_status()
-
+    
     return 0
 
 
