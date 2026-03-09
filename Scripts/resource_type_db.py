@@ -10,10 +10,14 @@ All scripts should import from here instead of maintaining their own dicts.
 """
 
 import sqlite3
+try:
+    from pycozo.client import Client as _CozoClient
+except ImportError:
+    _CozoClient = None  # type: ignore
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "Output/Learning/triage.db"
+DB_PATH = ROOT / "Output/Learning/triage.cozo"
 
 # ---------------------------------------------------------------------------
 # Seed / fallback data  (kept in sync with init_database.py seed rows)
@@ -253,7 +257,7 @@ _CATEGORY_KEYWORDS: list[tuple[str, str]] = [
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_resource_type(conn: sqlite3.Connection | None, terraform_type: str) -> dict:
+def get_resource_type(conn, terraform_type: str) -> dict:
     """Return lookup data for a terraform resource type.
 
     Returns dict with keys:
@@ -261,86 +265,88 @@ def get_resource_type(conn: sqlite3.Connection | None, terraform_type: str) -> d
         is_data_store, is_internet_facing_capable,
         display_on_architecture_chart, parent_type
 
-    conn may be None; in that case the DB query is skipped and _FALLBACK / _derive() are used.
+    conn may be None, a sqlite3.Connection, or a pycozo Client;
+    if None the DB query is skipped and _FALLBACK / _derive() are used.
     """
-    # 1. Query DB
-    if conn is None:
-        # No DB — derive provider then fall back to _FALLBACK / _derive()
-        provider = "unknown"
-        for prefix, prov in _PROVIDER_PREFIXES:
-            if terraform_type.startswith(prefix):
-                provider = prov
-                break
-        if terraform_type in _FALLBACK:
-            return {
-                **_FALLBACK[terraform_type],
-                "provider": provider,
-                "is_data_store": False,
-                "is_internet_facing_capable": False,
-                "display_on_architecture_chart": bool(
-                    _FALLBACK[terraform_type].get("display_on_architecture_chart", True)
-                ),
-                "parent_type": _FALLBACK[terraform_type].get("parent_type"),
-            }
-        derived = _derive(terraform_type)
-        return {
-            **derived,
-            "is_data_store": False,
-            "is_internet_facing_capable": False,
-            "display_on_architecture_chart": bool(derived.get("display_on_architecture_chart", True)),
-            "parent_type": derived.get("parent_type"),
-        }
-    try:
-        table_cols = {c[1] for c in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
-        has_display = "display_on_architecture_chart" in table_cols
-        has_parent = "parent_type" in table_cols
-        select_extra = []
-        if has_display:
-            select_extra.append("rt.display_on_architecture_chart")
-        if has_parent:
-            select_extra.append("rt.parent_type")
-        select_extra_sql = (", " + ", ".join(select_extra)) if select_extra else ""
-        row = conn.execute(
-            f"""
-            SELECT rt.friendly_name, rt.category, rt.icon,
-                   p.key AS provider,
-                   rt.is_data_store, rt.is_internet_facing_capable
-                   {select_extra_sql}
-            FROM resource_types rt
-            LEFT JOIN providers p ON rt.provider_id = p.id
-            WHERE rt.terraform_type = ?
-            """,
-            (terraform_type,),
-        ).fetchone()
-        if row:
-            idx = 6
-            display_value = True
-            parent_type = None
-            if has_display:
-                display_value = bool(row[idx]) if row[idx] is not None else True
-                idx += 1
-            if has_parent:
-                parent_type = row[idx] if row[idx] else None
-            return {
-                "friendly_name": row[0],
-                "category":      row[1],
-                "icon":          row[2] or "📦",
-                "provider":      row[3] or "unknown",
-                "is_data_store":               bool(row[4]),
-                "is_internet_facing_capable":  bool(row[5]),
-                "display_on_architecture_chart": display_value,
-                "parent_type": parent_type,
-            }
-    except sqlite3.OperationalError:
-        pass  # Tables may not exist yet; fall through
+    provider = "unknown"
+    for prefix, prov in _PROVIDER_PREFIXES:
+        if terraform_type.startswith(prefix):
+            provider = prov
+            break
+
+    # 1. Query DB (CozoDB or SQLite)
+    if conn is not None:
+        try:
+            # CozoDB client path
+            if _CozoClient is not None and isinstance(conn, _CozoClient):
+                result = conn.run(
+                    "?[fname, cat, icon, pkey, is_ds, is_if, display, parent] := "
+                    "*resource_types{terraform_type, friendly_name: fname, category: cat, icon, "
+                    "provider_id: pid, is_data_store: is_ds, is_internet_facing_capable: is_if, "
+                    "display_on_architecture_chart: display, parent_type: parent}, "
+                    "terraform_type = $t, "
+                    "*providers{id: pid, key: pkey}",
+                    {"t": terraform_type},
+                )
+                if result["rows"]:
+                    r = result["rows"][0]
+                    return {
+                        "friendly_name": r[0],
+                        "category": r[1],
+                        "icon": r[2] or "📦",
+                        "provider": r[3] or provider,
+                        "is_data_store": bool(r[4]),
+                        "is_internet_facing_capable": bool(r[5]),
+                        "display_on_architecture_chart": bool(r[6]) if r[6] is not None else True,
+                        "parent_type": r[7] or None,
+                    }
+            else:
+                # Legacy sqlite3.Connection path
+                table_cols = {c[1] for c in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+                has_display = "display_on_architecture_chart" in table_cols
+                has_parent = "parent_type" in table_cols
+                select_extra = []
+                if has_display:
+                    select_extra.append("rt.display_on_architecture_chart")
+                if has_parent:
+                    select_extra.append("rt.parent_type")
+                select_extra_sql = (", " + ", ".join(select_extra)) if select_extra else ""
+                row = conn.execute(
+                    f"""
+                    SELECT rt.friendly_name, rt.category, rt.icon,
+                           p.key AS provider,
+                           rt.is_data_store, rt.is_internet_facing_capable
+                           {select_extra_sql}
+                    FROM resource_types rt
+                    LEFT JOIN providers p ON rt.provider_id = p.id
+                    WHERE rt.terraform_type = ?
+                    """,
+                    (terraform_type,),
+                ).fetchone()
+                if row:
+                    idx = 6
+                    display_value = True
+                    parent_type = None
+                    if has_display:
+                        display_value = bool(row[idx]) if row[idx] is not None else True
+                        idx += 1
+                    if has_parent:
+                        parent_type = row[idx] if row[idx] else None
+                    return {
+                        "friendly_name": row[0],
+                        "category":      row[1],
+                        "icon":          row[2] or "📦",
+                        "provider":      row[3] or "unknown",
+                        "is_data_store":               bool(row[4]),
+                        "is_internet_facing_capable":  bool(row[5]),
+                        "display_on_architecture_chart": display_value,
+                        "parent_type": parent_type,
+                    }
+        except Exception:
+            pass  # Tables may not exist yet; fall through
 
     # 2. In-memory fallback
     if terraform_type in _FALLBACK:
-        provider = "unknown"
-        for prefix, prov in _PROVIDER_PREFIXES:
-            if terraform_type.startswith(prefix):
-                provider = prov
-                break
         entry = {
             **_FALLBACK[terraform_type],
             "provider": provider,
@@ -364,15 +370,15 @@ def get_resource_type(conn: sqlite3.Connection | None, terraform_type: str) -> d
     return derived
 
 
-def get_friendly_name(conn: sqlite3.Connection | None, terraform_type: str) -> str:
+def get_friendly_name(conn, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["friendly_name"]
 
 
-def get_category(conn: sqlite3.Connection | None, terraform_type: str) -> str:
+def get_category(conn, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["category"]
 
 
-def get_provider_key(conn: sqlite3.Connection | None, terraform_type: str) -> str:
+def get_provider_key(conn, terraform_type: str) -> str:
     return get_resource_type(conn, terraform_type)["provider"]
 
 

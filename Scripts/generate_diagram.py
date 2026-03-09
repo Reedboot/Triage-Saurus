@@ -2,24 +2,27 @@
 """Generate Mermaid diagrams from database queries."""
 
 import sys
-import sqlite3
 from pathlib import Path
 from typing import List, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
+from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram, _get_db
 import resource_type_db as _rtdb
 
-# Lazy DB connection for resource type lookups
-_lookup_conn: sqlite3.Connection | None = None
+# Lazy CozoDB client for resource type lookups
+_lookup_client = None
 
-def _get_lookup_db() -> sqlite3.Connection | None:
-    global _lookup_conn
-    if _lookup_conn is None:
-        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+def _get_lookup_db():
+    """Return the shared CozoDB client for resource type lookups (or None if DB not ready)."""
+    global _lookup_client
+    if _lookup_client is None:
+        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.cozo"
         if db_path.exists():
-            _lookup_conn = sqlite3.connect(str(db_path))
-    return _lookup_conn
+            try:
+                _lookup_client = _get_db(db_path)
+            except Exception:
+                pass
+    return _lookup_client
 
 
 # Category → diagram stroke colour
