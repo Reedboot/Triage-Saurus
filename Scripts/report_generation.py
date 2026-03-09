@@ -1852,36 +1852,36 @@ def _build_simple_architecture_diagram(
                         backend_url = _extract_apim_backend_url(repo_path, api_name)
                         if backend_url and repo_k8s_deployments:
                             for deployment in repo_k8s_deployments:
-                                    if deployment["module_name"] in ("api", "app", "service"):
-                                        # Check for database connections in this deployment
-                                        db_connection = _extract_database_connection(repo_path, deployment["module_name"])
-                                        # Check for Application Insights
-                                        app_insights = _extract_application_insights(repo_path, deployment["module_name"])
-                                        # Check for service dependencies
-                                        dependencies = _extract_service_dependencies(repo_path, deployment["module_name"])
-                                        backend_services.append({
-                                            "name": deployment["app_name"],
-                                            "label": f"☸️ AKS: {deployment['app_name']}",
-                                            "ops_slice": (operation_start_idx, len(operation_nodes)),
-                                            "database": db_connection,
-                                            "app_insights": app_insights,
-                                            "dependencies": dependencies
-                                        })
-                                        break
-                                if not backend_services or backend_services[-1]["ops_slice"][0] != operation_start_idx:
-                                    deployment = k8s_deployments[0]
-                                    deploy_type = deployment.get("type", "module")
-                                    if deploy_type == "helm":
-                                        label = f"⎈ K8s: {deployment['app_name']}"
-                                    else:
-                                        label = f"☸️ K8s: {deployment['app_name']}"
+                                if deployment["module_name"] in ("api", "app", "service"):
+                                    # Check for database connections in this deployment
                                     db_connection = _extract_database_connection(repo_path, deployment["module_name"])
+                                    # Check for Application Insights
+                                    app_insights = _extract_application_insights(repo_path, deployment["module_name"])
+                                    # Check for service dependencies
+                                    dependencies = _extract_service_dependencies(repo_path, deployment["module_name"])
                                     backend_services.append({
                                         "name": deployment["app_name"],
-                                        "label": label,
+                                        "label": f"☸️ AKS: {deployment['app_name']}",
                                         "ops_slice": (operation_start_idx, len(operation_nodes)),
-                                        "database": db_connection
+                                        "database": db_connection,
+                                        "app_insights": app_insights,
+                                        "dependencies": dependencies
                                     })
+                                    break
+                            if not backend_services or backend_services[-1]["ops_slice"][0] != operation_start_idx:
+                                deployment = k8s_deployments[0]
+                                deploy_type = deployment.get("type", "module")
+                                if deploy_type == "helm":
+                                    label = f"⎈ K8s: {deployment['app_name']}"
+                                else:
+                                    label = f"☸️ K8s: {deployment['app_name']}"
+                                db_connection = _extract_database_connection(repo_path, deployment["module_name"])
+                                backend_services.append({
+                                    "name": deployment["app_name"],
+                                    "label": label,
+                                    "ops_slice": (operation_start_idx, len(operation_nodes)),
+                                    "database": db_connection
+                                })
                     
                     # Add non-APIM resources if any
                     for resource_type in non_apim_resources:

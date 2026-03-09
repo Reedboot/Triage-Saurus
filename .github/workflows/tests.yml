@@ -34,3 +34,127 @@ jobs:
 
       - name: Verify opengrep installation
         run: opengrep --version
+
+      - name: Set up mock environment
+        run: |
+          # batch_scan_repos.sh sets REPOS_ROOT to the directory one level above the
+          # Triage-Saurus repo (i.e. the parent of $GITHUB_WORKSPACE).
+          REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
+
+          # Place TestRepo where the script will look for it.
+          cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$REPOS_ROOT/TestRepo"
+
+          # Tell the script which repos to scan.
+          echo "TestRepo" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
+
+          # Ensure the Learning output directory exists so the DB can be written.
+          mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
+
+      - name: Initialise triage database
+        working-directory: ${{ github.workspace }}
+        run: python3 Scripts/learning_db.py init
+
+      - name: Run batch repo scan
+        working-directory: ${{ github.workspace }}
+        run: bash Scripts/batch_scan_repos.sh --force
+
+      - name: Quality gate – verify triage.db has repository entries
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 - << 'PYCODE'
+          import os
+          import sqlite3
+          import sys
+
+          db_path = os.path.join("Output", "Learning", "triage.db")
+
+          if not os.path.isfile(db_path):
+              print(f"❌ triage.db not found at {db_path}")
+              sys.exit(1)
+
+          try:
+              conn = sqlite3.connect(db_path)
+          except sqlite3.Error as exc:
+              print(f"❌ Failed to open triage.db at {db_path}: {exc}")
+              sys.exit(1)
+
+          try:
+              cur = conn.cursor()
+              # Confirm the repositories table exists before counting rows.
+              cur.execute(
+                  "SELECT name FROM sqlite_master WHERE type='table' AND name='repositories';"
+              )
+              table = cur.fetchone()
+              if table is None:
+                  print("❌ 'repositories' table not found in triage.db – the database may be corrupted or uninitialised")
+                  sys.exit(1)
+
+              cur.execute("SELECT COUNT(*) FROM repositories;")
+              row = cur.fetchone()
+              row_count = int(row[0]) if row is not None else 0
+              print(f"Repositories table row count: {row_count}")
+              if row_count < 1:
+                  print("❌ No entries found in the repositories table")
+                  sys.exit(1)
+
+              print(f"✅ triage.db exists and contains {row_count} repository record(s)")
+          finally:
+              conn.close()
+          PYCODE
+
+      - name: Check opengrep rule syntax against TestRepo
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
+        run: |
+          OUTPUT_FILE="opengrep_output.json"
+
+          # Run opengrep, writing JSON output to a file. Leave stderr unredirected
+          # so that non-JSON logs remain visible in the workflow output.
+          opengrep scan \
+            --config Rules/ \
+            --json \
+            --output "$OUTPUT_FILE" \
+            "Sample Findings/Repos/TestRepo"
+
+          python3 - << 'PYCODE'
+          import json
+          import os
+          from json import JSONDecodeError
+
+          output_file = "opengrep_output.json"
+
+          if not os.path.exists(output_file):
+              print(f"opengrep scan did not produce an output file: {output_file}")
+              raise SystemExit(0)
+
+          try:
+              with open(output_file, "r", encoding="utf-8") as f:
+                  data = json.load(f)
+          except JSONDecodeError:
+              print("opengrep scan did not produce valid JSON in output file; raw contents:")
+              with open(output_file, "r", encoding="utf-8") as f:
+                  print(f.read())
+              raise SystemExit(0)
+
+          results = data.get("results", [])
+          errors = data.get("errors", [])
+          print(f"opengrep findings: {len(results)}, errors: {len(errors)}")
+          if errors:
+              print("Rule errors detected:", json.dumps(errors, indent=2))
+          PYCODE
+
+      - name: Upload triage database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-db
+          path: Output/Learning/triage.db
+          if-no-files-found: warn
+
+      - name: Upload session audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-logs
+          path: Output/Audit/
+          if-no-files-found: warn
