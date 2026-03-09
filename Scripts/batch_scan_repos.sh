@@ -27,7 +27,7 @@ log() {
 # Ensure triage.db exists
 if [ ! -f "$DB_PATH" ]; then
   log "triage.db not found, initializing..."
-  python3 Scripts/learning_db.py init
+  .venv/bin/python Scripts/learning_db.py init
 fi
 
 # Check if repo was scanned within last hour
@@ -135,7 +135,7 @@ while IFS= read -r repo_name || [ -n "$repo_name" ]; do
   
   # Phase 1-2: Context discovery with timeout
   log "  Phase 1-2: Context discovery..."
-  if timeout $TIMEOUT python3 "$REPO_ROOT/Scripts/discover_repo_context.py" "$REPO_PATH" --database "$DB_PATH" > /dev/null 2>&1; then
+  if timeout $TIMEOUT .venv/bin/python "$REPO_ROOT/Scripts/discover_repo_context.py" "$REPO_PATH" --database "$DB_PATH" > /dev/null 2>&1; then
     log "  ✅ Complete"
     SUCCESS=$((SUCCESS + 1))
   else
