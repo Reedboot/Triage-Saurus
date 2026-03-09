@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPOS_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 INTAKE_FILE="$REPO_ROOT/Intake/ReposToScan.txt"
-DB_PATH="$REPO_ROOT/Output/Learning/triage.db"
+DB_PATH="$REPO_ROOT/Output/Learning/triage_cozo.db"
 AUDIT_LOG="$REPO_ROOT/Output/Audit/Session_$(date +%Y-%m-%d_%H%M%S).md"
 TIMEOUT=120  # 2 minute timeout per repo
 
@@ -24,10 +24,10 @@ log() {
   echo "[$(date '+%H:%M:%S')] $*"
 }
 
-# Ensure triage.db exists
+# Ensure triage_cozo.db exists
 if [ ! -f "$DB_PATH" ]; then
-  log "triage.db not found, initializing..."
-  python3 Scripts/learning_db.py init
+  log "triage_cozo.db not found, initializing..."
+  python3 Scripts/init_database.py
 fi
 
 # Check if repo was scanned within last hour
@@ -39,9 +39,9 @@ should_skip_repo() {
     return 1  # Don't skip
   fi
   
-  # Query DB for last scan time
-  local last_scan=$(sqlite3 "$DB_PATH" \
-    "SELECT MAX(scanned_at) FROM repositories WHERE repo_name='$repo_name';" 2>/dev/null)
+  # Query DB via Python helper (CozoDB client)
+  local last_scan
+  last_scan=$(python3 "$REPO_ROOT/Scripts/get_last_scan_time.py" "$repo_name" 2>/dev/null)
   
   if [ -z "$last_scan" ]; then
     return 1  # No previous scan, don't skip

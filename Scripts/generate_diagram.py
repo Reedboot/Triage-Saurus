@@ -2,7 +2,6 @@
 """Generate Mermaid diagrams from database queries."""
 
 import sys
-import sqlite3
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -10,16 +9,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
 
-# Lazy DB connection for resource type lookups
-_lookup_conn: sqlite3.Connection | None = None
 
-def _get_lookup_db() -> sqlite3.Connection | None:
-    global _lookup_conn
-    if _lookup_conn is None:
-        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
-        if db_path.exists():
-            _lookup_conn = sqlite3.connect(str(db_path))
-    return _lookup_conn
+def _get_lookup_db():
+    """Return None to use the in-memory fallback dict in resource_type_db."""
+    return None
 
 
 # Category → diagram stroke colour

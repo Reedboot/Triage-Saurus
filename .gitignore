@@ -21,3 +21,7 @@ __pycache__
 
 # Per-session outputs live here (preferred)
 Output/*
+
+# CozoDB database files (auto-generated at runtime)
+Output/Learning/triage_cozo.db
+Output/Learning/triage.db

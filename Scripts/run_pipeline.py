@@ -56,12 +56,8 @@ def _run(cmd: list[str], label: str) -> int:
 
 def _get_experiment_findings(experiment_id: str) -> list[int]:
     """Return all finding IDs for the experiment."""
-    with get_db_connection() as conn:
-        rows = conn.execute(
-            "SELECT id FROM findings WHERE experiment_id = ? ORDER BY id",
-            (experiment_id,),
-        ).fetchall()
-    return [row[0] for row in rows]
+    from db_helpers import get_finding_ids_for_experiment
+    return get_finding_ids_for_experiment(experiment_id)
 
 
 def _resolve_experiment_dir(experiment_id: str) -> Path | None:
