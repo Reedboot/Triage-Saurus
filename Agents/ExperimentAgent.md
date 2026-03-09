@@ -367,7 +367,7 @@ After validation comparison is complete, proceed to human review.
 ```
 Output/Learning/
 ├── state.json                    # Cross-session continuity
-├── triage.db                     # SQLite metrics database
+├── cozo_graph                    # Cozo knowledge graph database
 ├── strategies/
 │   ├── default.json              # Base strategy
 │   └── learned_v1.json           # Optimized strategy
@@ -448,7 +448,7 @@ During each experiment, capture:
 | Files examined | Count of files scanned |
 | Questions asked | Count of questions to user |
 
-Store in `experiment.json` and SQLite for aggregation.
+Store in `experiment.json` and the Cozo knowledge graph for aggregation.
 
 ## Convergence Detection
 
@@ -564,7 +564,7 @@ After experiment completion and human validation:
 1. LearningAgent reads all `LEARNING_*.md` files in experiment folder
 2. Analyzes `validation.json` for human feedback patterns
 3. Proposes consolidated changes to agent instructions
-4. Updates `triage.db` SQLite with effectiveness metrics
+4. Updates Cozo knowledge graph with effectiveness metrics
 5. Applies approved changes to next experiment's Agents/
 
 **Your responsibility:** Capture the raw learning during experiment
