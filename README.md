@@ -97,6 +97,20 @@ Inspect DB-first topology relationships for a resource:
 python3 Scripts/query_resource_graph.py --experiment <id> --resource <resource_name> --query all
 ```
 
+## Cozo ingestion pipeline
+
+Once Phase 1 has generated opengrep JSON output, `Scripts/store_opengrep_for_cozo.py` can persist the raw findings, metadata, and metavars into a Cozo embedded database for additional enrichment or rule-based traversal. The script records the originating repo, source file paths, line numbers, rule IDs, severity, and all metadata (category, technology, provider hints) along with each metavariable so downstream agents can derive attributes and relationships.
+
+```bash
+python3 Scripts/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--repo-path /path/to/repo]
+```
+
+By default the database lives under `Output/Data/cozo.db` (directory created automatically) but you can override the path with `--cozo-db`. Run the script before or after the existing SQLite pipeline so that Cozo contains the same structured detection data that future rules will enrich or relate to other resources.
+
+To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.txt`, runs opengrep for every listed repo, imports the JSON result into `Output/Data/cozo.db`, prints the resources detected per repo, and now automatically invokes `Scripts/generate_repo_summary_from_cozo.py` so every scan also emits a repo-level Markdown summary under `Output/Summary/Repos/`. The script tracks recent scans via the Cozo `repo_scans` table (skip within one hour unless you pass `--force`), writes a timestamped audit log under `Output/Audit/CozoScan_<timestamp>.md`, and continues to surface detected providers/lines in the console for quick review.
+
+Use `Scripts/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
+
 ---
 
 ## Security Rules Library
@@ -208,6 +222,8 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 - **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
   - Used by: `opengrep scan --config Rules/ /path/to/repo`
   - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
+- `pycozo` + `cozo-embedded` (pip) — Install via `python3 -m pip install pycozo cozo-embedded==0.7.6` so `Scripts/store_opengrep_for_cozo.py` can write detections into an embedded Cozo database.
+- `jinja2` (pip) — Install via `python3 -m pip install jinja2` so the finding renderer can populate the Markdown templates in `Templates/`.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
