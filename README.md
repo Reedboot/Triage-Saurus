@@ -37,7 +37,7 @@ Triage-Saurus can run in **experiment mode** to optimize its own effectiveness:
 - **Agent instructions**: Per-experiment tweaks (isolated per run)
 
 ### Cross-Session Continuity
-State is stored in `Output/Learning/state.json` — any agent can resume from where the previous session left off. Experiment metrics are stored in SQLite for efficient querying.
+State is stored in `Output/Learning/state.json` — any agent can resume from where the previous session left off. Experiment metrics are stored in CozoDB (a hybrid relational-graph-vector database using RocksDB for persistence) for efficient querying.
 
 See `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md` for full details.
 
@@ -201,20 +201,21 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - `Scripts/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
   - `Scripts/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
-- **SQLite 3** — Required (used by the pipeline and accessible from Python):
-  - Database location: `Output/Learning/triage.db`
+- **CozoDB (via pycozo)** — Required (replaces SQLite; uses RocksDB for persistence):
+  - Database location: `Output/Learning/triage.cozo`
+  - Install: `pip install pycozo[rocksdb]`
   - Initialize the DB: `python3 Scripts/init_database.py`
-  - CLI (optional but useful): `sqlite3` (Debian/Ubuntu: `sudo apt update && sudo apt install -y sqlite3`; macOS Homebrew: `brew install sqlite`)
+  - CozoDB uses Datalog (CozoScript) for queries, enabling native graph traversal and vector search.
 - **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
   - Used by: `opengrep scan --config Rules/ /path/to/repo`
   - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
-  - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
+  - `pycozo[rocksdb]` (pip) — Required for the CozoDB backend: `pip install pycozo[rocksdb]`
   - Other standard Unix tooling: `grep`, `awk`, `sed`, `python3`, etc.
 
 Notes:
-- The repository and scripts are designed to work with the Python standard library where possible; third-party binaries listed above (opengrep, sqlite3 CLI) are required for full functionality and for parity with experiments and rule-based scans.
+- The repository and scripts are designed to work with the Python standard library where possible; third-party binaries listed above (opengrep) are required for full functionality and for parity with experiments and rule-based scans. The `pycozo[rocksdb]` package is required for all database operations.
 - See `Rules/README.md` for details about the rules engine and `Docs/DatabaseSchema.md` for DB layout.
 
 ## Auto-regenerate risk register

@@ -1,883 +1,482 @@
 #!/usr/bin/env python3
-"""Initialize the SQLite schema for Triage-Saurus learning database."""
+"""Initialize the CozoDB schema for Triage-Saurus learning database."""
 
-import sqlite3
 from pathlib import Path
+from typing import Dict
 import sys
-from db_helpers import apply_topology_backfills
+from pycozo.client import Client
 
 # Database location
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "Output/Learning/triage.db"
+DB_PATH = ROOT / "Output/Learning/triage.cozo"
 
 
-def init_schema(conn: sqlite3.Connection):
-    """Create all tables with proper schema."""
-    
-    # ============================================================================
-    # EXPERIMENTS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS experiments (
-          id TEXT PRIMARY KEY,
-          name TEXT,
-          parent_experiment_id TEXT,
-          
-          agent_versions TEXT,
-          script_versions TEXT,
-          strategy_version TEXT,
-          model TEXT,
-          
-          changes_description TEXT,
-          changes_files TEXT,
-          hypothesis TEXT,
-          
-          repos TEXT,
-          
-          status TEXT DEFAULT 'running',
-          started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          completed_at TIMESTAMP,
-          duration_sec INTEGER,
-          
-          tokens_used INTEGER,
-          findings_count INTEGER,
-          high_value_count INTEGER,
-          avg_score REAL,
-          
-          false_positives INTEGER,
-          false_negatives INTEGER,
-          accuracy_rate REAL,
-          precision REAL,
-          recall REAL,
-          
-          human_reviewed BOOLEAN DEFAULT 0,
-          human_quality_rating INTEGER,
-          notes TEXT,
-          
-          created_by TEXT,
-          tags TEXT,
-          
-          FOREIGN KEY(parent_experiment_id) REFERENCES experiments(id)
-        )
-    """)
-    
-    # ============================================================================
-    # REPOSITORIES
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS repositories (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          repo_name TEXT NOT NULL,
-          repo_url TEXT,
-          
-          repo_type TEXT,
-          primary_language TEXT,
-          
-          files_scanned INTEGER,
-          iac_files_count INTEGER,
-          code_files_count INTEGER,
-          
-          scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          UNIQUE(experiment_id, repo_name)
-        )
-    """)
-    
-    # ============================================================================
-    # RESOURCES (Asset Inventory)
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resources (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          repo_id INTEGER NOT NULL,
-          
-          resource_name TEXT NOT NULL,
-          resource_type TEXT NOT NULL,
-          provider TEXT,
-          region TEXT,
-          parent_resource_id INTEGER,
-          
-          discovered_by TEXT,
-          discovery_method TEXT,
-          source_file TEXT,
-          source_line_start INTEGER,
-          source_line_end INTEGER,
-          
-          status TEXT DEFAULT 'active',
-          first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          FOREIGN KEY(repo_id) REFERENCES repositories(id),
-          FOREIGN KEY(parent_resource_id) REFERENCES resources(id),
-          UNIQUE(experiment_id, repo_id, resource_name)
-        )
-    """)
-    
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_resources_experiment 
-        ON resources(experiment_id)
-    """)
-    
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_resources_type 
-        ON resources(resource_type)
-    """)
-    
-    # ============================================================================
-    # RESOURCE PROPERTIES
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_properties (
-          id INTEGER PRIMARY KEY,
-          resource_id INTEGER NOT NULL,
-          
-          property_key TEXT NOT NULL,
-          property_value TEXT,
-          property_type TEXT,
-          is_security_relevant BOOLEAN DEFAULT 0,
-          
-          FOREIGN KEY(resource_id) REFERENCES resources(id) ON DELETE CASCADE,
-          UNIQUE(resource_id, property_key)
-        )
-    """)
-    
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_properties_security 
-        ON resource_properties(is_security_relevant) 
-        WHERE is_security_relevant = 1
-    """)
-    
-    # ============================================================================
-    # RESOURCE CONTEXT
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_context (
-          resource_id INTEGER PRIMARY KEY,
-          
-          business_criticality TEXT,
-          data_classification TEXT,
-          environment TEXT,
-          purpose TEXT,
-          owner_team TEXT,
-          cost_per_month REAL,
-          
-          usage_pattern TEXT,
-          user_count INTEGER,
-          uptime_requirement TEXT,
-          
-          compliance_scope TEXT,
-          
-          last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(resource_id) REFERENCES resources(id) ON DELETE CASCADE
-        )
-    """)
-    
-    # ============================================================================
-    # RESOURCE CONNECTIONS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_connections (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          
-          source_resource_id INTEGER NOT NULL,
-          target_resource_id INTEGER NOT NULL,
-          source_repo_id INTEGER,
-          target_repo_id INTEGER,
-          
-          is_cross_repo BOOLEAN DEFAULT 0,
-          
-          connection_type TEXT,
-          protocol TEXT,
-          port TEXT,
-          
-          authentication TEXT,
-          authorization TEXT,
-          auth_method TEXT,
-          is_encrypted BOOLEAN,
-          
-          via_component TEXT,
-          notes TEXT,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          FOREIGN KEY(source_resource_id) REFERENCES resources(id) ON DELETE CASCADE,
-          FOREIGN KEY(target_resource_id) REFERENCES resources(id) ON DELETE CASCADE
-        )
-    """)
-    
-    # ============================================================================
-    # FINDINGS (create if not exists, then update if needed)
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS findings (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          repo_id INTEGER,
-          resource_id INTEGER,
-          
-          title TEXT NOT NULL,
-          description TEXT,
-          category TEXT,
-          
-          severity_score INTEGER,
-          base_severity TEXT,
-          overall_score TEXT,
-          
-          evidence_location TEXT,
-          source_file TEXT,
-          source_line_start INTEGER,
-          source_line_end INTEGER,
-          
-          finding_path TEXT,
-          
-          detected_by TEXT,
-          detection_method TEXT,
-          
-          status TEXT DEFAULT 'open',
-          
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          FOREIGN KEY(repo_id) REFERENCES repositories(id),
-          FOREIGN KEY(resource_id) REFERENCES resources(id)
-        )
-    """)
-    
-    # Check if findings table needs additional columns (for backward compatibility)
-    cursor = conn.execute("PRAGMA table_info(findings)")
-    columns = {row[1] for row in cursor.fetchall()}
-    
-    if 'repo_id' not in columns:
-        # Need to add repo_id column
-        conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
-    if 'resource_id' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
-    if 'category' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
-    if 'evidence_location' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
-    if 'base_severity' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
-    if 'title' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
-    if 'description' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
-    if 'severity_score' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
-    if 'source_file' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
-    if 'source_line_start' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
-    if 'source_line_end' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
-    if 'code_snippet' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
-    if 'reason' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
-    if 'llm_enriched_at' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
-    if 'rule_id' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
-    if 'proposed_fix' not in columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
 
-    # resources table — add display_label if missing
-    cursor = conn.execute("PRAGMA table_info(resources)")
-    res_cols = {row[1] for row in cursor.fetchall()}
-    if 'display_label' not in res_cols:
-        conn.execute("ALTER TABLE resources ADD COLUMN display_label TEXT")
-    if 'tags' not in res_cols:
-        conn.execute("ALTER TABLE resources ADD COLUMN tags TEXT")
+def _create_relation(db: Client, name: str, schema: str) -> None:
+    """Create a CozoDB relation only if it does not already exist."""
+    existing = {row[0] for row in db.relations()['rows']}
+    if name not in existing:
+        db.run(schema)
 
-    # resource_connections table — keep canonical topology columns additive/idempotent
-    cursor = conn.execute("PRAGMA table_info(resource_connections)")
-    rc_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("source_repo_id", "INTEGER"),
-        ("target_repo_id", "INTEGER"),
-        ("is_cross_repo", "BOOLEAN DEFAULT 0"),
-        ("connection_type", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("authentication", "TEXT"),
-        ("authorization", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("via_component", "TEXT"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in rc_cols:
-            conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_connections_cross_repo
-        ON resource_connections(experiment_id, is_cross_repo)
-        WHERE is_cross_repo = 1
-    """)
 
-    # ============================================================================
-    # TRUST BOUNDARIES
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS trust_boundaries (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          boundary_type TEXT,        -- 'vnet','subnet','paas','internet','aks_namespace'
-          provider TEXT,
-          region TEXT,
-          description TEXT,
-          notes TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS trust_boundary_members (
-          trust_boundary_id INTEGER NOT NULL,
-          resource_id INTEGER NOT NULL,
-          PRIMARY KEY (trust_boundary_id, resource_id),
-          FOREIGN KEY(trust_boundary_id) REFERENCES trust_boundaries(id),
-          FOREIGN KEY(resource_id) REFERENCES resources(id)
-        )
-    """)
+def _ensure_seq(db: Client, name: str) -> None:
+    """Ensure a sequence counter row exists for *name* (starts at 0)."""
+    result = db.run('?[v] := *ts_seqs[$n, v]', {'n': name})
+    if not result['rows']:
+        db.put('ts_seqs', [{'name': name, 'value': 0}])
 
-    # ============================================================================
-    # DATA FLOWS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS data_flows (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          flow_type TEXT,            -- 'ingress','egress','internal','auth'
-          description TEXT,
-          notes TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS data_flow_steps (
-          id INTEGER PRIMARY KEY,
-          flow_id INTEGER NOT NULL,
-          step_order INTEGER NOT NULL,
-          resource_id INTEGER,
-          component_label TEXT,      -- e.g. 'Internet','WAF','App Gateway'
-          protocol TEXT,
-          port TEXT,
-          auth_method TEXT,
-          is_encrypted BOOLEAN,
-          notes TEXT,
-          FOREIGN KEY(flow_id) REFERENCES data_flows(id),
-          FOREIGN KEY(resource_id) REFERENCES resources(id)
-        )
-    """)
-    cursor = conn.execute("PRAGMA table_info(data_flows)")
-    df_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("flow_type", "TEXT"),
-        ("description", "TEXT"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in df_cols:
-            conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
 
-    cursor = conn.execute("PRAGMA table_info(data_flow_steps)")
-    dfs_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("resource_id", "INTEGER"),
-        ("component_label", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in dfs_cols:
-            conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
+def _next_id(db: Client, seq_name: str) -> int:
+    """Return the next integer ID for *seq_name* and persist the updated counter.
 
-    # ============================================================================
-    # RISK SCORE HISTORY
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS risk_score_history (
-          id INTEGER PRIMARY KEY,
-          finding_id INTEGER NOT NULL,
-          score REAL NOT NULL,
-          scored_by TEXT,            -- 'script','llm','security_skeptic','human'
-          rationale TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(finding_id) REFERENCES findings(id)
-        )
-    """)
+    Note: this is safe for single-process use.  CozoDB's embedded RocksDB
+    backend serialises writes, so concurrent *processes* sharing the same
+    database directory should use an external lock or a higher-level
+    coordination mechanism.
+    """
+    result = db.run('?[v] := *ts_seqs[$n, v]', {'n': seq_name})
+    current = result['rows'][0][0] if result['rows'] else 0
+    new_id = current + 1
+    db.put('ts_seqs', [{'name': seq_name, 'value': new_id}])
+    return new_id
 
-    # ============================================================================
-    # REMEDIATIONS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS remediations (
-          id INTEGER PRIMARY KEY,
-          finding_id INTEGER NOT NULL,
-          title TEXT NOT NULL,
-          description TEXT,
-          remediation_type TEXT,     -- 'config','code','architecture','process'
-          effort TEXT,               -- 'low','medium','high'
-          priority INTEGER,
-          code_fix TEXT,
-          reference_url TEXT,
-          status TEXT DEFAULT 'proposed',
-          verified_by TEXT,
-          verified_at TIMESTAMP,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(finding_id) REFERENCES findings(id)
-        )
-    """)
 
-    # ============================================================================
-    # SKEPTIC REVIEWS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS skeptic_reviews (
-          id INTEGER PRIMARY KEY,
-          finding_id INTEGER NOT NULL,
-          reviewer_type TEXT NOT NULL,   -- 'security','dev','platform'
-          score_adjustment REAL,         -- delta applied to base score
-          adjusted_score REAL,
-          confidence REAL,               -- 0.0–1.0
-          reasoning TEXT,
-          key_concerns TEXT,
-          mitigating_factors TEXT,
-          recommendation TEXT,           -- 'confirm','downgrade','dismiss','escalate'
-          reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(finding_id) REFERENCES findings(id)
-        )
-    """)
+# ---------------------------------------------------------------------------
+# Topology backfills
+# ---------------------------------------------------------------------------
 
-    # ============================================================================
-    # COUNTERMEASURES
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS countermeasures (
-          id INTEGER PRIMARY KEY,
-          resource_id INTEGER NOT NULL,
-          finding_id INTEGER,
-          
-          control_type TEXT,
-          control_name TEXT,
-          control_category TEXT,
-          
-          effectiveness REAL,
-          status TEXT,
-          
-          evidence_location TEXT,
-          configuration_details TEXT,
-          
-          notes TEXT,
-          last_verified TIMESTAMP,
-          
-          FOREIGN KEY(resource_id) REFERENCES resources(id) ON DELETE CASCADE,
-          FOREIGN KEY(finding_id) REFERENCES findings(id) ON DELETE SET NULL
-        )
-    """)
-    
-    # ============================================================================
-    # COMPOUND RISKS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS compound_risks (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          resource_id INTEGER NOT NULL,
-          
-          finding_ids TEXT,
-          finding_count INTEGER,
-          base_compound_score INTEGER,
-          
-          risk_multiplier REAL,
-          context_multiplier REAL,
-          exposure_multiplier REAL,
-          
-          active_countermeasures TEXT,
-          countermeasure_discount REAL,
-          
-          adjusted_score INTEGER,
-          risk_category TEXT,
-          
-          blast_radius_resources TEXT,
-          blast_radius_severity TEXT,
-          
-          attack_chain TEXT,
-          remediation_priority INTEGER,
-          
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          FOREIGN KEY(resource_id) REFERENCES resources(id) ON DELETE CASCADE
-        )
-    """)
-    
-    # ============================================================================
-    # CONTEXT QUESTIONS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS context_questions (
-          id INTEGER PRIMARY KEY,
-          question_key TEXT UNIQUE NOT NULL,
-          question_text TEXT NOT NULL,
-          question_category TEXT,
-          
-          applies_to_resource_types TEXT,
-          applies_to_findings TEXT,
-          
-          impacts_risk_score BOOLEAN DEFAULT 0,
-          score_adjustment_range TEXT,
-          
-          priority INTEGER,
-          is_blocking BOOLEAN DEFAULT 0,
-          
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # ============================================================================
-    # CONTEXT ANSWERS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS context_answers (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          question_id INTEGER NOT NULL,
-          
-          answer_value TEXT,
-          answer_confidence TEXT,
-          
-          evidence_source TEXT,
-          evidence_type TEXT,
-          evidence_details TEXT,
-          
-          findings_affected TEXT,
-          score_adjustments TEXT,
-          
-          answered_by TEXT,
-          answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          validated BOOLEAN DEFAULT 0,
-          validation_notes TEXT,
-          validated_at TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id),
-          FOREIGN KEY(question_id) REFERENCES context_questions(id)
-        )
-    """)
-    
-    # ============================================================================
-    # KNOWLEDGE FACTS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_facts (
-          id INTEGER PRIMARY KEY,
-          fact_key TEXT UNIQUE NOT NULL,
-          fact_category TEXT,
-          
-          fact_value TEXT,
-          fact_type TEXT,
-          
-          applies_to_environment TEXT,
-          applies_to_provider TEXT,
-          applies_to_resources TEXT,
-          
-          confidence_level TEXT,
-          source TEXT,
-          
-          first_recorded TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          last_verified TIMESTAMP,
-          expires_at TIMESTAMP,
-          
-          times_used INTEGER DEFAULT 0,
-          experiments_used TEXT
-        )
-    """)
-    
-    # ============================================================================
-    # GENERATED DIAGRAMS
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS generated_diagrams (
-          id INTEGER PRIMARY KEY,
-          experiment_id TEXT NOT NULL,
-          diagram_type TEXT NOT NULL,
-          resource_filter TEXT,
-          
-          mermaid_code TEXT,
-          
-          node_count INTEGER,
-          edge_count INTEGER,
-          generation_time_ms INTEGER,
-          
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          FOREIGN KEY(experiment_id) REFERENCES experiments(id)
-        )
-    """)
-    
-    # ============================================================================
-    # LOOKUP TABLES — providers + resource_types
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS providers (
-          id      INTEGER PRIMARY KEY,
-          key     TEXT UNIQUE NOT NULL,
-          friendly_name TEXT NOT NULL,
-          icon    TEXT
-        )
-    """)
+def apply_topology_backfills(db: Client) -> Dict[str, int]:
+    """Fill in derived/denormalised fields that may be null in older rows."""
+    updates: Dict[str, int] = {}
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_types (
-          id                         INTEGER PRIMARY KEY,
-          provider_id                INTEGER,
-          terraform_type             TEXT UNIQUE NOT NULL,
-          friendly_name              TEXT NOT NULL,
-          category                   TEXT,
-          icon                       TEXT,
-          is_data_store              BOOLEAN DEFAULT 0,
-          is_internet_facing_capable BOOLEAN DEFAULT 0,
-          display_on_architecture_chart BOOLEAN DEFAULT 1,
-          parent_type                TEXT,
-          FOREIGN KEY(provider_id) REFERENCES providers(id)
-        )
-    """)
-    cursor = conn.execute("PRAGMA table_info(resource_types)")
-    rt_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
-        ("parent_type", "TEXT"),
-    ):
-        if col_name not in rt_cols:
-            conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
-    conn.execute(
-        "UPDATE resource_types SET display_on_architecture_chart = 1 "
-        "WHERE display_on_architecture_chart IS NULL"
-    )
+    # resource_connections: fill source_repo_id from resources
+    rows = db.run('''
+        ?[conn_id, repo_id] :=
+            *resource_connections{id: conn_id, source_resource_id: src_id, source_repo_id: null},
+            *resources{id: src_id, repo_id}
+    ''')['rows']
+    count = 0
+    for conn_id, repo_id in rows:
+        db.update('resource_connections', [{'id': conn_id, 'source_repo_id': repo_id}])
+        count += 1
+    updates['resource_connections_source_repo_id'] = count
 
-    # ============================================================================
-    # KNOWLEDGE GRAPH — cross-repo resource nodes + typed relationships
-    # ============================================================================
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_nodes (
-          id               INTEGER PRIMARY KEY,
-          resource_type    TEXT NOT NULL,
-          terraform_name   TEXT NOT NULL,
-          canonical_name   TEXT,
-          friendly_name    TEXT,
-          display_label    TEXT,
-          provider         TEXT,
-          source_repo      TEXT,
-          aliases          TEXT DEFAULT '[]',
-          confidence       TEXT DEFAULT 'extracted'
-                             CHECK(confidence IN ('extracted','inferred','user_confirmed')),
-          properties       TEXT DEFAULT '{}',
-          created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          UNIQUE(resource_type, terraform_name, source_repo)
-        )
-    """)
+    # resource_connections: fill target_repo_id from resources
+    rows = db.run('''
+        ?[conn_id, repo_id] :=
+            *resource_connections{id: conn_id, target_resource_id: tgt_id, target_repo_id: null},
+            *resources{id: tgt_id, repo_id}
+    ''')['rows']
+    count = 0
+    for conn_id, repo_id in rows:
+        db.update('resource_connections', [{'id': conn_id, 'target_repo_id': repo_id}])
+        count += 1
+    updates['resource_connections_target_repo_id'] = count
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_relationships (
-          id                INTEGER PRIMARY KEY,
-          source_id         INTEGER NOT NULL,
-          target_id         INTEGER NOT NULL,
-          relationship_type TEXT NOT NULL
-                              CHECK(relationship_type IN (
-                                'contains',
-                                'grants_access_to',
-                                'routes_ingress_to',
-                                'depends_on',
-                                'encrypts',
-                                'restricts_access',
-                                'monitors',
-                                'authenticates_via'
-                              )),
-          source_repo       TEXT,
-          confidence        TEXT DEFAULT 'extracted'
-                              CHECK(confidence IN ('extracted','inferred','user_confirmed')),
-          notes             TEXT,
-          created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          UNIQUE(source_id, target_id, relationship_type),
-          FOREIGN KEY(source_id) REFERENCES resource_nodes(id) ON DELETE CASCADE,
-          FOREIGN KEY(target_id) REFERENCES resource_nodes(id) ON DELETE CASCADE
-        )
-    """)
+    # is_cross_repo: set based on source/target repo difference
+    rows = db.run('''
+        ?[id, is_cross] :=
+            *resource_connections{id, source_repo_id: s, target_repo_id: t},
+            s != null, t != null,
+            is_cross = if(s != t, true, false)
+    ''')['rows']
+    count = 0
+    for conn_id, is_cross in rows:
+        db.update('resource_connections', [{'id': conn_id, 'is_cross_repo': is_cross}])
+        count += 1
+    updates['resource_connections_is_cross_repo'] = count
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS resource_equivalences (
-          id                       INTEGER PRIMARY KEY,
-          resource_node_id         INTEGER NOT NULL,
-          candidate_resource_type  TEXT NOT NULL,
-          candidate_terraform_name TEXT NOT NULL,
-          candidate_source_repo    TEXT NOT NULL,
-          equivalence_kind         TEXT NOT NULL DEFAULT 'cross_repo_alias'
-                                     CHECK(equivalence_kind IN ('cross_repo_alias','placeholder_promotion')),
-          confidence               TEXT DEFAULT 'medium'
-                                     CHECK(confidence IN ('high','medium','low')),
-          evidence_level           TEXT DEFAULT 'inferred'
-                                     CHECK(evidence_level IN ('extracted','inferred','user_confirmed')),
-          provenance               TEXT NOT NULL,
-          context                  TEXT,
-          created_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          UNIQUE(
-            resource_node_id,
-            candidate_resource_type,
-            candidate_terraform_name,
-            candidate_source_repo,
-            equivalence_kind
-          ),
-          FOREIGN KEY(resource_node_id) REFERENCES resource_nodes(id) ON DELETE CASCADE
-        )
-    """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
-        "ON resource_equivalences(resource_node_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
-        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
-    )
+    # findings: fill repo_id from resources
+    rows = db.run('''
+        ?[fid, repo_id] :=
+            *findings{id: fid, resource_id, repo_id: null},
+            resource_id != null,
+            *resources{id: resource_id, repo_id}
+    ''')['rows']
+    count = 0
+    for fid, repo_id in rows:
+        db.update('findings', [{'id': fid, 'repo_id': repo_id}])
+        count += 1
+    updates['findings_repo_id'] = count
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS enrichment_queue (
-          id                  INTEGER PRIMARY KEY,
-          resource_node_id    INTEGER,
-          relationship_id     INTEGER,
-          gap_type            TEXT NOT NULL
-                                CHECK(gap_type IN (
-                                  'unknown_name',
-                                  'ambiguous_ref',
-                                  'cross_repo_link',
-                                  'missing_target',
-                                  'assumption'
-                                )),
-          context             TEXT,
-          assumption_text     TEXT,
-          assumption_basis    TEXT,
-          confidence          TEXT DEFAULT 'medium'
-                                CHECK(confidence IN ('high','medium','low')),
-          suggested_value     TEXT,
-          status              TEXT DEFAULT 'pending_review'
-                                CHECK(status IN ('pending_review','confirmed','rejected')),
-          resolved_by         TEXT,
-          resolved_at         TIMESTAMP,
-          rejection_reason    TEXT,
-          created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(resource_node_id) REFERENCES resource_nodes(id) ON DELETE CASCADE,
-          FOREIGN KEY(relationship_id)  REFERENCES resource_relationships(id) ON DELETE CASCADE
-        )
-    """)
+    # resource_nodes: initialise null aliases to empty JSON array
+    rows = db.run('?[id] := *resource_nodes{id, aliases: null}')['rows']
+    count = 0
+    for (node_id,) in rows:
+        db.update('resource_nodes', [{'id': node_id, 'aliases': '[]'}])
+        count += 1
+    updates['resource_nodes_aliases'] = count
 
-    cursor = conn.execute("PRAGMA table_info(resource_nodes)")
-    node_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("canonical_name", "TEXT"),
-        ("friendly_name", "TEXT"),
-        ("display_label", "TEXT"),
-        ("provider", "TEXT"),
-        ("source_repo", "TEXT"),
-        ("aliases", "TEXT DEFAULT '[]'"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("properties", "TEXT DEFAULT '{}'"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in node_cols:
-            conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
+    return updates
 
-    cursor = conn.execute("PRAGMA table_info(resource_relationships)")
-    rel_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("source_repo", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in rel_cols:
-            conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
 
-    cursor = conn.execute("PRAGMA table_info(resource_equivalences)")
-    equiv_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("resource_node_id", "INTEGER"),
-        ("candidate_resource_type", "TEXT"),
-        ("candidate_terraform_name", "TEXT"),
-        ("candidate_source_repo", "TEXT"),
-        ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("evidence_level", "TEXT DEFAULT 'inferred'"),
-        ("provenance", "TEXT"),
-        ("context", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in equiv_cols:
-            conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
-        "ON resource_equivalences(resource_node_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
-        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
-    )
+# ---------------------------------------------------------------------------
+# Schema initialisation
+# ---------------------------------------------------------------------------
 
-    cursor = conn.execute("PRAGMA table_info(enrichment_queue)")
-    eq_cols = {row[1] for row in cursor.fetchall()}
-    for col_name, col_type in (
-        ("assumption_basis", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("suggested_value", "TEXT"),
-        ("status", "TEXT DEFAULT 'pending_review'"),
-        ("resolved_by", "TEXT"),
-        ("resolved_at", "TIMESTAMP"),
-        ("rejection_reason", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in eq_cols:
-            conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
+def init_schema(db: Client) -> None:
+    """Create all CozoDB relations and seed reference data."""
 
-    backfill_stats = apply_topology_backfills(conn)
+    # ------------------------------------------------------------------ seqs
+    _create_relation(db, 'ts_seqs', ':create ts_seqs { name: String => value: Int }')
+
+    # ----------------------------------------------------------- experiments
+    _create_relation(db, 'experiments', '''
+        :create experiments {
+            id: String =>
+            name: String?, parent_experiment_id: String?,
+            agent_versions: String?, script_versions: String?,
+            strategy_version: String?, model: String?,
+            changes_description: String?, changes_files: String?,
+            hypothesis: String?, repos: String?,
+            status: String, started_at: String?, completed_at: String?,
+            duration_sec: Int?, tokens_used: Int?,
+            findings_count: Int?, high_value_count: Int?,
+            avg_score: Float?, false_positives: Int?,
+            false_negatives: Int?, accuracy_rate: Float?,
+            precision: Float?, recall: Float?,
+            human_reviewed: Bool, human_quality_rating: Int?,
+            notes: String?, created_by: String?, tags: String?
+        }
+    ''')
+
+    # ---------------------------------------------------------- repositories
+    _create_relation(db, 'repositories', '''
+        :create repositories {
+            id: Int =>
+            experiment_id: String, repo_name: String,
+            repo_url: String?, repo_type: String?,
+            primary_language: String?,
+            files_scanned: Int?, iac_files_count: Int?,
+            code_files_count: Int?, scanned_at: String?
+        }
+    ''')
+
+
+    _create_relation(db, 'resources', '''
+        :create resources {
+            id: Int =>
+            experiment_id: String, repo_id: Int,
+            resource_name: String, resource_type: String,
+            provider: String?, region: String?,
+            parent_resource_id: Int?,
+            discovered_by: String?, discovery_method: String?,
+            source_file: String?, source_line_start: Int?,
+            source_line_end: Int?,
+            status: String, first_seen: String?, last_seen: String?,
+            display_label: String?, tags: String?
+        }
+    ''')
+
+    # ---------------------------------------------------- resource_properties
+    _create_relation(db, 'resource_properties', '''
+        :create resource_properties {
+            id: Int =>
+            resource_id: Int, property_key: String,
+            property_value: String?, property_type: String?,
+            is_security_relevant: Bool
+        }
+    ''')
+
+    # ------------------------------------------------------- resource_context
+    _create_relation(db, 'resource_context', '''
+        :create resource_context {
+            resource_id: Int =>
+            business_criticality: String?, data_classification: String?,
+            environment: String?, purpose: String?, owner_team: String?,
+            cost_per_month: Float?, usage_pattern: String?,
+            user_count: Int?, uptime_requirement: String?,
+            compliance_scope: String?, last_updated: String?
+        }
+    ''')
+
+    # -------------------------------------------------- resource_connections
+    _create_relation(db, 'resource_connections', '''
+        :create resource_connections {
+            id: Int =>
+            experiment_id: String,
+            source_resource_id: Int, target_resource_id: Int,
+            source_repo_id: Int?, target_repo_id: Int?,
+            is_cross_repo: Bool,
+            connection_type: String?, protocol: String?, port: String?,
+            authentication: String?, authorization: String?,
+            auth_method: String?, is_encrypted: Bool?,
+            via_component: String?, notes: String?
+        }
+    ''')
+
+    # ------------------------------------------------------ trust_boundaries
+    _create_relation(db, 'trust_boundaries', '''
+        :create trust_boundaries {
+            id: Int =>
+            experiment_id: String, name: String,
+            boundary_type: String?, provider: String?, region: String?,
+            description: String?, notes: String?, created_at: String?
+        }
+    ''')
+
+    _create_relation(db, 'trust_boundary_members', '''
+        :create trust_boundary_members {
+            trust_boundary_id: Int, resource_id: Int =>
+        }
+    ''')
+
+    # ------------------------------------------------------------ data_flows
+    _create_relation(db, 'data_flows', '''
+        :create data_flows {
+            id: Int =>
+            experiment_id: String, name: String,
+            flow_type: String?, description: String?,
+            notes: String?, created_at: String?
+        }
+    ''')
+
+    _create_relation(db, 'data_flow_steps', '''
+        :create data_flow_steps {
+            id: Int =>
+            flow_id: Int, step_order: Int,
+            resource_id: Int?, component_label: String?,
+            protocol: String?, port: String?,
+            auth_method: String?, is_encrypted: Bool?,
+            notes: String?
+        }
+    ''')
+
+    # --------------------------------------------------------------- findings
+    _create_relation(db, 'findings', '''
+        :create findings {
+            id: Int =>
+            experiment_id: String, repo_id: Int?, resource_id: Int?,
+            title: String, description: String?,
+            category: String?, severity_score: Int?,
+            base_severity: String?, overall_score: String?,
+            evidence_location: String?,
+            source_file: String?, source_line_start: Int?,
+            source_line_end: Int?, finding_path: String?,
+            detected_by: String?, detection_method: String?,
+            status: String, code_snippet: String?,
+            reason: String?, llm_enriched_at: String?,
+            rule_id: String?, proposed_fix: String?,
+            created_at: String?, updated_at: String?
+        }
+    ''')
+
+    # ------------------------------------------------------- risk_score_history
+    _create_relation(db, 'risk_score_history', '''
+        :create risk_score_history {
+            id: Int =>
+            finding_id: Int, score: Float,
+            scored_by: String?, rationale: String?, created_at: String?
+        }
+    ''')
+
+    # ----------------------------------------------------------- remediations
+    _create_relation(db, 'remediations', '''
+        :create remediations {
+            id: Int =>
+            finding_id: Int, title: String,
+            description: String?, remediation_type: String?,
+            effort: String?, priority: Int?,
+            code_fix: String?, reference_url: String?
+        }
+    ''')
+
+    # ------------------------------------------------------- skeptic_reviews
+    _create_relation(db, 'skeptic_reviews', '''
+        :create skeptic_reviews {
+            id: Int =>
+            finding_id: Int, reviewer_type: String,
+            score_adjustment: Float?, adjusted_score: Float?,
+            confidence: Float?, reasoning: String?,
+            key_concerns: String?, mitigating_factors: String?,
+            recommendation: String?, reviewed_at: String?
+        }
+    ''')
+
+    # ------------------------------------------------------ countermeasures
+    _create_relation(db, 'countermeasures', '''
+        :create countermeasures {
+            id: Int =>
+            resource_id: Int, control_name: String,
+            control_type: String?, effectiveness: String?,
+            notes: String?, created_at: String?
+        }
+    ''')
+
+    # ------------------------------------------------------- compound_risks
+    _create_relation(db, 'compound_risks', '''
+        :create compound_risks {
+            id: Int =>
+            experiment_id: String, title: String,
+            description: String?, combined_score: Float?,
+            created_at: String?
+        }
+    ''')
+
+    # ----------------------------------------------------- context_questions
+    _create_relation(db, 'context_questions', '''
+        :create context_questions {
+            id: Int =>
+            question_key: String, question_text: String,
+            question_category: String?
+        }
+    ''')
+
+    # ------------------------------------------------------- context_answers
+    _create_relation(db, 'context_answers', '''
+        :create context_answers {
+            id: Int =>
+            experiment_id: String, question_id: Int,
+            answer_value: String?, answer_confidence: String?,
+            evidence_source: String?, evidence_type: String?,
+            answered_by: String?, answered_at: String?
+        }
+    ''')
+
+    # ----------------------------------------------------- context_metadata
+    _create_relation(db, 'context_metadata', '''
+        :create context_metadata {
+            id: Int =>
+            experiment_id: String, repo_id: Int?,
+            namespace: String, key: String,
+            value: String?, source: String?, created_at: String?
+        }
+    ''')
+
+    # ------------------------------------------------------ knowledge_facts
+    _create_relation(db, 'knowledge_facts', '''
+        :create knowledge_facts {
+            id: Int =>
+            experiment_id: String,
+            subject: String?, predicate: String?, object_: String?,
+            confidence: String?, source: String?, created_at: String?
+        }
+    ''')
+
+    # ---------------------------------------------------- generated_diagrams
+    _create_relation(db, 'generated_diagrams', '''
+        :create generated_diagrams {
+            id: Int =>
+            experiment_id: String, repo_name: String?,
+            diagram_type: String?, content: String?,
+            created_at: String?
+        }
+    ''')
+
+    # -------------------------------------------------- knowledge-graph nodes
+    _create_relation(db, 'resource_nodes', '''
+        :create resource_nodes {
+            id: Int =>
+            resource_type: String, terraform_name: String,
+            canonical_name: String?, friendly_name: String?,
+            display_label: String?, provider: String?,
+            source_repo: String?,
+            aliases: String, confidence: String,
+            properties: String,
+            created_at: String?, updated_at: String?
+        }
+    ''')
+
+    _create_relation(db, 'resource_relationships', '''
+        :create resource_relationships {
+            id: Int =>
+            source_id: Int, target_id: Int,
+            relationship_type: String,
+            source_repo: String?, confidence: String,
+            notes: String?, created_at: String?
+        }
+    ''')
+
+    _create_relation(db, 'resource_equivalences', '''
+        :create resource_equivalences {
+            id: Int =>
+            resource_node_id: Int,
+            candidate_resource_type: String,
+            candidate_terraform_name: String,
+            candidate_source_repo: String,
+            equivalence_kind: String,
+            confidence: String, evidence_level: String,
+            provenance: String, context: String?,
+            created_at: String?, updated_at: String?
+        }
+    ''')
+
+    _create_relation(db, 'enrichment_queue', '''
+        :create enrichment_queue {
+            id: Int =>
+            resource_node_id: Int?, relationship_id: Int?,
+            gap_type: String, context: String?,
+            assumption_text: String?, assumption_basis: String?,
+            confidence: String, suggested_value: String?,
+            status: String, resolved_by: String?,
+            resolved_at: String?, rejection_reason: String?,
+            created_at: String?
+        }
+    ''')
+
+    # ---------------------------------------------------- lookup: providers
+    _create_relation(db, 'providers', '''
+        :create providers {
+            id: Int =>
+            key: String, friendly_name: String?, icon: String?
+        }
+    ''')
+
+    # ------------------------------------------------- lookup: resource_types
+    _create_relation(db, 'resource_types', '''
+        :create resource_types {
+            id: Int =>
+            provider_id: Int?, terraform_type: String,
+            friendly_name: String?, category: String?,
+            icon: String?,
+            is_data_store: Bool,
+            is_internet_facing_capable: Bool,
+            display_on_architecture_chart: Bool,
+            parent_type: String?
+        }
+    ''')
+
+    # ----------------------------------------------------------------- seqs
+    _seq_names = [
+        'repositories', 'resources', 'resource_properties', 'resource_context',
+        'resource_connections', 'trust_boundaries', 'trust_boundary_members',
+        'data_flows', 'data_flow_steps', 'findings', 'risk_score_history',
+        'remediations', 'skeptic_reviews', 'countermeasures', 'compound_risks',
+        'context_questions', 'context_answers', 'context_metadata',
+        'knowledge_facts', 'generated_diagrams',
+        'resource_nodes', 'resource_relationships', 'resource_equivalences',
+        'enrichment_queue', 'providers', 'resource_types',
+    ]
+    for seq in _seq_names:
+        _ensure_seq(db, seq)
+
+    # ---------------------------------------------------------- topology fix
+    backfill_stats = apply_topology_backfills(db)
     if any(backfill_stats.values()):
         summary = ", ".join(
             f"{name}={count}" for name, count in sorted(backfill_stats.items()) if count
         )
         print(f"ℹ️ Applied legacy topology backfills: {summary}")
 
-    # Seed providers
-    conn.executemany(
-        "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
-        [
-            ("azure",    "Microsoft Azure",         "☁️"),
-            ("aws",      "Amazon Web Services",     "🟠"),
-            ("gcp",      "Google Cloud Platform",   "🔵"),
-            ("alicloud", "Alibaba Cloud",            "🟡"),
-            ("oracle",   "Oracle Cloud",             "🔴"),
-        ],
-    )
+    # ---------------------------------------------------------- seed providers
+    _PROVIDERS = [
+        ('azure',    'Microsoft Azure',       '☁️'),
+        ('aws',      'Amazon Web Services',   '🟠'),
+        ('gcp',      'Google Cloud Platform', '🔵'),
+        ('alicloud', 'Alibaba Cloud',         '🟡'),
+        ('oracle',   'Oracle Cloud',          '🔴'),
+    ]
+    for key, friendly_name, icon in _PROVIDERS:
+        result = db.run('?[id] := *providers{id, key}, key = $k', {'k': key})
+        if not result['rows']:
+            new_id = _next_id(db, 'providers')
+            db.put('providers', [{'id': new_id, 'key': key,
+                                  'friendly_name': friendly_name, 'icon': icon}])
 
-    # Helper to get provider_id by key
-    def _pid(key: str) -> int | None:
-        row = conn.execute("SELECT id FROM providers WHERE key=?", (key,)).fetchone()
-        return row[0] if row else None
-
-    # Seed resource_types  (terraform_type, friendly_name, category, icon, provider_key,
-    #                        is_data_store, is_internet_facing_capable)
+    # ---------------------------------------------------- seed resource_types
     _SEED: list[tuple] = [
         # Azure — Identity
         ("azurerm_key_vault",                          "Key Vault",                  "Identity",   "🔑",  "azure", 0, 0),
@@ -1111,69 +710,57 @@ def init_schema(conn: sqlite3.Connection):
         "azurerm_application_gateway_http_listener": "azurerm_application_gateway",
     }
 
+    existing_types = {
+        r[0] for r in db.run('?[t] := *resource_types{terraform_type: t}')['rows']
+    }
     for (tf_type, fname, cat, icon, pkey, is_ds, is_if) in _SEED:
-        display_on_architecture_chart = display_overrides.get(tf_type, 1)
-        parent_type = parent_type_overrides.get(tf_type)
-        conn.execute(
-            """
-            INSERT INTO resource_types
-            (
-              provider_id,
-              terraform_type,
-              friendly_name,
-              category,
-              icon,
-              is_data_store,
-              is_internet_facing_capable,
-              display_on_architecture_chart,
-              parent_type
+        display = display_overrides.get(tf_type, 1)
+        parent = parent_type_overrides.get(tf_type)
+        pid_result = db.run('?[id] := *providers{id, key}, key = $k', {'k': pkey})
+        pid = pid_result['rows'][0][0] if pid_result['rows'] else None
+        if pid is None:
+            print(f"⚠️  provider key '{pkey}' not found — resource_type '{tf_type}' will have null provider_id",
+                  file=sys.stderr)
+        if tf_type not in existing_types:
+            new_id = _next_id(db, 'resource_types')
+            db.put('resource_types', [{
+                'id': new_id, 'provider_id': pid, 'terraform_type': tf_type,
+                'friendly_name': fname, 'category': cat, 'icon': icon,
+                'is_data_store': bool(is_ds),
+                'is_internet_facing_capable': bool(is_if),
+                'display_on_architecture_chart': bool(display),
+                'parent_type': parent,
+            }])
+        else:
+            id_result = db.run(
+                '?[id] := *resource_types{id, terraform_type: t}, t = $t',
+                {'t': tf_type},
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(terraform_type) DO UPDATE SET
-              provider_id=excluded.provider_id,
-              friendly_name=excluded.friendly_name,
-              category=excluded.category,
-              icon=excluded.icon,
-              is_data_store=excluded.is_data_store,
-              is_internet_facing_capable=excluded.is_internet_facing_capable,
-              display_on_architecture_chart=excluded.display_on_architecture_chart,
-              parent_type=COALESCE(excluded.parent_type, resource_types.parent_type)
-            """,
-            (
-                _pid(pkey),
-                tf_type,
-                fname,
-                cat,
-                icon,
-                is_ds,
-                is_if,
-                display_on_architecture_chart,
-                parent_type,
-            ),
-        )
+            if id_result['rows']:
+                db.update('resource_types', [{
+                    'id': id_result['rows'][0][0],
+                    'provider_id': pid, 'friendly_name': fname, 'category': cat,
+                    'icon': icon,
+                    'is_data_store': bool(is_ds),
+                    'is_internet_facing_capable': bool(is_if),
+                    'display_on_architecture_chart': bool(display),
+                    'parent_type': parent,
+                }])
 
     print("✅ Schema initialized successfully")
 
 
-def main():
+def main() -> None:
     """Initialize or upgrade the database schema."""
-    
-    # Create Output/Learning directory if needed
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Connect and initialize
-    conn = sqlite3.connect(DB_PATH)
-    
+
+    db = Client('rocksdb', str(DB_PATH), dataframe=False)
     try:
-        init_schema(conn)
-        conn.commit()
+        init_schema(db)
         print(f"✅ Database ready: {DB_PATH}")
     except Exception as e:
-        conn.rollback()
         print(f"❌ Error initializing database: {e}", file=sys.stderr)
         sys.exit(1)
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":
