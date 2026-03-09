@@ -18,8 +18,32 @@ AUDIT_LOG="$REPO_ROOT/Output/Audit/CozoScan_$(date +%Y-%m-%d_%H%M%S).md"
 ONE_HOUR=3600
 FORCE_SCAN=false
 
-if [ "${1:-}" = "--force" ]; then
-  FORCE_SCAN=true
+# Parse args: support --force and --repo <name>
+REPO_OVERRIDE=""
+CLEANUP_TMP=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force)
+      FORCE_SCAN=true
+      shift
+      ;;
+    --repo)
+      REPO_OVERRIDE="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$REPO_OVERRIDE" ]; then
+  TMP_REPOS=$(mktemp)
+  echo "$REPO_OVERRIDE" > "$TMP_REPOS"
+  REPOS_FILE="$TMP_REPOS"
+  CLEANUP_TMP=true
+  # ensure temporary file is removed on exit
+  trap 'if [ "$CLEANUP_TMP" = true ]; then rm -f "$TMP_REPOS"; fi' EXIT
 fi
 
 if [ ! -f "$REPOS_FILE" ]; then

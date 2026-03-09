@@ -11,6 +11,16 @@ import resource_type_db as _rtdb
 
 # Lazy DB connection — initialised on first use, None if DB unavailable
 
+def _get_db():
+    """Return a sqlite3.Connection if the learning DB exists, otherwise None."""
+    try:
+        from db_helpers import DB_PATH
+        import sqlite3
+        if not DB_PATH.exists():
+            return None
+        return sqlite3.connect(str(DB_PATH))
+    except Exception:
+        return None
 
 
 def now_uk() -> str:
