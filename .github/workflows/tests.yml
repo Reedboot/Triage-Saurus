@@ -114,7 +114,7 @@ jobs:
             --config Rules/ \
             --json \
             --output "$OUTPUT_FILE" \
-            "Sample Findings/Repos/TestRepo" || true
+            "Sample Findings/Repos/TestRepo"
 
           python3 - << 'PYCODE'
           import json
