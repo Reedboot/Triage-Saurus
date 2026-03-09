@@ -84,23 +84,35 @@ jobs:
         working-directory: ${{ github.workspace }}
         continue-on-error: true
         run: |
-          OUTPUT=$(opengrep scan \
+          OUTPUT_FILE="opengrep_output.json"
+
+          # Run opengrep, writing JSON output to a file. Leave stderr unredirected
+          # so that non-JSON logs remain visible in the workflow output.
+          opengrep scan \
             --config Rules/ \
             --json \
-            "Sample Findings/Repos/TestRepo" 2>&1 || true)
+            --output "$OUTPUT_FILE" \
+            "Sample Findings/Repos/TestRepo" || true
 
-          printf '%s\n' "$OUTPUT" | python3 - << 'PYCODE'
+          python3 - << 'PYCODE'
           import json
-          import sys
+          import os
           from json import JSONDecodeError
 
-          raw = sys.stdin.read()
+          output_file = "opengrep_output.json"
+
+          if not os.path.exists(output_file):
+              print(f"opengrep scan did not produce an output file: {output_file}")
+              raise SystemExit(0)
+
           try:
-              data = json.loads(raw)
+              with open(output_file, "r", encoding="utf-8") as f:
+                  data = json.load(f)
           except JSONDecodeError:
-              print("opengrep scan did not produce valid JSON; raw output:")
-              print(raw)
-              sys.exit(0)
+              print("opengrep scan did not produce valid JSON in output file; raw contents:")
+              with open(output_file, "r", encoding="utf-8") as f:
+                  print(f.read())
+              raise SystemExit(0)
 
           results = data.get("results", [])
           errors = data.get("errors", [])
