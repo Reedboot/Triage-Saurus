@@ -50,9 +50,47 @@ jobs:
           # Ensure the Learning output directory exists so the DB can be written.
           mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
 
-      - name: Initialise triage database
+      - name: Install Cozo (if missing) and prepare DB
         working-directory: ${{ github.workspace }}
-        run: python3 Scripts/learning_db.py init
+        run: |
+          mkdir -p Output/Learning
+          DB_PATH="$GITHUB_WORKSPACE/Output/Learning/triage.db"
+
+          # Try to ensure cozo CLI is available
+          if ! command -v cozo >/dev/null 2>&1; then
+            echo "cozo not found on PATH — attempting pip install"
+            # Prefer requirements.txt if it pins cozo (safe); otherwise try pip install cozo
+            if [ -f requirements.txt ] && grep -q '^cozo[=><!~]' requirements.txt; then
+              pip install -r requirements.txt || true
+            else
+              pip install cozo || true
+            fi
+          fi
+
+          # Confirm cozo present (if it is)
+          if command -v cozo >/dev/null 2>&1; then
+            echo "cozo detected: $(cozo --version || true)"
+
+            # Try common cozo DB init/migrate invocations (be permissive, do not fail the workflow permanently)
+            # 1) cozo db init/migrate --database sqlite:///<abs-path>
+            if cozo db --help >/dev/null 2>&1; then
+              cozo db init --database "sqlite:///$DB_PATH" || true
+              cozo db migrate --database "sqlite:///$DB_PATH" || true
+            else
+              # 2) older/alternate: cozo init --db or cozo migrate --db
+              cozo init --db "sqlite:///$DB_PATH" || true
+              cozo migrate --db "sqlite:///$DB_PATH" || true
+            fi
+
+            # If DB still missing, fall back to creating schema with repo script (non-fatal)
+            if [ ! -f "$DB_PATH" ]; then
+              echo "cozo did not create triage.db; falling back to learning_db.py init"
+              python3 Scripts/learning_db.py init
+            fi
+          else
+            echo "cozo not available after pip attempt; falling back to learning_db.py init"
+            python3 Scripts/learning_db.py init
+          fi
 
       - name: Run batch repo scan
         working-directory: ${{ github.workspace }}
