@@ -14,9 +14,9 @@ rules:
       - azurerm_servicebus_queue
       - azurerm_servicebus_subscription
     patterns:
-      - pattern: 'resource "azurerm_servicebus_topic" "(?P<topic_name>.*?)"'
-      - pattern: 'resource "azurerm_servicebus_queue" "(?P<queue_name>.*?)"'
-      - pattern: 'resource "azurerm_servicebus_subscription" "(?P<subscription_name>.*?)"'
+      - pattern-regex: 'resource "azurerm_servicebus_topic" "(?P<topic_name>[^"]+)"'
+      - pattern-regex: 'resource "azurerm_servicebus_queue" "(?P<queue_name>[^"]+)"'
+      - pattern-regex: 'resource "azurerm_servicebus_subscription" "(?P<subscription_name>[^"]+)"'
     outputs:
       - summary: |
           Service Bus Topics and Queues:
