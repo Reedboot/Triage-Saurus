@@ -26,6 +26,13 @@ fi
 # Point the repos file at TestRepo
 echo "TestRepo" > "$REPOS_FILE"
 
+echo "[test] Ensuring opengrep is available"
+if ! command -v opengrep >/dev/null 2>&1; then
+  echo "[test] Installing opengrep to /usr/local/bin/opengrep"
+  sudo curl -sSL https://github.com/opengrep/opengrep/releases/latest/download/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
+  sudo chmod +x /usr/local/bin/opengrep
+fi
+
 echo "[test] Running Scripts/run_cozo_repos.sh --force"
 bash Scripts/run_cozo_repos.sh --force
 
