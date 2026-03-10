@@ -44,15 +44,15 @@ jobs:
         run: |
           . .venv/bin/activate
           python3 - <<'PY'
-import sys
-try:
-    # cozo_embedded must be importable for pycozo Client to work fully
-    import cozo_embedded
-except Exception as e:
-    print('❌ cozo_embedded import failed:', e, file=sys.stderr)
-    sys.exit(1)
-print('✅ cozo_embedded import OK')
-PY
+            import sys
+            try:
+                # cozo_embedded must be importable for pycozo Client to work fully
+                import cozo_embedded
+            except Exception as e:
+                print('❌ cozo_embedded import failed:', e, file=sys.stderr)
+                sys.exit(1)
+            print('✅ cozo_embedded import OK')
+          PY
 
       - name: Debug Python environment (transient)
         if: always()
@@ -64,25 +64,25 @@ PY
           pip list || true
           echo "--- site-packages paths ---"
           python3 - <<'PY'
-import sysconfig, sys
-paths = sysconfig.get_paths()
-for k,v in paths.items():
-    print(k, v)
-print('\nsys.path:')
-print('\n'.join(sys.path))
-PY
+            import sysconfig, sys
+            paths = sysconfig.get_paths()
+            for k,v in paths.items():
+                print(k, v)
+            print('\nsys.path:')
+            print('\n'.join(sys.path))
+          PY
           echo "--- site-packages contents (if present) ---"
           PKG_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") || true
           if [ -d "$PKG_DIR" ]; then
             ls -la "$PKG_DIR" | sed -n '1,200p'
             echo "--- cozo_embedded file info (if importable) ---"
             python3 - <<'PY'
-try:
-    import cozo_embedded
-    print('cozo_embedded loaded from', getattr(cozo_embedded, '__file__', 'unknown'))
-except Exception as e:
-    print('cozo_embedded not importable:', e)
-PY
+              try:
+                  import cozo_embedded
+                  print('cozo_embedded loaded from', getattr(cozo_embedded, '__file__', 'unknown'))
+              except Exception as e:
+                  print('cozo_embedded not importable:', e)
+            PY
           else
             echo "No site-packages directory found at $PKG_DIR"
           fi
