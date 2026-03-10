@@ -158,3 +158,20 @@ jobs:
           name: audit-logs
           path: Output/Audit/
           if-no-files-found: warn
+
+  init-test:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Run init_cozo_learning test
+        run: ./Scripts/tests/test_run_cozo_init.sh
+        shell: bash
+
