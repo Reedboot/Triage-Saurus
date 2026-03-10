@@ -23,3 +23,6 @@ __pycache__
 Output/*
 .venv/
 .venv-cozo/
+__pycache__/
+*.pyc
+Scripts/resource_types.db
