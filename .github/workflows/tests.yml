@@ -50,9 +50,11 @@ jobs:
           # Ensure the Learning output directory exists so the DB can be written.
           mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
 
-      - name: Initialise triage database
+      - name: Initialise cozo learning database
         working-directory: ${{ github.workspace }}
-        run: python3 Scripts/learning_db.py init
+        run: |
+          mkdir -p Output/Data Output/Learning
+          python3 Scripts/init_cozo_learning.py init Output/Data/cozo.db
 
       - name: Run batch repo scan
         working-directory: ${{ github.workspace }}
