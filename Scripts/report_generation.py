@@ -2817,6 +2817,102 @@ def _build_external_dependencies_summary(
     return "- No external dependencies detected from DB topology."
 
 
+def _build_service_only_architecture_diagram(repo_name: str, context: RepositoryContext, repo_path: "Path | None" = None) -> str:
+    """
+    Build a Mermaid flowchart focused only on detected services (no cloud/provider labels).
+    Prefer DB topology edges when available; otherwise fall back to a simple service -> repo diagram.
+
+    Returns a Mermaid diagram body (starting with 'flowchart ...') without fenced code block.
+    """
+    # Attempt to use DB topology if present
+    try:
+        db_connections = _load_repo_topology_connections(repo_name)
+        db_ingress_edges, db_egress_edges = _collect_db_topology_edges(repo_name, db_connections)
+        all_db_edges = db_ingress_edges + db_egress_edges
+    except Exception:
+        all_db_edges = []
+
+    if all_db_edges:
+        # _build_flow_mermaid returns a fenced code block; strip fences and return the inner diagram
+        fenced = _build_flow_mermaid(all_db_edges[:48], include_internet=True)
+        # fenced starts with ```mermaid\nflowchart ... and ends with ```
+        inner = fenced.split('\n', 1)[1].rsplit('\n', 1)[0] if '\n' in fenced else fenced
+        return inner
+
+    # Fallback: build a simple flowchart connecting detected services to the repo
+    # Build friendly -> raw types grouping
+    db = _get_db()
+    actual_names = _terraform_actual_names(repo_path)
+    resource_types = sorted({r.resource_type for r in context.resources})
+    all_groups = _group_parent_services(resource_types)
+
+    # Create nodes and edges
+    used_ids: set[str] = set()
+    node_ids: dict[str, str] = {}
+    def _id_for(label: str) -> str:
+        if label in node_ids:
+            return node_ids[label]
+        nid = _mermaid_node_id(label, used_ids)
+        node_ids[label] = nid
+        return nid
+
+    lines = ["flowchart LR"]
+    # Repo node
+    repo_id = _id_for(f"{repo_name}")
+    lines.append(f'  {repo_id}["{repo_name}"]')
+
+    # Add Internet node
+    internet_id = _id_for("Internet")
+    lines.append(f'  {internet_id}["Internet"]')
+
+    services_added = []
+    for friendly, raw_types in all_groups.items():
+        # Skip empty friendly names
+        if not friendly:
+            continue
+        svc_id = _id_for(friendly)
+        # Define node
+        lines.append(f'  {svc_id}["{friendly}"]')
+        services_added.append((friendly, svc_id, raw_types))
+
+    # Connect services to repo and optionally to Internet if edge-like
+    for friendly, svc_id, raw_types in services_added:
+        lines.append(f'  {svc_id} --> {repo_id}')
+        if _is_edge_gateway_service(friendly):
+            lines.append(f'  {internet_id} --> {svc_id}')
+
+    # If any DB-extractable external deps exist, add them (best-effort)
+    try:
+        ext_summary = _build_external_dependencies_summary(context, repo_name=repo_name, repo_path=repo_path, db_connections=[])
+        # Parse simple bullet list lines like '- External dependencies detected from DB topology:' followed by '  - Name'
+        ext_targets = []
+        for line in ext_summary.splitlines():
+            m = re.match(r"\s*-\s+(.+)", line)
+            if m:
+                name = m.group(1).strip()
+                # ignore header lines
+                if name.lower().startswith("external dependencies"):
+                    continue
+                ext_targets.append(name)
+        for tgt in sorted(set(ext_targets))[:20]:
+            tgt_id = _id_for(tgt)
+            lines.append(f'  {tgt_id}["{tgt}"]')
+            # Connect repo or services to external target heuristically
+            # If a service name appears in target, connect service -> target; else repo -> target
+            connected = False
+            for friendly, svc_id, _ in services_added:
+                if friendly.lower() in tgt.lower() or tgt.lower() in friendly.lower():
+                    lines.append(f'  {svc_id} --> {tgt_id}')
+                    connected = True
+                    break
+            if not connected:
+                lines.append(f'  {repo_id} --> {tgt_id}')
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 def write_repo_summary(
     *,
     repo: Path,
@@ -2990,7 +3086,7 @@ def write_repo_summary(
             "repo_name": repo_name,
             "repo_type": "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other",
             "timestamp": now_uk(),
-            "architecture_diagram": _build_simple_architecture_diagram(repo_name, provider_resources, repo_path=repo),
+            "architecture_diagram": _build_service_only_architecture_diagram(repo_name, context, repo_path=repo),
             "languages": language_text,
             "hosting": hosting_text,
             "ci_cd": ci_cd_text,
