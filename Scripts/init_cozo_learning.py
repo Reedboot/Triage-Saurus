@@ -120,6 +120,12 @@ def init(db_path: Path) -> None:
                 (pid, tf_type, entry.get("friendly_name"), entry.get("category"), entry.get("icon"), 1 if entry.get("display_on_architecture_chart", True) else 0, entry.get("parent_type")),
             )
         conn.commit()
+
+        # Create helpful indexes for fast lookups
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_providers_key ON providers(key)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_resource_types_terraform_type ON resource_types(terraform_type)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_resource_types_provider_id ON resource_types(provider_id)")
+        conn.commit()
     finally:
         conn.close()
 

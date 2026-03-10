@@ -10,14 +10,29 @@ from db_helpers import get_db_connection, get_resources_for_diagram, get_connect
 import resource_type_db as _rtdb
 
 # Lazy DB connection for resource type lookups
+import sqlite3
 _lookup_conn: sqlite3.Connection | None = None
 
 def _get_lookup_db() -> sqlite3.Connection | None:
     global _lookup_conn
     if _lookup_conn is None:
-        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
-        if db_path.exists():
+        # Prefer the consolidated Cozo DB if present, otherwise fall back to legacy triage DB
+        db_path = None
+        try:
+            if getattr(_rtdb, 'COZO_DB', None) and Path(_rtdb.COZO_DB).exists():
+                db_path = Path(_rtdb.COZO_DB)
+        except Exception:
+            pass
+        if db_path is None:
+            try:
+                if getattr(_rtdb, 'TRIAGE_DB', None) and Path(_rtdb.TRIAGE_DB).exists():
+                    db_path = Path(_rtdb.TRIAGE_DB)
+            except Exception:
+                pass
+        if db_path:
             _lookup_conn = sqlite3.connect(str(db_path))
+            # Return rows as mappings where callers expect dict-like access
+            _lookup_conn.row_factory = sqlite3.Row
     return _lookup_conn
 
 
