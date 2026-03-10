@@ -182,6 +182,31 @@ jobs:
           path: Output/Audit/
           if-no-files-found: warn
 
+      - name: Verify generated Markdown files
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          shopt -s nullglob
+          audit_files=(Output/Audit/*.md)
+          if [ ${#audit_files[@]} -eq 0 ]; then
+            echo '❌ No audit Markdown files found in Output/Audit'
+            exit 1
+          fi
+          for f in "${audit_files[@]}"; do
+            if [ ! -s "$f" ]; then
+              echo "❌ Audit file $f is empty"
+              exit 1
+            fi
+          done
+
+          # Verify per-repo summary for TestRepo exists and is non-empty
+          if [ ! -s "Output/Summary/Repos/TestRepo.md" ]; then
+            echo '❌ Repo summary missing or empty: Output/Summary/Repos/TestRepo.md'
+            exit 1
+          fi
+
+          echo '✅ Markdown outputs present and non-empty'
+
   init-test:
     needs: test
     runs-on: ubuntu-latest
