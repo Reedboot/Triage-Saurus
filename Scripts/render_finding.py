@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Render a finding Markdown file from a database finding ID."""
+"""Render a finding Markdown file from a Cozo finding captured in Output/Data/cozo.db."""
 
 import argparse
 import json
 import re
+import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from db_helpers import get_db_connection
+from jinja2 import BaseLoader, Environment, StrictUndefined
+
+from cozo_helpers import clamp_score, get_finding_with_context, severity_summary
 from markdown_validator import validate_markdown_file
 from output_paths import OUTPUT_FINDINGS_DIR
 
@@ -26,6 +31,21 @@ def _emoji_for(sev: str) -> str:
         return "🟢"
     raise SystemExit(f"Unknown severity: {sev!r} (expected Critical/High/Medium/Low)")
 
+
+class ScoreWrapper:
+    def __init__(self, score: int, severity: str) -> None:
+        self.score = score
+        self.severity = severity
+
+    def __str__(self) -> str:
+        return str(self.score)
+
+    def __int__(self) -> int:
+        return self.score
+
+    def __float__(self) -> float:
+        return float(self.score)
+
 def _safe_filename(title: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")
     parts = [p for p in cleaned.split("_") if p]
@@ -42,6 +62,132 @@ def _as_list(x: object) -> list[str]:
     if isinstance(x, list):
         return [str(i) for i in x if str(i).strip()]
     return [str(x)]
+
+
+def _parse_metadata(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _humanize_rule_id(rule_id: str | None) -> str:
+    if not rule_id:
+        return "Finding"
+    cleaned = re.sub(r"[_\-.]+", " ", rule_id).strip()
+    parts = [part.capitalize() for part in cleaned.split() if part]
+    return " ".join(parts) or "Finding"
+
+
+def _format_context_lines(contexts: list[dict[str, Any]], limit: int = 4) -> list[str]:
+    lines: list[str] = []
+    for entry in contexts:
+        key = entry.get("context_key")
+        value = entry.get("context_value")
+        if not key or not value:
+            continue
+        snippet = f"{key}: {value}"
+        lines.append(snippet)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _normalize_recommendations(raw: Any, score_i: int) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for item in raw or []:
+        if isinstance(item, Mapping):
+            text = str(
+                item.get("text")
+                or item.get("summary")
+                or item.get("title")
+                or item.get("name")
+                or "TODO: add recommendation"
+            ).strip()
+            try:
+                score_from = int(item.get("score_from", score_i))
+            except Exception:
+                score_from = score_i
+            try:
+                score_to = int(item.get("score_to", max(score_i - 2, 0)))
+            except Exception:
+                score_to = max(score_i - 2, 0)
+        else:
+            text = str(item).strip() or "TODO: add recommendation"
+            score_from = score_i
+            score_to = max(score_i - 2, 0)
+        candidates.append(
+            {
+                "text": text,
+                "score_from": score_from,
+                "score_to": score_to,
+            }
+        )
+
+    if not candidates:
+        candidates.append(
+            {
+                "text": "TODO: add recommendation",
+                "score_from": score_i,
+                "score_to": max(score_i - 2, 0),
+            }
+        )
+    return candidates
+
+
+def _default_skeptic_block() -> dict[str, dict[str, str]]:
+    return {
+        "dev": {
+            "missing": "Nothing yet — awaiting a security review narrative.",
+            "score_recommendation": "✅ Keep",
+            "how_it_could_be_worse": "TODO: describe escalation path.",
+            "countermeasure_effectiveness": "TODO: explain how controls reduce risk.",
+            "assumptions_to_validate": "None yet.",
+        },
+        "platform": {
+            "missing": "TODO: platform constraints / risks.",
+            "score_recommendation": "✅ Keep",
+            "operational_constraints": "TODO: describe deployment constraints.",
+            "countermeasure_effectiveness": "TODO: describe operational controls.",
+            "assumptions_to_validate": "None yet.",
+        },
+    }
+
+
+def _extract_template_body(text: str) -> str:
+    match = re.search(
+        r"## File Template\b\s*(?:```|~~~)md\s*\n(.*?)(?:\n```|\n~~~)\s*(?:## Required Sections\b|\n## Testing\b|\Z)",
+        text,
+        re.DOTALL,
+    )
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
+def _build_render_context(model: dict[str, Any], score_wrapper: ScoreWrapper, emoji: str) -> dict[str, Any]:
+    context: dict[str, Any] = dict(model)
+    context.setdefault("security_review_summary", (model.get("security_review") or {}).get("summary", ""))
+    context.setdefault(
+        "applicability_evidence",
+        (model.get("security_review") or {}).get("applicability", {}).get("evidence", ""),
+    )
+    context.setdefault("recommendations_checkboxes", "")
+    context.setdefault("countermeasures_bullets", "")
+    context.setdefault("assumptions_bullets", "")
+    context.setdefault("key_evidence_bullets", "")
+    context.setdefault("compounding_findings", [])
+    context.setdefault("collaboration", {"outcome": "Pending collaboration", "next_step": "TBD"})
+    context.setdefault("skeptic", _default_skeptic_block())
+    context["overall_score"] = score_wrapper
+    context["overall_score_severity"] = score_wrapper.severity
+    context["overall_score_emoji"] = emoji
+    context["overall_score_value"] = int(score_wrapper)
+    meta = model.get("meta") or {}
+    context.setdefault("last_updated", meta.get("last_updated") or datetime.now().strftime("%d/%m/%Y %H:%M"))
+    return context
 
 def _get_template_path(kind: str) -> Path:
     if kind == "cloud":
@@ -93,195 +239,175 @@ def render_md(model: dict) -> str:
     if not title:
         raise SystemExit("Missing 'title'")
 
-    description = str(model.get("description", "")).strip() or title
-
-    overall = model.get("overall_score") or {}
-    sev = str(overall.get("severity", "")).strip()
-    score = overall.get("score", None)
-    if score is None:
-        raise SystemExit("Missing overall_score.score")
-    score_i = int(score)
-    if score_i < 1 or score_i > 10:
-        raise SystemExit("overall_score.score must be 1-10")
-    emoji = _emoji_for(sev)
-
-    arch_mermaid = str(model.get("architecture_mermaid", "")).strip()
-    if not arch_mermaid:
-        arch_mermaid = "flowchart TB\n  A[TODO]"
-
-    sr = model.get("security_review") or {}
-    sr_summary = str(sr.get("summary", "")).strip() or "TODO: Provide a non-boilerplate summary."
-    app = sr.get("applicability") or {}
-    app_status = str(app.get("status", "Don’t know")).strip() or "Don’t know"
-    app_evidence = str(app.get("evidence", "")).strip() or "TODO"
-
-    key_evidence = _as_list(sr.get("key_evidence"))
-    assumptions = _as_list(sr.get("assumptions"))
-    exploitability = str(sr.get("exploitability", "")).strip() or "TODO"
-    rationale = str(sr.get("rationale", "")).strip() or "TODO"
-
-    recommendations_block = _recommendations(sr.get("recommendations"), score_i)
-    countermeasures_block = _bullets(_as_list(sr.get("countermeasures")))
-
-    overview_bullets = _bullets(_as_list(model.get("overview_bullets")))
-    risks_bullets = _bullets(_as_list(sr.get("risks")))
-    key_evidence_deep = _as_list(sr.get("key_evidence_deep") or sr.get("key_evidence_deep_dive"))
-    if not key_evidence_deep:
-        key_evidence_deep = key_evidence
-    key_evidence_deep_bullets = _bullets(key_evidence_deep) if key_evidence_deep else "- TODO"
-
-    meta = model.get("meta") or {}
-    category = str(meta.get("category", "")).strip() or "TODO"
-    languages = str(meta.get("languages", "")).strip() or "Unknown"
-    source = str(meta.get("source", "")).strip() or "Unknown"
-    validation_status = str(meta.get("validation_status", "")).strip() or "⚠️ Draft - Needs Triage"
-    last_updated = str(meta.get("last_updated", "")).strip()
-    if not last_updated:
-        raise SystemExit("Missing meta.last_updated (expected DD/MM/YYYY HH:MM)")
-
     template_path = _get_template_path(kind)
     if not template_path.is_file():
         raise SystemExit(f"Renderer template not found: {template_path.relative_to(ROOT)}")
 
-    tmpl = template_path.read_text(encoding="utf-8", errors="replace")
-    
-    match = re.search(r"## File Template\s*```md\n(.*?)\n```\s*(?:## Required Sections|## Testing|$)", tmpl, re.DOTALL)
-    if match:
-        tmpl = match.group(1)
+    overall = model.get("overall_score") or {}
+    severity = str(overall.get("severity", "")).strip()
+    score_value = overall.get("score", None)
+    if score_value is None:
+        raise SystemExit("Missing overall_score.score")
+    score_i = int(score_value)
+    if score_i < 1 or score_i > 10:
+        raise SystemExit("overall_score.score must be 1-10")
 
-    provider = str(meta.get("provider", "")).strip() or str(model.get("provider", "")).strip() or "TODO"
-    resource_type = str(meta.get("resource_type", "")).strip() or str(model.get("resource_type", "")).strip() or "TODO"
+    score_wrapper = ScoreWrapper(score_i, severity or "Medium")
+    emoji = _emoji_for(score_wrapper.severity)
 
-    mapping: dict[str, str] = {
-        "title": title,
-        "description": description,
-        "overall_score_emoji": emoji,
-        "overall_score_severity": sev,
-        "overall_score": str(score_i),
-        "architecture_mermaid": arch_mermaid.rstrip("\n"),
-        "security_review_summary": sr_summary,
-        "applicability_status": app_status,
-        "applicability_evidence": app_evidence,
-        "assumptions_bullets": _bullets(assumptions),
-        "key_evidence_bullets": _bullets(key_evidence) if key_evidence else "- TODO",
-        "key_evidence_deep_bullets": key_evidence_deep_bullets,
-        "exploitability": exploitability,
-        "recommendations_checkboxes": recommendations_block,
-        "countermeasures_bullets": countermeasures_block,
-        "rationale": rationale,
-        "overview_bullets": overview_bullets,
-        "risks_bullets": risks_bullets,
-        "category": category,
-        "languages": languages,
-        "validation_status": validation_status,
-        "source": source,
-        "last_updated": last_updated,
-        "provider": provider,
-        "resource_type": resource_type,
-    }
+    security_review = model.get("security_review") or {}
+    recommendations_block = _recommendations(security_review.get("recommendations"), score_i)
+    countermeasures_block = _bullets(_as_list(security_review.get("countermeasures")))
+    assumptions_block = _bullets(_as_list(security_review.get("assumptions")))
+    key_evidence = _as_list(security_review.get("key_evidence"))
+    key_evidence_block = _bullets(security_review.get("key_evidence_deep") or key_evidence or ["TODO"])
 
-    out = tmpl
-    for k, v in mapping.items():
-        out = out.replace("{{" + k + "}}", v)
+    template_text = template_path.read_text(encoding="utf-8", errors="replace")
+    render_text = _extract_template_body(template_text)
 
-    placeholder_pattern = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
-    default_replacements = {
-        "entry_point": "Entry point TBD",
-        "vulnerable_component": "Vulnerable component TBD",
-        "source_file": str(model.get("source_file", "source_file")),
-        "source_line": str(model.get("source_line", "0")),
-        "route_line": "0",
-        "auth_file": "Auth file TBD",
-        "auth_line": "0",
-        "data_store": "Data store TBD",
-        "language": "plaintext",
-        "code_snippet": "TBD",
-        "vulnerable_snippet": "TBD",
-        "fixed_snippet": "TBD",
-        "overall_score_severity": model.get("overall_score", {}).get("severity", "Medium"),
-        "overall_score": str(model.get("overall_score", {}).get("score", 5)),
-        "overall_score_emoji": _emoji_for(model.get("overall_score", {}).get("severity", "Medium")),
-    }
+    env = Environment(loader=BaseLoader(), keep_trailing_newline=True, undefined=StrictUndefined)
+    template = env.from_string(render_text)
 
-    def _fill_placeholder(match: re.Match) -> str:
-        key = match.group(1)
-        return default_replacements.get(key, "TODO")
+    context = _build_render_context(model, score_wrapper, emoji)
+    context.update(
+        {
+            "recommendations_checkboxes": recommendations_block,
+            "countermeasures_bullets": countermeasures_block,
+            "assumptions_bullets": assumptions_block,
+            "key_evidence_bullets": key_evidence_block,
+            "security_review_summary": security_review.get("summary", ""),
+            "applicability_evidence": security_review.get("applicability", {}).get("evidence", ""),
+            "exploitability": security_review.get("exploitability", "TODO"),
+            "rationale": security_review.get("rationale", "TODO"),
+            "security_review": security_review,
+            "overview_bullets": model.get("overview_bullets") or [],
+            "title": title,
+            "description": str(model.get("description", "")).strip() or title,
+            "rule_id": model.get("rule_id"),
+            "source_file": model.get("source_file"),
+            "source_line": model.get("source_line"),
+            "language": model.get("language"),
+            "framework": model.get("framework"),
+        }
+    )
 
-    out = placeholder_pattern.sub(_fill_placeholder, out)
+    output = template.render(**context)
+    return output.rstrip() + "\n"
 
-    return out.rstrip() + "\n"
+def get_finding_model_from_db(finding_id: str) -> dict:
+    """Get finding model from the Cozo DB."""
+    try:
+        row, contexts = get_finding_with_context(finding_id)
+    except KeyError:
+        raise ValueError(f"Finding not found in Cozo DB: {finding_id}")
 
-def _fallback_model_from_row(finding: dict) -> dict:
-    """Build a minimal finding model for the renderer when no structured details are stored."""
-    def _text(value: object, *, default: str = "TODO") -> str:
-        if value is None:
-            return default
-        text = str(value).strip()
-        return text if text else default
+    metadata = _parse_metadata(row.get("metadata_json"))
+    provider_raw = metadata.get("provider") or row.get("provider") or "unknown"
+    provider = str(provider_raw).strip() or "unknown"
+    provider_display = provider.capitalize()
 
-    title = _text(finding.get("title") or finding.get("finding_name") or finding.get("rule_id") or f"Finding {finding.get('id')}")
-    description = _text(finding.get("description") or finding.get("reason"), default=title)
+    severity_label, fallback_score = severity_summary(row.get("severity"))
+    raw_score = row.get("severity_score")
+    try:
+        score_i = clamp_score(int(raw_score)) if raw_score is not None else clamp_score(fallback_score)
+    except (TypeError, ValueError):
+        score_i = clamp_score(fallback_score)
 
-    base_severity = _text(finding.get("base_severity"), default="Medium").capitalize()
-    score = finding.get("severity_score") or finding.get("score") or 5
-    score_i = max(1, min(int(score), 10))
+    rule_id = str(row.get("rule_id") or row.get("check_id") or "finding").strip()
+    title = metadata.get("title") or _humanize_rule_id(rule_id)
+    description = str(row.get("message") or metadata.get("description") or metadata.get("summary") or title).strip() or title
 
-    sr_summary = description
-    applicability = {
-        "status": "Unknown",
-        "evidence": _text(finding.get("reason"), default="Evidence pending")
-    }
+    source_file = row.get("source_file") or "unknown"
+    start_line = row.get("start_line") or 0
+    location = f"{source_file}:{start_line}"
+    repo_name = str(row.get("repo_name") or "unknown_repo")
+    category = metadata.get("category") or row.get("category") or "Unknown"
+
+    architecture = metadata.get("architecture_mermaid") or f"flowchart LR\n  {provider_display} --> {rule_id}"
+    context_lines = _format_context_lines(contexts)
+    key_evidence = context_lines or [f"Detected by {rule_id}"]
+
     security_review = {
-        "summary": sr_summary,
-        "applicability": applicability,
-        "key_evidence": [f"Detected by {finding.get('rule_id') or 'unknown rule'}"],
-        "assumptions": [],
-        "exploitability": "Not assessed",
-        "recommendations": [],
-        "countermeasures": [],
-        "risks": [],
+        "summary": description,
+        "applicability": {
+            "status": "Yes",
+            "evidence": f"{rule_id} at {location}",
+        },
+        "key_evidence": key_evidence,
+        "key_evidence_deep": context_lines or key_evidence,
+        "assumptions": _as_list(metadata.get("assumptions")),
+        "exploitability": metadata.get("exploitability") or "Not assessed",
+        "recommendations": _normalize_recommendations(metadata.get("recommendations"), score_i),
+        "countermeasures": _as_list(metadata.get("countermeasures")),
+        "risks": _as_list(metadata.get("risks")),
+        "rationale": metadata.get("rationale") or description,
     }
+
+    overview_bullets = [
+        f"Repo: {repo_name}",
+        f"Location: {location}",
+        f"Provider: {provider_display}",
+    ]
+    if description:
+        overview_bullets.append(f"Details: {description}")
+
+    language = metadata.get("language") or metadata.get("languages") or "plaintext"
+    framework = metadata.get("framework") or metadata.get("technology") or "Unknown"
+    collaboration = metadata.get("collaboration") or {
+        "outcome": "Pending collaboration",
+        "next_step": "TBD",
+    }
+    compounding_findings = metadata.get("compounding_findings") or []
+    entry_point = metadata.get("entry_point") or metadata.get("route") or "Entry point TBD"
+    vulnerable_component = metadata.get("vulnerable_component") or "Vulnerable component TBD"
+    data_store = metadata.get("data_store") or "Data store TBD"
+    code_snippet = metadata.get("code_snippet") or ""
+    vulnerable_snippet = metadata.get("vulnerable_snippet") or ""
+    fixed_snippet = metadata.get("fixed_snippet") or ""
 
     meta = {
-        "category": _text(finding.get("category"), default="Code"),
-        "languages": "Unknown",
-        "source": _text(finding.get("discovered_by") or "Phase 1 scan"),
-        "validation_status": "⚠️ Draft - Needs Triage",
-        "last_updated": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "category": category,
+        "languages": metadata.get("languages") or "Unknown",
+        "source": metadata.get("source") or "Cozo scan",
+        "validation_status": metadata.get("validation_status") or "⚠️ Draft - Needs Triage",
+        "last_updated": metadata.get("last_updated") or datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "repo_name": repo_name,
+        "provider": provider_display,
     }
 
     return {
         "version": 1,
-        "kind": "code",
+        "kind": "cloud" if provider.lower() in {"azure", "aws", "gcp", "alibaba", "oracle"} else "code",
         "title": title,
         "description": description,
         "overall_score": {
             "score": score_i,
-            "severity": base_severity,
+            "severity": severity_label,
         },
-        "architecture_mermaid": "flowchart LR\n  Client --> Service[Entry]\n  Service --> Vulnerability[⚠️ TODO]\n  Vulnerability --> Data[Data Store]",
+        "architecture_mermaid": architecture,
         "security_review": security_review,
-        "overview_bullets": [
-            _text(finding.get("source_file"), default="Source unknown"),
-            f"Rule: {_text(finding.get('rule_id'), default='Manual review')}",
-        ],
+        "overview_bullets": overview_bullets,
         "meta": meta,
+        "provider": provider_display,
+        "resource_type": metadata.get("resource_type") or category,
+        "rule_id": rule_id,
+        "repo_name": repo_name,
+        "source_file": source_file,
+        "source_line": start_line,
+        "language": language,
+        "framework": framework,
+        "entry_point": entry_point,
+        "vulnerable_component": vulnerable_component,
+        "data_store": data_store,
+        "route_line": metadata.get("route_line") or start_line,
+        "auth_file": metadata.get("auth_file") or source_file,
+        "auth_line": metadata.get("auth_line") or start_line,
+        "code_snippet": code_snippet,
+        "vulnerable_snippet": vulnerable_snippet,
+        "fixed_snippet": fixed_snippet,
+        "compounding_findings": compounding_findings,
+        "collaboration": collaboration,
     }
-
-def get_finding_model_from_db(finding_id: int) -> dict:
-    """Get finding model from the database."""
-    with get_db_connection() as conn:
-        finding = conn.execute("SELECT * FROM findings WHERE id = ?", [finding_id]).fetchone()
-        if not finding:
-            raise ValueError(f"Finding not found in database: {finding_id}")
-
-    if "details" in finding.keys() and finding["details"]:
-        try:
-            return json.loads(finding["details"])
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    return _fallback_model_from_row(dict(finding))
 
 def compute_output_path(model: dict) -> Path:
     out = (model.get("output") or {}).get("path")
@@ -300,8 +426,8 @@ def compute_output_path(model: dict) -> Path:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Render a finding Markdown file from the database.")
-    p.add_argument("--id", dest="finding_id", type=int, required=True, help="Finding ID from the database")
+    p = argparse.ArgumentParser(description="Render a finding Markdown file from the Cozo DB.")
+    p.add_argument("--id", dest="finding_id", type=str, required=True, help="Cozo finding_id (hash) to render.")
     p.add_argument("--out", dest="out_path", help="Override output Markdown path")
     args = p.parse_args()
 

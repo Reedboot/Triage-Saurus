@@ -30,6 +30,7 @@ from pathlib import Path
 
 from output_paths import OUTPUT_ROOT, REPO_ROOT
 import learning_db as db
+from cozo_helpers import insert_task_node, insert_task_dependency
 
 LEARNING_DIR = OUTPUT_ROOT / "Learning"
 STATE_FILE = LEARNING_DIR / "state.json"
@@ -145,10 +146,16 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    """Save state to state.json."""
+    """Save state to state.json and record as a workflow task in Cozo."""
     state["last_updated"] = datetime.now().isoformat()
     LEARNING_DIR.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, indent=2))
+    # Record workflow task in Cozo
+    task_id = f"experiment-{state.get('current_experiment_id', 'unknown')}"
+    title = f"Experiment {state.get('current_experiment_id', 'unknown')}"
+    description = state.get('handoff_notes', '')
+    status = state.get('status', 'pending')
+    insert_task_node(task_id, title, description, status)
 
 
 def get_next_experiment_id() -> str:

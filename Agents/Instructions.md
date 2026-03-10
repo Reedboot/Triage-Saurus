@@ -31,7 +31,7 @@ This repository supports consistent security triage. The expected workflow is:
 - Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are only acceptable if opengrep becomes unavailable mid-session and must be documented in the audit log.
 - Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
 - **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
-- **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` + `triage.db`, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the DB rather than keeping prior repo transcripts in memory.
+- **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` and the Cozo knowledge graph, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the Cozo graph rather than keeping prior repo transcripts in memory.
 
 **Rules + LLM Pattern:**
 - Rules detect patterns and extract relevant data
@@ -201,7 +201,7 @@ is acceptable for learning purposes. Not applicable to production.
 **Post-experiment capture (after user feedback):**
 - Run LearningAgent to analyze `experiments/00X/validation.json`
 - Compare experiments to identify patterns
-- Update SQLite `triage.db` with effectiveness metrics
+- Update Cozo knowledge graph with effectiveness metrics
 
 ### Format for Learning Documents
 

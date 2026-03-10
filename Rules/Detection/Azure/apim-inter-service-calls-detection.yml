@@ -6,18 +6,8 @@ rules:
     severity: INFO
     languages: [terraform, hcl]
     patterns:
-      - pattern: |
-          config = {
-            ...
-            $SERVICE_NAME__BaseUri = "$API_MANAGER_URI/$PATH/"
-            ...
-          }
-      - pattern: |
-          secrets = {
-            ...
-            $SERVICE_NAME__SubscriptionKey = $SUBSCRIPTION_KEY
-            ...
-          }
+      - pattern-regex: '(?s)config\s*=\s*\{.*?\$SERVICE_NAME__BaseUri\s*=\s*"\$API_MANAGER_URI/\$PATH/"'
+      - pattern-regex: '(?s)secrets\s*=\s*\{.*?\$SERVICE_NAME__SubscriptionKey\s*=\s*\$SUBSCRIPTION_KEY'
     metadata:
       rule_type: context_discovery
       category: service-dependencies

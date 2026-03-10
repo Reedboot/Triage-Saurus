@@ -1,6 +1,7 @@
 # context_extraction.py
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
 
@@ -708,9 +709,8 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_key_vault_secret": "azurerm_key_vault",
     }
     try:
-        from pathlib import Path as _Path
-        db_path = _Path(__file__).parent.parent / "Output" / "Learning" / "triage.db"
-        import sqlite3
+        import resource_type_db as _rtdb
+        db_path = _rtdb.DB_PATH
         conn = sqlite3.connect(str(db_path))
         rows = conn.execute(
             "SELECT terraform_type, parent_type FROM resource_types WHERE parent_type IS NOT NULL"

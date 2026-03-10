@@ -8,10 +8,7 @@ rules:
     severity: WARNING
     languages: [json, hcl, terraform]
     patterns:
-      - pattern-inside: |
-          resource "aws_iam_user_policy" $NAME {
-            ...
-          }
+      - pattern-regex: '(?s)resource\s+"aws_iam_user_policy"\s+\S+\s*\{.*?\}'
       - pattern-regex: '"Action":\s*\[?[^]]*"(?:ec2|s3|lambda|cloudwatch|\*):\*"'
     metadata:
       category: security

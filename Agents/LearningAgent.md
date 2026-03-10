@@ -34,7 +34,7 @@ For each experiment:
 3. Propose agent instruction changes
 4. Propose new scripts or scan patterns
 5. Update `Output/Learning/strategies/*.json` with learned weights
-6. Update SQLite learning index with effectiveness data
+6. Update Cozo learning index with effectiveness data
 
 ## Inputs
 
@@ -42,7 +42,7 @@ For each experiment:
 |--------|------------------|
 | `experiments/00X/validation.json` | Human feedback on findings |
 | `experiments/00X/experiment.json` | Metrics from the run |
-| `Output/Learning/triage.db` | Historical data across experiments |
+| Cozo knowledge graph | Historical data across experiments |
 | `experiments/00X/Agents/changes.md` | What was modified in this run |
 
 ## Outputs
@@ -52,7 +52,7 @@ For each experiment:
 | Proposed changes (presented to human) | Agent/script modifications |
 | Updated strategy JSON | Scan order, file patterns, question order |
 | Modified agent instructions | Copied to next experiment's Agents/ |
-| SQLite updates | Effectiveness weights, accuracy rates |
+| Cozo updates | Effectiveness weights, accuracy rates |
 
 ## Learning from Human Feedback
 
@@ -69,7 +69,7 @@ When human marks a finding as incorrect:
 ```
 
 **Actions:**
-1. Log the correction in SQLite
+1. Log the correction in the Cozo knowledge graph
 2. Identify which agent/scan missed the context
 3. Propose specific instruction change
 4. Add to `changes.md` for next experiment
@@ -93,7 +93,7 @@ When human identifies a missed finding:
 
 ## Effectiveness Metrics
 
-Track in SQLite:
+Track in Cozo knowledge graph:
 
 ```sql
 -- Scan effectiveness

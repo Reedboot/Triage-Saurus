@@ -10,10 +10,8 @@ rules:
     languages:
       - terraform
     patterns:
-      # Match common single-line module declarations: module "name" { source = "..." }
-      - pattern: 'module "(?P<module_name>[^\"]+)"\s*\{\s*source\s*=\s*"(?P<source>[^\"]+)"'
-      # Match multi-line module blocks where source may be on a following line
-      - pattern: '(?s)module "(?P<module_name>[^\"]+)".*?source\s*=\s*"(?P<source>[^\"]+)"'
+      - pattern-regex: 'module "(?P<module_name>[^"]+)"\s*\{\s*source\s*=\s*"(?P<source>[^"]+)"'
+      - pattern-regex: '(?s)module "(?P<module_name>[^"]+)".*?source\s*=\s*"(?P<source>[^"]+)"'
     outputs:
       - summary: |
           Terraform module detected:

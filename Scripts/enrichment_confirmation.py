@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from db_helpers import list_enrichment_assumptions, resolve_enrichment_assumption  # noqa: E402
+from cozo_helpers import insert_task_node
 
 
 def _print_assumption_rows(rows: list[dict[str, Any]], *, experiment: str, repo: str | None, status: str) -> None:
@@ -37,6 +38,12 @@ def _print_assumption_rows(rows: list[dict[str, Any]], *, experiment: str, repo:
         if relationship_summary:
             print(f"  relationship={relationship_summary}")
         print(f"  repo_scope={', '.join(row.get('repo_scope') or [])}")
+        # Record each assumption as a workflow task in Cozo
+        task_id = f"assumption-{row['id']}"
+        title = f"Assumption {row['id']}"
+        description = assumption_text
+        status_val = row.get('status', 'pending')
+        insert_task_node(task_id, title, description, status_val)
 
 
 def _print_resolution_result(result: dict[str, Any]) -> None:
@@ -77,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resolve_parser = subparsers.add_parser("resolve", help="Confirm or reject an enrichment assumption")
     resolve_parser.add_argument("--experiment", required=True, help="Experiment ID")
-    resolve_parser.add_argument("--assumption-id", required=True, type=int, help="enrichment_queue.id value")
+    resolve_parser.add_argument("--assumption-id", required=True, type=int, help="enrichment assumption id value")
     resolve_parser.add_argument(
         "--decision",
         required=True,
