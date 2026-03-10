@@ -302,6 +302,43 @@ def main() -> None:
         ''')
         conn.commit()
 
+        # Ensure findings table has required columns (backfill missing columns via ALTER TABLE)
+        try:
+            cur.execute("PRAGMA table_info(findings)")
+            rows = cur.fetchall()
+            existing_cols = {r[1] for r in rows}
+        except Exception:
+            existing_cols = set()
+
+        required_columns = {
+            "finding_id": "TEXT",
+            "scan_id": "TEXT",
+            "repo_name": "TEXT",
+            "repo_path": "TEXT",
+            "rule_id": "TEXT",
+            "check_id": "TEXT",
+            "category": "TEXT",
+            "severity": "TEXT",
+            "severity_score": "INTEGER",
+            "message": "TEXT",
+            "code_snippet": "TEXT",
+            "metadata_json": "TEXT",
+            "provider": "TEXT",
+            "source_file": "TEXT",
+            "start_line": "INTEGER",
+            "end_line": "INTEGER",
+            "created_at": "TEXT",
+        }
+
+        for col, col_type in required_columns.items():
+            if col not in existing_cols:
+                try:
+                    cur.execute(f"ALTER TABLE findings ADD COLUMN {col} {col_type}")
+                except Exception:
+                    # If ALTER fails (e.g., read-only or incompatible schema), continue
+                    pass
+        conn.commit()
+
         cur.execute(
             "INSERT OR IGNORE INTO repo_scans (scan_id, repo_name, repo_path, scan_time) VALUES (?, ?, ?, ?)",
             (scan_id, args.repo, str(args.repo_path) if args.repo_path else "", scan_time),
