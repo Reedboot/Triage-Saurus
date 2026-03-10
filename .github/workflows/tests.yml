@@ -99,6 +99,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run init_cozo_learning test
-        run: ./Scripts/tests/test_run_cozo_init.sh
+        run: bash Scripts/tests/test_run_cozo_init.sh
         shell: bash
 
