@@ -58,7 +58,7 @@ jobs:
 
       - name: Run batch repo scan
         working-directory: ${{ github.workspace }}
-        run: bash Scripts/batch_scan_repos.sh --force
+        run: bash Scripts/run_cozo_repos.sh --force
 
       - name: Quality gate – verify triage.db has repository entries
         working-directory: ${{ github.workspace }}
