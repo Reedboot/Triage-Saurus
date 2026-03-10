@@ -26,9 +26,29 @@ jobs:
             pip install -r requirements.txt
           fi
 
-      - name: Install pycozo
+      - name: Install pycozo (wheel or pip)
         run: |
-          pip install pycozo
+          # If a prebuilt wheel URL is provided via secret, prefer installing it (must include cozo_embedded)
+          if [ -n "${{ secrets.PYCOZO_WHEEL_URL }}" ]; then
+            echo "Installing pycozo wheel from secret URL"
+            curl -sSL "${{ secrets.PYCOZO_WHEEL_URL }}" -o /tmp/pycozo.whl
+            pip install /tmp/pycozo.whl
+          else
+            pip install pycozo
+          fi
+
+      - name: Verify cozo_embedded presence
+        run: |
+          python3 - <<'PY'
+import sys
+try:
+    # cozo_embedded must be importable for pycozo Client to work fully
+    import cozo_embedded
+except Exception as e:
+    print('❌ cozo_embedded import failed:', e, file=sys.stderr)
+    sys.exit(1)
+print('✅ cozo_embedded import OK')
+PY
 
       - name: Install opengrep
         run: |
