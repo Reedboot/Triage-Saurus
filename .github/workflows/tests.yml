@@ -23,19 +23,36 @@ jobs:
       - name: Verify opengrep installation
         run: opengrep --version
 
-      - name: Set up mock environment
+      - name: Set up mock environment and expanded corpus
         run: |
+          # Prepare a corpus of sample repos to exercise more rules during CI
           REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
-          cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$REPOS_ROOT/TestRepo"
+          CORPUS_DIR="$GITHUB_WORKSPACE/TestsCorpus"
+          mkdir -p "$CORPUS_DIR"
+
+          # Copy the existing TestRepo into the corpus
+          cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$CORPUS_DIR/TestRepo" || true
+
+          # Clone a couple of tiny public sample repos (different languages) to increase coverage
+          git clone --depth 1 https://github.com/githubtraining/hellogitworld.git "$CORPUS_DIR/hellogitworld" || true
+          git clone --depth 1 https://github.com/octocat/Hello-World.git "$CORPUS_DIR/hello-world" || true
+
+          # Place TestRepo where batch_scan_repos.sh expects it (ensure backward compatibility)
+          cp -r "$CORPUS_DIR/TestRepo" "$REPOS_ROOT/TestRepo" || true
+
+          # Tell the script which repos to scan (keep TestRepo entry for existing scripts)
           echo "TestRepo" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
+
+          # Ensure the Learning output directory exists so the DB can be written.
           mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
 
-      - name: Validate Opengrep rules and sample scan
+      - name: Validate Opengrep rules and sample scan against expanded corpus
         working-directory: ${{ github.workspace }}
         run: |
           OUTPUT_FILE="opengrep_output.json"
 
-          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "Sample Findings/Repos/TestRepo" || true
+          # Run opengrep against the expanded corpus to exercise more rules
+          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "$GITHUB_WORKSPACE/TestsCorpus" || true
 
           if [ ! -f "$OUTPUT_FILE" ]; then
             echo "❌ opengrep did not produce an output file: $OUTPUT_FILE"
@@ -54,7 +71,7 @@ jobs:
                 print(json.dumps(errors, indent=2))
                 sys.exit(1)
             if len(results) == 0:
-                print("❌ opengrep produced zero findings for TestRepo; aborting")
+                print("❌ opengrep produced zero findings for the corpus; aborting")
                 sys.exit(1)
             print("✅ opengrep rules validated and sample scan produced results")
           PYCODE
