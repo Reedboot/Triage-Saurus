@@ -31,14 +31,8 @@ jobs:
           python3 -m venv .venv
           . .venv/bin/activate
           pip install --upgrade pip setuptools wheel
-          # If a prebuilt wheel URL is provided via secret, prefer installing it (must include cozo_embedded)
-          if [ -n "${{ secrets.PYCOZO_WHEEL_URL }}" ]; then
-            echo "Installing pycozo wheel from secret URL"
-            curl -sSL "${{ secrets.PYCOZO_WHEEL_URL }}" -o /tmp/pycozo.whl
-            pip install /tmp/pycozo.whl
-          else
-            pip install pycozo
-          fi
+          # Install pycozo from PyPI (ensure pycozo package includes native cozo_embedded for CI runners)
+          pip install pycozo
 
       - name: Verify cozo_embedded presence
         run: |
