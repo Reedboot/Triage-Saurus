@@ -49,6 +49,14 @@ def _sort_key(row: Dict[str, str]) -> int:
     return SEVERITY_ORDER.get(severity, 99)
 
 
+def _highlight_internet_ingress(nodes: List[Dict[str, str]]) -> List[str]:
+    highlights = []
+    for node in nodes:
+        if node.get("internet_ingress") == "True" or node.get("internet_ingress") is True:
+            highlights.append(f'{node.get("finding_id")}: style {node.get("finding_id")},fill:#ffcccc,stroke:#ff0000,stroke-width:2')
+            highlights.append(f'{node.get("finding_id")} --> Internet')
+    return highlights
+
 def _extract_mermaid_blocks(md_text: str) -> List[str]:
     """Return a list of mermaid fenced code blocks (including fences).
 
@@ -128,9 +136,14 @@ def build_summary_markdown(
     if arch_blocks:
         lines.append("## Architecture")
         lines.append("")
+        # Highlight internet ingress in Mermaid diagrams
+        ingress_highlights = _highlight_internet_ingress(findings)
         for prov, block in arch_blocks:
             lines.append(f"### {prov.capitalize()}")
             lines.append("")
+            if ingress_highlights:
+                # Insert highlights at the end of the mermaid block
+                block = block.rstrip('`') + '\n' + '\n'.join(ingress_highlights) + '\n```'
             lines.append(block)
             lines.append("")
 
