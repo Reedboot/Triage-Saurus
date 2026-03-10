@@ -9,7 +9,9 @@ from contextlib import contextmanager
 
 # Database location
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "Output/Learning/triage.db"
+TRIAGE_DB = ROOT / "Output/Learning/triage.db"
+COZO_DB = ROOT / "Output/Data/cozo.db"
+DB_PATH = COZO_DB if COZO_DB.exists() else TRIAGE_DB
 
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
 ENRICHMENT_DECISION_MAP = {

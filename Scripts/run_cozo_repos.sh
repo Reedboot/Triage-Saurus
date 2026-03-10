@@ -12,8 +12,8 @@ COZO_DB_PATH="$REPO_ROOT/Output/Data/cozo.db"
 SUMMARY_SCRIPT="$REPO_ROOT/Scripts/generate_repo_summary_from_cozo.py"
 SUMMARY_OUTPUT_DIR="$REPO_ROOT/Output/Summary/Repos"
 PYTHON_BIN="$REPO_ROOT/.venv-cozo/bin/python"
-ANALYTICS_DB_DIR="$REPO_ROOT/Output/Learning"
-ANALYTICS_DB="$ANALYTICS_DB_DIR/triage.db"
+ANALYTICS_DB_DIR="$REPO_ROOT/Output/Data"
+ANALYTICS_DB="$COZO_DB_PATH"
 AUDIT_LOG="$REPO_ROOT/Output/Audit/CozoScan_$(date +%Y-%m-%d_%H%M%S).md"
 ONE_HOUR=3600
 FORCE_SCAN=false
@@ -67,10 +67,8 @@ log() {
   echo "[$(date '+%H:%M:%S')] $*"
 }
 
-if [ ! -f "$ANALYTICS_DB" ]; then
-  log "Initializing learning database at $ANALYTICS_DB"
-  "$PYTHON_BIN" "$REPO_ROOT/Scripts/learning_db.py" init >/dev/null 2>&1
-fi
+log "Ensuring learning schema exists inside Cozo DB at $ANALYTICS_DB"
+"$PYTHON_BIN" "$REPO_ROOT/Scripts/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
 
 should_skip_repo() {
   local repo="$1"
