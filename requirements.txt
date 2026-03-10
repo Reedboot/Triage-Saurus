@@ -1,0 +1,4 @@
+cozo-embedded==0.7.6
+Jinja2==3.1.6
+pycozo==0.7.6
+PyYAML==6.0.3

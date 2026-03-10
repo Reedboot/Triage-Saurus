@@ -25,4 +25,3 @@ Output/*
 .venv-cozo/
 __pycache__/
 *.pyc
-Scripts/resource_types.db

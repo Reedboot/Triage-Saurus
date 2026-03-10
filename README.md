@@ -222,8 +222,13 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 - **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
   - Used by: `opengrep scan --config Rules/ /path/to/repo`
   - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
-- `pycozo` + `cozo-embedded` (pip) — Install via `python3 -m pip install pycozo cozo-embedded==0.7.6` so `Scripts/store_opengrep_for_cozo.py` can write detections into an embedded Cozo database.
-- `jinja2` (pip) — Install via `python3 -m pip install jinja2` so the finding renderer can populate the Markdown templates in `Templates/`.
+- **Python dependencies** — Install all required packages via the provided `requirements.txt`:
+  ```bash
+  python3 -m venv .venv-cozo
+  source .venv-cozo/bin/activate
+  pip install -r requirements.txt
+  ```
+  This installs `pycozo`, `jinja2`, and `PyYAML`. The `Scripts/run_cozo_repos.sh` script automatically uses `.venv-cozo` if present.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
