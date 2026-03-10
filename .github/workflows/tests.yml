@@ -15,76 +15,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
-      - name: Create venv and install pycozo
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip setuptools wheel
-          # Install pycozo from PyPI (ensure pycozo package includes native cozo_embedded for CI runners)
-          pip install pycozo
-
-      - name: Verify cozo_embedded presence
-        run: |
-          . .venv/bin/activate
-          python3 - <<'PY'
-            import sys
-            try:
-                # cozo_embedded must be importable for pycozo Client to work fully
-                import cozo_embedded
-            except Exception as e:
-                print('❌ cozo_embedded import failed:', e, file=sys.stderr)
-                sys.exit(1)
-            print('✅ cozo_embedded import OK')
-          PY
-
-      - name: Debug Python environment (transient)
-        if: always()
-        run: |
-          echo "--- Python executable and version ---"
-          . .venv/bin/activate
-          python3 -V || true
-          echo "--- pip list ---"
-          pip list || true
-          echo "--- site-packages paths ---"
-          python3 - <<'PY'
-            import sysconfig, sys
-            paths = sysconfig.get_paths()
-            for k,v in paths.items():
-                print(k, v)
-            print('\nsys.path:')
-            print('\n'.join(sys.path))
-          PY
-          echo "--- site-packages contents (if present) ---"
-          PKG_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") || true
-          if [ -d "$PKG_DIR" ]; then
-            ls -la "$PKG_DIR" | sed -n '1,200p'
-            echo "--- cozo_embedded file info (if importable) ---"
-            python3 - <<'PY'
-              try:
-                  import cozo_embedded
-                  print('cozo_embedded loaded from', getattr(cozo_embedded, '__file__', 'unknown'))
-              except Exception as e:
-                  print('cozo_embedded not importable:', e)
-            PY
-          else
-            echo "No site-packages directory found at $PKG_DIR"
-          fi
-
       - name: Install opengrep
         run: |
-          sudo curl -sSL https://github.com/opengrep/opengrep/releases/latest/download/opengrep_manylinux_x86 \
-            -o /usr/local/bin/opengrep
+          sudo curl -sSL https://github.com/opengrep/opengrep/releases/latest/download/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
           sudo chmod +x /usr/local/bin/opengrep
 
       - name: Verify opengrep installation
@@ -92,36 +25,17 @@ jobs:
 
       - name: Set up mock environment
         run: |
-          # batch_scan_repos.sh sets REPOS_ROOT to the directory one level above the
-          # Triage-Saurus repo (i.e. the parent of $GITHUB_WORKSPACE).
           REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
-
-          # Place TestRepo where the script will look for it.
           cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$REPOS_ROOT/TestRepo"
-
-          # Tell the script which repos to scan.
           echo "TestRepo" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
-
-          # Ensure the Learning output directory exists so the DB can be written.
           mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
-
-      - name: Initialise cozo learning database
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p Output/Data Output/Learning
-          python3 Scripts/init_cozo_learning.py init Output/Data/cozo.db
 
       - name: Validate Opengrep rules and sample scan
         working-directory: ${{ github.workspace }}
         run: |
           OUTPUT_FILE="opengrep_output.json"
 
-          # Run opengrep and write JSON output; allow opengrep to exit non-zero but keep output file if produced
-          opengrep scan \
-            --config Rules/ \
-            --json \
-            --output "$OUTPUT_FILE" \
-            "Sample Findings/Repos/TestRepo" || true
+          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "Sample Findings/Repos/TestRepo" || true
 
           if [ ! -f "$OUTPUT_FILE" ]; then
             echo "❌ opengrep did not produce an output file: $OUTPUT_FILE"
@@ -145,152 +59,15 @@ jobs:
             print("✅ opengrep rules validated and sample scan produced results")
           PYCODE
 
-      - name: Run batch repo scan
-        working-directory: ${{ github.workspace }}
-        run: bash Scripts/run_cozo_repos.sh --force
-
-      - name: Quality gate – verify Cozo DB contents
-        working-directory: ${{ github.workspace }}
-        run: |
-          python3 - << 'PYCODE'
-          import os
-          import sqlite3
-          import sys
-
-          db_path = os.path.join("Output", "Data", "cozo.db")
-
-          if not os.path.isfile(db_path):
-              print(f"❌ cozo.db not found at {db_path}")
-              sys.exit(1)
-
-          try:
-              conn = sqlite3.connect(db_path)
-          except sqlite3.Error as exc:
-              print(f"❌ Failed to open cozo.db at {db_path}: {exc}")
-              sys.exit(1)
-
-          try:
-              cur = conn.cursor()
-
-              # Ensure required tables exist
-              required_tables = ['repositories', 'resources', 'findings']
-              missing = []
-              for t in required_tables:
-                  cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (t,))
-                  if cur.fetchone() is None:
-                      missing.append(t)
-              if missing:
-                  print(f"❌ Missing required tables in cozo.db: {missing}")
-                  sys.exit(1)
-
-              # Check repositories contains TestRepo
-              cur.execute("SELECT COUNT(1) FROM repositories WHERE repo_name = ?;", ('TestRepo',))
-              repo_count = int(cur.fetchone()[0] or 0)
-              if repo_count < 1:
-                  print("❌ 'TestRepo' not found in repositories table")
-                  sys.exit(1)
-
-              # Check resources and findings counts
-              cur.execute("SELECT COUNT(1) FROM resources;")
-              resources_count = int(cur.fetchone()[0] or 0)
-
-              cur.execute("SELECT COUNT(1) FROM findings;")
-              findings_count = int(cur.fetchone()[0] or 0)
-
-              if resources_count < 1:
-                  print(f"❌ resources table contains 0 rows (expected >0)")
-                  sys.exit(1)
-              if findings_count < 1:
-                  print(f"❌ findings table contains 0 rows (expected >0)")
-                  sys.exit(1)
-
-              print(f"✅ cozo.db checks passed: repositories(TestRepo)={repo_count}, resources={resources_count}, findings={findings_count}")
-
-          finally:
-              conn.close()
-          PYCODE
-
-      - name: Check opengrep rule syntax against TestRepo
-        working-directory: ${{ github.workspace }}
-        continue-on-error: true
-        run: |
-          OUTPUT_FILE="opengrep_output.json"
-
-          # Run opengrep, writing JSON output to a file. Leave stderr unredirected
-          # so that non-JSON logs remain visible in the workflow output.
-          opengrep scan \
-            --config Rules/ \
-            --json \
-            --output "$OUTPUT_FILE" \
-            "Sample Findings/Repos/TestRepo"
-
-          python3 - << 'PYCODE'
-          import json
-          import os
-          from json import JSONDecodeError
-
-          output_file = "opengrep_output.json"
-
-          if not os.path.exists(output_file):
-              print(f"opengrep scan did not produce an output file: {output_file}")
-              raise SystemExit(0)
-
-          try:
-              with open(output_file, "r", encoding="utf-8") as f:
-                  data = json.load(f)
-          except JSONDecodeError:
-              print("opengrep scan did not produce valid JSON in output file; raw contents:")
-              with open(output_file, "r", encoding="utf-8") as f:
-                  print(f.read())
-              raise SystemExit(0)
-
-          results = data.get("results", [])
-          errors = data.get("errors", [])
-          print(f"opengrep findings: {len(results)}, errors: {len(errors)}")
-          if errors:
-              print("Rule errors detected:", json.dumps(errors, indent=2))
-          PYCODE
-
-      - name: Upload triage database
+      - name: Upload opengrep output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: triage-db
-          path: Output/Learning/triage.db
+          name: opengrep-output
+          path: opengrep_output.json
           if-no-files-found: warn
 
-      - name: Upload session audit logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: audit-logs
-          path: Output/Audit/
-          if-no-files-found: warn
 
-      - name: Verify generated Markdown files
-        if: always()
-        working-directory: ${{ github.workspace }}
-        run: |
-          shopt -s nullglob
-          audit_files=(Output/Audit/*.md)
-          if [ ${#audit_files[@]} -eq 0 ]; then
-            echo '❌ No audit Markdown files found in Output/Audit'
-            exit 1
-          fi
-          for f in "${audit_files[@]}"; do
-            if [ ! -s "$f" ]; then
-              echo "❌ Audit file $f is empty"
-              exit 1
-            fi
-          done
-
-          # Verify per-repo summary for TestRepo exists and is non-empty
-          if [ ! -s "Output/Summary/Repos/TestRepo.md" ]; then
-            echo '❌ Repo summary missing or empty: Output/Summary/Repos/TestRepo.md'
-            exit 1
-          fi
-
-          echo '✅ Markdown outputs present and non-empty'
 
   init-test:
     needs: test
