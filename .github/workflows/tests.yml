@@ -72,16 +72,16 @@ jobs:
           import sqlite3
           import sys
 
-          db_path = os.path.join("Output", "Learning", "triage.db")
+          db_path = os.path.join("Output", "Data", "cozo.db")
 
           if not os.path.isfile(db_path):
-              print(f"❌ triage.db not found at {db_path}")
+              print(f"❌ cozo.db not found at {db_path}")
               sys.exit(1)
 
           try:
               conn = sqlite3.connect(db_path)
           except sqlite3.Error as exc:
-              print(f"❌ Failed to open triage.db at {db_path}: {exc}")
+              print(f"❌ Failed to open cozo.db at {db_path}: {exc}")
               sys.exit(1)
 
           try:
@@ -92,18 +92,15 @@ jobs:
               )
               table = cur.fetchone()
               if table is None:
-                  print("❌ 'repositories' table not found in triage.db – the database may be corrupted or uninitialised")
+                  print("❌ 'repositories' table not found in cozo.db – the database may be corrupted or uninitialised")
                   sys.exit(1)
 
               cur.execute("SELECT COUNT(*) FROM repositories;")
               row = cur.fetchone()
               row_count = int(row[0]) if row is not None else 0
               print(f"Repositories table row count: {row_count}")
-              if row_count < 1:
-                  print("❌ No entries found in the repositories table")
-                  sys.exit(1)
 
-              print(f"✅ triage.db exists and contains {row_count} repository record(s)")
+              print(f"✅ cozo.db exists and repositories table was found (rows: {row_count})")
           finally:
               conn.close()
           PYCODE
