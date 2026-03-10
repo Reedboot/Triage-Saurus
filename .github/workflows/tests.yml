@@ -95,6 +95,14 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Install opengrep
+        run: |
+          sudo curl -sSL https://github.com/opengrep/opengrep/releases/latest/download/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
+          sudo chmod +x /usr/local/bin/opengrep
+
+      - name: Verify opengrep installation
+        run: opengrep --version
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
