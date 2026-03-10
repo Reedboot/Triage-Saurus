@@ -59,7 +59,19 @@ jobs:
             exit 1
           fi
 
-          python3 -c "import json,sys,pprint as _p; data=json.load(open('opengrep_output.json','r',encoding='utf-8')); errors=data.get('errors',[]); results=data.get('results',[]); print(f'opengrep findings: {len(results)}, errors: {len(errors)}'); ( _p.pprint(errors); sys.exit(1) ) if errors else None; ( print('❌ opengrep produced zero findings for the corpus; aborting'); sys.exit(1) ) if len(results)==0 else None; print('✅ opengrep rules validated and sample scan produced results')"
+          results_count=$(jq '.results | length' opengrep_output.json)
+          errors_count=$(jq '.errors | length' opengrep_output.json)
+          echo "opengrep findings: ${results_count}, errors: ${errors_count}"
+          if [ "${errors_count}" -gt 0 ]; then
+            echo "❌ opengrep reported rule errors:"
+            jq '.errors' opengrep_output.json || true
+            exit 1
+          fi
+          if [ "${results_count}" -eq 0 ]; then
+            echo "❌ opengrep produced zero findings for the corpus; aborting"
+            exit 1
+          fi
+          echo "✅ opengrep rules validated and sample scan produced results"
 
       - name: Upload opengrep output
         if: always()
