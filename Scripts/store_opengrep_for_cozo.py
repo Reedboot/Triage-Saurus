@@ -188,74 +188,86 @@ def main() -> None:
     scan_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
     scan_id = args.scan_id or hashlib.sha1(scan_time.encode("utf-8")).hexdigest()
 
+    # Try to use pycozo Client if available, but be resilient to runtime failures (e.g., missing cozo_embedded)
     if _HAS_PYCOZO and Client is not None:
-        # Preferred path: use pycozo Client to create relations and store.
-        db = Client(engine="sqlite", path=str(DEFAULT_COZO_DB), dataframe=False)
+        db = None
         try:
-            _ensure_relations(db)
+            db = Client(engine="sqlite", path=str(DEFAULT_COZO_DB), dataframe=False)
+        except Exception as e:
+            # If pycozo Client initialization fails (missing native extension), fall back to sqlite writes
+            print(f"[WARN] pycozo Client init failed, falling back to sqlite ingestion: {e}", file=sys.stderr)
+            db = None
 
-            db.insert(
-                "repo_scans",
-                {
-                    "scan_id": scan_id,
-                    "repo_name": args.repo,
-                    "repo_path": str(args.repo_path) if args.repo_path else "",
-                    "scan_time": scan_time,
-                },
-            )
-
-            stored = 0
-            contexts = 0
-            for result in data.get("results", []):
-                extra = result.get("extra", {}) or {}
-                metadata = extra.get("metadata") or {}
-                rule_id = result.get("check_id", "")
-                path = result.get("path", "")
-                start_line = result.get("start", {}).get("line", 0) or 0
-                end_line = result.get("end", {}).get("line", start_line) or start_line
-                severity = extra.get("severity", "WARNING")
-                finding_id = _make_finding_id(args.repo, rule_id, path, start_line)
-                provider = _detect_provider(rule_id, metadata)
-
-                message = (extra.get("message") or "").strip()
-                code_snippet = extra.get("lines") or ""
-                category = metadata.get("category") if isinstance(metadata, Mapping) else None
-                metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        if db is not None:
+            try:
+                _ensure_relations(db)
 
                 db.insert(
-                    "findings",
+                    "repo_scans",
                     {
-                        "finding_id": finding_id,
                         "scan_id": scan_id,
                         "repo_name": args.repo,
                         "repo_path": str(args.repo_path) if args.repo_path else "",
-                        "rule_id": rule_id,
-                        "check_id": rule_id,
-                        "category": category or "",
-                        "severity": severity,
-                        "severity_score": _severity_score(severity),
-                        "message": message,
-                        "code_snippet": code_snippet,
-                        "metadata_json": metadata_json,
-                        "provider": provider,
-                        "source_file": path,
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "created_at": scan_time,
+                        "scan_time": scan_time,
                     },
                 )
 
-                entries = _context_entries(finding_id, extra)
-                for entry in entries:
-                    db.put("finding_context", entry)
+                stored = 0
+                contexts = 0
+                for result in data.get("results", []):
+                    extra = result.get("extra", {}) or {}
+                    metadata = extra.get("metadata") or {}
+                    rule_id = result.get("check_id", "")
+                    path = result.get("path", "")
+                    start_line = result.get("start", {}).get("line", 0) or 0
+                    end_line = result.get("end", {}).get("line", start_line) or start_line
+                    severity = extra.get("severity", "WARNING")
+                    finding_id = _make_finding_id(args.repo, rule_id, path, start_line)
+                    provider = _detect_provider(rule_id, metadata)
 
-                stored += 1
-                contexts += len(entries)
+                    message = (extra.get("message") or "").strip()
+                    code_snippet = extra.get("lines") or ""
+                    category = metadata.get("category") if isinstance(metadata, Mapping) else None
+                    metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
 
-        finally:
-            db.close()
+                    db.insert(
+                        "findings",
+                        {
+                            "finding_id": finding_id,
+                            "scan_id": scan_id,
+                            "repo_name": args.repo,
+                            "repo_path": str(args.repo_path) if args.repo_path else "",
+                            "rule_id": rule_id,
+                            "check_id": rule_id,
+                            "category": category or "",
+                            "severity": severity,
+                            "severity_score": _severity_score(severity),
+                            "message": message,
+                            "code_snippet": code_snippet,
+                            "metadata_json": metadata_json,
+                            "provider": provider,
+                            "source_file": path,
+                            "start_line": start_line,
+                            "end_line": end_line,
+                            "created_at": scan_time,
+                        },
+                    )
 
-        print(f"Stored {stored} findings with {contexts} context rows into {DEFAULT_COZO_DB}")
+                    entries = _context_entries(finding_id, extra)
+                    for entry in entries:
+                        db.put("finding_context", entry)
+
+                    stored += 1
+                    contexts += len(entries)
+
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+            print(f"Stored {stored} findings with {contexts} context rows into {DEFAULT_COZO_DB}")
+            return
     else:
         # Fallback path: write directly into SQLite tables so CI can validate DB contents
         conn = sqlite3.connect(str(DEFAULT_COZO_DB))
