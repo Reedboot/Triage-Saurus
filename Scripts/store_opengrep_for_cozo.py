@@ -339,6 +339,76 @@ def main() -> None:
                     pass
         conn.commit()
 
+        # Ensure repositories and resources tables exist for CI quality gates
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS repositories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT UNIQUE,
+                repo_path TEXT,
+                created_at TEXT
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS resources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                resource_id TEXT UNIQUE,
+                repo_name TEXT,
+                resource_type TEXT,
+                resource_name TEXT,
+                provider TEXT,
+                properties_json TEXT,
+                created_at TEXT
+            )
+        ''')
+        conn.commit()
+
+        # Insert repository record
+        try:
+            cur.execute(
+                "INSERT OR IGNORE INTO repositories (repo_name, repo_path, created_at) VALUES (?, ?, ?)",
+                (args.repo, str(args.repo_path) if args.repo_path else "", scan_time),
+            )
+        except Exception:
+            pass
+
+        # Derive and insert resource rows from opengrep metadata extracts when available
+        try:
+            existing_resources = set()
+            for result in data.get("results", []):
+                extra = result.get("extra", {}) or {}
+                metadata = extra.get("metadata") or {}
+                extracts = metadata.get("extracts") or {}
+                resource_type = extracts.get("resource_type") if isinstance(extracts, dict) else None
+                resource_name = extracts.get("resource_name") if isinstance(extracts, dict) else None
+                provider = _detect_provider(result.get("check_id", ""), metadata)
+                if resource_type and resource_name:
+                    rid_payload = f"{args.repo}|{resource_type}|{resource_name}"
+                    resource_id = hashlib.sha1(rid_payload.encode("utf-8")).hexdigest()
+                    if resource_id in existing_resources:
+                        continue
+                    properties_json = json.dumps(extracts.get("properties") or {}, ensure_ascii=False, sort_keys=True)
+                    try:
+                        cur.execute(
+                            "INSERT OR IGNORE INTO resources (resource_id, repo_name, resource_type, resource_name, provider, properties_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                resource_id,
+                                args.repo,
+                                resource_type,
+                                resource_name,
+                                provider,
+                                properties_json,
+                                scan_time,
+                            ),
+                        )
+                        existing_resources.add(resource_id)
+                    except Exception:
+                        # best-effort: continue on insert failures
+                        pass
+            conn.commit()
+        except Exception:
+            # Ignore extraction errors; the main goal is to ensure tables exist and repo row is present
+            conn.rollback()
+
         cur.execute(
             "INSERT OR IGNORE INTO repo_scans (scan_id, repo_name, repo_path, scan_time) VALUES (?, ?, ?, ?)",
             (scan_id, args.repo, str(args.repo_path) if args.repo_path else "", scan_time),
