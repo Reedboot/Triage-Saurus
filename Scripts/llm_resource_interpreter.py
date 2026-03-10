@@ -31,7 +31,8 @@ _db_conn: sqlite3.Connection | None = None
 def _get_db() -> sqlite3.Connection | None:
     global _db_conn
     if _db_conn is None:
-        db_path = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+        # Use the resource type DB path (prefers COZO DB when available)
+        db_path = _rtdb.DB_PATH
         if db_path.exists():
             _db_conn = sqlite3.connect(str(db_path))
     return _db_conn

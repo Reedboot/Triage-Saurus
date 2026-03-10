@@ -29,7 +29,9 @@ from cozo_helpers import (
 )
 
 
-DB_PATH = Path(__file__).resolve().parents[1] / "Output/Learning/triage.db"
+# Prefer cozo consolidated DB if present; fall back to legacy triage DB
+import db_helpers as _db_helpers
+DB_PATH = _db_helpers.DB_PATH
 
 
 def _get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
