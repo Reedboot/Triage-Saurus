@@ -64,7 +64,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash Scripts/run_cozo_repos.sh --force
 
-      - name: Quality gate – verify triage.db has repository entries
+      - name: Quality gate – verify Cozo DB contents
         working-directory: ${{ github.workspace }}
         run: |
           python3 - << 'PYCODE'
@@ -86,21 +86,41 @@ jobs:
 
           try:
               cur = conn.cursor()
-              # Confirm the repositories table exists before counting rows.
-              cur.execute(
-                  "SELECT name FROM sqlite_master WHERE type='table' AND name='repositories';"
-              )
-              table = cur.fetchone()
-              if table is None:
-                  print("❌ 'repositories' table not found in cozo.db – the database may be corrupted or uninitialised")
+
+              # Ensure required tables exist
+              required_tables = ['repositories', 'resources', 'findings']
+              missing = []
+              for t in required_tables:
+                  cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (t,))
+                  if cur.fetchone() is None:
+                      missing.append(t)
+              if missing:
+                  print(f"❌ Missing required tables in cozo.db: {missing}")
                   sys.exit(1)
 
-              cur.execute("SELECT COUNT(*) FROM repositories;")
-              row = cur.fetchone()
-              row_count = int(row[0]) if row is not None else 0
-              print(f"Repositories table row count: {row_count}")
+              # Check repositories contains TestRepo
+              cur.execute("SELECT COUNT(1) FROM repositories WHERE repo_name = ?;", ('TestRepo',))
+              repo_count = int(cur.fetchone()[0] or 0)
+              if repo_count < 1:
+                  print("❌ 'TestRepo' not found in repositories table")
+                  sys.exit(1)
 
-              print(f"✅ cozo.db exists and repositories table was found (rows: {row_count})")
+              # Check resources and findings counts
+              cur.execute("SELECT COUNT(1) FROM resources;")
+              resources_count = int(cur.fetchone()[0] or 0)
+
+              cur.execute("SELECT COUNT(1) FROM findings;")
+              findings_count = int(cur.fetchone()[0] or 0)
+
+              if resources_count < 1:
+                  print(f"❌ resources table contains 0 rows (expected >0)")
+                  sys.exit(1)
+              if findings_count < 1:
+                  print(f"❌ findings table contains 0 rows (expected >0)")
+                  sys.exit(1)
+
+              print(f"✅ cozo.db checks passed: repositories(TestRepo)={repo_count}, resources={resources_count}, findings={findings_count}")
+
           finally:
               conn.close()
           PYCODE
