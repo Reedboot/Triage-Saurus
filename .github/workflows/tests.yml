@@ -60,21 +60,21 @@ jobs:
           fi
 
           python3 - <<'PYCODE'
-            import json, sys
-            with open("opengrep_output.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-            errors = data.get("errors", [])
-            results = data.get("results", [])
-            print(f"opengrep findings: {len(results)}, errors: {len(errors)}")
-            if errors:
-                print("❌ opengrep reported rule errors:")
-                print(json.dumps(errors, indent=2))
-                sys.exit(1)
-            if len(results) == 0:
-                print("❌ opengrep produced zero findings for the corpus; aborting")
-                sys.exit(1)
-            print("✅ opengrep rules validated and sample scan produced results")
-          PYCODE
+import json, sys
+with open("opengrep_output.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+errors = data.get("errors", [])
+results = data.get("results", [])
+print(f"opengrep findings: {len(results)}, errors: {len(errors)}")
+if errors:
+    print("❌ opengrep reported rule errors:")
+    print(json.dumps(errors, indent=2))
+    sys.exit(1)
+if len(results) == 0:
+    print("❌ opengrep produced zero findings for the corpus; aborting")
+    sys.exit(1)
+print("✅ opengrep rules validated and sample scan produced results")
+PYCODE
 
       - name: Upload opengrep output
         if: always()
