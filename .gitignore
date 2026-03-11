@@ -25,3 +25,7 @@ Output/*
 .venv-cozo/
 __pycache__/
 *.pyc
+.venv-ci/
+.local/
+TestsCorpus/
+opengrep_output.json
