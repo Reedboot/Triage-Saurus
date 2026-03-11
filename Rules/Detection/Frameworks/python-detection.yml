@@ -8,6 +8,8 @@ rules:
     pattern-regex: |
       ^[a-zA-Z0-9\-_]+(==|>=|<=|~=|!=)[0-9.]+
     metadata:
+      finding_kind: Asset
+      asset_provider: unknown
       rule_type: context_discovery
       category: application
       subcategory: framework

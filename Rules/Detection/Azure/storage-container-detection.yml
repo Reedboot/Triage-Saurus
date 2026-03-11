@@ -28,6 +28,8 @@ rules:
               metavariable: $SRC
               regex: "(?i).*storage[_-]?container.*"
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: infrastructure
       subcategory: storage_container

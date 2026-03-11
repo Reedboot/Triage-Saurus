@@ -22,6 +22,8 @@ rules:
               metavariable: $SRC
               regex: "(?i).*private[_-]?dns[_-]?zone.*"
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: networking
       subcategory: private_dns

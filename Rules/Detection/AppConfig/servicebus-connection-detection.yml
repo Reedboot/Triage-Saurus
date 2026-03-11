@@ -8,6 +8,8 @@ rules:
     pattern-regex: |
       Endpoint=sb://[A-Za-z0-9\.\-]+\.servicebus\.windows\.net/;[^"\n]+
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: application
       subcategory: messaging

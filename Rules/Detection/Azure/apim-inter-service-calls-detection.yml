@@ -9,6 +9,8 @@ rules:
       - pattern-regex: '(?s)config\s*=\s*\{.*?\$SERVICE_NAME__BaseUri\s*=\s*"\$API_MANAGER_URI/\$PATH/"'
       - pattern-regex: '(?s)secrets\s*=\s*\{.*?\$SERVICE_NAME__SubscriptionKey\s*=\s*\$SUBSCRIPTION_KEY'
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: service-dependencies
       subcategory: inter-service-communication

@@ -12,6 +12,8 @@ rules:
         ...
       }
     metadata:
+      finding_kind: Asset
+      asset_provider: aws
       rule_type: context_discovery
       category: infrastructure
       subcategory: identity
