@@ -3,8 +3,12 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add the script's directory to the Python path
-sys.path.append(str(Path(__file__).parent))
+# Ensure repo Scripts and subpackages are on PYTHONPATH after the reorg
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = str(REPO_ROOT / 'Scripts')
+for p in (SCRIPTS_DIR, str(Path(__file__).resolve().parents[1]), str(REPO_ROOT / 'Scripts' / 'Utils'), str(REPO_ROOT / 'Scripts' / 'Persist')):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from context_extraction import extract_context
 from report_generation import generate_reports, write_to_database
