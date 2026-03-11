@@ -35,7 +35,6 @@ jobs:
 
           # Clone a couple of tiny public sample repos (different languages) to increase coverage
           git clone --depth 1 https://github.com/githubtraining/hellogitworld.git "$CORPUS_DIR/hellogitworld" || true
-          git clone --depth 1 https://github.com/octocat/Hello-World.git "$CORPUS_DIR/hello-world" || true
 
           # Place TestRepo where batch_scan_repos.sh expects it (ensure backward compatibility)
           cp -r "$CORPUS_DIR/TestRepo" "$REPOS_ROOT/TestRepo" || true
