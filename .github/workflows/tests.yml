@@ -25,21 +25,24 @@ jobs:
 
       - name: Set up mock environment and expanded corpus
         run: |
-          # Prepare a corpus of sample repos to exercise more rules during CI
+          # Prepare TestsCorpus and ensure terragoat is available as a git-tracked repo
           REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
           CORPUS_DIR="$GITHUB_WORKSPACE/TestsCorpus"
           mkdir -p "$CORPUS_DIR"
 
-          # Copy the existing TestRepo into the corpus
-          cp -r "$GITHUB_WORKSPACE/Sample Findings/Repos/TestRepo" "$CORPUS_DIR/TestRepo" || true
+          # Prefer cloned terragoat in TestsCorpus (clone if missing)
+          if [ ! -d "$CORPUS_DIR/terragoat/.git" ]; then
+            echo "[ci] Cloning terragoat into TestsCorpus"
+            git clone --depth 1 https://github.com/bridgecrewio/terragoat "$CORPUS_DIR/terragoat"
+          else
+            echo "[ci] terragoat already present in TestsCorpus"
+          fi
 
-          # Clone a couple of tiny public sample repos (different languages) to increase coverage
+          # Place terragoat where run_cozo_repos.sh expects it (parent/terragoat)
+          cp -r "$CORPUS_DIR/terragoat" "$REPOS_ROOT/terragoat" || true
 
-          # Place TestRepo where batch_scan_repos.sh expects it (ensure backward compatibility)
-          cp -r "$CORPUS_DIR/TestRepo" "$REPOS_ROOT/TestRepo" || true
-
-          # Tell the script which repos to scan (keep TestRepo entry for existing scripts)
-          echo "TestRepo" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
+          # Tell the script which repos to scan (use terragoat)
+          echo "terragoat" > "$GITHUB_WORKSPACE/Intake/ReposToScan.txt"
 
           # Ensure the Learning output directory exists so the DB can be written.
           mkdir -p "$GITHUB_WORKSPACE/Output/Learning"
