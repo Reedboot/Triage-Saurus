@@ -179,7 +179,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     continue
   fi
 
-  if ! "$PYTHON_BIN" "$PYTHON_SCRIPT" "$json_output" --repo "$repo_name" --repo-path "$repo_path" --scan-id "$scan_id"; then
+  if ! "$PYTHON_BIN" -u "$PYTHON_SCRIPT" "$json_output" --repo "$repo_name" --repo-path "$repo_path" --scan-id "$scan_id"; then
     log "  ❌ Cozo import failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (Cozo import)" >> "$AUDIT_LOG"
@@ -187,7 +187,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   echo "Resources detected for $repo_name (scan $scan_id):"
-  "$PYTHON_BIN" - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name"
+  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name"
 from pycozo import Client
 import sys
 
