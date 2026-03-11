@@ -18,16 +18,21 @@ pip install -r requirements.txt
 mkdir -p "$ROOT_DIR/Intake"
 REPOS_FILE="$ROOT_DIR/Intake/ReposToScan.txt"
 PARENT_DIR="$(cd "$ROOT_DIR/.." && pwd)"
-# Prefer using the cloned terragoat repo in TestsCorpus. Ensure a repo named 'terragoat' exists under the parent directory
+
+# Determine source repo path for scans (can be overridden via SCAN_PATH env var)
+SCAN_PATH="${SCAN_PATH:-$ROOT_DIR/TestsCorpus/terragoat}"
+
+# Ensure the repo exists under the parent directory where run_cozo_repos.sh expects it
 if [ ! -d "$PARENT_DIR/terragoat" ]; then
-  if [ -d "$ROOT_DIR/TestsCorpus/terragoat" ]; then
-    echo "[test] Creating symlink to TestsCorpus/terragoat under parent directory"
-    ln -s "$ROOT_DIR/TestsCorpus/terragoat" "$PARENT_DIR/terragoat"
+  if [ -d "$SCAN_PATH" ]; then
+    echo "[test] Creating symlink to $SCAN_PATH under parent directory"
+    ln -s "$SCAN_PATH" "$PARENT_DIR/terragoat"
   else
     echo "[test] Cloning terragoat into parent directory for scan"
     git clone --depth 1 https://github.com/bridgecrewio/terragoat "$PARENT_DIR/terragoat"
   fi
 fi
+
 # Point the repos file at terragoat
 echo "terragoat" > "$REPOS_FILE"
 
