@@ -27,7 +27,7 @@ jobs:
         run: |
           # Prepare TestsCorpus and ensure terragoat is available as a git-tracked repo
           REPOS_ROOT="$(cd "$GITHUB_WORKSPACE/.." && pwd)"
-          CORPUS_DIR="$GITHUB_WORKSPACE/TestsCorpus"
+          CORPUS_DIR="$GITHUB_WORKSPACE/TestsCorpus/terragoat"
           mkdir -p "$CORPUS_DIR"
 
           # Prefer cloned terragoat in TestsCorpus (clone if missing)
@@ -53,7 +53,7 @@ jobs:
           OUTPUT_FILE="opengrep_output.json"
 
           # Run opengrep against the expanded corpus to exercise more rules
-          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "$GITHUB_WORKSPACE/TestsCorpus" || true
+          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "$GITHUB_WORKSPACE/TestsCorpus/terragoat" || true
 
           if [ ! -f "$OUTPUT_FILE" ]; then
             echo "❌ opengrep did not produce an output file: $OUTPUT_FILE"
