@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 
 # Ensure Scripts is on path
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SYS_SCRIPTS = str(ROOT / 'Scripts')
 if SYS_SCRIPTS not in sys.path:
     sys.path.insert(0, SYS_SCRIPTS)
