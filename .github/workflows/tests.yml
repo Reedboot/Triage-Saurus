@@ -118,3 +118,13 @@ jobs:
         run: bash Scripts/Tests/test_run_cozo_init.sh
         shell: bash
 
+      - name: Upload generated markdown summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-summaries
+          path: |
+            Output/Summary/Repos/**/*.md
+            Output/Summary/Cloud/**/*.md
+          if-no-files-found: warn
+
