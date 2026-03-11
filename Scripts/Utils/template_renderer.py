@@ -10,7 +10,7 @@ from string import Template
 
 
 # Repository root and templates directory
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = REPO_ROOT / "Templates"
 
 

@@ -14,17 +14,27 @@ python3 -m venv .venv-cozo
 echo "[test] Installing requirements"
 pip install -r requirements.txt
 
-# Ensure Intake list and a scanable TestRepo exist under the parent directory
+# Ensure Intake list and a scanable repo exist under the parent directory
 mkdir -p "$ROOT_DIR/Intake"
 REPOS_FILE="$ROOT_DIR/Intake/ReposToScan.txt"
 PARENT_DIR="$(cd "$ROOT_DIR/.." && pwd)"
-if [ ! -d "$PARENT_DIR/TestRepo" ]; then
-  echo "[test] Creating TestRepo under parent directory for scan"
-  # Copy current repo into parent as TestRepo so run_cozo_repos.sh can find it
-  cp -r "$ROOT_DIR" "$PARENT_DIR/TestRepo"
+
+# Determine source repo path for scans (can be overridden via SCAN_PATH env var)
+SCAN_PATH="${SCAN_PATH:-$ROOT_DIR/TestsCorpus/terragoat}"
+
+# Ensure the repo exists under the parent directory where run_cozo_repos.sh expects it
+if [ ! -d "$PARENT_DIR/terragoat" ]; then
+  if [ -d "$SCAN_PATH" ]; then
+    echo "[test] Creating symlink to $SCAN_PATH under parent directory"
+    ln -s "$SCAN_PATH" "$PARENT_DIR/terragoat"
+  else
+    echo "[test] Cloning terragoat into parent directory for scan"
+    git clone --depth 1 https://github.com/bridgecrewio/terragoat "$PARENT_DIR/terragoat"
+  fi
 fi
-# Point the repos file at TestRepo
-echo "TestRepo" > "$REPOS_FILE"
+
+# Point the repos file at terragoat
+echo "terragoat" > "$REPOS_FILE"
 
 echo "[test] Ensuring opengrep is available"
 if ! command -v opengrep >/dev/null 2>&1; then

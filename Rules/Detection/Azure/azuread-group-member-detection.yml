@@ -13,6 +13,8 @@ rules:
         ...
       }
     metadata:
+      finding_kind: Asset
+      asset_provider: unknown
       rule_type: context_discovery
       category: identity
       subcategory: group_membership

@@ -8,6 +8,8 @@ rules:
     pattern-regex: |
       Server=tcp:[A-Za-z0-9\.\-]+(?:,1433)?;[^"\n]*Database=[^;"\n]+;
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: application
       subcategory: database

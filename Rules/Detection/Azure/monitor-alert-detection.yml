@@ -34,6 +34,8 @@ rules:
               metavariable: $SRC
               regex: "(?i).*monitor[_-]?(alert|metric).*"
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: observability
       subcategory: monitoring

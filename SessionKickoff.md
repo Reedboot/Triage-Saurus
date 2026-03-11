@@ -29,7 +29,7 @@ Targeted helpers (stdout-only):
 - `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
 - `python3 Scripts/triage_queue.py` — use after bulk imports to identify common missing context
 - `python3 Scripts/get_cwd.py` — suggests repo root path based on current directory
-- `python3 Scripts/compare_intake_to_findings.py --intake <path> --findings <path>` — checks for duplicates before bulk processing
+- `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings <path>` — checks for duplicates before bulk processing
 
 ## Kickoff Flow
 
@@ -77,7 +77,7 @@ Targeted helpers (stdout-only):
      - Sample Findings/Cloud
      - Sample Findings/Code
    - Before starting bulk triage, check for duplicates:
-     `python3 Scripts/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
+     `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
    - If duplicates found: ask to proceed with new items only.
    - If no new items: stop and notify user.
 
@@ -107,7 +107,7 @@ Targeted helpers (stdout-only):
    - **Phase 1 - Fast Context Discovery (~10 seconds per repo):**
       - Run `opengrep scan --config Rules/ <repo>` immediately after discovery; log the command in the audit log. Only fall back to manual grep if opengrep is unavailable, and document the outage.
 
-     - Run `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
+     - Run `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
      - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies.
      - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
        - 🗺️ Architecture Diagram (Mermaid) - infrastructure topology with colored borders

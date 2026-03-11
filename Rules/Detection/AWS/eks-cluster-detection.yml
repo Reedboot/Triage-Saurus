@@ -17,6 +17,8 @@ rules:
       subcategory: kubernetes
       technology: [terraform, aws, eks]
       target_files: ["*.tf", "**/*.tf"]
+      finding_kind: Asset
+      asset_provider: aws
       extracts:
         service_type: EKS Cluster
         resource_type: aws_eks_cluster
@@ -51,6 +53,8 @@ rules:
       subcategory: kubernetes
       technology: [terraform, aws, eks, module]
       target_files: ["*.tf", "**/*.tf"]
+      finding_kind: Asset
+      asset_provider: aws
       extracts:
         service_type: EKS Cluster
         resource_type: aws_eks_cluster

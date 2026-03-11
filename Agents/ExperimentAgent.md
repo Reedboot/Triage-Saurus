@@ -71,7 +71,7 @@ When `status = "pending"`:
 
    **Phase 1: Automated Context Discovery - ~10 seconds**
    ```bash
-   python3 Scripts/discover_repo_context.py <repo_path> --repos-root /mnt/c/Repos \
+   python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root /mnt/c/Repos \
        --output-dir Output/Learning/experiments/001_baseline
    ```
    - Creates baseline summary with architecture diagram at `experiments/<id>/Summary/Repos/<RepoName>.md`
@@ -79,12 +79,12 @@ When `status = "pending"`:
    - Populates `resources` table and `repositories` table in DB
    - **After Phase 1:** render findings and diagrams
      ```bash
-     python3 Scripts/generate_diagram.py <id>
+     python3 Scripts/Generate/generate_diagram.py <id>
      ```
 
    **Phase 2: Deeper Context Discovery (scripts, no LLM) - ~5-15 seconds**
    ```bash
-   python3 Scripts/discover_code_context.py \
+   python3 Scripts/Context/discover_code_context.py \
        --experiment <id> \
        --repo <repo_name> \
        --target <repo_path> \
@@ -101,7 +101,7 @@ When `status = "pending"`:
    Writes all findings to `context_metadata` table (namespace: `phase2_code`) and generates `Summary/Repos/<repo>.md`.
 
    ```bash
-   python3 Scripts/generate_diagram.py <id>
+   python3 Scripts/Generate/generate_diagram.py <id>
    ```
 
    **Phase 3: Rules-Based Infrastructure Scanning (~5-10 minutes)**
@@ -129,7 +129,7 @@ When `status = "pending"`:
    "
    # Then for each ID:
    for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
-   python3 Scripts/generate_diagram.py <id>
+   python3 Scripts/Generate/generate_diagram.py <id>
    ```
 
    **Verify DB findings stored:**
@@ -151,7 +151,7 @@ When `status = "pending"`:
    Follow `experiments/<id>/Agents/SecurityAgent.md` → `## DB-First Enrichment Workflow`:
 
    ```bash
-   python3 Scripts/enrich_findings.py --experiment <id>
+   python3 Scripts/Enrich/enrich_findings.py --experiment <id>
    ```
    - Queries `findings WHERE llm_enriched_at IS NULL`
    - Calls LLM once per finding; writes `title`, `description`, `proposed_fix`, `severity_score`
@@ -161,7 +161,7 @@ When `status = "pending"`:
    **After enrichment, regenerate finding MDs and diagrams:**
    ```bash
    for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
-   python3 Scripts/generate_diagram.py <id>
+   python3 Scripts/Generate/generate_diagram.py <id>
    ```
    
    **Validation:** At end of Phase 4:
@@ -239,7 +239,7 @@ When `status = "pending"`:
    
    **After skeptic reviews, regenerate diagrams and reports:**
    ```bash
-   python3 Scripts/generate_diagram.py <id>
+   python3 Scripts/Generate/generate_diagram.py <id>
    for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
    python3 Scripts/risk_register.py
    ```

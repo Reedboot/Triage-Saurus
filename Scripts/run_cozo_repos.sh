@@ -7,9 +7,9 @@ REPO_PARENT="$(cd "$REPO_ROOT/.." && pwd)"
 REPOS_FILE="$REPO_ROOT/Intake/ReposToScan.txt"
 RULES_DIR="$REPO_ROOT/Rules"
 OUTPUT_DIR="$REPO_ROOT/Output/Data/opengrep"
-PYTHON_SCRIPT="$REPO_ROOT/Scripts/store_opengrep_for_cozo.py"
+PYTHON_SCRIPT="$REPO_ROOT/Scripts/Scan/store_opengrep_for_cozo.py"
 COZO_DB_PATH="$REPO_ROOT/Output/Data/cozo.db"
-SUMMARY_SCRIPT="$REPO_ROOT/Scripts/generate_repo_summary_from_cozo.py"
+SUMMARY_SCRIPT="$REPO_ROOT/Scripts/Generate/generate_repo_summary_from_cozo.py"
 SUMMARY_OUTPUT_DIR="$REPO_ROOT/Output/Summary/Repos"
 PYTHON_BIN="$REPO_ROOT/.venv-cozo/bin/python"
 ANALYTICS_DB_DIR="$REPO_ROOT/Output/Data"
@@ -68,7 +68,7 @@ log() {
 }
 
 log "Ensuring learning schema exists inside Cozo DB at $ANALYTICS_DB"
-"$PYTHON_BIN" "$REPO_ROOT/Scripts/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
+"$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
 
 should_skip_repo() {
   local repo="$1"
@@ -154,7 +154,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   log "  Phase 1-2: Context discovery (learning DB: $ANALYTICS_DB)"
-  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
+  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Context/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
     log "  ❌ Context discovery failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (context discovery)" >> "$AUDIT_LOG"

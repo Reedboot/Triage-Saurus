@@ -254,7 +254,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - `python3 Scripts/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
   - **Check for draft findings requiring validation:**
-    - `python3 Scripts/check_draft_findings.py`
+    - `python3 Scripts/Utils/check_draft_findings.py`
     It identifies findings with generic boilerplate that need evidence, applicability confirmation, and accurate risk scoring.
     - If **>10% of findings are drafts**, prominently warn the user and offer to complete them:
       - "⚠️ Found **N draft findings** that need validation. These have placeholder scores and generic boilerplate."
@@ -299,7 +299,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
       - Accept either the **number** or the **full text** as a valid answer.
     - Exception: when using a **selectable** UI prompt (where the client renders choices), do **not** include numeric prefixes in the labels.
   - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
-    - Run (stdout-only): `python3 Scripts/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
+    - Run (stdout-only): `python3 Scripts/Utils/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
     - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
       - proceed with **new items only** (recommended), or
         - stop and let the user adjust the intake.
@@ -598,7 +598,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - If single evidence file: show inline
     - If multiple evidence files: format as bullet list
   - If a repo scan finds **Terraform module usage**, automatically:
-    1) extract and classify module dependencies using (stdout-only): `python3 Scripts/analyze_terraform_modules.py <repo-path>`
+    1) extract and classify module dependencies using (stdout-only): `python3 Scripts/Context/analyze_terraform_modules.py <repo-path>`
     2) scan any **local-path** modules immediately,
     3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
@@ -669,7 +669,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
   - **Exception (user-requested automation):** if the user asks for summaries to update automatically as new information becomes available, it is OK to run `python3 Scripts/update_validated_summaries.py --path Output/Findings/Cloud --in-place` after each material Q&A/knowledge update (it only removes title-only boilerplate when there is confirmed/applicability context).
   - **Exception (user-requested automation):** if the user asks for descriptions to stop repeating titles, it is OK to run `python3 Scripts/update_descriptions.py --path Output/Findings/Cloud --in-place` after bulk imports and/or as part of draft validation.
-  - **Exception (user-requested automation):** if the user asks to adjust scores based on confirmed countermeasures and compounding, it is OK to run `python3 Scripts/adjust_finding_scores.py --path Output/Findings/Cloud --in-place` after material Q&A/knowledge updates (it only adjusts when the finding contains confirmed context and records the applied drivers under `### 📐 Rationale`).
+  - **Exception (user-requested automation):** if the user asks to adjust scores based on confirmed countermeasures and compounding, it is OK to run `python3 Scripts/Utils/adjust_finding_scores.py --path Output/Findings/Cloud --in-place` after material Q&A/knowledge updates (it only adjusts when the finding contains confirmed context and records the applied drivers under `### 📐 Rationale`).
   - **Exception (user-requested automation):** if the user asks for the risk register to auto-regenerate, it is OK to run a watcher in a separate terminal: `python3 Scripts/watch_risk_register.py` (or `--full` to also run the refresh helpers).
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
@@ -712,7 +712,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
   - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
-- **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+- **Optional bulk draft generator (titles → findings):** `python3 Scripts/Generate/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
     `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
     and appends audit entries under `Output/Audit/`.

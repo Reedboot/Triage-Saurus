@@ -17,6 +17,8 @@ rules:
       subcategory: storage
       technology: [terraform, aws, s3]
       target_files: ["*.tf", "**/*.tf"]
+      finding_kind: Asset
+      asset_provider: aws
       extracts:
         service_type: S3 Bucket
         resource_type: aws_s3_bucket

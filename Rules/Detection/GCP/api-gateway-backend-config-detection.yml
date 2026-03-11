@@ -24,6 +24,8 @@ rules:
             ...
           }
     metadata:
+      finding_kind: Asset
+      asset_provider: gcp
       rule_type: context_discovery
       category: api-gateway
       subcategory: backend-routing

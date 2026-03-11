@@ -8,6 +8,8 @@ rules:
     pattern-regex: |
       [A-Za-z0-9\-]+\.redis\.cache\.windows\.net:6379,password=[^,;\s]+
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: application
       subcategory: caching

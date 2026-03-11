@@ -8,6 +8,8 @@ rules:
     pattern-regex: |
       InstrumentationKey=[0-9a-fA-F\-]{36}
     metadata:
+      finding_kind: Asset
+      asset_provider: azure
       rule_type: context_discovery
       category: application
       subcategory: observability

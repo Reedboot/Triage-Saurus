@@ -242,3 +242,12 @@ rules:
 **Test:** Manual grep or opengrep scan  
 **Track:** Reference rule-id in findings  
 **Learn:** Document missed detections and new rules
+
+## Context discovery metadata for assets
+When writing context_discovery rules, include optional metadata to mark findings as assets and identify the provider:
+
+metadata:
+  finding_kind: Asset        # non-breaking label indicating this finding represents an asset/resource
+  asset_provider: aws|azure|gcp|unknown
+
+Do NOT change the `severity:` value — keep discovery rules as `INFO` so downstream scoring and storage behave correctly.
