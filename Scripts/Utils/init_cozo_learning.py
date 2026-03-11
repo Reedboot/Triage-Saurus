@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SYS_SCRIPTS = str(ROOT / 'Scripts')
 if SYS_SCRIPTS not in sys.path:
     sys.path.insert(0, SYS_SCRIPTS)
+# Also add Scripts/Persist where db_helpers lives after the reorg
+SYS_PERSIST = str(ROOT / 'Scripts' / 'Persist')
+if SYS_PERSIST not in sys.path:
+    sys.path.insert(0, SYS_PERSIST)
 
 import db_helpers
 import resource_type_db as rtdb
