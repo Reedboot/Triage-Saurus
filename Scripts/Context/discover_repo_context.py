@@ -97,40 +97,45 @@ def main() -> int:
         print(f"Error: Not a directory: {repo_path}", file=sys.stderr)
         return 1
 
+    repo_name = repo_path.name
+
+    def log(message: str) -> None:
+        print(f"[{repo_name}] {message}", flush=True)
+
     # 1. Data Extraction
-    print("== Starting context extraction ==")
+    log("== Starting context extraction ==")
     context_model = extract_context(str(repo_path))
-    print(f"== Extracted {len(context_model.resources)} resources, {len(context_model.relationships)} relationships ==")
+    log(f"== Extracted {len(context_model.resources)} resources, {len(context_model.relationships)} relationships ==")
 
     # 2. Database Population
-    print("== Writing to database ==")
+    log("== Writing to database ==")
     db_path = args.database if args.database else None
     write_to_database(context_model, db_path, experiment_id=args.experiment_id)
-    print("== Database write complete ==")
+    log("== Database write complete ==")
 
     # 2b. Persist knowledge graph (nodes, typed relationships, enrichment queue)
-    print("== Persisting knowledge graph ==")
+    log("== Persisting knowledge graph ==")
     try:
         persist_context(context_model)
-        print(f"== Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships ==")
+        log(f"== Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships ==")
     except Exception as e:
-        print(f"[WARN] Knowledge graph persist failed (non-fatal): {e}")
+        log(f"[WARN] Knowledge graph persist failed (non-fatal): {e}")
 
     # 3. Report Generation
-    print("== Generating reports ==")
+    log("== Generating reports ==")
     if args.output_dir:
         summary_root = Path(args.output_dir).resolve() / "Summary"
     else:
         summary_root = Path.cwd() / "Output" / "Summary"
 
     generated = generate_reports(context_model, str(summary_root), repo_path=repo_path)
-    print("== Report generation complete ==")
+    log("== Report generation complete ==")
     for report in generated:
-        print(f"Generated: {report}")
+        log(f"Generated: {report}")
 
     # Keep repository inventory in sync with discovered repos.
     update_repos_knowledge(repo_path)
-    print("Updated: Output/Knowledge/Repos.md")
+    log("Updated: Output/Knowledge/Repos.md")
 
     return 0
 
