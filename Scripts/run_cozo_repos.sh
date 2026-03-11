@@ -7,7 +7,7 @@ REPO_PARENT="$(cd "$REPO_ROOT/.." && pwd)"
 REPOS_FILE="$REPO_ROOT/Intake/ReposToScan.txt"
 RULES_DIR="$REPO_ROOT/Rules"
 OUTPUT_DIR="$REPO_ROOT/Output/Data/opengrep"
-PYTHON_SCRIPT="$REPO_ROOT/Scripts/store_opengrep_for_cozo.py"
+PYTHON_SCRIPT="$REPO_ROOT/Scripts/Scan/store_opengrep_for_cozo.py"
 COZO_DB_PATH="$REPO_ROOT/Output/Data/cozo.db"
 SUMMARY_SCRIPT="$REPO_ROOT/Scripts/generate_repo_summary_from_cozo.py"
 SUMMARY_OUTPUT_DIR="$REPO_ROOT/Output/Summary/Repos"
@@ -68,7 +68,7 @@ log() {
 }
 
 log "Ensuring learning schema exists inside Cozo DB at $ANALYTICS_DB"
-"$PYTHON_BIN" "$REPO_ROOT/Scripts/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
+"$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
 
 should_skip_repo() {
   local repo="$1"
