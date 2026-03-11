@@ -57,17 +57,6 @@ jobs:
         run: |
           OUTPUT_FILE="opengrep_output.json"
 
-          # Debug: show scan path and git info
-          echo "[ci] SCAN_PATH=$SCAN_PATH"
-          echo "[ci] Listing SCAN_PATH:"
-          ls -la "$SCAN_PATH" || true
-          echo "[ci] Count files under SCAN_PATH:"
-          find "$SCAN_PATH" -type f | wc -l || true
-          echo "[ci] git info for SCAN_PATH:"
-          git -C "$SCAN_PATH" rev-parse --is-inside-work-tree 2>/dev/null || echo "not a git repo"
-          git -C "$SCAN_PATH" status --porcelain 2>/dev/null || true
-          echo "[ci] git tracked files count:"
-          git -C "$SCAN_PATH" ls-files | wc -l 2>/dev/null || echo "git ls-files failed"
           # Run opengrep against the expanded corpus to exercise more rules
           opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "$SCAN_PATH" || true
 
