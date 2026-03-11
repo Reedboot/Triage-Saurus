@@ -154,7 +154,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   log "  Phase 1-2: Context discovery (learning DB: $ANALYTICS_DB)"
-  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
+  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Context/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
     log "  ❌ Context discovery failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (context discovery)" >> "$AUDIT_LOG"

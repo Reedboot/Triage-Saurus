@@ -243,7 +243,7 @@ Key-value attributes for a resource. Populated by scripts from IaC; no schema ch
 ### `resource_connections`
 Canonical DB-first topology edges between concrete resources.
 
-> Defined in `Scripts/init_database.py` and `Scripts/db_helpers.py`; primarily written via `db_helpers.insert_connection()` (directly and through `report_generation.write_to_database()`).
+> Defined in `Scripts/init_database.py` and `Scripts/Persist/db_helpers.py`; primarily written via `db_helpers.insert_connection()` (directly and through `report_generation.write_to_database()`).
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -368,7 +368,7 @@ Pending topology assumptions/gaps requiring review.
 
 **Behavior:**
 - New queue entries are deduped by `(context, status='pending_review')`.
-- `Scripts/enrichment_confirmation.py resolve ...` writes an auditable `context_answers` entry and updates queue status.
+- `Scripts/Enrich/enrichment_confirmation.py resolve ...` writes an auditable `context_answers` entry and updates queue status.
 - Confirmed decisions can promote confidence on linked `resource_relationships`, `resource_nodes`, and `resource_equivalences`.
 
 ---
@@ -528,8 +528,8 @@ python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --que
 python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --query assumptions
 
 # List/resolve pending assumptions (confirmation loop)
-python3 Scripts/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
-python3 Scripts/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
+python3 Scripts/Enrich/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
+python3 Scripts/Enrich/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
 ```
 
 ### Parent resource for a given node

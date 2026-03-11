@@ -2,7 +2,7 @@
 """
 Analyze Terraform module dependencies and classify them.
 
-Usage: python3 Scripts/analyze_terraform_modules.py <repo-path>
+Usage: python3 Scripts/Context/analyze_terraform_modules.py <repo-path>
 
 Scans *.tf files for module blocks and classifies each source as:
 - Local path
@@ -92,7 +92,7 @@ def extract_modules(repo_path):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 Scripts/analyze_terraform_modules.py <repo-path>", file=sys.stderr)
+        print("Usage: python3 Scripts/Context/analyze_terraform_modules.py <repo-path>", file=sys.stderr)
         sys.exit(1)
     
     repo_path = sys.argv[1]

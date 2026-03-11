@@ -12,7 +12,7 @@ Analyses a repository WITHOUT any LLM calls by:
   7. Generating/updating the repo summary MD       → human-readable output
 
 Usage:
-    python3 Scripts/discover_code_context.py \\
+    python3 Scripts/Context/discover_code_context.py \\
         --experiment 003 \\
         --repo insecure-kubernetes-deployments \\
         --target /path/to/repo \\

@@ -625,7 +625,7 @@ Total scans to run: 3/4 (saving ~2 minutes)
 When scanning a repository with IaC:
 
 ☐ **Phase 1: Automated context discovery** (discover_repo_context.py)
-  - Run script: `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root_path>`
+  - Run script: `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root_path>`
   - Creates skeleton `Output/Summary/Repos/<RepoName>.md` with [PHASE 2 TODO] markers
   - Updates `Output/Knowledge/Repos.md` with basic repo info
 

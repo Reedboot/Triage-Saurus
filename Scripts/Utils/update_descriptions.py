@@ -131,7 +131,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if cloud_description_for_title is None:
-        raise SystemExit("ERROR: could not import cloud_description_for_title (Scripts/finding_text.py)")
+        raise SystemExit("ERROR: could not import cloud_description_for_title (Scripts/Utils/finding_text.py)")
 
     root = Path(args.path)
     paths = iter_findings(root)

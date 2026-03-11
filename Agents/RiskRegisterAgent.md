@@ -34,7 +34,7 @@ This repository supports consistent security triage. The expected workflow is:
         - `python3 Scripts/scan_intake_files.py <candidate-path>`
       - Only offer **non-empty** candidates as choices.
     - **Idempotency (multi-day runs):** before processing a selected intake path, check for overlap with already-processed findings and only proceed with *new* items.
-      - Run (stdout-only): `python3 Scripts/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
+      - Run (stdout-only): `python3 Scripts/Utils/compare_intake_to_findings.py --intake <Intake/...> --findings Output/Findings/Cloud`
       - If **duplicates are detected** (Already processed > 0), **ask for confirmation** before proceeding:
         - proceed with **new items only** (recommended), or
         - stop and let the user adjust the intake.
@@ -147,7 +147,7 @@ This repository supports consistent security triage. The expected workflow is:
     - If single evidence file: show inline
     - If multiple evidence files: format as bullet list
   - If a repo scan finds **Terraform module usage**, automatically:
-    1) extract and classify module dependencies using (stdout-only): `python3 Scripts/analyze_terraform_modules.py <repo-path>`
+    1) extract and classify module dependencies using (stdout-only): `python3 Scripts/Context/analyze_terraform_modules.py <repo-path>`
     2) scan any **local-path** modules immediately,
     3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
@@ -216,7 +216,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
   - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
 - **Risk register:** regenerate via `python3 Scripts/risk_register.py`
-- **Optional bulk draft generator (titles → findings):** `python3 Scripts/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
+- **Optional bulk draft generator (titles → findings):** `python3 Scripts/Generate/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
     `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
     and appends audit entries under `Output/Audit/`.
@@ -250,5 +250,5 @@ This repository supports consistent security triage. The expected workflow is:
   - Environment context (production, internet-facing, etc.)
   - Accurate risk scoring based on actual exposure
 - Draft findings typically have placeholder 5/10 Medium scores
-- Use `python3 Scripts/check_draft_findings.py` to identify draft findings needing validation
+- Use `python3 Scripts/Utils/check_draft_findings.py` to identify draft findings needing validation
 - During session kickoff, prompt users to complete draft findings if >10% are unvalidated

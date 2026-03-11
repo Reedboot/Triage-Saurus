@@ -313,9 +313,9 @@ def main() -> None:
     print(f"  Detection results : {detection_json.name}")
     print(f"  Findings JSON     : {misconfig_json.name}")
     print(f"\nNext steps:")
-    print(f"  python3 Scripts/enrich_findings.py --experiment {args.experiment}")
+    print(f"  python3 Scripts/Enrich/enrich_findings.py --experiment {args.experiment}")
     print(f"  python3 Scripts/run_skeptics.py --experiment {args.experiment} --reviewer all")
-    print(f"  python3 Scripts/generate_diagram.py --experiment-id {args.experiment}")
+    print(f"  python3 Scripts/Generate/generate_diagram.py --experiment-id {args.experiment}")
 
 
 if __name__ == "__main__":

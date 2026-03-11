@@ -2,7 +2,7 @@
 """Phase 2 pipeline: LLM enrichment for unenriched findings.
 
 Usage:
-    python3 Scripts/enrich_findings.py --experiment <id> [--dry-run] [--limit N]
+    python3 Scripts/Enrich/enrich_findings.py --experiment <id> [--dry-run] [--limit N]
 """
 
 import argparse

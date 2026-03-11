@@ -120,8 +120,8 @@ python3 Scripts/query_resource_graph.py --experiment 003 --resource my-api --que
 ### Resolve pending assumptions
 
 ```bash
-python3 Scripts/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
-python3 Scripts/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
+python3 Scripts/Enrich/enrichment_confirmation.py list --experiment 003 --repo my-repo --status pending_review
+python3 Scripts/Enrich/enrichment_confirmation.py resolve --experiment 003 --assumption-id 42 --decision confirm --resolver analyst@example.com
 ```
 
 Resolution writes auditable `context_answers` records and updates `enrichment_queue` status; confirmation can promote confidence on related graph records.

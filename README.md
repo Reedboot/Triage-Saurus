@@ -86,7 +86,7 @@ Output/Learning/experiments/<id>_<name>/
 Phases 4–6 require an LLM:
 
 ```bash
-python3 Scripts/enrich_findings.py --experiment <id>          # Phase 4 — LLM titles/descriptions/severity
+python3 Scripts/Enrich/enrich_findings.py --experiment <id>          # Phase 4 — LLM titles/descriptions/severity
 python3 Scripts/run_skeptics.py --experiment <id> --reviewer all  # Phase 5 — DevSkeptic/PlatformSkeptic
 python3 Scripts/triage_experiment.py complete <id>            # Mark done
 ```

@@ -228,7 +228,7 @@ def main() -> int:
     print(f"  Repo summary  : {exp_dir}/Summary/Repos/{repo_name}.md")
     print(f"  Architecture  : {exp_dir}/Summary/Cloud/Architecture_AWS.md")
     print(f"\n  Next steps (require LLM):")
-    print(f"    python3 Scripts/enrich_findings.py --experiment {experiment_id}")
+    print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
     print(f"    python3 Scripts/run_skeptics.py --experiment {experiment_id} --reviewer all")
     print(f"    python3 Scripts/triage_experiment.py complete {experiment_id}")
     print()

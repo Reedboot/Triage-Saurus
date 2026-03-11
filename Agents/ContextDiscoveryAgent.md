@@ -11,10 +11,10 @@ This agent performs **fast, non-security context discovery** of repositories to 
 ### Phase 1: Automated Baseline (Script) - ~10 seconds
 
 **Rule integration:** Phase 1 MUST use the Rules/ catalog (Rules/Summary.md) to derive rule-based grep patterns and run programmatic checks when opengrep/semgrep is unavailable. This ensures IaC and configuration signals are detected during discovery and aids Phase 1.5 rule scanning.
-**Tool:** `Scripts/discover_repo_context.py`
+**Tool:** `Scripts/Context/discover_repo_context.py`
 **Method:** Pattern matching, regex, file scanning
 
-**Run:** `python3 Scripts/discover_repo_context.py <repo_path> --repos-root <repos_root>`
+**Run:** `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root>`
 
 **Detects automatically:**
 - **Languages & frameworks** - C#, F#, VB.NET, TypeScript, JavaScript, Python, Go, Java, Kotlin
