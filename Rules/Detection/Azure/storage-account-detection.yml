@@ -17,6 +17,8 @@ rules:
       subcategory: storage
       technology: [terraform, azure, storage]
       target_files: ["*.tf", "**/*.tf"]
+      finding_kind: Asset
+      asset_provider: azure
       extracts:
         service_type: Storage Account
         resource_type: azurerm_storage_account
