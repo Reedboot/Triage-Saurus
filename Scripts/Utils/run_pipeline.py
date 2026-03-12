@@ -10,12 +10,12 @@ Runs the complete AI-free triage pipeline against a repository:
 No LLM or internet access required.
 
 Usage:
-    python3 Scripts/run_pipeline.py --repo /path/to/repo [--name my_scan]
+    python3 Scripts/Utils/run_pipeline.py --repo /path/to/repo [--name my_scan]
 
 Examples:
-    python3 Scripts/run_pipeline.py --repo /home/user/my-k8s-repo
-    python3 Scripts/run_pipeline.py --repo /home/user/my-k8s-repo --name baseline_v1
-    python3 Scripts/run_pipeline.py --repo /home/user/my-k8s-repo --name recheck --experiment 005
+    python3 Scripts/Utils/run_pipeline.py --repo /home/user/my-k8s-repo
+    python3 Scripts/Utils/run_pipeline.py --repo /home/user/my-k8s-repo --name baseline_v1
+    python3 Scripts/Utils/run_pipeline.py --repo /home/user/my-k8s-repo --name recheck --experiment 005
 
 Output:
     Output/Learning/experiments/<id>_<name>/
@@ -35,9 +35,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPTS.parent
-sys.path.append(str(SCRIPTS))
+SCRIPTS = Path(__file__).resolve().parent.parent  # Scripts/Utils → Scripts/
+REPO_ROOT = SCRIPTS.parent                         # Scripts/ → repo root
+sys.path.insert(0, str(SCRIPTS / "Persist"))
+sys.path.insert(0, str(SCRIPTS / "Utils"))
+
+_EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
+_DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
+_RENDER        = SCRIPTS / "Generate"    / "render_finding.py"
+_GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
 from db_helpers import get_db_connection
 
@@ -126,7 +132,7 @@ def main() -> int:
     else:
         print(f"\n[Pipeline] Creating new experiment: {args.name}")
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "triage_experiment.py"), "new", args.name,
+            [sys.executable, str(_EXPERIMENTS), "new", args.name,
              "--repos", str(repo_path)],
             cwd=str(REPO_ROOT),
             capture_output=True,
@@ -157,7 +163,7 @@ def main() -> int:
     # ── Phase 1: Detection + targeted scan + store findings ───────────────────
     if not args.skip_phase1:
         rc = _run(
-            [sys.executable, str(SCRIPTS / "triage_experiment.py"), "run", experiment_id],
+            [sys.executable, str(_EXPERIMENTS), "run", experiment_id],
             "Phase 1 — Detection scan + targeted misconfig scan",
         )
         if rc != 0:
@@ -168,7 +174,7 @@ def main() -> int:
     # ── Phase 2: Code context discovery ──────────────────────────────────────
     if not args.skip_phase2:
         phase2_cmd = [
-            sys.executable, str(SCRIPTS / "discover_code_context.py"),
+            sys.executable, str(_DISCOVER),
             "--experiment", experiment_id,
             "--repo", repo_name,
             "--target", str(repo_path),
@@ -194,7 +200,7 @@ def main() -> int:
         for fid in finding_ids:
             out_path = findings_dir / f"finding_{fid}.md"
             result = subprocess.run(
-                [sys.executable, str(SCRIPTS / "render_finding.py"),
+                [sys.executable, str(_RENDER),
                  "--id", str(fid), "--out", str(out_path)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
@@ -214,7 +220,7 @@ def main() -> int:
     diagram_out = exp_dir / "Summary" / "Cloud" / "Architecture_AWS.md"
     diagram_out.parent.mkdir(parents=True, exist_ok=True)
     _run(
-        [sys.executable, str(SCRIPTS / "generate_diagram.py"), experiment_id,
+        [sys.executable, str(_GEN_DIAGRAM), experiment_id,
          "--output", str(diagram_out)],
         "Phase 3b — Generate architecture diagram",
     )
