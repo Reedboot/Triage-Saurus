@@ -4,6 +4,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import sqlite3
+from pycozo import Client
 
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
@@ -27,7 +28,7 @@ def insert_resource_node(resource_type: str, terraform_name: str, source_repo: s
     try:
         _execute_sql(sql, ("resource", resource_type, terraform_name, source_repo, aliases, canonical_name))
     except Exception as e:
-        raise RuntimeError(f"Cozo insert_resource_node failed: {e}; SQL: {sql}; params: {(resource_type, terraform_name, source_repo, aliases, canonical_name)!r}")
+        raise RuntimeError(f"Cozo insert_resource_node failed: {e}")
 
 def insert_enrichment_node(context: str, provenance: str, evidence_level: str) -> None:
     """Insert an enrichment node in the lightweight nodes table."""
@@ -37,7 +38,7 @@ def insert_enrichment_node(context: str, provenance: str, evidence_level: str) -
     try:
         _execute_sql(sql, ("enrichment", context, provenance, evidence_level))
     except Exception as e:
-        raise RuntimeError(f"Cozo insert_enrichment_node failed: {e}; SQL: {sql}; params: {(context, provenance, evidence_level)!r}")
+        raise RuntimeError(f"Cozo insert_enrichment_node failed: {e}")
 
 def insert_relationship(from_id: str, to_id: str, relationship_type: str, confidence: str, evidence_level: str) -> None:
     """Insert a relationship edge between nodes in the lightweight edges table."""
@@ -47,7 +48,7 @@ def insert_relationship(from_id: str, to_id: str, relationship_type: str, confid
     try:
         _execute_sql(sql, (from_id, to_id, relationship_type, confidence, evidence_level))
     except Exception as e:
-        raise RuntimeError(f"Cozo insert_relationship failed: {e}; SQL: {sql}; params: {(from_id, to_id, relationship_type, confidence, evidence_level)!r}")
+        raise RuntimeError(f"Cozo insert_relationship failed: {e}")
 
 def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str) -> None:
     """Insert an equivalence edge between resource nodes in Cozo."""
@@ -57,7 +58,7 @@ def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: st
     try:
         _execute_sql(sql, (resource_id, candidate_id, 'equivalence', equivalence_kind))
     except Exception as e:
-        raise RuntimeError(f"Cozo insert_equivalence failed: {e}; SQL: {sql}; params: {(resource_id, candidate_id, equivalence_kind)!r}")
+        raise RuntimeError(f"Cozo insert_equivalence failed: {e}")
 
 def link_enrichment(resource_id: str, enrichment_id: str) -> None:
     """Link a resource node to an enrichment node in Cozo (as an edge)."""
@@ -67,7 +68,7 @@ def link_enrichment(resource_id: str, enrichment_id: str) -> None:
     try:
         _execute_sql(sql, (resource_id, enrichment_id, 'enriched_by'))
     except Exception as e:
-        raise RuntimeError(f"Cozo link_enrichment failed: {e}; SQL: {sql}; params: {(resource_id, enrichment_id)!r}")
+        raise RuntimeError(f"Cozo link_enrichment failed: {e}")
 
 def insert_task_dependency(task_id: str, depends_on_id: str) -> None:
     """Insert a dependency edge between task nodes in Cozo."""
@@ -77,7 +78,7 @@ def insert_task_dependency(task_id: str, depends_on_id: str) -> None:
     try:
         _execute_sql(sql, (task_id, depends_on_id, 'depends_on'))
     except Exception as e:
-        raise RuntimeError(f"Cozo insert_task_dependency failed: {e}; SQL: {sql}; params: {(task_id, depends_on_id)!r}")
+        raise RuntimeError(f"Cozo insert_task_dependency failed: {e}")
 _SEVERITY_PROFILE: Dict[str, Tuple[str, int]] = {
     "error": ("High", 9),
     "warning": ("Medium", 6),
