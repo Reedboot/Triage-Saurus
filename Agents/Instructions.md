@@ -282,12 +282,12 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - If `Output/Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - If there are **no refinement questions** *and* the `Output/Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
     - `🦖 Welcome to Triage-Saurus.`
-  - Then use the **ask_user tool** with selectable choices (keep sample options lower, since they’re mainly for onboarding):
+  - Then use the **ask_user tool** with selectable choices:
     - **Copy/paste a single issue to triage**
-    - **Provide a path under Intake/ to process in bulk**
-    - **Scan a repo**
-    - **Scan a sample repo**
-    - **Import and triage the sample findings**
+    - **Scan a specific repo**
+    - **Run a batch scan using Intake/ReposToScan.txt (Batch)**
+
+
     - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
       - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
@@ -305,7 +305,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
         - stop and let the user adjust the intake.
       - If **no new items** remain, stop and tell the user.
       - If **new items exist**, proceed using only that new-item subset.
-      - Candidate paths in this repo: `Intake/Cloud`, `Intake/Code`, `Intake/Sample/Cloud` (if present), `Intake/Sample/Code` (if present)
+      - Candidate batch source in this repo: `Intake/ReposToScan.txt`
 - After summarising what you’ve done (kickoff, scans, imports, bulk triage, file writes), always ask the user what they want to do next.
 - **Cloud context survey:** Before starting cloud triage (after provider is confirmed), check if `Output/Knowledge/<Provider>.md` has sufficient environmental context. If sparse/missing, offer: "Would you like to run a cloud context survey first? (~10 questions, builds foundational context for faster triage)" — see `Agents/CloudContextAgent.md` for the survey workflow.
 - If triage type is **Cloud** and the provider is not explicit from the folder path, quickly skim the intake titles and:

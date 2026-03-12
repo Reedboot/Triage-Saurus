@@ -61,9 +61,8 @@ Targeted helpers (stdout-only):
     - **Start experiment mode** (for self-optimizing triage)
     - **Answer questions to build context** (if existing knowledge/findings exist)
     - **Copy/paste a single issue to triage**
-    - **Provide a path under Intake/ to process in bulk**
-   - **Scan a repo**
-    - **Import intake samples**
+    - **Scan a specific repo**
+    - **Run a batch scan using Intake/ReposToScan.txt (Batch)**
 
     > **Automation requirement:** Trigger this menu immediately after `sessionkickoff` completes without waiting for the user to type `mainmenu`.
 
