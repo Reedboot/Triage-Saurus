@@ -67,7 +67,7 @@ _EVIDENCE_LEVEL_RANK = {"inferred": 1, "extracted": 2, "user_confirmed": 3}
 # Public API
 # ---------------------------------------------------------------------------
 
-def persist_context(context: RepositoryContext, db_path: Path = DB_PATH) -> None:
+def persist_context(context: RepositoryContext, db_path: Path = DB_PATH, scan_id: str | None = None, actor_type: str | None = None, actor_id: str | None = None) -> None:
     """
     Main entry point. Upsert all resources and relationships from *context*
     into the Cozo knowledge graph, and queue enrichment items for gaps.
@@ -130,7 +130,7 @@ def persist_context(context: RepositoryContext, db_path: Path = DB_PATH) -> None
                 provenance="variable_reference" if "var." in rel.target_name else "connection_string",
                 evidence_level="medium" if "var." not in rel.target_name else "low",
             )
-            link_enrichment(node_id_map[src_key], f"enrichment_{src_key}_{tgt_key}")
+            link_enrichment(node_id_map[src_key], f"enrichment_{src_key}_{tgt_key}", actor_type=actor_type, actor_id=actor_id, scan_id=scan_id)
             continue
 
         insert_relationship(
@@ -139,6 +139,9 @@ def persist_context(context: RepositoryContext, db_path: Path = DB_PATH) -> None
             relationship_type=rel.relationship_type.value,
             confidence=rel.confidence,
             evidence_level="extracted",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            scan_id=scan_id,
         )
 
     # TODO: Implement equivalence and enrichment linking as needed

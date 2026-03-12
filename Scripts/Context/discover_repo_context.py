@@ -116,7 +116,8 @@ def main() -> int:
     # 2b. Persist knowledge graph (nodes, typed relationships, enrichment queue)
     log("== Persisting knowledge graph ==")
     try:
-        persist_context(context_model)
+        # pass the experiment id / scan id as provenance so persisted relationships are traceable
+        persist_context(context_model, scan_id=args.experiment_id, actor_type='context_discovery', actor_id=args.experiment_id)
         log(f"== Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships ==")
     except Exception as e:
         log(f"[WARN] Knowledge graph persist failed (non-fatal): {e}")

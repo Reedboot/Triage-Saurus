@@ -105,6 +105,16 @@ def insert_task_dependency(task_id: str, depends_on_id: str, *, actor_type: str 
     except Exception as e:
         raise RuntimeError(f"Cozo insert_task_dependency failed: {e}")
 
+
+def delete_relationship(from_id: str, to_id: str, rel_type: str, *, actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None, reason: str | None = None) -> None:
+    """Delete a relationship edge between nodes and record provenance for the deletion."""
+    try:
+        # delete matching edges (non-transactional simple approach)
+        _execute_sql("DELETE FROM edges WHERE from_id=? AND to_id=? AND type=?", (from_id, to_id, rel_type))
+        _insert_relationship_audit(from_id, to_id, rel_type, action='deleted', actor_type=actor_type, actor_id=actor_id, scan_id=scan_id, details_json=(reason or None))
+    except Exception as e:
+        raise RuntimeError(f"Cozo delete_relationship failed: {e}")
+
 def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str) -> None:
     """Insert an equivalence edge between resource nodes in Cozo."""
     sql = (
