@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 from flask import Flask, Response, render_template, request, stream_with_context
@@ -174,4 +175,7 @@ def scan():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, threaded=True)
+    # Allow disabling the debugger via environment variable TRIAGE_DEBUG
+    debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
+    debug = debug_env in ("1", "true", "yes", "on")
+    app.run(debug=debug, host="0.0.0.0", port=5000, threaded=True)
