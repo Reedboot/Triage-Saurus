@@ -1,0 +1,14 @@
+name: Check Cozo DB
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check-cozo-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cozo DB check
+        run: |
+          bash Scripts/ci/check_cozo_db.sh
