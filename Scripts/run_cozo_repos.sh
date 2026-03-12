@@ -199,6 +199,13 @@ while IFS= read -r line || [ -n "$line" ]; do
     continue
   fi
 
+  # remove the opengrep json after successful import
+  if rm -f "$json_output"; then
+    log "  🗑️  Removed opengrep JSON: $json_output"
+  else
+    log "  ⚠️  Failed to remove opengrep JSON: $json_output (manual cleanup may be required)"
+  fi
+
   echo "Resources detected for $repo_name (scan $scan_id):"
   "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name"
 from pycozo import Client
