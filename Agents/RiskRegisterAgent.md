@@ -16,7 +16,7 @@ This repository supports consistent security triage. The expected workflow is:
   - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
     - `python3 Scripts/scan_workspace.py`
-    It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
+    It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/` and `Intake/Sample/` paths.
   - **Targeted helpers (stdout-only):**
     - **Check `Output/Knowledge/`:** `python3 Scripts/scan_knowledge_refinement.py`
       It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.

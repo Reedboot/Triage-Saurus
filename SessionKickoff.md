@@ -13,7 +13,7 @@ This document provides the session initialization flow for Triage-Saurus. When t
 ## Helper Scripts
 
 Prefer the consolidated workspace scanner (stdout-only):
-- `python3 Scripts/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/sample paths
+- `python3 Scripts/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/Sample paths
 
 Experiment management (for self-optimizing triage):
 - `python3 Scripts/triage_experiment.py resume` — check experiment state, continue from last position
@@ -50,7 +50,7 @@ Targeted helpers (stdout-only):
 5. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
-   - Intake/ and Sample Findings/ for available triage items
+   - Intake/ and Intake/Sample/ for available triage items
 
 6. **Check for refinement questions:**
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
@@ -63,8 +63,7 @@ Targeted helpers (stdout-only):
     - **Copy/paste a single issue to triage**
     - **Provide a path under Intake/ to process in bulk**
    - **Scan a repo**
-   - **Scan a sample repo**
-    - **Import and triage the sample findings**
+    - **Import intake samples**
 
     > **Automation requirement:** Trigger this menu immediately after `sessionkickoff` completes without waiting for the user to type `mainmenu`.
 
