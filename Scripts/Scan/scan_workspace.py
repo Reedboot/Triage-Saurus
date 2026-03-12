@@ -312,7 +312,7 @@ def scan_repo_candidates(repos_root: Path) -> list[tuple[str, str, Path]]:
 
 def scan_sample_repo_candidates() -> list[tuple[str, str, Path]]:
     """List sample repo candidates shipped with workspace."""
-    sample_root = REPO_ROOT / "Sample Findings" / "Repos"
+    sample_root = REPO_ROOT / "Intake" / "Sample" / "Repos"
     if not sample_root.is_dir():
         return []
 
@@ -438,8 +438,8 @@ def print_repo_candidates(repos_root: Path | None, *, skip_repos: bool) -> None:
             print(f"- {name} — {classification} — {path}")
         print()
 
-    print("== Sample repo candidates ==")
-    sample_root = REPO_ROOT / "Sample Findings" / "Repos"
+    print("== Intake sample repo candidates ==")
+    sample_root = REPO_ROOT / "Intake" / "Sample" / "Repos"
     print(f"sample_repos_root: {sample_root}")
 
     if not sample_root.exists():
@@ -486,8 +486,6 @@ def main() -> int:
         "Intake/Code",
         "Intake/Sample/Cloud",
         "Intake/Sample/Code",
-        "Sample Findings/Cloud",
-        "Sample Findings/Code",
     ]
 
     # Resolve intake paths
