@@ -123,7 +123,7 @@ When `status = "pending"`:
    **After Phase 3, render all finding MDs and update diagrams:**
    ```bash
    python3 -c "
-   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
+   import sqlite3; conn = sqlite3.connect('Output/Data/cozo.db')
    ids = [r[0] for r in conn.execute(\"SELECT id FROM findings WHERE experiment_id=?\", ['<id>']).fetchall()]
    print(' '.join(map(str, ids)))
    "
@@ -135,7 +135,7 @@ When `status = "pending"`:
    **Verify DB findings stored:**
    ```bash
    python3 -c "
-   import sqlite3; conn = sqlite3.connect('Output/Learning/triage.db')
+   import sqlite3; conn = sqlite3.connect('Output/Data/cozo.db')
    rows = conn.execute(\"SELECT rule_id, COUNT(*) FROM findings WHERE experiment_id=? GROUP BY rule_id\", ['<id>']).fetchall()
    for r in rows: print(r)
    "

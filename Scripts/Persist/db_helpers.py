@@ -31,9 +31,10 @@ except Exception as e:
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
-TRIAGE_DB = ROOT / "Output/Learning/triage.db"
+TRIAGE_DB = ROOT / "Output/Data/cozo.db"
 COZO_DB = ROOT / "Output/Data/cozo.db"
-DB_PATH = COZO_DB if COZO_DB.exists() else TRIAGE_DB
+# Prefer Cozo DB for all scripts. Do not auto-fallback to triage.db to avoid using the legacy DB.
+DB_PATH = COZO_DB
 
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
 ENRICHMENT_DECISION_MAP = {
@@ -708,7 +709,10 @@ def _ensure_schema(conn: sqlite3.Connection):
 def get_db_connection(db_path: Optional[Path] = None):
     """Context manager for database connections."""
     path = db_path or DB_PATH
-    conn = sqlite3.connect(path, timeout=30)
+    # Ensure parent directory exists so sqlite can create the DB file if needed
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), timeout=30)
     # Improve concurrency: enable WAL and set busy timeout
     try:
         conn.execute("PRAGMA journal_mode=WAL;")

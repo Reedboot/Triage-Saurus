@@ -217,8 +217,8 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - `Scripts/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **SQLite 3** — Required (used by the pipeline and accessible from Python):
-  - Database location: `Output/Learning/triage.db`
-  - Initialize the DB: `python3 Scripts/init_database.py`
+  - Database location: `Output/Data/cozo.db` (preferred consolidated DB for findings and resources)
+  - Initialize the DB: `python3 Scripts/init_database.py` (this creates schema in the configured DB)
   - CLI (optional but useful): `sqlite3` (Debian/Ubuntu: `sudo apt update && sudo apt install -y sqlite3`; macOS Homebrew: `brew install sqlite`)
 - **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
   - Used by: `opengrep scan --config Rules/ /path/to/repo`
