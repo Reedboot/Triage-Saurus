@@ -331,6 +331,7 @@ def _ensure_schema(conn: sqlite3.Connection):
         # If lock couldn't be acquired, proceed but rely on sqlite busy timeout/retries
         pass
 
+    # Perform migrations under a try/finally so the lock is removed on exit
     try:
         # Attempt to acquire exclusive locking mode for the duration of migrations
         try:
@@ -584,168 +585,183 @@ def _ensure_schema(conn: sqlite3.Connection):
     );
     """)
 
-    # Ensure optional columns exist for backward compatibility.
-    resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
-    if "parent_resource_id" not in resource_columns:
-        conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
+        # Ensure optional columns exist for backward compatibility.
+        resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
+        if "parent_resource_id" not in resource_columns:
+            conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
 
-    connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
-    for col_name, col_type in (
-        ("source_repo_id", "INTEGER"),
-        ("target_repo_id", "INTEGER"),
-        ("is_cross_repo", "BOOLEAN DEFAULT 0"),
-        ("connection_type", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("authentication", "TEXT"),
-        ("authorization", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("via_component", "TEXT"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in connection_columns:
-            conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
-
-    flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flows)").fetchall()}
-    for col_name, col_type in (
-        ("flow_type", "TEXT"),
-        ("description", "TEXT"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in flow_columns:
-            conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
-
-    flow_step_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flow_steps)").fetchall()}
-    for col_name, col_type in (
-        ("resource_id", "INTEGER"),
-        ("component_label", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in flow_step_columns:
-            conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
-
-    node_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_nodes)").fetchall()}
-    for col_name, col_type in (
-        ("canonical_name", "TEXT"),
-        ("friendly_name", "TEXT"),
-        ("display_label", "TEXT"),
-        ("provider", "TEXT"),
-        ("source_repo", "TEXT"),
-        ("aliases", "TEXT DEFAULT '[]'"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("properties", "TEXT DEFAULT '{}'"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in node_columns:
-            conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
-
-    relationship_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_relationships)").fetchall()}
-    for col_name, col_type in (
-        ("source_repo", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in relationship_columns:
-            conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
-
-    equivalence_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
-    for col_name, col_type in (
-        ("resource_node_id", "INTEGER"),
-        ("candidate_resource_type", "TEXT"),
-        ("candidate_terraform_name", "TEXT"),
-        ("candidate_source_repo", "TEXT"),
-        ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("evidence_level", "TEXT DEFAULT 'inferred'"),
-        ("provenance", "TEXT"),
-        ("context", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in equivalence_columns:
-            conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
-        "ON resource_equivalences(resource_node_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
-        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
-    )
-
-    queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment_queue)").fetchall()}
-    for col_name, col_type in (
-        ("assumption_basis", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("suggested_value", "TEXT"),
-        ("status", "TEXT DEFAULT 'pending_review'"),
-        ("resolved_by", "TEXT"),
-        ("resolved_at", "TIMESTAMP"),
-        ("rejection_reason", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in queue_columns:
-            conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
-
-    resource_types_exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
-    ).fetchone()
-    if resource_types_exists:
-        resource_type_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+        connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
         for col_name, col_type in (
-            ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
-            ("parent_type", "TEXT"),
+            ("source_repo_id", "INTEGER"),
+            ("target_repo_id", "INTEGER"),
+            ("is_cross_repo", "BOOLEAN DEFAULT 0"),
+            ("connection_type", "TEXT"),
+            ("protocol", "TEXT"),
+            ("port", "TEXT"),
+            ("authentication", "TEXT"),
+            ("authorization", "TEXT"),
+            ("auth_method", "TEXT"),
+            ("is_encrypted", "BOOLEAN"),
+            ("via_component", "TEXT"),
+            ("notes", "TEXT"),
         ):
-            if col_name not in resource_type_columns:
-                conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
+            if col_name not in connection_columns:
+                conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
+
+        flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flows)").fetchall()}
+        for col_name, col_type in (
+            ("flow_type", "TEXT"),
+            ("description", "TEXT"),
+            ("notes", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in flow_columns:
+                conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
+
+        flow_step_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flow_steps)").fetchall()}
+        for col_name, col_type in (
+            ("resource_id", "INTEGER"),
+            ("component_label", "TEXT"),
+            ("protocol", "TEXT"),
+            ("port", "TEXT"),
+            ("auth_method", "TEXT"),
+            ("is_encrypted", "BOOLEAN"),
+            ("notes", "TEXT"),
+        ):
+            if col_name not in flow_step_columns:
+                conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
+
+        node_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_nodes)").fetchall()}
+        for col_name, col_type in (
+            ("canonical_name", "TEXT"),
+            ("friendly_name", "TEXT"),
+            ("display_label", "TEXT"),
+            ("provider", "TEXT"),
+            ("source_repo", "TEXT"),
+            ("aliases", "TEXT DEFAULT '[]'"),
+            ("confidence", "TEXT DEFAULT 'extracted'"),
+            ("properties", "TEXT DEFAULT '{}'"),
+            ("created_at", "TIMESTAMP"),
+            ("updated_at", "TIMESTAMP"),
+        ):
+            if col_name not in node_columns:
+                conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
+
+        relationship_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_relationships)").fetchall()}
+        for col_name, col_type in (
+            ("source_repo", "TEXT"),
+            ("confidence", "TEXT DEFAULT 'extracted'"),
+            ("notes", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in relationship_columns:
+                conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
+
+        equivalence_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
+        for col_name, col_type in (
+            ("resource_node_id", "INTEGER"),
+            ("candidate_resource_type", "TEXT"),
+            ("candidate_terraform_name", "TEXT"),
+            ("candidate_source_repo", "TEXT"),
+            ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
+            ("confidence", "TEXT DEFAULT 'medium'"),
+            ("evidence_level", "TEXT DEFAULT 'inferred'"),
+            ("provenance", "TEXT"),
+            ("context", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+            ("updated_at", "TIMESTAMP"),
+        ):
+            if col_name not in equivalence_columns:
+                conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
         conn.execute(
-            "UPDATE resource_types SET display_on_architecture_chart = 1 "
-            "WHERE display_on_architecture_chart IS NULL"
+            "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
+            "ON resource_equivalences(resource_node_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
+            "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
         )
 
-    findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
-    if "repo_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
-    if "resource_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
-    if "category" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
-    if "base_severity" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
-    if "evidence_location" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
-    if "title" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
-    if "description" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
-    if "severity_score" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
-    if "source_file" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
-    if "source_line_start" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
-    if "source_line_end" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
-    if "code_snippet" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
-    if "reason" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
-    if "rule_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
-    if "proposed_fix" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
-    if "llm_enriched_at" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+        queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment_queue)").fetchall()}
+        for col_name, col_type in (
+            ("assumption_basis", "TEXT"),
+            ("confidence", "TEXT DEFAULT 'medium'"),
+            ("suggested_value", "TEXT"),
+            ("status", "TEXT DEFAULT 'pending_review'"),
+            ("resolved_by", "TEXT"),
+            ("resolved_at", "TIMESTAMP"),
+            ("rejection_reason", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in queue_columns:
+                conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
 
-    apply_topology_backfills(conn)
+        resource_types_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
+        ).fetchone()
+        if resource_types_exists:
+            resource_type_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+            for col_name, col_type in (
+                ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
+                ("parent_type", "TEXT"),
+            ):
+                if col_name not in resource_type_columns:
+                    conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
+            conn.execute(
+                "UPDATE resource_types SET display_on_architecture_chart = 1 "
+                "WHERE display_on_architecture_chart IS NULL"
+            )
+
+        findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+        if "repo_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
+        if "resource_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
+        if "category" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
+        if "base_severity" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
+        if "evidence_location" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
+        if "title" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
+        if "description" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
+        if "severity_score" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
+        if "source_file" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
+        if "source_line_start" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
+        if "source_line_end" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
+        if "code_snippet" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
+        if "reason" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
+        if "rule_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
+        if "proposed_fix" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
+        if "llm_enriched_at" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+
+        apply_topology_backfills(conn)
+    finally:
+        # Release filesystem migration lock if we acquired one
+        try:
+            if acquired and lock_fd is not None:
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
+                try:
+                    os.unlink(str(lock_path))
+                except Exception:
+                    pass
+        except Exception:
+            # Best-effort cleanup only; don't fail migrations for cleanup errors
+            pass
 
 
 @contextmanager
