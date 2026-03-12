@@ -467,6 +467,23 @@ def _ensure_schema(conn: sqlite3.Connection):
       UNIQUE(source_id, target_id, relationship_type)
     );
 
+    CREATE TABLE IF NOT EXISTS findings (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT,
+      repo_id INTEGER,
+      title TEXT,
+      description TEXT,
+      severity TEXT,
+      severity_score INTEGER,
+      resource_id INTEGER,
+      rule_id TEXT,
+      source_file TEXT,
+      source_line_start INTEGER,
+      source_line_end INTEGER,
+      code_snippet TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS resource_equivalences (
       id INTEGER PRIMARY KEY,
       resource_node_id INTEGER NOT NULL,
