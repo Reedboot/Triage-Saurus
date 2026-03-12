@@ -73,8 +73,8 @@ Targeted helpers (stdout-only):
    - Common paths in this repo:
      - Intake/Cloud
      - Intake/Code
-     - Sample Findings/Cloud
-     - Sample Findings/Code
+     - Intake/Sample/Cloud
+     - Intake/Sample/Code
    - Before starting bulk triage, check for duplicates:
      `python3 Scripts/Utils/compare_intake_to_findings.py --intake <path> --findings Output/Findings/Cloud`
    - If duplicates found: ask to proceed with new items only.
