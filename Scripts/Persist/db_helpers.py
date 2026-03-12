@@ -4,6 +4,7 @@
 import json
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -707,9 +708,24 @@ def _ensure_schema(conn: sqlite3.Connection):
 def get_db_connection(db_path: Optional[Path] = None):
     """Context manager for database connections."""
     path = db_path or DB_PATH
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)
+    # Improve concurrency: enable WAL and set busy timeout
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    conn.execute("PRAGMA busy_timeout = 30000;")
     conn.row_factory = sqlite3.Row  # Access columns by name
-    _ensure_schema(conn)
+    # Ensure schema with retries to avoid concurrent migration lock errors
+    for attempt in range(6):
+        try:
+            _ensure_schema(conn)
+            break
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < 5:
+                time.sleep(1 + attempt)
+                continue
+            raise
     try:
         yield conn
         conn.commit()

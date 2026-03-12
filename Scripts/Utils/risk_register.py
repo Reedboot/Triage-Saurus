@@ -11,7 +11,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 # Header fill colour (Excel ARGB): FF1F4E79 (dark blue)
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
 

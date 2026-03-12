@@ -49,12 +49,29 @@ from db_helpers import get_db_connection
 
 
 def _run(cmd: list[str], label: str) -> int:
-    """Run a subprocess, stream output, return exit code."""
+    """Run a subprocess, stream output, return exit code.
+
+    Forces subprocesses to include the repo Scripts/ paths on PYTHONPATH and
+    ensures they run from the repo root. This avoids import errors for
+    db_helpers and other internal modules when scripts are invoked as
+    subprocesses.
+    """
+    import os
+
     print(f"\n{'─'*60}")
     print(f"▶  {label}")
     print(f"   {' '.join(cmd)}")
     print('─'*60)
-    result = subprocess.run(cmd, cwd=str(REPO_ROOT))
+
+    # Build environment with PYTHONPATH including Scripts and its subfolders
+    env = os.environ.copy()
+    existing = env.get('PYTHONPATH', '')
+    paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils')]
+    if existing:
+        paths.append(existing)
+    env['PYTHONPATH'] = ':'.join(paths)
+
+    result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
     if result.returncode != 0:
         print(f"\n[ERROR] {label} exited with code {result.returncode}", file=sys.stderr)
     return result.returncode
