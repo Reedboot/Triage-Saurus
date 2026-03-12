@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from pycozo import Client
 
-COZO_DB_PATH = Path(__file__).resolve().parents[1] / "Output/Data/cozo.db"
+COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
 def insert_resource_node(resource_type: str, terraform_name: str, source_repo: str, aliases: str = "[]", canonical_name: str = "") -> None:
     """Insert or update a resource node in Cozo."""
