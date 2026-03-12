@@ -2029,4 +2029,5 @@ def resolve_enrichment_assumption(
 
 if __name__ == "__main__":
     # Test basic operations
+    pass
 
