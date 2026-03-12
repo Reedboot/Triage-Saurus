@@ -4,7 +4,44 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import sqlite3
-from pycozo import Client
+try:
+    from pycozo import Client
+except Exception:
+    # Fallback minimal Client shim when pycozo is not installed.
+    class Client:
+        """Minimal shim implementing export_relations used by this repository.
+
+        It supports engine="sqlite" and path pointing to a sqlite DB file.
+        export_relations(names) returns a dict[name] = {"headers": [...], "rows": [[...], ...]}
+        """
+        def __init__(self, engine: str = "sqlite", path: str | None = None, dataframe: bool = False):
+            if engine != "sqlite":
+                raise RuntimeError("Fallback Client only supports sqlite engine")
+            if not path:
+                raise RuntimeError("Fallback Client requires path to sqlite DB")
+            self._path = path
+
+        def export_relations(self, names: list) -> dict:
+            out: dict = {}
+            conn = sqlite3.connect(self._path)
+            try:
+                cur = conn.cursor()
+                for name in names:
+                    # simple mapping for common relation names to tables
+                    if name == "findings":
+                        cur.execute("SELECT * FROM findings")
+                    elif name == "finding_context":
+                        cur.execute("SELECT * FROM finding_context")
+                    else:
+                        # generic fallback: try selecting all from table named as relation
+                        cur.execute(f"SELECT * FROM {name}")
+                    rows = cur.fetchall()
+                    headers = [col[0] for col in cur.description] if cur.description else []
+                    out[name] = {"headers": headers, "rows": [list(r) for r in rows]}
+            finally:
+                conn.close()
+            return out
+
 
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
