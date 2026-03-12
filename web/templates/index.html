@@ -90,7 +90,8 @@
       font-weight: 500;
     }
 
-    input[type="text"] {
+    input[type="text"],
+    select {
       background: #0d1117;
       border: 1px solid #30363d;
       border-radius: 6px;
@@ -101,15 +102,20 @@
       transition: border-color 0.15s;
     }
 
-    input[type="text"]:focus {
+    input[type="text"]:focus,
+    select:focus {
       outline: none;
       border-color: #58a6ff;
     }
 
-    input[type="text"]:disabled {
+    input[type="text"]:disabled,
+    select:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
+
+    select option:disabled { color: #484f58; }
+    select option.not-found { color: #484f58; font-style: italic; }
 
     button {
       background: #238636;
@@ -313,10 +319,19 @@
     <form id="scan-form">
       <div class="form-row">
         <div class="field grow">
-          <label for="repo-path">Repository path (server-side)</label>
-          <input type="text" id="repo-path" name="repo_path"
-                 placeholder="/home/user/my-repo or ~/projects/terragoat"
-                 autocomplete="off" spellcheck="false" required />
+          <label for="repo-select">Repository</label>
+          <select id="repo-select" name="repo_path" required>
+            <option value="" disabled selected>— select a repository —</option>
+            {% for repo in repos %}
+              {% if repo.found %}
+                <option value="{{ repo.path }}">{{ repo.name }} — {{ repo.path }}</option>
+              {% else %}
+                <option value="" disabled class="not-found">{{ repo.name }} (not found locally)</option>
+              {% endif %}
+            {% else %}
+              <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
+            {% endfor %}
+          </select>
         </div>
         <div class="field" style="min-width:180px">
           <label for="scan-name">Scan name</label>
@@ -387,7 +402,7 @@
   });
 
   const form       = document.getElementById('scan-form');
-  const repoInput  = document.getElementById('repo-path');
+  const repoSelect = document.getElementById('repo-select');
   const nameInput  = document.getElementById('scan-name');
   const scanBtn    = document.getElementById('scan-btn');
   const resetBtn   = document.getElementById('reset-btn');
@@ -512,7 +527,7 @@
       }
       spinner.style.display = 'none';
       scanBtn.disabled = false;
-      repoInput.disabled = false;
+      repoSelect.disabled = false;
       nameInput.disabled = false;
       resetBtn.style.display = 'inline-block';
     }
@@ -528,7 +543,7 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const repoPath = repoInput.value.trim();
+    const repoPath = repoSelect.value;
     const scanName = (nameInput.value.trim() || 'web_scan');
 
     // Reset UI
@@ -541,7 +556,7 @@
     diagrams = [];
 
     scanBtn.disabled = true;
-    repoInput.disabled = true;
+    repoSelect.disabled = true;
     nameInput.disabled = true;
     resetBtn.style.display = 'none';
     spinner.style.display = '';
@@ -557,7 +572,7 @@
     } catch (err) {
       setStatus('Connection failed: ' + err, 'error');
       scanBtn.disabled = false;
-      repoInput.disabled = false;
+      repoSelect.disabled = false;
       nameInput.disabled = false;
       spinner.style.display = 'none';
       return;
@@ -567,7 +582,7 @@
       const err = await response.text();
       setStatus('Server error: ' + err, 'error');
       scanBtn.disabled = false;
-      repoInput.disabled = false;
+      repoSelect.disabled = false;
       nameInput.disabled = false;
       spinner.style.display = 'none';
       return;
@@ -588,9 +603,9 @@
 
   // ── Reset button ─────────────────────────────────────────────────────────────
   resetBtn.addEventListener('click', () => {
-    repoInput.disabled = false;
+    repoSelect.disabled = false;
     nameInput.disabled = false;
-    repoInput.value = '';
+    repoSelect.value = '';
     resetBtn.style.display = 'none';
     statusBar.classList.remove('visible');
   });

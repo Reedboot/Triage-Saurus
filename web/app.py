@@ -17,6 +17,40 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "Scripts"
 PIPELINE = SCRIPTS / "Utils" / "run_pipeline.py"
 EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
+INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
+
+# Directories searched when resolving a bare repo name from Intake
+_SEARCH_ROOTS = [
+    REPO_ROOT.parent,
+    Path.home() / "code",
+    Path.home() / "repos",
+    Path.home() / "projects",
+    Path.home(),
+]
+
+
+def _resolve_repos() -> list[dict]:
+    """Return list of {name, path, found} for every entry in ReposToScan.txt."""
+    if not INTAKE_REPOS.exists():
+        return []
+
+    entries: list[dict] = []
+    for line in INTAKE_REPOS.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        resolved: Path | None = None
+        for root in _SEARCH_ROOTS:
+            candidate = root / name
+            if candidate.is_dir():
+                resolved = candidate.resolve()
+                break
+        entries.append({
+            "name": name,
+            "path": str(resolved) if resolved else "",
+            "found": resolved is not None,
+        })
+    return entries
 
 
 def _extract_mermaid_blocks(md_text: str) -> list[str]:
@@ -117,7 +151,7 @@ def _stream_scan(repo_path: str, scan_name: str):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", repos=_resolve_repos())
 
 
 @app.route("/scan", methods=["POST"])
