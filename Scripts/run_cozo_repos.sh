@@ -67,8 +67,21 @@ log() {
   echo "[$(date '+%H:%M:%S')] $*"
 }
 
-log "Ensuring learning schema exists inside Cozo DB at $ANALYTICS_DB"
-"$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1
+log "Ensuring Cozo DB exists at $COZO_DB_PATH"
+if [ ! -f "$COZO_DB_PATH" ]; then
+  log "Cozo DB not found — initializing learning schema at $COZO_DB_PATH"
+  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH"; then
+    log "  ❌ Failed to initialize Cozo DB at $COZO_DB_PATH"
+    exit 1
+  fi
+  log "  ✅ Initialized Cozo DB at $COZO_DB_PATH"
+else
+  log "Cozo DB already present at $COZO_DB_PATH — ensuring learning schema"
+  # Try to ensure relations/schema but don't fail the entire run if it errors
+  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1; then
+    log "  ⚠️  Warning: failed to ensure learning schema (non-fatal)"
+  fi
+fi
 
 should_skip_repo() {
   local repo="$1"
