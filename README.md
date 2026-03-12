@@ -101,6 +101,8 @@ python3 Scripts/query_resource_graph.py --experiment <id> --resource <resource_n
 
 Once Phase 1 has generated opengrep JSON output, `Scripts/store_opengrep_for_cozo.py` can persist the raw findings, metadata, and metavars into a Cozo embedded database for additional enrichment or rule-based traversal. The script records the originating repo, source file paths, line numbers, rule IDs, severity, and all metadata (category, technology, provider hints) along with each metavariable so downstream agents can derive attributes and relationships.
 
+Cozo now records provenance for any node/relationship changes: an append-only `relationship_audit` table captures who or what created/modified the relationship (scanner, user, or AI), the originating `scan_id` or session, optional `evidence_finding_id`, confidence, and a JSON details blob. Lightweight provenance (e.g., `source_scan_id`) is also stored on `edges` for fast lookup and tracing.
+
 ```bash
 python3 Scripts/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--repo-path /path/to/repo]
 ```

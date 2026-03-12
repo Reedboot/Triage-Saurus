@@ -9,6 +9,20 @@ from pycozo import Client
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
 
+def _insert_relationship_audit(from_node: str, to_node: str, rel_type: str, action: str = 'created', actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None, evidence_finding_id: str | None = None, confidence: float | None = None, details_json: str | None = None) -> None:
+    """Insert an append-only provenance row into relationship_audit."""
+    sql = (
+        "INSERT INTO relationship_audit (from_node, to_node, rel_type, action, actor_type, actor_id, scan_id, evidence_finding_id, confidence, details_json, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))"
+    )
+    try:
+        _execute_sql(sql, (from_node, to_node, rel_type, action, actor_type, actor_id, scan_id, evidence_finding_id, confidence, details_json))
+    except Exception:
+        # Non-fatal: provenance should not break enrichment flows
+        pass
+
+
+
+
 def _execute_sql(sql: str, params: tuple = ()) -> None:
     """Execute SQL directly against the Cozo sqlite DB for simple graph ops."""
     conn = sqlite3.connect(str(COZO_DB_PATH))
@@ -40,15 +54,56 @@ def insert_enrichment_node(context: str, provenance: str, evidence_level: str) -
     except Exception as e:
         raise RuntimeError(f"Cozo insert_enrichment_node failed: {e}")
 
-def insert_relationship(from_id: str, to_id: str, relationship_type: str, confidence: str, evidence_level: str) -> None:
-    """Insert a relationship edge between nodes in the lightweight edges table."""
+def insert_relationship(from_id: str, to_id: str, relationship_type: str, confidence: str = None, evidence_level: str = None, *, actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None, evidence_finding_id: str | None = None, details_json: str | None = None) -> None:
+    """Insert a relationship edge between nodes in the lightweight edges table.
+
+    Optional provenance parameters (actor_type, actor_id, scan_id, evidence_finding_id) are recorded in relationship_audit.
+    """
     sql = (
-        "INSERT INTO edges (from_id, to_id, type, confidence, evidence_level) VALUES (?,?,?,?,?)"
+        "INSERT INTO edges (from_id, to_id, type, confidence, evidence_level, source_scan_id) VALUES (?,?,?,?,?,?)"
     )
     try:
-        _execute_sql(sql, (from_id, to_id, relationship_type, confidence, evidence_level))
+        _execute_sql(sql, (from_id, to_id, relationship_type, confidence, evidence_level, scan_id))
+        # record provenance (non-fatal)
+        _insert_relationship_audit(from_id, to_id, relationship_type, action='created', actor_type=actor_type, actor_id=actor_id, scan_id=scan_id, evidence_finding_id=evidence_finding_id, confidence=float(confidence) if confidence is not None else None, details_json=details_json)
     except Exception as e:
         raise RuntimeError(f"Cozo insert_relationship failed: {e}")
+
+
+def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str, *, actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None) -> None:
+    """Insert an equivalence edge between resource nodes in Cozo."""
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type, equivalence_kind, source_scan_id) VALUES (?,?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (resource_id, candidate_id, 'equivalence', equivalence_kind, scan_id))
+        _insert_relationship_audit(resource_id, candidate_id, 'equivalence', action='created', actor_type=actor_type, actor_id=actor_id, scan_id=scan_id, details_json=f'{{"equivalence_kind":"{equivalence_kind}"}}')
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_equivalence failed: {e}")
+
+
+def link_enrichment(resource_id: str, enrichment_id: str, *, actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None) -> None:
+    """Link a resource node to an enrichment node in Cozo (as an edge)."""
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type, source_scan_id) VALUES (?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (resource_id, enrichment_id, 'enriched_by', scan_id))
+        _insert_relationship_audit(resource_id, enrichment_id, 'enriched_by', action='created', actor_type=actor_type, actor_id=actor_id, scan_id=scan_id)
+    except Exception as e:
+        raise RuntimeError(f"Cozo link_enrichment failed: {e}")
+
+
+def insert_task_dependency(task_id: str, depends_on_id: str, *, actor_type: str | None = None, actor_id: str | None = None, scan_id: str | None = None) -> None:
+    """Insert a dependency edge between task nodes in Cozo."""
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type, source_scan_id) VALUES (?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (task_id, depends_on_id, 'depends_on', scan_id))
+        _insert_relationship_audit(task_id, depends_on_id, 'depends_on', action='created', actor_type=actor_type, actor_id=actor_id, scan_id=scan_id)
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_task_dependency failed: {e}")
 
 def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str) -> None:
     """Insert an equivalence edge between resource nodes in Cozo."""

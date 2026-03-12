@@ -162,7 +162,33 @@ def init(db_path: Path) -> None:
             )
             '''
         )
+
+        # provenance: an append-only audit trail for relationship/node changes
+        cur.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS relationship_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_node TEXT,
+                to_node TEXT,
+                rel_type TEXT,
+                action TEXT,
+                actor_type TEXT,
+                actor_id TEXT,
+                scan_id TEXT,
+                evidence_finding_id TEXT,
+                confidence REAL,
+                details_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            '''
+        )
         conn.commit()
+
+        # Ensure provenance columns on edges for fast lookup (add if missing)
+        edge_cols = {row[1] for row in conn.execute("PRAGMA table_info(edges)").fetchall()}
+        if 'source_scan_id' not in edge_cols:
+            conn.execute("ALTER TABLE edges ADD COLUMN source_scan_id TEXT")
+            conn.commit()
     finally:
         conn.close()
 
