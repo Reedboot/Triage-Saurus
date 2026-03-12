@@ -135,7 +135,7 @@ def _print_rel(path: Path, *, absolute: bool) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare intake titles to existing findings by normalised title.")
-    parser.add_argument("--intake", required=True, help="Intake file or folder (e.g., Intake/Cloud)")
+    parser.add_argument("--intake", required=True, help="Intake file or folder (e.g., Intake/<path>)")
     parser.add_argument(
         "--findings",
         default=str(OUTPUT_FINDINGS_DIR / "Cloud"),

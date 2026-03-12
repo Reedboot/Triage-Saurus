@@ -19,7 +19,7 @@ Outputs
 Example
   python3 Scripts/generate_findings_from_titles.py \
     --provider azure \
-    --in-dir "Intake/Cloud" \
+    --in-dir "Intake/<path>" \
     --out-dir "Findings/Cloud" \
     --update-knowledge
 """

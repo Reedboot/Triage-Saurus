@@ -16,7 +16,7 @@ This repository supports consistent security triage. The expected workflow is:
   - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
     - `python3 Scripts/scan_workspace.py`
-    It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/` and `Intake/Sample/` paths.
+    It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and Intake/ (including `Intake/ReposToScan.txt`).
   - **Targeted helpers (stdout-only):**
     - **Check `Output/Knowledge/`:** `python3 Scripts/scan_knowledge_refinement.py`
       It lists Markdown files under `Output/Knowledge/` and prints any non-empty sections under `## Unknowns` / `## ❓ Open Questions`.
@@ -27,7 +27,7 @@ This repository supports consistent security triage. The expected workflow is:
   - If `Output/Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - If there are **no refinement questions** *and* the `Output/Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
     - `🦖 Welcome to Triage-Saurus.`
-  - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import intake samples** (from `Intake/Sample/`), or **scan a repo**.
+  - Then ask the user to either **copy/paste a single issue** to triage, **scan a specific repo**, or **run a batch scan using `Intake/ReposToScan.txt`**.
     - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
       - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):

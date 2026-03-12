@@ -10,7 +10,7 @@ Maintains same interface as scan_workspace.py for drop-in replacement.
 
 Usage:
   python3 Scripts/scan_workspace_v2.py
-  python3 Scripts/scan_workspace_v2.py --intake Intake/Cloud
+  python3 Scripts/scan_workspace_v2.py --intake Intake/ReposToScan.txt
 """
 
 from __future__ import annotations
@@ -482,10 +482,7 @@ def main() -> int:
 
     # Default intake paths
     intake_paths_raw = args.intake or [
-        "Intake/Cloud",
-        "Intake/Code",
-        "Intake/Sample/Cloud",
-        "Intake/Sample/Code",
+        "Intake/ReposToScan.txt",
     ]
 
     # Resolve intake paths

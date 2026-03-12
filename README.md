@@ -197,12 +197,11 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
-## Process sample findings
+## Bulk processing
 
-1. Stage samples into `Intake/`:
-   - `python3 Scripts/stage_sample_findings_to_intake.py --type cloud`
-2. Use your chosen CLI
-3. Provide the bulk path `Intake/Sample/Cloud` (or `Intake/Sample/Code`) for processing.
+1. Stage inputs into `Intake/` or create `Intake/ReposToScan.txt` for batch repo scans.
+2. Use your chosen CLI.
+3. Provide the bulk path under `Intake/<path>` or run batch scans via `Intake/ReposToScan.txt`.
 
 During bulk processing, if a finding title clearly names a cloud service (e.g., *Storage account*, *Azure SQL*, *ACR*, *Key Vault*), record that service as **Confirmed in use** in `Knowledge/<Provider>.md`.
 

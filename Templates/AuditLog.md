@@ -56,7 +56,7 @@
 ### HH:MM - Finding Created
 - **Action:** Created
 - **Target:** `Output/Findings/Cloud/Public_Storage_Account.md`
-- **Reason:** Processing bulk intake from Intake/Cloud/cloud.txt
+- **Reason:** Processing bulk intake from an Intake path (e.g., `Intake/Cloud/cloud.txt`)
 - **Impact:** New finding, initial score 8/10
 
 ### HH:MM - Knowledge Updated
@@ -82,7 +82,7 @@
 ## Bulk Operations
 
 ### HH:MM - Bulk Import Started
-- **Source:** `Intake/Cloud/cloud.txt`
+- **Source:** `<Intake path>`
 - **Items count:** 15
 - **Processing order:** Internet exposure → Data stores → Identity → Detection → Hardening
 

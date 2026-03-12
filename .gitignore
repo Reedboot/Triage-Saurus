@@ -1,7 +1,5 @@
 # Ignore everything dropped into Intake/
 Intake/
-Intake/Cloud/
-Instake/Code/
 
 Output/Audit/*
 Output/Findings/*
