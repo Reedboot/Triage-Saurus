@@ -994,30 +994,28 @@ def insert_resource(
                       _infer_property_type(key), 
                       _is_security_relevant(key)))
 
-        # Record lightweight provenance for resource creation when cozo_helpers available
-        if _COZO_HELPERS_AVAILABLE:
-            try:
-                # Use a self-referential audit row to indicate node creation
-                try:
-                    cozo_helpers._insert_relationship_audit(
-                        from_node=f"resource:{resource_id}",
-                        to_node=f"resource:{resource_id}",
-                        rel_type="resource_created",
-                        action="created",
-                        actor_type="context_discovery",
-                        actor_id=experiment_id,
-                        scan_id=experiment_id,
-                        evidence_finding_id=None,
-                        confidence=None,
-                        details_json=json.dumps({"repo": repo_name, "resource_type": resource_type}),
-                    )
-                except Exception:
-                    # Non-fatal provenance failures should not break resource insertion
-                    pass
-            except Exception:
-                pass
-        
-        return resource_id
+    # Record provenance AFTER the main transaction commits to avoid a write-lock
+    # deadlock: cozo_helpers._execute_sql opens its own sqlite3 connection, which
+    # would block waiting for this connection to release while we'd be waiting for
+    # it to return — each call would time out after Python's default 5s connect timeout.
+    if _COZO_HELPERS_AVAILABLE:
+        try:
+            cozo_helpers._insert_relationship_audit(
+                from_node=f"resource:{resource_id}",
+                to_node=f"resource:{resource_id}",
+                rel_type="resource_created",
+                action="created",
+                actor_type="context_discovery",
+                actor_id=experiment_id,
+                scan_id=experiment_id,
+                evidence_finding_id=None,
+                confidence=None,
+                details_json=json.dumps({"repo": repo_name, "resource_type": resource_type}),
+            )
+        except Exception:
+            pass
+
+    return resource_id
 
 
 def get_resource_id(
