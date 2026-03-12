@@ -27,7 +27,7 @@ This repository supports consistent security triage. The expected workflow is:
   - If `Output/Knowledge/` contains outstanding items under `## Unknowns` and/or `## ❓ Open Questions`, tell the user: “I’ve found some **refinement questions** — do you want to answer them now?” (then offer *resume* vs *proceed to new triage*).
   - If there are **no refinement questions** *and* the `Output/Knowledge/` scan indicates **no Knowledge markdown files** (i.e., `scan_knowledge_refinement.py` reports `Knowledge markdown files: 0`), treat this as a **first run / fresh workspace** and start with:
     - `🦖 Welcome to Triage-Saurus.`
-  - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import and triage the sample findings** (from `Sample Findings/` into `Intake/Sample/`), or **scan a repo**.
+  - Then ask the user to either **copy/paste a single issue** to triage, **provide a path under `Intake/`** to process in bulk, **import intake samples** (from `Intake/Sample/`), or **scan a repo**.
     - If they choose bulk intake, present a **selectable** multiple-choice list of common paths (and allow freeform for a custom `Intake/...` path).
       - Do **not** include numeric prefixes in the choice labels; the UI will handle numbering/selection.
       - Before offering choices, verify which candidate folders are **non-empty** using (stdout-only):
