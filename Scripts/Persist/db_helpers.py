@@ -6,6 +6,12 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
+try:
+    import cozo_helpers
+    _COZO_HELPERS_AVAILABLE = True
+except Exception:
+    cozo_helpers = None
+    _COZO_HELPERS_AVAILABLE = False
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
@@ -843,6 +849,29 @@ def insert_resource(
                 """, (resource_id, key, str(value), 
                       _infer_property_type(key), 
                       _is_security_relevant(key)))
+
+        # Record lightweight provenance for resource creation when cozo_helpers available
+        if _COZO_HELPERS_AVAILABLE:
+            try:
+                # Use a self-referential audit row to indicate node creation
+                try:
+                    cozo_helpers._insert_relationship_audit(
+                        from_node=f"resource:{resource_id}",
+                        to_node=f"resource:{resource_id}",
+                        rel_type="resource_created",
+                        action="created",
+                        actor_type="context_discovery",
+                        actor_id=experiment_id,
+                        scan_id=experiment_id,
+                        evidence_finding_id=None,
+                        confidence=None,
+                        details_json=json.dumps({"repo": repo_name, "resource_type": resource_type}),
+                    )
+                except Exception:
+                    # Non-fatal provenance failures should not break resource insertion
+                    pass
+            except Exception:
+                pass
         
         return resource_id
 
@@ -993,6 +1022,35 @@ def insert_connection(
                         existing[0],
                     ),
                 )
+                # Record provenance for update
+                if _COZO_HELPERS_AVAILABLE:
+                    try:
+                        try:
+                            cozo_helpers._insert_relationship_audit(
+                                from_node=f"resource:{source_result[0]}",
+                                to_node=f"resource:{target_result[0]}",
+                                rel_type=connection_type or 'connection',
+                                action="updated",
+                                actor_type="context_discovery",
+                                actor_id=experiment_id,
+                                scan_id=experiment_id,
+                                evidence_finding_id=None,
+                                confidence=None,
+                                details_json=json.dumps({
+                                    "protocol": protocol,
+                                    "port": port,
+                                    "authentication": authentication,
+                                    "authorization": authorization,
+                                    "auth_method": auth_method,
+                                    "is_encrypted": is_encrypted,
+                                    "via_component": via_component,
+                                    "notes": notes,
+                                }),
+                            )
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                 return existing[0]
 
             cursor = conn.execute(
@@ -1023,7 +1081,38 @@ def insert_connection(
                 ),
             )
             row = cursor.fetchone()
-            return row[0] if row else None
+            new_id = row[0] if row else None
+
+            # Record provenance for creation
+            if new_id and _COZO_HELPERS_AVAILABLE:
+                try:
+                    try:
+                        cozo_helpers._insert_relationship_audit(
+                            from_node=f"resource:{source_result[0]}",
+                            to_node=f"resource:{target_result[0]}",
+                            rel_type=connection_type or 'connection',
+                            action="created",
+                            actor_type="context_discovery",
+                            actor_id=experiment_id,
+                            scan_id=experiment_id,
+                            evidence_finding_id=None,
+                            confidence=None,
+                            details_json=json.dumps({
+                                "protocol": protocol,
+                                "port": port,
+                                "authentication": authentication,
+                                "authorization": authorization,
+                                "auth_method": auth_method,
+                                "is_encrypted": is_encrypted,
+                                "via_component": via_component,
+                                "notes": notes,
+                            }),
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            return new_id
     return None
 
 
