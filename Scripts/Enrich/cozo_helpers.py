@@ -115,35 +115,7 @@ def delete_relationship(from_id: str, to_id: str, rel_type: str, *, actor_type: 
     except Exception as e:
         raise RuntimeError(f"Cozo delete_relationship failed: {e}")
 
-def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str) -> None:
-    """Insert an equivalence edge between resource nodes in Cozo."""
-    sql = (
-        "INSERT INTO edges (from_id, to_id, type, equivalence_kind) VALUES (?,?,?,?)"
-    )
-    try:
-        _execute_sql(sql, (resource_id, candidate_id, 'equivalence', equivalence_kind))
-    except Exception as e:
-        raise RuntimeError(f"Cozo insert_equivalence failed: {e}")
 
-def link_enrichment(resource_id: str, enrichment_id: str) -> None:
-    """Link a resource node to an enrichment node in Cozo (as an edge)."""
-    sql = (
-        "INSERT INTO edges (from_id, to_id, type) VALUES (?,?,?)"
-    )
-    try:
-        _execute_sql(sql, (resource_id, enrichment_id, 'enriched_by'))
-    except Exception as e:
-        raise RuntimeError(f"Cozo link_enrichment failed: {e}")
-
-def insert_task_dependency(task_id: str, depends_on_id: str) -> None:
-    """Insert a dependency edge between task nodes in Cozo."""
-    sql = (
-        "INSERT INTO edges (from_id, to_id, type) VALUES (?,?,?)"
-    )
-    try:
-        _execute_sql(sql, (task_id, depends_on_id, 'depends_on'))
-    except Exception as e:
-        raise RuntimeError(f"Cozo insert_task_dependency failed: {e}")
 _SEVERITY_PROFILE: Dict[str, Tuple[str, int]] = {
     "error": ("High", 9),
     "warning": ("Medium", 6),
