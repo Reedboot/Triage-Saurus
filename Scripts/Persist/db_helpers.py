@@ -31,9 +31,8 @@ except Exception as e:
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
-TRIAGE_DB = ROOT / "Output/Data/cozo.db"
 COZO_DB = ROOT / "Output/Data/cozo.db"
-# Prefer Cozo DB for all scripts. Do not auto-fallback to triage.db to avoid using the legacy DB.
+# Prefer Cozo DB for all scripts.
 DB_PATH = COZO_DB
 
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}

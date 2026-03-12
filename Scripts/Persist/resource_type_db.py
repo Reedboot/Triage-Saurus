@@ -13,9 +13,7 @@ import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TRIAGE_DB = ROOT / "Output/Data/cozo.db"
 COZO_DB = ROOT / "Output/Data/cozo.db"
-# Always prefer Cozo DB. Do not fall back to the legacy triage.db at runtime.
 DB_PATH = COZO_DB
 
 # ---------------------------------------------------------------------------
