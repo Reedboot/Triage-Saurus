@@ -610,7 +610,13 @@
     statusBar.classList.remove('visible');
   });
 
-  // ── Utility buttons ──────────────────────────────────────────────────────────
+  // Auto-fill scan name from selected repo
+  repoSelect.addEventListener('change', () => {
+    const selected = repoSelect.options[repoSelect.selectedIndex];
+    if (selected && selected.value) {
+      nameInput.value = selected.text.split(' — ')[0].trim();
+    }
+  });
   document.getElementById('copy-log-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(logOutput.innerText).catch(() => {});
   });
