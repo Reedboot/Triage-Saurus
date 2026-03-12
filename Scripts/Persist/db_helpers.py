@@ -328,8 +328,36 @@ def _ensure_schema(conn: sqlite3.Connection):
             break
 
     if not acquired:
-        # If lock couldn't be acquired, proceed but rely on sqlite busy timeout/retries
-        pass
+        # If lock couldn't be acquired, wait for the lock file to disappear and
+        # attempt to acquire it again. If the lock appears stale (>5min) remove it.
+        wait_start = time.time()
+        waited = False
+        while lock_path.exists() and (time.time() - wait_start) < 30:
+            time.sleep(1)
+            waited = True
+        if lock_path.exists():
+            try:
+                mtime = os.path.getmtime(str(lock_path))
+                # Remove stale lock older than 5 minutes
+                if time.time() - mtime > 300:
+                    try:
+                        os.unlink(str(lock_path))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Try one final time to create the lock before proceeding
+        if not acquired:
+            try:
+                lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(lock_fd, str(os.getpid()).encode())
+                except Exception:
+                    pass
+                acquired = True
+            except Exception:
+                # Give up acquiring lock; proceed but migrations may contend
+                pass
 
     # Perform migrations under a try/finally so the lock is removed on exit
     try:
