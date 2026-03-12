@@ -3,88 +3,81 @@ from __future__ import annotations
 from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
-from pycozo import Client
+import sqlite3
 
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
+
+def _execute_sql(sql: str, params: tuple = ()) -> None:
+    """Execute SQL directly against the Cozo sqlite DB for simple graph ops."""
+    conn = sqlite3.connect(str(COZO_DB_PATH))
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def insert_resource_node(resource_type: str, terraform_name: str, source_repo: str, aliases: str = "[]", canonical_name: str = "") -> None:
-    """Insert or update a resource node in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO nodes (type, resource_type, terraform_name, source_repo, aliases, canonical_name) VALUES ("
-            f"'resource', '{resource_type}', '{terraform_name}', '{source_repo}', '{aliases}', '{canonical_name}'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo insert_resource_node failed: {e}; SQL: {sql!r}")
+    """Insert or update a resource node in the lightweight nodes table."""
+    sql = (
+        "INSERT INTO nodes (type, resource_type, terraform_name, source_repo, aliases, canonical_name) VALUES (?,?,?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, ("resource", resource_type, terraform_name, source_repo, aliases, canonical_name))
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_resource_node failed: {e}; SQL: {sql}; params: {(resource_type, terraform_name, source_repo, aliases, canonical_name)!r}")
 
 def insert_enrichment_node(context: str, provenance: str, evidence_level: str) -> None:
-    """Insert an enrichment node in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO nodes (type, context, provenance, evidence_level) VALUES ("
-            f"'enrichment', '{context}', '{provenance}', '{evidence_level}'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo insert_enrichment_node failed: {e}; SQL: {sql!r}")
+    """Insert an enrichment node in the lightweight nodes table."""
+    sql = (
+        "INSERT INTO nodes (type, context, provenance, evidence_level) VALUES (?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, ("enrichment", context, provenance, evidence_level))
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_enrichment_node failed: {e}; SQL: {sql}; params: {(context, provenance, evidence_level)!r}")
 
 def insert_relationship(from_id: str, to_id: str, relationship_type: str, confidence: str, evidence_level: str) -> None:
-    """Insert a relationship edge between resource nodes in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO edges (from_id, to_id, type, confidence, evidence_level) VALUES ("
-            f"'{from_id}', '{to_id}', '{relationship_type}', '{confidence}', '{evidence_level}'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo insert_relationship failed: {e}; SQL: {sql!r}")
+    """Insert a relationship edge between nodes in the lightweight edges table."""
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type, confidence, evidence_level) VALUES (?,?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (from_id, to_id, relationship_type, confidence, evidence_level))
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_relationship failed: {e}; SQL: {sql}; params: {(from_id, to_id, relationship_type, confidence, evidence_level)!r}")
 
 def insert_equivalence(resource_id: str, candidate_id: str, equivalence_kind: str) -> None:
     """Insert an equivalence edge between resource nodes in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO edges (from_id, to_id, type, equivalence_kind) VALUES ("
-            f"'{resource_id}', '{candidate_id}', 'equivalence', '{equivalence_kind}'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo insert_equivalence failed: {e}; SQL: {sql!r}")
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type, equivalence_kind) VALUES (?,?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (resource_id, candidate_id, 'equivalence', equivalence_kind))
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_equivalence failed: {e}; SQL: {sql}; params: {(resource_id, candidate_id, equivalence_kind)!r}")
 
 def link_enrichment(resource_id: str, enrichment_id: str) -> None:
-    """Link a resource node to an enrichment node in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO edges (from_id, to_id, type) VALUES ("
-            f"'{resource_id}', '{enrichment_id}', 'enriched_by'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo link_enrichment failed: {e}; SQL: {sql!r}")
+    """Link a resource node to an enrichment node in Cozo (as an edge)."""
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type) VALUES (?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (resource_id, enrichment_id, 'enriched_by'))
+    except Exception as e:
+        raise RuntimeError(f"Cozo link_enrichment failed: {e}; SQL: {sql}; params: {(resource_id, enrichment_id)!r}")
 
 def insert_task_dependency(task_id: str, depends_on_id: str) -> None:
     """Insert a dependency edge between task nodes in Cozo."""
-    with closing(_open_client(dataframe=False)) as client:
-        sql = (
-            "INSERT INTO edges (from_id, to_id, type) VALUES ("
-            f"'{task_id}', '{depends_on_id}', 'depends_on'"
-            ")"
-        )
-        try:
-            client.run(sql)
-        except Exception as e:
-            raise RuntimeError(f"Cozo insert_task_dependency failed: {e}; SQL: {sql!r}")
+    sql = (
+        "INSERT INTO edges (from_id, to_id, type) VALUES (?,?,?)"
+    )
+    try:
+        _execute_sql(sql, (task_id, depends_on_id, 'depends_on'))
+    except Exception as e:
+        raise RuntimeError(f"Cozo insert_task_dependency failed: {e}; SQL: {sql}; params: {(task_id, depends_on_id)!r}")
 _SEVERITY_PROFILE: Dict[str, Tuple[str, int]] = {
     "error": ("High", 9),
     "warning": ("Medium", 6),

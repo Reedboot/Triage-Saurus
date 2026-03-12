@@ -129,6 +129,39 @@ def init(db_path: Path) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_providers_key ON providers(key)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_resource_types_terraform_type ON resource_types(terraform_type)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_resource_types_provider_id ON resource_types(provider_id)")
+
+        # Also create lightweight node/edge graph tables used by older enrichment code
+        cur.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT,
+                resource_type TEXT,
+                terraform_name TEXT,
+                source_repo TEXT,
+                aliases TEXT,
+                canonical_name TEXT,
+                context TEXT,
+                provenance TEXT,
+                evidence_level TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            '''
+        )
+        cur.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_id TEXT,
+                to_id TEXT,
+                type TEXT,
+                confidence TEXT,
+                evidence_level TEXT,
+                equivalence_kind TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            '''
+        )
         conn.commit()
     finally:
         conn.close()
