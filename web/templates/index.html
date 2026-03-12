@@ -23,6 +23,7 @@
       padding: 16px 24px;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 12px;
     }
 
@@ -30,6 +31,11 @@
       font-size: 1.25rem;
       font-weight: 600;
       color: #58a6ff;
+    }
+
+    header .dino {
+      font-size: 1.5rem;
+      line-height: 1;
     }
 
     header span.badge {
@@ -302,11 +308,7 @@
 <body>
 
 <header>
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2">
-    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-    <path d="M2 17l10 5 10-5"/>
-    <path d="M2 12l10 5 10-5"/>
-  </svg>
+  <span class="dino">🦕</span>
   <h1>Triage-Saurus</h1>
   <span class="badge">Repo Scanner</span>
 </header>
