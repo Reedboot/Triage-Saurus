@@ -105,6 +105,13 @@ def main():
                 WHERE id = ?
             """, (title, description, proposed_fix, new_score, fid))
 
+        # Record provenance: LLM enrichment event for this finding (non-fatal)
+        try:
+            from cozo_helpers import _insert_relationship_audit
+            _insert_relationship_audit(f"finding:{fid}", f"finding:{fid}", "llm_enrichment", action='created', actor_type='llm', actor_id='llm_enrich_findings', scan_id=args.experiment, details_json=json.dumps({"confidence": enriched.get("confidence", None)}))
+        except Exception:
+            pass
+
         db_helpers.record_risk_score(fid, new_score, scored_by="llm", rationale=description)
         print(f"Enriched finding {fid}: {title} [{new_score}/10]")
 
