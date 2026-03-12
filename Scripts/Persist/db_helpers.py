@@ -3,11 +3,13 @@
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 try:
     import cozo_helpers
+    _COZO_HELPERS_AVAILABLE = True
 except Exception as e:
     # Attempt to dynamically load the local implementation from Scripts/Enrich/cozo_helpers.py
     import importlib.util
@@ -21,7 +23,9 @@ except Exception as e:
         loader.exec_module(module)
         cozo_helpers = module
         sys.modules.setdefault("cozo_helpers", module)
+        _COZO_HELPERS_AVAILABLE = True
     else:
+        _COZO_HELPERS_AVAILABLE = False
         raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location

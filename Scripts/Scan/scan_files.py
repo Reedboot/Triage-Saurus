@@ -163,7 +163,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Resolve repo root
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
 
     # Resolve target path
     from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_KNOWLEDGE_DIR

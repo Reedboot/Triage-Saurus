@@ -605,7 +605,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             # targeted_scan.py handles both phases and calls store_findings.py.
             targeted_cmd = [
                 sys.executable,
-                str(SCRIPTS_SOURCE / "targeted_scan.py"),
+                str(SCRIPTS_SOURCE / "Scan" / "targeted_scan.py"),
                 str(rp),
                 "--experiment", str(args.id),
                 "--repo", rp.name,
@@ -618,7 +618,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
             cmd = [
                 sys.executable,
-                str(SCRIPTS_SOURCE / "discover_repo_context.py"),
+                str(SCRIPTS_SOURCE / "Context" / "discover_repo_context.py"),
                 str(rp),
                 "--repos-root",
                 str(repos_root),
