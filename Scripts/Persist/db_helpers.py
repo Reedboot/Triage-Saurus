@@ -9,7 +9,20 @@ from contextlib import contextmanager
 try:
     import cozo_helpers
 except Exception as e:
-    raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
+    # Attempt to dynamically load the local implementation from Scripts/Enrich/cozo_helpers.py
+    import importlib.util
+    impl_path = Path(__file__).resolve().parents[2] / "Scripts" / "Enrich" / "cozo_helpers.py"
+    if impl_path.exists():
+        spec = importlib.util.spec_from_file_location("cozo_helpers", str(impl_path))
+        module = importlib.util.module_from_spec(spec)
+        loader = spec.loader
+        if loader is None:
+            raise ImportError("Failed to load cozo_helpers implementation (no loader)")
+        loader.exec_module(module)
+        cozo_helpers = module
+        sys.modules.setdefault("cozo_helpers", module)
+    else:
+        raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
