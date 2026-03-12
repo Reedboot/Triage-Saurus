@@ -242,3 +242,42 @@ Notes:
 ## Auto-regenerate risk register
 - Run `python3 Scripts/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
 - Use `python3 Scripts/watch_risk_register.py --full` to also refresh summaries/descriptions/scores before regenerating.
+
+---
+
+## Web UI (Experimental)
+Triage-Saurus includes a lightweight web portal (web/app.py) that provides a browser-based interface to run scans and stream pipeline output in real time.
+
+Quick start (local only):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 web/app.py
+# Open http://localhost:5000 in your browser
+```
+
+What the web UI does:
+- Presents a pre-populated dropdown from `Intake/ReposToScan.txt` to select a repository (server-side paths are resolved).
+- Runs the same offline Phase 1–3 pipeline (Scripts/Utils/run_pipeline.py) as subprocesses on the machine where the web server runs.
+- Streams the pipeline stdout/stderr to the browser using Server-Sent Events and renders any generated Mermaid diagrams.
+
+Security warning
+
+This web portal executes scanning commands against the server's filesystem. If the web server is exposed to untrusted users, it can be abused to browse directories, read files the web process can access, or trigger expensive scans. In short: yes — this is a potentially dangerous capability if published publicly.
+
+Important safety notes (read carefully):
+- The UI is intended for local, single-user usage. Do NOT deploy it to public networks without adding proper authentication, authorization, and network protections.
+- The current UI limits selection to repos listed in `Intake/ReposToScan.txt`, but that is only a convenience and not a security boundary.
+- If you must expose the portal, protect it with an authenticated reverse proxy or VPN, run the service as an unprivileged user (or inside a container), restrict allowed target paths (allow-list), and enable rate-limiting and auditing.
+- Treat any scan outputs as potentially sensitive: the process may read configuration files, credentials, or other secrets present in scanned directories.
+
+Recommendations
+
+- Use the web UI only on trusted, isolated hosts (your laptop or a locked admin VM).
+- Consider adding server-side allow-lists, request authentication, and CSRF protections before enabling network access.
+- Run the server in a container, with a dedicated low-privilege user and minimal filesystem mounts.
+
+---
+
