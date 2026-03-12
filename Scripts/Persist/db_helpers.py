@@ -8,10 +8,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 try:
     import cozo_helpers
-    _COZO_HELPERS_AVAILABLE = True
-except Exception:
-    cozo_helpers = None
-    _COZO_HELPERS_AVAILABLE = False
+except Exception as e:
+    raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]

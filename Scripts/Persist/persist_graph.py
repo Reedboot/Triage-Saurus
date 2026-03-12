@@ -20,14 +20,17 @@ from pathlib import Path
 from typing import Optional
 
 from models import RepositoryContext, Relationship, RelationshipType
-from cozo_helpers import (
-    insert_resource_node,
-    insert_enrichment_node,
-    insert_relationship,
-    insert_equivalence,
-    link_enrichment,
-)
-
+# cozo_helpers is required — fail fast with a clear message if missing
+try:
+    from cozo_helpers import (
+        insert_resource_node,
+        insert_enrichment_node,
+        insert_relationship,
+        insert_equivalence,
+        link_enrichment,
+    )
+except Exception as e:
+    raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Prefer cozo consolidated DB if present; fall back to legacy triage DB
 import db_helpers as _db_helpers
