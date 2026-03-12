@@ -68,6 +68,20 @@ for t in ('repos','resources','findings'):
         print(f"{t}:", cur.fetchone()[0])
     except Exception:
         pass
+
+# Ensure compatibility nodes/edges tables exist (created by init_cozo_learning)
+missing = []
+for t in ('nodes','edges'):
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,))
+    if not cur.fetchone():
+        missing.append(t)
+    else:
+        cur.execute(f"SELECT count(*) FROM {t}")
+        print(f"{t}:", cur.fetchone()[0])
+if missing:
+    print('Missing expected compatibility tables:', missing)
+    sys.exit(4)
+
 print('DB verification OK')
 PY
 
