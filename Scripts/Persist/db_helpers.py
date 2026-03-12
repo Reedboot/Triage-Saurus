@@ -5,6 +5,7 @@ import json
 import sqlite3
 import sys
 import time
+import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -294,8 +295,51 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
 
 
 def _ensure_schema(conn: sqlite3.Connection):
-    """Ensure tables used by db_helpers exist on the active database."""
-    conn.executescript("""
+    """Ensure tables used by db_helpers exist on the active database.
+
+    To avoid transient sqlite "database is locked" errors during concurrent runs,
+    acquire a lightweight filesystem-based migration lock so only one process
+    applies schema migrations at a time. This avoids multiple processes attempting
+    concurrent ALTER TABLE/CREATE INDEX operations which often lead to "database
+    is locked" errors on sqlite.
+    """
+    # Migration lock file (sibling to DB file)
+    lock_path = COZO_DB.with_name(COZO_DB.name + ".schema_lock")
+    lock_fd = None
+    acquired = False
+    # Try to acquire an exclusive lock file with retries
+    for attempt in range(6):
+        try:
+            # O_CREAT | O_EXCL ensures this fails if file already exists
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            # Write PID for diagnostics
+            try:
+                os.write(lock_fd, str(os.getpid()).encode())
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            # Another process is running migrations; wait and retry
+            time.sleep(1 + attempt)
+            continue
+        except Exception:
+            # If something unexpected happens, don't block migrations entirely
+            break
+
+    if not acquired:
+        # If lock couldn't be acquired, proceed but rely on sqlite busy timeout/retries
+        pass
+
+    try:
+        # Attempt to acquire exclusive locking mode for the duration of migrations
+        try:
+            conn.execute("PRAGMA locking_mode=EXCLUSIVE;")
+        except Exception:
+            # If setting locking_mode fails, continue — it's advisory
+            pass
+
+        conn.executescript("""
     CREATE TABLE IF NOT EXISTS repositories (
       id INTEGER PRIMARY KEY,
       experiment_id TEXT NOT NULL,
