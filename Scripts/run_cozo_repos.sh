@@ -11,7 +11,7 @@ PYTHON_SCRIPT="$REPO_ROOT/Scripts/Scan/store_opengrep_for_cozo.py"
 COZO_DB_PATH="$REPO_ROOT/Output/Data/cozo.db"
 SUMMARY_SCRIPT="$REPO_ROOT/Scripts/Generate/generate_repo_summary_from_cozo.py"
 SUMMARY_OUTPUT_DIR="$REPO_ROOT/Output/Summary/Repos"
-PYTHON_BIN="$REPO_ROOT/.venv-cozo/bin/python"
+PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
 ANALYTICS_DB_DIR="$REPO_ROOT/Output/Data"
 ANALYTICS_DB="$COZO_DB_PATH"
 AUDIT_LOG="$REPO_ROOT/Output/Audit/CozoScan_$(date +%Y-%m-%d_%H%M%S).md"
@@ -56,7 +56,10 @@ if ! command -v opengrep >/dev/null 2>&1; then
   exit 1
 fi
 
-[ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+  echo "⚠️  Warning: .venv-cozo/bin/python not found — falling back to python3 (required packages may be missing)" >&2
+  PYTHON_BIN="python3"
+fi
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$SUMMARY_OUTPUT_DIR"
@@ -94,25 +97,23 @@ should_skip_repo() {
     return 1
   fi
 
-  local safe_repo
-  safe_repo=$(printf "%s" "$repo" | sed "s/'/''/g")
-  local last_scan
-  last_scan=$(sqlite3 "$COZO_DB_PATH" \
-    "SELECT scan_time FROM repo_scans WHERE repo_name = '$safe_repo' ORDER BY scan_time DESC LIMIT 1;" 2>/dev/null | tr -d '\n')
-  if [ -z "$last_scan" ]; then
-    return 1
-  fi
-
-  local last_epoch
-  last_epoch=$(date -d "$last_scan" +%s 2>/dev/null || echo "0")
-  local now_epoch
-  now_epoch=$(date +%s)
-  local diff=$((now_epoch - last_epoch))
-
-  if [ "$diff" -lt "$ONE_HOUR" ]; then
-    return 0
-  fi
-  return 1
+  "$PYTHON_BIN" - "$COZO_DB_PATH" "$repo" "$ONE_HOUR" <<'PY' 2>/dev/null
+import sys, sqlite3, time, datetime
+db, repo, max_age = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    row = conn.execute(
+        "SELECT scan_time FROM repo_scans WHERE repo_name = ? ORDER BY scan_time DESC LIMIT 1",
+        (repo,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        sys.exit(1)
+    age = int(time.time()) - int(datetime.datetime.fromisoformat(row[0]).timestamp())
+    sys.exit(0 if age < max_age else 1)
+except Exception:
+    sys.exit(1)
+PY
 }
 
 REPO_LIST_COUNT=$(grep -cEv '^[[:space:]]*(#|$)' "$REPOS_FILE" || true)
@@ -207,7 +208,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   echo "Resources detected for $repo_name (scan $scan_id):"
-  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name"
+  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name" || log "  ⚠️  Failed to display findings summary for $repo_name"
 from pycozo import Client
 import sys
 
@@ -247,9 +248,8 @@ PY
 done < "$REPOS_FILE"
 
 TOTAL_TIME=$(( $(date +%s) - START_TIME ))
-TOTAL_MIN=$((TOTAL_TIME / 60))
 TOTAL_HOURS=$((TOTAL_TIME / 3600))
-REMAINING_MIN=$((TOTAL_MIN % 60))
+REMAINING_MIN=$(( (TOTAL_TIME % 3600) / 60 ))
 
 log ""
 log "✅ Cozo repo scan complete"

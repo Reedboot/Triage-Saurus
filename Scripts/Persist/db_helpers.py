@@ -36,6 +36,10 @@ COZO_DB = ROOT / "Output/Data/cozo.db"
 # Prefer Cozo DB for all scripts.
 DB_PATH = COZO_DB
 
+# Track which DB paths have had their schema ensured in this process so
+# _ensure_schema skips the expensive DDL + lock on every subsequent connection.
+_schema_ensured_for: set = set()
+
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
 ENRICHMENT_DECISION_MAP = {
     "confirm": "confirmed",
@@ -303,6 +307,11 @@ def _ensure_schema(conn: sqlite3.Connection):
     concurrent ALTER TABLE/CREATE INDEX operations which often lead to "database
     is locked" errors on sqlite.
     """
+    # Skip DDL entirely if this process has already ensured the schema for this DB.
+    db_file = conn.execute("PRAGMA database_list").fetchone()[2]
+    if db_file in _schema_ensured_for:
+        return
+
     # Migration lock file (sibling to DB file)
     lock_path = COZO_DB.with_name(COZO_DB.name + ".schema_lock")
     lock_fd = None
@@ -361,13 +370,6 @@ def _ensure_schema(conn: sqlite3.Connection):
 
     # Perform migrations under a try/finally so the lock is removed on exit
     try:
-        # Attempt to acquire exclusive locking mode for the duration of migrations
-        try:
-            conn.execute("PRAGMA locking_mode=EXCLUSIVE;")
-        except Exception:
-            # If setting locking_mode fails, continue — it's advisory
-            pass
-
         conn.executescript("""
     CREATE TABLE IF NOT EXISTS repositories (
       id INTEGER PRIMARY KEY,
@@ -790,6 +792,9 @@ def _ensure_schema(conn: sqlite3.Connection):
         except Exception:
             # Best-effort cleanup only; don't fail migrations for cleanup errors
             pass
+
+    # Mark schema as ensured for this DB path so subsequent connections skip DDL.
+    _schema_ensured_for.add(db_file)
 
 
 @contextmanager
