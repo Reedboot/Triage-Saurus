@@ -1164,98 +1164,70 @@ def insert_connection(
                         existing[0],
                     ),
                 )
-                # Record provenance for update
-                if _COZO_HELPERS_AVAILABLE:
-                    try:
-                        try:
-                            cozo_helpers._insert_relationship_audit(
-                                from_node=f"resource:{source_result[0]}",
-                                to_node=f"resource:{target_result[0]}",
-                                rel_type=connection_type or 'connection',
-                                action="updated",
-                                actor_type="context_discovery",
-                                actor_id=experiment_id,
-                                scan_id=experiment_id,
-                                evidence_finding_id=None,
-                                confidence=None,
-                                details_json=json.dumps({
-                                    "protocol": protocol,
-                                    "port": port,
-                                    "authentication": authentication,
-                                    "authorization": authorization,
-                                    "auth_method": auth_method,
-                                    "is_encrypted": is_encrypted,
-                                    "via_component": via_component,
-                                    "notes": notes,
-                                }),
-                            )
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                return existing[0]
+                _audit = ("updated", source_result[0], target_result[0])
+                _return_id = existing[0]
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO resource_connections
+                    (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
+                     is_cross_repo, connection_type, protocol, port, authentication, authorization,
+                     auth_method, is_encrypted, via_component, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        experiment_id,
+                        source_result[0],
+                        target_result[0],
+                        source_repo_id,
+                        target_repo_id,
+                        is_cross_repo,
+                        connection_type,
+                        protocol,
+                        port,
+                        effective_authentication,
+                        authorization,
+                        effective_auth_method,
+                        is_encrypted,
+                        via_component,
+                        notes,
+                    ),
+                )
+                row = cursor.fetchone()
+                new_id = row[0] if row else None
+                _audit = ("created", source_result[0], target_result[0]) if new_id else None
+                _return_id = new_id
+        else:
+            _audit = None
+            _return_id = None
 
-            cursor = conn.execute(
-                """
-                INSERT INTO resource_connections
-                (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
-                 is_cross_repo, connection_type, protocol, port, authentication, authorization,
-                 auth_method, is_encrypted, via_component, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                RETURNING id
-                """,
-                (
-                    experiment_id,
-                    source_result[0],
-                    target_result[0],
-                    source_repo_id,
-                    target_repo_id,
-                    is_cross_repo,
-                    connection_type,
-                    protocol,
-                    port,
-                    effective_authentication,
-                    authorization,
-                    effective_auth_method,
-                    is_encrypted,
-                    via_component,
-                    notes,
-                ),
+    # Fire provenance audit AFTER the transaction commits to avoid a write-lock
+    # deadlock (same issue as insert_resource — cozo_helpers opens its own connection).
+    if _audit and _COZO_HELPERS_AVAILABLE:
+        _action, _src_id, _tgt_id = _audit
+        audit_details = json.dumps({
+            "protocol": protocol, "port": port,
+            "authentication": authentication, "authorization": authorization,
+            "auth_method": auth_method, "is_encrypted": is_encrypted,
+            "via_component": via_component, "notes": notes,
+        })
+        try:
+            cozo_helpers._insert_relationship_audit(
+                from_node=f"resource:{_src_id}",
+                to_node=f"resource:{_tgt_id}",
+                rel_type=connection_type or 'connection',
+                action=_action,
+                actor_type="context_discovery",
+                actor_id=experiment_id,
+                scan_id=experiment_id,
+                evidence_finding_id=None,
+                confidence=None,
+                details_json=audit_details,
             )
-            row = cursor.fetchone()
-            new_id = row[0] if row else None
-
-            # Record provenance for creation
-            if new_id and _COZO_HELPERS_AVAILABLE:
-                try:
-                    try:
-                        cozo_helpers._insert_relationship_audit(
-                            from_node=f"resource:{source_result[0]}",
-                            to_node=f"resource:{target_result[0]}",
-                            rel_type=connection_type or 'connection',
-                            action="created",
-                            actor_type="context_discovery",
-                            actor_id=experiment_id,
-                            scan_id=experiment_id,
-                            evidence_finding_id=None,
-                            confidence=None,
-                            details_json=json.dumps({
-                                "protocol": protocol,
-                                "port": port,
-                                "authentication": authentication,
-                                "authorization": authorization,
-                                "auth_method": auth_method,
-                                "is_encrypted": is_encrypted,
-                                "via_component": via_component,
-                                "notes": notes,
-                            }),
-                        )
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-            return new_id
-    return None
+        except Exception:
+            pass
+    return _return_id
 
 
 # ============================================================================
