@@ -28,9 +28,47 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Ensure Scripts/Utils is on sys.path when executing this script directly
+_script_dir = Path(__file__).resolve().parent
+_scripts_root = _script_dir.parent
+import sys
+sys.path.insert(0, str(_scripts_root))
+sys.path.insert(0, str(_scripts_root / 'Utils'))
+sys.path.insert(0, str(_scripts_root / 'Persist'))
+# Also make other script subpackages available for imports used by the CLI
+sys.path.insert(0, str(_scripts_root / 'Enrich'))
+sys.path.insert(0, str(_scripts_root / 'Context'))
+sys.path.insert(0, str(_scripts_root / 'Generate'))
+sys.path.insert(0, str(_scripts_root / 'Scan'))
+
 from output_paths import OUTPUT_ROOT, REPO_ROOT
-import learning_db as db
-from cozo_helpers import insert_task_node, insert_task_dependency
+try:
+    import learning_db as db
+except Exception:
+    # Minimal shim when learning_db module is not available (e.g., running in
+    # constrained environments). Provides required no-op functions used by the
+    # experiment CLI so the rest of the pipeline can continue using filesystem
+    # state.
+    class _DummyDB:
+        def create_experiment(self, exp_id, name, repos, version=None):
+            print(f"[WARN] learning_db missing: create_experiment({exp_id}) no-op")
+            return None
+        def print_status(self):
+            print("[WARN] learning_db missing: print_status no-op")
+        def update_experiment(self, *args, **kwargs):
+            print("[WARN] learning_db missing: update_experiment no-op")
+        def get_experiment(self, exp_id):
+            return None
+    db = _DummyDB()
+try:
+    from cozo_helpers import insert_task_node, insert_task_dependency
+except Exception:
+    # Cozo helper missing (pycozo not installed) — provide no-op fallbacks so
+    # experiments can still be created and stored on the filesystem.
+    def insert_task_node(*args, **kwargs):
+        return None
+    def insert_task_dependency(*args, **kwargs):
+        return None
 
 LEARNING_DIR = OUTPUT_ROOT / "Learning"
 STATE_FILE = LEARNING_DIR / "state.json"
