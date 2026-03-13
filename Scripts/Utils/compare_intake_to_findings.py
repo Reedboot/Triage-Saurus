@@ -29,23 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 from output_paths import OUTPUT_FINDINGS_DIR
-
-
-def _is_hidden(path: Path) -> bool:
-    return any(part.startswith(".") for part in path.parts)
-
-
-def _normalise_title(line: str) -> str:
-    # Accept both raw lines and Markdown headings.
-    return line.strip().lstrip("\ufeff").lstrip("# ").strip()
-
-
-def _dedupe_key(title: str) -> str:
-    # Keep consistent with generate_findings_from_titles.py
-    s = _normalise_title(title).lower()
-    s = re.sub(r"\s+", " ", s).strip().rstrip(".")
-    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
-    return s
+from shared_utils import _is_hidden, _normalise_title, _dedupe_key
 
 
 def _titles_from_text_file(path: Path) -> list[str]:

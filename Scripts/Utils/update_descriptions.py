@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import argparse
 import re
-from datetime import datetime
 from pathlib import Path
+
+from shared_utils import _update_last_updated, iter_findings
 
 
 try:
@@ -12,9 +13,6 @@ try:
 except Exception:
     cloud_description_for_title = None
 
-
-def _now_stamp() -> str:
-    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
 def _norm(s: str) -> str:
@@ -96,29 +94,6 @@ def _looks_auto_generated_description(desc: str) -> bool:
         "security configuration does not meet baseline guidance:",
     ]
     return any(d.startswith(p) for p in prefixes)
-
-
-def _update_last_updated(lines: list[str]) -> list[str]:
-    stamp = _now_stamp()
-    out: list[str] = []
-    updated = False
-    for line in lines:
-        if re.match(r"^\-\s*🗓️\s*\*\*Last updated:\*\*", line):
-            out.append(f"- 🗓️ **Last updated:** {stamp}")
-            updated = True
-        else:
-            out.append(line)
-    return out if updated else lines
-
-
-def iter_findings(root: Path) -> list[Path]:
-    if root.is_file() and root.suffix.lower() == ".md":
-        return [root]
-    if not root.exists():
-        return []
-    return sorted([p for p in root.rglob("*.md") if p.is_file()])
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Replace title-repeated Description lines with short explanatory descriptions.")
     ap.add_argument("--path", default="Output/Findings/Cloud", help="Finding file or folder to scan")

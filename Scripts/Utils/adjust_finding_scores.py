@@ -4,8 +4,18 @@ from __future__ import annotations
 import argparse
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
+
+from shared_utils import (
+    _extract_first_match,
+    _find_heading,
+    _normalise_compounds_with,
+    _normalise_status,
+    _now_stamp,
+    _slice_section_body,
+    _update_last_updated,
+    iter_findings,
+)
 
 
 @dataclass(frozen=True)
@@ -13,10 +23,6 @@ class ScoreUpdate:
     old_score: int
     new_score: int
     drivers: list[str]
-
-
-def _now_stamp() -> str:
-    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
 def _severity(score: int) -> tuple[str, str]:
@@ -30,53 +36,6 @@ def _severity(score: int) -> tuple[str, str]:
     if score >= 3:
         return "🟢", "Low"
     return "⚪", "Informational"
-
-
-def _find_heading(lines: list[str], heading: str) -> int | None:
-    for i, line in enumerate(lines):
-        if line.strip() == heading:
-            return i
-    return None
-
-
-def _slice_section_body(lines: list[str], heading_idx: int) -> tuple[int, int]:
-    start = heading_idx + 1
-    end = len(lines)
-    for j in range(start, len(lines)):
-        if re.match(r"^#{1,3}\s+", lines[j]):
-            end = j
-            break
-    return start, end
-
-
-def _extract_first_match(lines: list[str], pattern: re.Pattern[str]) -> str:
-    for line in lines:
-        m = pattern.search(line)
-        if m:
-            return m.group(1).strip()
-    return ""
-
-
-def _normalise_compounds_with(s: str) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    if s.lower() in {"none", "none identified", "n/a"}:
-        return ""
-    return s
-
-
-def _normalise_status(s: str) -> str:
-    s = (s or "").strip().lower()
-    if s in {"yes", "y"}:
-        return "yes"
-    if s in {"no", "n", "not applicable", "n/a"}:
-        return "no"
-    if "don’t know" in s or "don't know" in s:
-        return "dont_know"
-    return s
-
-
 def _gather_confirmed_context(lines: list[str]) -> list[str]:
     confirmed: list[str] = []
 
@@ -262,29 +221,6 @@ def _upsert_score_drivers(lines: list[str], drivers: list[str]) -> list[str]:
     prefix = ["Score drivers (confirmed):"] + [f"- {d}" for d in drivers] + [""]
     new_body = prefix + cleaned
     return lines[:b0] + new_body + lines[b1:]
-
-
-def _update_last_updated(lines: list[str]) -> list[str]:
-    stamp = _now_stamp()
-    out: list[str] = []
-    updated = False
-    for line in lines:
-        if re.match(r"^\-\s*🗓️\s*\*\*Last updated:\*\*", line):
-            out.append(f"- 🗓️ **Last updated:** {stamp}")
-            updated = True
-        else:
-            out.append(line)
-    return out if updated else lines
-
-
-def iter_findings(root: Path) -> list[Path]:
-    if root.is_file() and root.suffix.lower() == ".md":
-        return [root]
-    if not root.exists():
-        return []
-    return sorted([p for p in root.rglob("*.md") if p.is_file()])
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Adjust finding scores using confirmed countermeasures and compounding.")
     ap.add_argument("--path", default="Output/Findings/Cloud", help="Finding file or folder to scan")

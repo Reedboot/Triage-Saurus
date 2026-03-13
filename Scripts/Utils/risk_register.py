@@ -14,6 +14,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 ROOT = Path(__file__).resolve().parents[2]
 
 from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
+from shared_utils import is_draft_finding
 
 # Try database-first approach, fallback to markdown parsing
 USE_DATABASE = True
@@ -134,27 +135,6 @@ def parse_issue(title: str) -> str:
 
     return cleaned or title
 
-
-def is_draft_finding(lines: list[str]) -> bool:
-    """Check if a finding is a draft (generic boilerplate, not validated)."""
-    text = " ".join(lines).lower()
-
-    # Prefer explicit status in Meta Data (more stable than phrase matching).
-    joined = "\n".join(lines)
-    if "Validation Status:** ⚠️ Draft - Needs Triage" in joined:
-        return True
-    if "Validation Status:** ✅ Validated" in joined:
-        return False
-    
-    # Check for draft indicators
-    draft_indicators = [
-        "draft finding generated from a title-only input",
-        "this is a draft finding",
-        "validate the affected resources/scope",
-        "title-only input; needs validation",
-    ]
-    
-    return any(indicator in text for indicator in draft_indicators)
 
 
 def parse_summary(lines: list[str], path: Path) -> str:
@@ -758,7 +738,7 @@ def build_rows_from_markdown() -> list[RiskRow]:
         exec_issue = _strip_markdown_formatting(exec_issue)
         
         # Check if this is a draft finding
-        validation_status = "⚠️ Draft - Needs Triage" if is_draft_finding(lines) else "✅ Validated"
+        validation_status = "⚠️ Draft - Needs Triage" if is_draft_finding("\n".join(lines)) else "✅ Validated"
 
         if _is_repo_finding(path) and re.fullmatch(r"Repo\s+[^:]+", issue, flags=re.IGNORECASE):
             print(

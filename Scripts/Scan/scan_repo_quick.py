@@ -14,6 +14,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
+from shared_utils import iter_files as _shared_iter_files
+
 
 KEY_FILE_PATTERNS = [
     "*.tf",
@@ -57,25 +60,6 @@ LANGUAGE_RULES = [
 
 def eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
-
-
-def iter_files(repo: Path, max_depth: int) -> list[Path]:
-    files: list[Path] = []
-    repo = repo.resolve()
-    for p in repo.rglob("*"):
-        try:
-            rel = p.relative_to(repo)
-        except ValueError:
-            continue
-        if ".git" in rel.parts:
-            continue
-        if len(rel.parts) > max_depth:
-            continue
-        if p.is_file():
-            files.append(p)
-    return files
-
-
 def detect_languages(file_list: list[Path], repo: Path) -> list[tuple[str, str]]:
     """Returns list of (language, evidence) tuples based on collected files."""
     detected: list[tuple[str, str]] = []
@@ -133,7 +117,7 @@ def main() -> int:
     print()
     
     # Collect files once
-    all_files = iter_files(repo, max_depth=10)
+    all_files = _shared_iter_files(repo, max_depth=10, skip_dirs={".git"})
 
     print("== Languages/frameworks detected ==")
     langs = detect_languages(all_files, repo)

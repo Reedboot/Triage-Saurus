@@ -12,11 +12,9 @@ from pathlib import Path
 
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
 import db_helpers
-
-
-def _severity_score(severity: str) -> int:
-    return 8 if severity.upper() == "ERROR" else 5
+from shared_utils import _severity_score
 
 
 def _base_severity(severity: str) -> str:

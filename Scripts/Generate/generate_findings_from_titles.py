@@ -45,24 +45,7 @@ from output_paths import (
 )
 
 from markdown_validator import validate_markdown_file
-
-
-def now_uk() -> str:
-    return _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
-
-
-def _normalise_title(line: str) -> str:
-    # Accept both raw lines and Markdown headings.
-    return line.strip().lstrip("\ufeff").lstrip("# ").strip()
-
-
-def _dedupe_key(title: str) -> str:
-    # Coarse dedupe for bulk imports: avoid generating multiple findings for the same title.
-    # Keep it conservative: whitespace/case normalisation + common /etc/*- backup patterns.
-    s = _normalise_title(title).lower()
-    s = re.sub(r"\s+", " ", s).strip().rstrip(".")
-    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
-    return s
+from shared_utils import now_uk, _normalise_title, _dedupe_key, titlecase_filename, _unique_out_path, severity
 
 
 def _titles_from_path(path: Path) -> list[str]:
@@ -80,38 +63,6 @@ def _titles_from_path(path: Path) -> list[str]:
         if t:
             return [t]
     return []
-
-
-def _unique_out_path(out_dir: Path, base: str) -> Path:
-    out = out_dir / f"{base}.md"
-    if not out.exists():
-        return out
-
-    i = 2
-    while True:
-        candidate = out_dir / f"{base}_{i}.md"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
-def severity(score: int) -> str:
-    if score >= 8:
-        return "🔴 Critical"
-    if score >= 6:
-        return "🟠 High"
-    if score >= 4:
-        return "🟡 Medium"
-    return "🟢 Low"
-
-
-def titlecase_filename(title: str) -> str:
-    # Keep filenames predictable and safe.
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")
-    # Titlecase convention: initial caps per segment, no underscores in title rules
-    # are for document titles, not filenames; filenames can keep underscores.
-    parts = [p for p in cleaned.split("_") if p]
-    return "_".join([p[:1].upper() + p[1:] for p in parts]) or "Finding"
 
 
 def score_for(title: str) -> int:

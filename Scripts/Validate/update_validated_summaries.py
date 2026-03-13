@@ -3,9 +3,21 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
+from shared_utils import (
+    _extract_first_match,
+    _find_heading,
+    _normalise_compounds_with,
+    _normalise_status,
+    _now_stamp,
+    _slice_section_body,
+    _update_last_updated,
+    iter_findings,
+)
 
 
 BOILERPLATE_SNIPPETS = [
@@ -25,42 +37,6 @@ class ParsedFinding:
     confirmed_assumptions: list[str]
     compounds_with: str
     summary_lines: list[str]
-
-
-def _now_stamp() -> str:
-    # Match repo convention seen in findings: dd/mm/yyyy HH:MM
-    return datetime.now().strftime("%d/%m/%Y %H:%M")
-
-
-def _find_heading(lines: list[str], heading: str) -> int | None:
-    for i, line in enumerate(lines):
-        if line.strip() == heading:
-            return i
-    return None
-
-
-def _slice_section_body(lines: list[str], heading_idx: int) -> tuple[int, int]:
-    """
-    Return (body_start_idx, body_end_exclusive_idx) for a markdown section.
-    Section ends at next heading of same/higher level (##/###/#) or EOF.
-    """
-    start = heading_idx + 1
-    end = len(lines)
-    for j in range(start, len(lines)):
-        if re.match(r"^#{1,3}\s+", lines[j]):
-            end = j
-            break
-    return start, end
-
-
-def _extract_first_match(lines: list[str], pattern: re.Pattern[str]) -> str:
-    for line in lines:
-        m = pattern.search(line)
-        if m:
-            return m.group(1).strip()
-    return ""
-
-
 def parse_finding(path: Path) -> ParsedFinding:
     lines = path.read_text(encoding="utf-8").splitlines()
 
@@ -118,17 +94,6 @@ def _contains_boilerplate(summary_lines: list[str]) -> bool:
 
 def _is_validated(validation_status: str) -> bool:
     return "validated" in validation_status.lower()
-
-
-def _normalise_compounds_with(s: str) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    if s.lower() in {"none", "none identified", "n/a"}:
-        return ""
-    return s
-
-
 def _summary_text(summary_lines: list[str]) -> str:
     return "\n".join(summary_lines).strip()
 
@@ -175,19 +140,6 @@ def _should_refresh_summary(p: ParsedFinding) -> bool:
         return True
 
     return False
-
-
-def _normalise_status(s: str) -> str:
-    s = (s or "").strip().lower()
-    if s in {"yes", "y"}:
-        return "yes"
-    if s in {"no", "n", "not applicable", "n/a"}:
-        return "no"
-    if "don’t know" in s or "don't know" in s:
-        return "dont_know"
-    return s
-
-
 def _pick_context_snippets(confirmed: list[str]) -> list[str]:
     # Prefer concise, high-signal context; cap to avoid overly-long summaries.
     prefer_needles = [
@@ -292,29 +244,6 @@ def _replace_summary(lines: list[str], new_summary: str) -> list[str]:
         new_block.append("")
 
     return lines[:s0] + new_block + lines[s1:]
-
-
-def _update_last_updated(lines: list[str]) -> list[str]:
-    stamp = _now_stamp()
-    out: list[str] = []
-    updated = False
-    for line in lines:
-        if re.match(r"^\-\s*🗓️\s*\*\*Last updated:\*\*", line):
-            out.append(f"- 🗓️ **Last updated:** {stamp}")
-            updated = True
-        else:
-            out.append(line)
-    return out if updated else lines
-
-
-def iter_findings(root: Path) -> list[Path]:
-    if root.is_file() and root.suffix.lower() == ".md":
-        return [root]
-    if not root.exists():
-        return []
-    return sorted([p for p in root.rglob("*.md") if p.is_file()])
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Update finding summaries to remove title-only boilerplate and incorporate compounding context.")
     ap.add_argument("--path", default="Output/Findings/Cloud", help="Finding file or folder to scan")
