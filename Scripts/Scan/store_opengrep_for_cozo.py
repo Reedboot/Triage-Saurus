@@ -21,18 +21,8 @@ except Exception:
 
 DEFAULT_COZO_DB = Path("Output/Data/cozo.db")
 
-
-def _severity_score(severity: str | None) -> int:
-    if not severity:
-        return 4
-    value = severity.upper()
-    if value == "ERROR":
-        return 8
-    if value == "WARNING":
-        return 5
-    if value == "INFO":
-        return 2
-    return 4
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
+from shared_utils import _severity_score
 
 
 def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:

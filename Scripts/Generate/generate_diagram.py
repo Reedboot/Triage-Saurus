@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
+from shared_utils import _normalize_optional_bool
 
 # Lazy DB connection for resource type lookups
 import sqlite3
@@ -84,21 +85,6 @@ def _category(resource: dict) -> str:
 def sanitize_id(name: str) -> str:
     """Convert resource name to valid Mermaid node ID."""
     return name.replace('-', '_').replace('.', '_').replace(' ', '_')
-
-
-def _normalize_optional_bool(value: object) -> Optional[bool]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    lowered = str(value).strip().lower()
-    if lowered in {"1", "true", "yes", "y", "t"}:
-        return True
-    if lowered in {"0", "false", "no", "n", "f"}:
-        return False
-    return None
 
 
 def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:

@@ -19,23 +19,25 @@ Usage:
 import json
 import hashlib
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime, timedelta
 
 import resource_type_db as _rtdb
+import db_helpers as _db
 
-# Lazy DB connection
-_db_conn: sqlite3.Connection | None = None
 
 def _get_db() -> sqlite3.Connection | None:
-    global _db_conn
-    if _db_conn is None:
-        # Use the resource type DB path (prefers COZO DB when available)
-        db_path = _rtdb.DB_PATH
-        if db_path.exists():
-            _db_conn = sqlite3.connect(str(db_path))
-    return _db_conn
+    db_path = _db.DB_PATH
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=30)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception:
+        return None
 
 # Cache location
 CACHE_DIR = Path.home() / ".triage-saurus" / "cache"

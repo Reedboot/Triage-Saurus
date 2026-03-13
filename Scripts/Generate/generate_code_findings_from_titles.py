@@ -25,46 +25,9 @@ from pathlib import Path
 
 from output_paths import OUTPUT_RENDER_INPUTS_DIR
 from markdown_validator import validate_markdown_file
+from shared_utils import now_uk, _normalise_title, titlecase_filename, _unique_out_path, severity
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def now_uk() -> str:
-    return _dt.datetime.now().strftime("%d/%m/%Y %H:%M")
-
-
-def _normalise_title(line: str) -> str:
-    # Accept both raw lines and Markdown headings.
-    return line.strip().lstrip("\ufeff").lstrip("# ").strip()
-
-
-def titlecase_filename(text: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
-    parts = [p for p in cleaned.split("_") if p]
-    return "_".join([p[:1].upper() + p[1:] for p in parts]) or "Finding"
-
-
-def _unique_out_path(out_dir: Path, base: str) -> Path:
-    out = out_dir / f"{base}.md"
-    if not out.exists():
-        return out
-    i = 2
-    while True:
-        candidate = out_dir / f"{base}_{i}.md"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
-def severity(score: int) -> str:
-    if score >= 8:
-        return "🔴 Critical"
-    if score >= 6:
-        return "🟠 High"
-    if score >= 4:
-        return "🟡 Medium"
-    return "🟢 Low"
-
 
 OWASP_2021 = {
     "broken access control": ("A01", 8),

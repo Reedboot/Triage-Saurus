@@ -27,6 +27,7 @@ from output_paths import (
     OUTPUT_FINDINGS_DIR,
     OUTPUT_KNOWLEDGE_DIR,
 )
+from shared_utils import _is_hidden
 
 # -----------------------------------------------------------------------------
 # Knowledge refinement detection (from scan_knowledge_refinement.py)
@@ -89,7 +90,7 @@ def scan_knowledge_file(path: Path) -> list[RefinementFinding]:
 
 
 # -----------------------------------------------------------------------------
-# Repo candidate detection (from list_repo_candidates.py)
+# Repo candidate detection
 # -----------------------------------------------------------------------------
 
 REPO_MARKERS = {
@@ -143,12 +144,6 @@ class ScanResults:
     refinement_findings: list[RefinementFinding] = field(default_factory=list)
     finding_files: list[Path] = field(default_factory=list)
     intake_files: dict[str, list[Path]] = field(default_factory=dict)  # path -> files
-
-
-def _is_hidden(name: str) -> bool:
-    return name.startswith(".")
-
-
 def single_pass_scan(
     *,
     scan_knowledge: bool,

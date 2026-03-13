@@ -208,7 +208,7 @@ When an experiment produces **validated, high-confidence learnings**, promote th
 
 **Command:**
 ```bash
-python3 Scripts/triage_experiment.py promote <experiment_id>
+python3 Scripts/Experiments/triage_experiment.py promote <experiment_id>
 ```
 
 **What Gets Promoted:**
@@ -246,7 +246,7 @@ The `promote` command:
 
 **View promoted experiments:**
 ```bash
-python3 Scripts/triage_experiment.py list
+python3 Scripts/Experiments/triage_experiment.py list
 # Shows which experiments have been promoted
 ```
 

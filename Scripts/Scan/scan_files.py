@@ -29,45 +29,17 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
+from shared_utils import _is_hidden, iter_files
 
 
 # -----------------------------------------------------------------------------
 # File walking
 # -----------------------------------------------------------------------------
-
-def _is_hidden(path: Path, root: Path) -> bool:
-    """Check if path or any parent (relative to root) is hidden."""
-    try:
-        rel = path.relative_to(root)
-        return any(part.startswith(".") for part in rel.parts)
-    except ValueError:
-        return False
-
-
-def iter_files(root: Path, exts: set[str], include_hidden: bool) -> list[Path]:
-    """Walk directory tree and collect files matching extensions."""
-    matches: list[Path] = []
-
-    for dirpath, dirnames, filenames in os.walk(root):
-        if not include_hidden:
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-
-        for name in filenames:
-            p = Path(dirpath) / name
-            if not include_hidden and _is_hidden(p, root):
-                continue
-            if not exts or p.suffix.lower().lstrip(".") in exts:
-                matches.append(p)
-
-    return sorted(matches)
-
-
-# -----------------------------------------------------------------------------
-# Knowledge refinement detection
-# -----------------------------------------------------------------------------
-
 HEADING_RE = re.compile(r"^##\s+(Unknowns|❓\s*Open\s+Questions)\s*$", re.IGNORECASE)
 NEXT_SECTION_RE = re.compile(r"^#{1,2}\s+")
 
@@ -203,7 +175,7 @@ def main() -> int:
         if args.target.lower() != "knowledge":
             print("Warning: Refinement mode only works with 'knowledge' target", flush=True)
         
-        files = iter_files(target, {"md"}, args.include_hidden)
+        files = iter_files(target, exts={"md"}, include_hidden=args.include_hidden)
         print(f"Knowledge markdown files: {len(files)}", flush=True)
         
         all_findings: list[RefinementFinding] = []
@@ -223,7 +195,7 @@ def main() -> int:
         return 0
 
     # List mode (default)
-    files = iter_files(target, exts, args.include_hidden)
+    files = iter_files(target, exts=exts, include_hidden=args.include_hidden)
     
     print(f"Scan path: {target}", flush=True)
     print(f"Files found: {len(files)}", flush=True)

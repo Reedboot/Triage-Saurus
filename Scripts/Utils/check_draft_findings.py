@@ -15,27 +15,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from output_paths import OUTPUT_FINDINGS_DIR
+from shared_utils import is_draft_finding as _is_draft_shared
 
 
 def is_draft_finding(file_path: Path) -> bool:
     """Check if a finding is a draft."""
     try:
-        content = file_path.read_text(encoding="utf-8")
-        # Prefer explicit status in Meta Data to avoid relying on boilerplate phrasing.
-        if "Validation Status:**" in content:
-            if "Validation Status:** ⚠️ Draft - Needs Triage" in content:
-                return True
-            if "Validation Status:** ✅ Validated" in content:
-                return False
-
-        draft_indicators = [
-            "draft finding generated from a title-only input",
-            "this is a draft finding",
-            "validate the affected resources/scope",
-            "title-only input; needs validation",
-        ]
-        content_lower = content.lower()
-        return any(indicator in content_lower for indicator in draft_indicators)
+        return _is_draft_shared(file_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"Error reading {file_path}: {e}", file=sys.stderr)
         return False

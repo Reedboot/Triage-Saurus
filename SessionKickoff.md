@@ -13,17 +13,17 @@ This document provides the session initialization flow for Triage-Saurus. When t
 ## Helper Scripts
 
 Prefer the consolidated workspace scanner (stdout-only):
-- `python3 Scripts/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/Sample paths
+- `python3 Scripts/Scan/scan_workspace.py` — scans Knowledge/, Findings/, and common Intake/Sample paths
 
 Experiment management (for self-optimizing triage):
-- `python3 Scripts/triage_experiment.py resume` — check experiment state, continue from last position
-- `python3 Scripts/triage_experiment.py status` — detailed experiment + learning status
-- `python3 Scripts/triage_experiment.py list` — show all experiments with metrics
-- `python3 Scripts/triage_experiment.py promote <id>` — promote experiment learnings to production (updates SessionKickoff.md, Instructions.md)
+- `python3 Scripts/Experiments/triage_experiment.py resume` — check experiment state, continue from last position
+- `python3 Scripts/Experiments/triage_experiment.py status` — detailed experiment + learning status
+- `python3 Scripts/Experiments/triage_experiment.py list` — show all experiments with metrics
+- `python3 Scripts/Experiments/triage_experiment.py promote <id>` — promote experiment learnings to production (updates SessionKickoff.md, Instructions.md)
 - `python3 Scripts/learning_db.py status` — show SQLite learning database status
 
 Targeted helpers (stdout-only):
-- `python3 Scripts/pull_repo.py <repo_path> [--auto-pull] [--dry-run]` — fetch latest remote refs and optionally pull before scanning
+- `python3 Scripts/Scan/pull_repo.py <repo_path> [--auto-pull] [--dry-run]` — fetch latest remote refs and optionally pull before scanning
 - `python3 Scripts/scan_knowledge_refinement.py`
 - `python3 Scripts/scan_findings_files.py`
 - `python3 Scripts/scan_intake_files.py <Intake/Subfolder>`
@@ -38,16 +38,16 @@ Targeted helpers (stdout-only):
 
 2. **Request Output folder permission:** At the start of the session, ask user once to grant write access to the `Output/` folder. This covers all operations (audit logs, findings, knowledge, summaries). Do NOT ask again during the session.
 
-3. **Check experiment state:** Run `python3 Scripts/triage_experiment.py resume` to check:
+3. **Check experiment state:** Run `python3 Scripts/Experiments/triage_experiment.py resume` to check:
    - If an experiment is in progress → offer to continue it
    - If experiment awaiting review → prompt for review
    - If learning pending → offer to apply learnings
    - If fresh/no experiments → proceed to normal triage flow
-   - **Parallel experiments:** Multiple experiments can run simultaneously. If user wants to start a new experiment while another is running, create the new experiment without stopping the existing one. Use `python3 Scripts/triage_experiment.py list` to see all experiments and their statuses.
+   - **Parallel experiments:** Multiple experiments can run simultaneously. If user wants to start a new experiment while another is running, create the new experiment without stopping the existing one. Use `python3 Scripts/Experiments/triage_experiment.py list` to see all experiments and their statuses.
 
 4. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
 
-5. **Scan workspace:** Run `python3 Scripts/scan_workspace.py` to check:
+5. **Scan workspace:** Run `python3 Scripts/Scan/scan_workspace.py` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Intake/Sample/ for available triage items

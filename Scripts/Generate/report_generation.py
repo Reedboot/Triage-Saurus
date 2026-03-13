@@ -8,31 +8,20 @@ from models import RepositoryContext
 from template_renderer import render_template
 from markdown_validator import validate_markdown_file
 import resource_type_db as _rtdb
-
-# Lazy DB connection — initialised on first use, None if DB unavailable
-
-_DB_CACHE: "sqlite3.Connection | None" = None
+import db_helpers as _db
+from shared_utils import now_uk, _normalize_optional_bool
 
 
 def _get_db():
-    """Return a cached sqlite3.Connection if the learning DB exists, otherwise None."""
-    global _DB_CACHE
-    if _DB_CACHE is not None:
-        return _DB_CACHE
+    """Return a sqlite3.Connection if the learning DB exists, otherwise None."""
+    if not _db.DB_PATH.exists():
+        return None
     try:
-        from db_helpers import DB_PATH
-        import sqlite3
-        if not DB_PATH.exists():
-            return None
-        _DB_CACHE = sqlite3.connect(str(DB_PATH))
-        return _DB_CACHE
+        conn = sqlite3.connect(str(_db.DB_PATH), timeout=30)
+        conn.row_factory = sqlite3.Row
+        return conn
     except Exception:
         return None
-
-
-def now_uk() -> str:
-    return datetime.now().strftime("%d/%m/%Y %H:%M")
-
 
 def _provider_title(provider: str) -> str:
     return {"azure": "Azure", "aws": "AWS", "gcp": "GCP"}.get(provider, provider.upper())
@@ -239,7 +228,6 @@ def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Pa
 #   - kubernetes-backend-deployment-detection.yml (AKS deployments)
 #   - eks-backend-deployment-detection.yml (AWS EKS)
 #   - gke-backend-deployment-detection.yml (GCP GKE)
-# To use opengrep instead: import opengrep_backend_detection and call run_opengrep_rules()
 # Current approach is faster for Phase 1 (no LLM) baseline scans.
 
 
@@ -2495,21 +2483,6 @@ def _build_resource_inventory(
 def _relationship_kind_value(rel: object) -> str:
     kind = getattr(rel, "relationship_type", "")
     return kind.value if hasattr(kind, "value") else str(kind)
-
-
-def _normalize_optional_bool(value: object) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    lowered = str(value).strip().lower()
-    if lowered in {"1", "true", "yes", "y", "t"}:
-        return True
-    if lowered in {"0", "false", "no", "n", "f"}:
-        return False
-    return None
 
 
 def _load_repo_topology_connections(repo_name: str) -> list[dict]:

@@ -7,7 +7,7 @@ You orchestrate triage experiments to optimize scan efficiency and accuracy. You
 
 **At the start of EVERY session, run:**
 ```bash
-python3 Scripts/triage_experiment.py resume
+python3 Scripts/Experiments/triage_experiment.py resume
 ```
 
 This tells you:
@@ -50,7 +50,7 @@ When `status = "pending"`:
 
 1. **Mark as running:**
    ```bash
-   python3 Scripts/triage_experiment.py run 001
+   python3 Scripts/Experiments/triage_experiment.py run 001
    ```
 
 2. **Read the experiment config:**
@@ -116,7 +116,7 @@ When `status = "pending"`:
    ```bash
    opengrep scan --config /home/neil/code/Triage-Saurus/Rules/ <repo_path> \
        --json --output Output/Learning/experiments/<id>/scan_<repo>.json
-   python3 Scripts/store_findings.py Output/Learning/experiments/<id>/scan_<repo>.json \
+   python3 Scripts/Persist/store_findings.py Output/Learning/experiments/<id>/scan_<repo>.json \
        --experiment <id> --repo <repo_name>
    ```
 
@@ -128,7 +128,7 @@ When `status = "pending"`:
    print(' '.join(map(str, ids)))
    "
    # Then for each ID:
-   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
+   for id in <ids>; do python3 Scripts/Generate/render_finding.py --id "$id"; done
    python3 Scripts/Generate/generate_diagram.py <id>
    ```
 
@@ -160,7 +160,7 @@ When `status = "pending"`:
 
    **After enrichment, regenerate finding MDs and diagrams:**
    ```bash
-   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
+   for id in <ids>; do python3 Scripts/Generate/render_finding.py --id "$id"; done
    python3 Scripts/Generate/generate_diagram.py <id>
    ```
    
@@ -221,7 +221,7 @@ When `status = "pending"`:
    **Phase 5: Skeptic Reviews — run ONCE, stored in DB**
 
    ```bash
-   python3 Scripts/run_skeptics.py --experiment <id> --reviewer all
+   python3 Scripts/Utils/run_skeptics.py --experiment <id> --reviewer all
    ```
    
    - Queries `findings WHERE llm_enriched_at IS NOT NULL`
@@ -232,16 +232,16 @@ When `status = "pending"`:
    
    **Run individual reviewers if preferred:**
    ```bash
-   python3 Scripts/run_skeptics.py --experiment <id> --reviewer dev
-   python3 Scripts/run_skeptics.py --experiment <id> --reviewer platform
-   python3 Scripts/run_skeptics.py --experiment <id> --reviewer security
+   python3 Scripts/Utils/run_skeptics.py --experiment <id> --reviewer dev
+   python3 Scripts/Utils/run_skeptics.py --experiment <id> --reviewer platform
+   python3 Scripts/Utils/run_skeptics.py --experiment <id> --reviewer security
    ```
    
    **After skeptic reviews, regenerate diagrams and reports:**
    ```bash
    python3 Scripts/Generate/generate_diagram.py <id>
-   for id in <ids>; do python3 Scripts/render_finding.py --id "$id"; done
-   python3 Scripts/risk_register.py
+   for id in <ids>; do python3 Scripts/Generate/render_finding.py --id "$id"; done
+   python3 Scripts/Utils/risk_register.py
    ```
 
    **Phase 6: Capture Metrics**
@@ -266,7 +266,7 @@ When `status = "pending"`:
 
 7. **When done, mark complete:**
    ```bash
-   python3 Scripts/triage_experiment.py complete 001
+   python3 Scripts/Experiments/triage_experiment.py complete 001
    ```
 
 ## Responsibilities

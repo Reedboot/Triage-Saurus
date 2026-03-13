@@ -553,7 +553,7 @@ Run this mental checklist on EVERY Mermaid diagram:
 
 **After saving, ALWAYS run validation:**
 ```bash
-python3 Scripts/validate_markdown.py --path <path-to-file>
+python3 Scripts/Validate/validate_markdown.py --path <path-to-file>
 ```
 This ensures no `fill:` attributes slipped through and Mermaid syntax is valid.
 

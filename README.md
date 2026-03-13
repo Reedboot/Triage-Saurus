@@ -5,7 +5,7 @@ Read `AGENTS.md` first for repository-specific agent instructions.
 ## Session kick-off
 - In your CLI, type `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
 - Then provide either a single issue to triage (paste into chat) or a bulk path under `Intake/`.
-- Bulk import note: `Scripts/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
+- Bulk import note: `Scripts/Generate/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
 
 ## Purpose
 This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
@@ -48,7 +48,7 @@ See `Agents/ExperimentAgent.md` and `Agents/LearningAgent.md` for full details.
 Run the full detection-to-output pipeline against any repo with a single command — no API keys, no internet, no LLM required.
 
 ```bash
-python3 Scripts/run_pipeline.py --repo /path/to/repo
+python3 Scripts/Utils/run_pipeline.py --repo /path/to/repo
 ```
 
 This creates a new experiment and runs:
@@ -87,24 +87,24 @@ Phases 4–6 require an LLM:
 
 ```bash
 python3 Scripts/Enrich/enrich_findings.py --experiment <id>          # Phase 4 — LLM titles/descriptions/severity
-python3 Scripts/run_skeptics.py --experiment <id> --reviewer all  # Phase 5 — DevSkeptic/PlatformSkeptic
-python3 Scripts/triage_experiment.py complete <id>            # Mark done
+python3 Scripts/Utils/run_skeptics.py --experiment <id> --reviewer all  # Phase 5 — DevSkeptic/PlatformSkeptic
+python3 Scripts/Experiments/triage_experiment.py complete <id>            # Mark done
 ```
 
 Inspect DB-first topology relationships for a resource:
 
 ```bash
-python3 Scripts/query_resource_graph.py --experiment <id> --resource <resource_name> --query all
+python3 Scripts/Persist/query_resource_graph.py --experiment <id> --resource <resource_name> --query all
 ```
 
 ## Cozo ingestion pipeline
 
-Once Phase 1 has generated opengrep JSON output, `Scripts/store_opengrep_for_cozo.py` can persist the raw findings, metadata, and metavars into a Cozo embedded database for additional enrichment or rule-based traversal. The script records the originating repo, source file paths, line numbers, rule IDs, severity, and all metadata (category, technology, provider hints) along with each metavariable so downstream agents can derive attributes and relationships.
+Once Phase 1 has generated opengrep JSON output, `Scripts/Scan/store_opengrep_for_cozo.py` can persist the raw findings, metadata, and metavars into a Cozo embedded database for additional enrichment or rule-based traversal. The script records the originating repo, source file paths, line numbers, rule IDs, severity, and all metadata (category, technology, provider hints) along with each metavariable so downstream agents can derive attributes and relationships.
 
 Cozo now records provenance for any node/relationship changes: an append-only `relationship_audit` table captures who or what created/modified the relationship (scanner, user, or AI), the originating `scan_id` or session, optional `evidence_finding_id`, confidence, and a JSON details blob. Lightweight provenance (e.g., `source_scan_id`) is also stored on `edges` for fast lookup and tracing.
 
 ```bash
-python3 Scripts/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--repo-path /path/to/repo]
+python3 Scripts/Scan/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--repo-path /path/to/repo]
 ```
 
 By default the database lives under `Output/Data/cozo.db` (directory created automatically) but you can override the path with `--cozo-db`. Run the script before or after the existing SQLite pipeline so that Cozo contains the same structured detection data that future rules will enrich or relate to other resources.
@@ -119,7 +119,7 @@ To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.t
 - **Writes a timestamped audit log** to `Output/Audit/CozoScan_<timestamp>.md`.
 - **Generates a repo-level Markdown summary** under `Output/Summary/Repos/` for each scan.
 
-Use `Scripts/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
+Use `Scripts/Generate/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
 
 ---
 
@@ -187,7 +187,7 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
    context as needed.
 3. The agent creates or updates findings in `Output/Findings/`, updates `Output/Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Output/Summary/`.
 4. After any finding changes, the agent **regenerates**
-   `Output/Summary/Risk Register.xlsx` using `Scripts/risk_register.py`.
+   `Output/Summary/Risk Register.xlsx` using `Scripts/Utils/risk_register.py`.
    - This spreadsheet is **ExCo/CISO-facing** (no team/status columns); priority/ranking is deterministic from finding scores.
 
 > Note: By default, artifacts under `Output/Findings/`, `Output/Knowledge/`, and `Output/Summary/`
@@ -220,9 +220,9 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 
 **Required tools**
 - **Python 3.8+** — Required to run all scripts and helpers:
-  - `Scripts/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
+  - `Scripts/Utils/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
   - `Scripts/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
-  - `Scripts/validate_findings.py` (validate finding + summary formatting)
+  - `Scripts/Validate/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **SQLite 3** — Required (used by the pipeline and accessible from Python):
   - Database location: `Output/Data/cozo.db` (preferred consolidated DB for findings and resources)
@@ -238,7 +238,7 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   pip install -r requirements.txt
   ```
   This installs `pycozo`, `jinja2`, `Flask`, and `PyYAML`. The virtual environment **must be located at `.venv`** in the repo root — `Scripts/run_cozo_repos.sh` will auto-activate it if it is not already active, and will print clear setup instructions if it cannot be found.
-- **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
+- **git** — recommended for repository metadata and repo discovery (used by Scripts/Scan/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
   - Other standard Unix tooling: `grep`, `awk`, `sed`, `python3`, etc.

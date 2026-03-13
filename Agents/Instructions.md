@@ -30,7 +30,7 @@ This repository supports consistent security triage. The expected workflow is:
 - When opengrep is installed (default repo state), every IaC/code scan MUST start with `opengrep scan --config Rules/ <target>` to apply the entire ruleset.
 - Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are only acceptable if opengrep becomes unavailable mid-session and must be documented in the audit log.
 - Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
-- **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
+- **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/Scan/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
 - **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` and the Cozo knowledge graph, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the Cozo graph rather than keeping prior repo transcripts in memory.
 
 **Rules + LLM Pattern:**
@@ -251,7 +251,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - Ask user: "This will delete the listed session artifacts (findings, knowledge, audit logs, summaries). Proceed?"
   - If confirmed, run: `python3 Scripts/clear_session.py --yes`
   - This clears all Output/ artifacts (Findings, Knowledge, Summary, Audit) and sample-staged Intake/Sample/ content while preserving Templates/ and user Intake/ files.
-    - `python3 Scripts/scan_workspace.py`
+    - `python3 Scripts/Scan/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and common `Intake/`/sample paths.
   - **Check for draft findings requiring validation:**
     - `python3 Scripts/Utils/check_draft_findings.py`
@@ -446,7 +446,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - **DO NOT look at these folders during the scan phase** - only review AFTER completing all findings
     - Use for post-scan validation to measure True Positives, False Negatives, False Positives
     - Document validation results in experiment `validation.json` if applicable
-  - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - Prefer using `python3 Scripts/Scan/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `my_api.md` for repo `my_api`, not `Repo_my_api.md` or `Repo_MY_API.md`).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
@@ -488,7 +488,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
       4. Identify **compounding issues** (weaknesses that chain across repos)
       5. Update finding scores and add cross-references using clickable markdown links under `## Compounding Findings` sections
       6. **Synchronize diagrams:** Review cloud architecture diagrams (`Output/Summary/Cloud/Architecture_*.md`) and verify consistency with repo-specific diagrams. Check authentication flows, network boundaries, service relationships. Update cloud architecture if new information discovered. See `Agents/ArchitectureAgent.md` for synchronization guidance.
-      7. Regenerate risk register: `python3 Scripts/risk_register.py`
+      7. Regenerate risk register: `python3 Scripts/Utils/risk_register.py`
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
     - Prefer using the stdout-only helper to avoid guesswork: `python3 Scripts/get_cwd.py` (prints `cwd` + `suggested_repos_root`).
@@ -579,7 +579,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - Explain impact on score if assumption is wrong
     - Ask a specific question for the human reviewer
     - Common critical assumptions: network ingress paths, public vs private access, authentication mechanisms, blast radius
-    - Helper (writes files; use when needed): `python3 Scripts/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
+    - Helper (writes files; use when needed): `python3 Scripts/Validate/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
 - When a finding is created or updated, **immediately** update `Output/Knowledge/` with any
   new inferred or confirmed facts discovered while writing the finding.
   - Capture inferred facts as **assumptions** and ask the user to confirm/deny.
@@ -603,7 +603,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
        - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
-       - use `python3 Scripts/scan_repo_quick.py` for the initial scan.
+       - use `python3 Scripts/Scan/scan_repo_quick.py` for the initial scan.
     4) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
   - **Terraform module value resolution:** when reviewing Terraform code that calls modules, do not assume a variable/output implies insecure behaviour in the root module.
     - Example: a variable named `secret` or an output named `client_secret` may be passed into a module that stores it in Key Vault and only returns a reference/ID.
@@ -633,7 +633,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - Prefer **top-down** Mermaid (`flowchart TB`) so external → internal flows read naturally.
   - Only include **confirmed services** on the Mermaid diagram unless the user explicitly asks
     to include assumed components.
-  - If any `✅ Validated` findings still contain title-only boilerplate in `### 🧾 Summary`, refresh them (writes files): `python3 Scripts/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
+  - If any `✅ Validated` findings still contain title-only boilerplate in `### 🧾 Summary`, refresh them (writes files): `python3 Scripts/Validate/update_validated_summaries.py --path Output/Findings/Cloud --in-place`
 - While writing/updating cloud findings, scan the finding content for implied **cloud services** (e.g., VM, NSG, Storage, Key Vault, AKS, SQL, App Service) and add them to `Output/Knowledge/` as **assumptions**, then immediately ask the user to confirm/deny.
 - **Cloud resource native defaults:** When triaging findings about specific cloud resources, look up the **native provider default** for that resource type and note it in the finding:
   - **Azure examples:**
@@ -662,13 +662,13 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
 - When a new finding overlaps an existing one, link them under **Compounding Findings**.
 - **Avoid running git commands by default** (e.g., `git status`, `git diff`, `git restore`). Only use git when the user explicitly asks, and explain why it’s needed.
-- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/risk_register.py`), first explain:
+- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/Utils/risk_register.py`), first explain:
   - what it does,
   - what files it will write/change,
   - why it’s necessary now.
-  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
-  - **Exception (user-requested automation):** if the user asks for summaries to update automatically as new information becomes available, it is OK to run `python3 Scripts/update_validated_summaries.py --path Output/Findings/Cloud --in-place` after each material Q&A/knowledge update (it only removes title-only boilerplate when there is confirmed/applicability context).
-  - **Exception (user-requested automation):** if the user asks for descriptions to stop repeating titles, it is OK to run `python3 Scripts/update_descriptions.py --path Output/Findings/Cloud --in-place` after bulk imports and/or as part of draft validation.
+  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/Scan/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
+  - **Exception (user-requested automation):** if the user asks for summaries to update automatically as new information becomes available, it is OK to run `python3 Scripts/Validate/update_validated_summaries.py --path Output/Findings/Cloud --in-place` after each material Q&A/knowledge update (it only removes title-only boilerplate when there is confirmed/applicability context).
+  - **Exception (user-requested automation):** if the user asks for descriptions to stop repeating titles, it is OK to run `python3 Scripts/Utils/update_descriptions.py --path Output/Findings/Cloud --in-place` after bulk imports and/or as part of draft validation.
   - **Exception (user-requested automation):** if the user asks to adjust scores based on confirmed countermeasures and compounding, it is OK to run `python3 Scripts/Utils/adjust_finding_scores.py --path Output/Findings/Cloud --in-place` after material Q&A/knowledge updates (it only adjusts when the finding contains confirmed context and records the applied drivers under `### 📐 Rationale`).
   - **Exception (user-requested automation):** if the user asks for the risk register to auto-regenerate, it is OK to run a watcher in a separate terminal: `python3 Scripts/watch_risk_register.py` (or `--full` to also run the refresh helpers).
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
@@ -711,7 +711,7 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
 - **Cloud summaries:**
   - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
   - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
-- **Risk register:** regenerate via `python3 Scripts/risk_register.py`
+- **Risk register:** regenerate via `python3 Scripts/Utils/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/Generate/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
     `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
@@ -719,14 +719,14 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:
-  - `python3 Scripts/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
+  - `python3 Scripts/Utils/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
   - `python3 Scripts/extract_finding_scores.py Output/Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
 
 ## Mermaid diagram validation (MANDATORY)
 - **After creating or updating any file with Mermaid diagrams** (findings, summaries, architecture diagrams, repo summaries), **ALWAYS run:**
-  - `python3 Scripts/validate_markdown.py --path <path-to-file-or-directory>`
+  - `python3 Scripts/Validate/validate_markdown.py --path <path-to-file-or-directory>`
   - This validates Mermaid syntax and ensures **no `fill:` attributes** (which break dark themes)
 - **Critical rule:** NEVER use `fill:#` in Mermaid style blocks. Use `stroke:` and `stroke-width:` instead.
   - ❌ `style node fill:#ff6b6b,stroke:#c92a2a` → ✅ `style node stroke:#c92a2a,stroke-width:3px`

@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 from output_paths import OUTPUT_FINDINGS_DIR, OUTPUT_SUMMARY_DIR
 from markdown_validator import validate_markdown_file
+from shared_utils import _dedupe_key
 
 SCORE_RE = re.compile(r"^\s*- \*\*Overall Score:\*\*\s+(🔴|🟠|🟡|🟢)\s+(Critical|High|Medium|Low)\s+(\d{1,2})/10\s*$")
 LAST_UPDATED_RE = re.compile(r"^- \U0001f5d3\ufe0f \*\*Last updated:\*\* \d{2}/\d{2}/\d{4} \d{2}:\d{2}\s*$")
@@ -150,15 +151,6 @@ def iter_md_files(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted(p for p in folder.glob("*.md") if p.is_file() and p.name != ".gitkeep")
-
-
-def _dedupe_key(title: str) -> str:
-    s = title.strip().lower()
-    s = re.sub(r"\s+", " ", s).strip().rstrip(".")
-    s = re.sub(r"(/etc/(?:shadow|gshadow|passwd|group))\-(?=\s)", r"\1", s)
-    return s
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Findings/ and Summary/ formatting")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")

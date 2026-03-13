@@ -15,7 +15,7 @@ This repository supports consistent security triage. The expected workflow is:
   - Read `AGENTS.md` and `Agents/Instructions.md`, then scan `Output/Knowledge/` and existing `Output/Findings/` for missing context.
   - If there are **no findings** under `Output/Findings/`, assume this is a **new instance** and move straight to collecting the first triage input (single issue, bulk `Intake/` path, sample import, or repo scan).
   - **Preferred workspace scan (stdout-only):**
-    - `python3 Scripts/scan_workspace.py`
+    - `python3 Scripts/Scan/scan_workspace.py`
     It scans `Output/Knowledge/` (refinement questions), `Output/Findings/`, and Intake/ (including `Intake/ReposToScan.txt`).
   - **Targeted helpers (stdout-only):**
     - **Check `Output/Knowledge/`:** `python3 Scripts/scan_knowledge_refinement.py`
@@ -91,7 +91,7 @@ This repository supports consistent security triage. The expected workflow is:
   file path + timestamp). Only include per-item lists when the user explicitly asks.
 - When kickoff questions are answered (triage type, cloud provider, repo path, scanner/source/scope, repo roots), check whether the answer adds new context vs existing `Output/Knowledge/`.
 - **Repo scans:**
-  - Prefer using `python3 Scripts/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
+  - Prefer using `python3 Scripts/Scan/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - First check `Output/Knowledge/Repos.md` for known repo root path(s).
   - If it doesn’t exist or is empty, **suggest a default based on the current working directory**.
@@ -152,7 +152,7 @@ This repository supports consistent security triage. The expected workflow is:
     3) for any module repo/path that is **not already recorded in `Output/Knowledge/Repos.md` (or otherwise known)**, ask the user whether you can scan it next to increase context/accuracy,
        - if the module source is a remote git URL (e.g., Azure DevOps/GitHub), first ask the user for the **local path** (or confirmation it exists under a known repo root) before attempting any scan,
        - for **Terraform Registry modules** (registry.terraform.io), **do not ask to scan them**; just record them as upstream dependencies in the repo finding/audit.
-       - use `python3 Scripts/scan_repo_quick.py` for the initial scan.
+       - use `python3 Scripts/Scan/scan_repo_quick.py` for the initial scan.
     4) repeat this process recursively for newly scanned module repos until no new modules are discovered (or the user says stop).
   - **Terraform module value resolution:** when reviewing Terraform code that calls modules, do not assume a variable/output implies insecure behaviour in the root module.
     - Example: a variable named `secret` or an output named `client_secret` may be passed into a module that stores it in Key Vault and only returns a reference/ID.
@@ -192,11 +192,11 @@ This repository supports consistent security triage. The expected workflow is:
 - For findings that materially affect platform operations (SKU changes, networking primitives, CI/CD constraints, or downtime risk), add a platform-engineering perspective under `## 🤔 Skeptic` → `### 🏗️ Platform` (see `Agents/PlatformSkeptic.md`).
 - When a new finding overlaps an existing one, link them under **Compounding Findings** using clickable markdown links with relative paths (e.g., `[Related_Finding.md](../Cloud/Related_Finding.md)`).
 - **Avoid running git commands by default** (e.g., `git status`, `git diff`, `git restore`). Only use git when the user explicitly asks, and explain why it’s needed.
-- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/risk_register.py`), first explain:
+- **Avoid running scripts/automations by default**. If you propose running a script (including repo utilities like `python3 Scripts/Utils/risk_register.py`), first explain:
   - what it does,
   - what files it will write/change,
   - why it’s necessary now.
-  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
+  - **Exception:** during **repo scans**, it is OK (and preferred) to run `python3 Scripts/Scan/scan_repo_quick.py <abs-repo-path>` as the default initial skim.
 - **Automation language preference:** when automating a repo task, prefer **Python** over other
   languages to minimize extra dependencies the user may need to install.
 
@@ -215,7 +215,7 @@ This repository supports consistent security triage. The expected workflow is:
 - **Cloud summaries:**
   - Top-level architecture files only: `Output/Summary/Cloud/Architecture_*.md`
   - Provider-scoped resource summaries: `Output/Summary/Cloud/<Provider>/<ResourceType>.md` (see `Agents/CloudSummaryAgent.md`)
-- **Risk register:** regenerate via `python3 Scripts/risk_register.py`
+- **Risk register:** regenerate via `python3 Scripts/Utils/risk_register.py`
 - **Optional bulk draft generator (titles → findings):** `python3 Scripts/Generate/generate_findings_from_titles.py --provider <azure|aws|gcp> --in-dir <input> --out-dir <output> [--update-knowledge]`
   - With `--update-knowledge`, it also generates provider-scoped cloud summaries under
     `Output/Summary/Cloud/<Provider>/`, regenerates `Output/Summary/Risk Register.xlsx`,
@@ -223,7 +223,7 @@ This repository supports consistent security triage. The expected workflow is:
 
 ## After changes to findings
 - **Risk register must stay current:** after creating or updating any finding, regenerate:
-  - `python3 Scripts/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
+  - `python3 Scripts/Utils/risk_register.py` (updates `Output/Summary/Risk Register.xlsx`)
 - If you need a quick, consistent score list (for summaries/architecture notes), run:
   - `python3 Scripts/extract_finding_scores.py Output/Findings/Cloud`
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
