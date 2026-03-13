@@ -805,11 +805,6 @@ def get_db_connection(db_path: Optional[Path] = None):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), timeout=30)
-    # Improve concurrency: enable WAL and set busy timeout
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
     conn.execute("PRAGMA busy_timeout = 30000;")
     conn.row_factory = sqlite3.Row  # Access columns by name
     # Ensure schema with retries to avoid concurrent migration lock errors
@@ -1323,6 +1318,69 @@ def insert_finding(
         return cursor.fetchone()[0]
 
 
+def batch_insert_findings(
+    conn,
+    findings_data: list,
+) -> list:
+    """
+    Batch insert multiple findings in a single transaction.
+    
+    Args:
+        conn: Database connection (must be managed by caller)
+        findings_data: List of dicts with keys:
+            - experiment_id, repo_id, resource_id, title, description, category,
+              severity_score, base_severity, evidence_location, source_file,
+              source_line_start, source_line_end, rule_id, proposed_fix,
+              code_snippet, reason
+    
+    Returns:
+        List of inserted finding IDs
+    """
+    if not findings_data:
+        return []
+    
+    finding_ids = []
+    
+    for attempt in range(6):
+        try:
+            for finding in findings_data:
+                cursor = conn.execute("""
+                    INSERT INTO findings
+                    (experiment_id, repo_id, resource_id, title, description, category,
+                     severity_score, base_severity, evidence_location, source_file, source_line_start,
+                     source_line_end, rule_id, proposed_fix, code_snippet, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                """, (
+                    finding['experiment_id'],
+                    finding['repo_id'],
+                    finding.get('resource_id'),
+                    finding['title'],
+                    finding.get('description'),
+                    finding['category'],
+                    finding['severity_score'],
+                    finding['base_severity'],
+                    finding['evidence_location'],
+                    finding.get('source_file'),
+                    finding.get('source_line_start'),
+                    finding.get('source_line_end'),
+                    finding.get('rule_id'),
+                    finding.get('proposed_fix'),
+                    finding.get('code_snippet'),
+                    finding.get('reason'),
+                ))
+                finding_ids.append(cursor.fetchone()[0])
+            break
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < 5:
+                time.sleep(1 + attempt)
+                finding_ids.clear()
+                continue
+            raise
+    
+    return finding_ids
+
+
 def store_skeptic_review(
     finding_id: int,
     reviewer_type: str,
@@ -1368,9 +1426,23 @@ def record_risk_score(
     score: float,
     scored_by: str,
     rationale: str = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    """Append a risk score snapshot to risk_score_history. Returns history row id."""
-    with get_db_connection() as conn:
+    """Append a risk score snapshot to risk_score_history. Returns history row id.
+
+    If `conn` is provided, use it (this allows callers to include the write in an
+    existing transaction to avoid sqlite write-lock contention). Otherwise, open
+    a new connection for a standalone insert.
+    """
+    if conn is None:
+        with get_db_connection() as conn_local:
+            cursor = conn_local.execute("""
+                INSERT INTO risk_score_history (finding_id, score, scored_by, rationale)
+                VALUES (?, ?, ?, ?)
+                RETURNING id
+            """, (finding_id, score, scored_by, rationale))
+            return cursor.fetchone()[0]
+    else:
         cursor = conn.execute("""
             INSERT INTO risk_score_history (finding_id, score, scored_by, rationale)
             VALUES (?, ?, ?, ?)

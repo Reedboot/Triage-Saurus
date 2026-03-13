@@ -63,8 +63,19 @@ def main():
 
     stored = 0
     skipped = 0
+    resource_updates = []  # Track resource_id updates to batch later
 
     with db_helpers.get_db_connection() as conn:
+        # Get repo_id once at the start
+        repo_row = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+            (args.experiment, args.repo),
+        ).fetchone()
+        repo_id = repo_row[0] if repo_row else None
+
+        # Prepare all findings for batch insert
+        findings_to_insert = []
+
         for result in results:
             check_id: str = result.get("check_id", "")
             severity: str = result.get("extra", {}).get("severity", "WARNING")
@@ -97,38 +108,34 @@ def main():
 
             resource_id = _find_resource_id(conn, args.experiment, path, start_line)
 
-            # insert_finding needs repo_name; resource lookup is internal
-            finding_id = db_helpers.insert_finding(
-                experiment_id=args.experiment,
-                repo_name=args.repo,
-                finding_name=rule_id,
-                resource_name=None,
-                score=sev_score,
-                severity=base_sev,
-                category=category,
-                evidence_location=f"{path}:{start_line}",
-                discovered_by="store_findings",
-                title=title,
-                reason=reason,
-                severity_score=sev_score,
-                source_file=path,
-                source_line_start=start_line,
-                source_line_end=end_line,
-                code_snippet=code_snippet,
-                rule_id=rule_id,
-            )
+            findings_to_insert.append({
+                'experiment_id': args.experiment,
+                'repo_id': repo_id,
+                'resource_id': resource_id,
+                'title': title,
+                'description': None,
+                'category': category,
+                'severity_score': sev_score,
+                'base_severity': base_sev,
+                'evidence_location': f"{path}:{start_line}",
+                'source_file': path,
+                'source_line_start': start_line,
+                'source_line_end': end_line,
+                'rule_id': rule_id,
+                'proposed_fix': None,
+                'code_snippet': code_snippet,
+                'reason': reason,
+            })
 
-            # Manually link resource_id if we found one (insert_finding can't do it without resource_name)
-            if resource_id is not None:
-                conn.execute(
-                    "UPDATE findings SET resource_id = ? WHERE id = ?",
-                    (resource_id, finding_id),
-                )
+        # Batch insert all findings
+        if findings_to_insert:
+            finding_ids = db_helpers.batch_insert_findings(conn, findings_to_insert)
 
-            db_helpers.record_risk_score(finding_id, sev_score, scored_by="script")
-
-            print(f"  [stored] finding {finding_id}: {title} ({base_sev})")
-            stored += 1
+            # Record risk scores for all findings
+            for finding_id, finding_data in zip(finding_ids, findings_to_insert):
+                db_helpers.record_risk_score(finding_id, finding_data['severity_score'], scored_by="script", conn=conn)
+                print(f"  [stored] finding {finding_id}: {finding_data['title']} ({finding_data['base_severity']})")
+                stored += 1
 
     print(f"\nStored {stored} new findings, skipped {skipped} duplicates")
 
