@@ -98,6 +98,16 @@ else
   else
     echo -e "${YELLOW}⚠ requirements.txt not found at $REQ_FILE — skipping pip install.${RESET}"
   fi
+
+  # Install project in editable mode if it appears to be a Python package
+  if [ -f "$ROOT/pyproject.toml" ] || [ -f "$ROOT/setup.py" ]; then
+    echo -e "${CYAN}Installing repository into venv (editable mode)...${RESET}"
+    # Use -q to keep output quiet; don't fail startup if install errors
+    "$PIP_PY" -m pip install -e "$ROOT" -q || \
+      echo -e "${YELLOW}⚠ Editable install failed; continuing without it.${RESET}"
+  else
+    echo -e "${YELLOW}ℹ No pyproject.toml or setup.py found — skipping editable install.${RESET}"
+  fi
 fi
 
 echo ""
