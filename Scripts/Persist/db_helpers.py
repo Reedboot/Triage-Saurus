@@ -1293,18 +1293,32 @@ def insert_finding(
             if repo_row:
                 repo_id = repo_row[0]
 
-        cursor = conn.execute("""
-            INSERT INTO findings
-            (experiment_id, repo_id, resource_id, title, description, category,
-             severity_score, base_severity, evidence_location, source_file, source_line_start,
-             source_line_end, rule_id, proposed_fix, code_snippet, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-        """, (
-            experiment_id, repo_id, resource_id, effective_title, description, category,
-            effective_severity_score, severity, evidence_location, source_file, source_line_start,
-            source_line_end, rule_id, proposed_fix, code_snippet, reason,
-        ))
+        # Attempt insert with retries on SQLITE_BUSY/locked errors.
+        cursor = None
+        for attempt in range(6):
+            try:
+                cursor = conn.execute("""
+                    INSERT INTO findings
+                    (experiment_id, repo_id, resource_id, title, description, category,
+                     severity_score, base_severity, evidence_location, source_file, source_line_start,
+                     source_line_end, rule_id, proposed_fix, code_snippet, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                """, (
+                    experiment_id, repo_id, resource_id, effective_title, description, category,
+                    effective_severity_score, severity, evidence_location, source_file, source_line_start,
+                    source_line_end, rule_id, proposed_fix, code_snippet, reason,
+                ))
+                break
+            except sqlite3.OperationalError as e:
+                if 'locked' in str(e).lower() and attempt < 5:
+                    # Backoff before retrying
+                    time.sleep(1 + attempt)
+                    continue
+                raise
+
+        if cursor is None:
+            raise RuntimeError('Failed to insert finding after retries')
 
         return cursor.fetchone()[0]
 
