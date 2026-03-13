@@ -655,7 +655,7 @@ grep -r "host:\|destination:\|service:\|port:" --include="*.yaml" -A 3 | head -3
 ### Cloud Services & Dependencies
 **Goal:** Identify external services this repo integrates with
 
-> **Resource type → category/friendly name lookups:** Use `Scripts/resource_type_db.py` as the canonical source
+> **Resource type → category/friendly name lookups:** Use `Scripts/Persist/resource_type_db.py` as the canonical source
 > rather than re-deriving these mappings here. The examples below are illustrative.
 
 **From IaC resources:**
@@ -1590,7 +1590,7 @@ Would you like to run security scans on these repos?
 4. Mermaid diagram renders correctly (no syntax errors, no fill colors)
 5. **Pre-flight check passed:** Verified no `fill:` attributes in style blocks
 6. **No CVEs mentioned:** Only dependency versions listed, not vulnerabilities
-7. **Validation script run:** Execute `python3 Scripts/validate_markdown.py --path Output/Summary/Repos/<name>.md` to verify Mermaid syntax
+7. **Validation script run:** Execute `python3 Scripts/Validate/validate_markdown.py --path Output/Summary/Repos/<name>.md` to verify Mermaid syntax
 8. Audit log updated with timing
 9. User can make informed scan scope decision
 

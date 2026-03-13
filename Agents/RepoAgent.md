@@ -63,13 +63,13 @@ See `Agents/ContextDiscoveryAgent.md` for detailed discovery patterns and grep c
 **Preferred method — use the helper script:**
 ```bash
 # Check status only (no pull)
-python3 Scripts/pull_repo.py /path/to/repo --dry-run
+python3 Scripts/Scan/pull_repo.py /path/to/repo --dry-run
 
 # Auto-pull if behind (non-interactive, recommended for agents)
-python3 Scripts/pull_repo.py /path/to/repo --auto-pull
+python3 Scripts/Scan/pull_repo.py /path/to/repo --auto-pull
 
 # Interactive prompt (for manual sessions)
-python3 Scripts/pull_repo.py /path/to/repo
+python3 Scripts/Scan/pull_repo.py /path/to/repo
 ```
 
 The script handles: git-repo validation, fetch, ahead/behind/diverged detection, stash-before-pull, pull, stash-pop, and clear status output.
@@ -389,7 +389,7 @@ After all task agents complete:
 3. **Update finding scores** based on blast radius from architecture context (see SecurityAgent.md for scoring guidance)
 4. **Add cross-references** in `## Compounding Findings` sections using markdown links
 5. **Update repo summary** with consolidated security posture
-6. **Regenerate risk register:** `python3 Scripts/risk_register.py`
+6. **Regenerate risk register:** `python3 Scripts/Utils/risk_register.py`
 
 ## Incremental Scan Optimization (Recommended for Re-scans)
 
