@@ -12,10 +12,9 @@ All scripts should import from here instead of maintaining their own dicts.
 import sqlite3
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-TRIAGE_DB = ROOT / "Output/Learning/triage.db"
+ROOT = Path(__file__).resolve().parents[2]
 COZO_DB = ROOT / "Output/Data/cozo.db"
-DB_PATH = COZO_DB if COZO_DB.exists() else TRIAGE_DB
+DB_PATH = COZO_DB
 
 # ---------------------------------------------------------------------------
 # Seed / fallback data  (kept in sync with init_database.py seed rows)

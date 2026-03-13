@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 import re
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PATTERN = re.compile(r"```mermaid(.*?)```", re.DOTALL | re.IGNORECASE)
 
 

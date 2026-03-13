@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def print_repos_list(repos_file: Path) -> int:

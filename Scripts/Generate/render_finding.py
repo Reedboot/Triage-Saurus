@@ -16,7 +16,7 @@ from cozo_helpers import clamp_score, get_finding_with_context, severity_summary
 from markdown_validator import validate_markdown_file
 from output_paths import OUTPUT_FINDINGS_DIR
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 # (The rest of the helper functions from the original script will be kept the same)
 def _emoji_for(sev: str) -> str:

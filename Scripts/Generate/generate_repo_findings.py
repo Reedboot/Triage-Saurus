@@ -67,7 +67,7 @@ def main() -> int:
 
     finding_model = generate_finding_model(repo_context)
     
-    template_path = Path(__file__).resolve().parents[1] / "Templates" / "RepoFinding.md"
+    template_path = Path(__file__).resolve().parents[2] / "Templates" / "RepoFinding.md"
     
     output_dir = OUTPUT_FINDINGS_DIR / "Repo"
     output_dir.mkdir(parents=True, exist_ok=True)

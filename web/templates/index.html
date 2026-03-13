@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Triage-Saurus — Repo Scanner</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #58a6ff;
+    }
+
+    header .dino {
+      font-size: 1.5rem;
+      line-height: 1;
+    }
+
+    header span.badge {
+      background: #388bfd26;
+      color: #58a6ff;
+      border: 1px solid #388bfd66;
+      border-radius: 12px;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+    }
+
+    .container {
+      flex: 1;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Scan form ── */
+    .scan-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+
+    .scan-card h2 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 14px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field.grow { flex: 1; min-width: 240px; }
+
+    label {
+      font-size: 0.78rem;
+      color: #8b949e;
+      font-weight: 500;
+    }
+
+    input[type="text"],
+    select {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #c9d1d9;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #58a6ff;
+    }
+
+    input[type="text"]:disabled,
+    select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    select option:disabled { color: #484f58; }
+    select option.not-found { color: #484f58; font-style: italic; }
+
+    button {
+      background: #238636;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 9px 20px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+
+    button:hover:not(:disabled) { background: #2ea043; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    button.secondary {
+      background: #21262d;
+      border: 1px solid #30363d;
+    }
+    button.secondary:hover:not(:disabled) { background: #30363d; }
+
+    /* ── Status bar ── */
+    .status-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      margin-top: 12px;
+    }
+
+    .status-bar.visible { display: flex; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status-text { color: #8b949e; }
+    .status-text.success { color: #3fb950; }
+    .status-text.error   { color: #f85149; }
+
+    /* ── Main workspace ── */
+    .workspace {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 960px) { .workspace { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 480px;
+    }
+
+    .panel-header {
+      padding: 8px 12px;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .panel-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .panel-actions { display: flex; gap: 6px; }
+
+    .btn-small {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #8b949e;
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+
+    .btn-small:hover { color: #c9d1d9; background: #30363d; }
+
+    /* ── Log output ── */
+    #log-output {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+      padding: 8px 12px;
+      max-height: 60vh;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #8b949e;
+      scrollbar-width: thin;
+      scrollbar-color: #58a6ff #0d1117;
+    }
+    /* WebKit scrollbars */
+    #log-output::-webkit-scrollbar { width: 12px; height: 12px; }
+    #log-output::-webkit-scrollbar-track { background: transparent; }
+    #log-output::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+    #log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb66; }
+
+    #log-output .line-ok     { color: #3fb950; }
+    #log-output .line-warn   { color: #e3b341; }
+    #log-output .line-error  { color: #f85149; }
+    #log-output .line-phase  { color: #58a6ff; font-weight: 600; }
+    #log-output .line-done   { color: #3fb950; font-weight: 600; }
+    #log-output .line-sep    { color: #30363d; }
+
+    /* ── Diagram panel ── */
+    #diagram-panel .panel-body {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .diagram-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      min-height: 300px;
+      color: #484f58;
+      text-align: center;
+      gap: 8px;
+    }
+
+    .diagram-placeholder svg {
+      opacity: 0.3;
+    }
+
+    .diagram-placeholder p { font-size: 0.85rem; }
+
+    .diagram-tabs {
+      display: none;
+      gap: 4px;
+      padding: 6px 12px 0;
+      border-bottom: 1px solid #30363d;
+      overflow-x: auto;
+    }
+
+    .diagram-tabs.visible { display: flex; }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      color: #8b949e;
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover:not(:disabled) { background: transparent; color: #c9d1d9; }
+    .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+    .diagram-view {
+      display: none;
+      padding: 12px;
+    }
+
+    .diagram-view.active { display: block; }
+
+    .mermaid { overflow: auto; }
+
+    /* Mermaid dark theme overrides */
+    .mermaid svg {
+      background: transparent !important;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="dino">🦕</span>
+  <h1>Triage-Saurus</h1>
+  <span class="badge">Repo Scanner</span>
+</header>
+
+<div class="container">
+
+  <!-- Scan form -->
+  <div class="scan-card">
+    <h2>New Scan</h2>
+    <form id="scan-form">
+      <div class="form-row">
+        <div class="field grow">
+          <label for="repo-select">Repository</label>
+          <select id="repo-select" name="repo_path" required>
+            <option value="" disabled selected>— select a repository —</option>
+            {% for repo in repos %}
+              {% if repo.found %}
+                <option value="{{ repo.path }}">{{ repo.name }} — {{ repo.path }}</option>
+              {% else %}
+                <option value="" disabled class="not-found">{{ repo.name }} (not found locally)</option>
+              {% endif %}
+            {% else %}
+              <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="min-width:180px">
+          <label for="scan-name">Scan name</label>
+          <input type="text" id="scan-name" name="scan_name"
+                 placeholder="web_scan" value="web_scan"
+                 autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button type="submit" id="scan-btn">▶ Run Scan</button>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button type="button" class="secondary" id="reset-btn" style="display:none">↺ New Scan</button>
+        </div>
+      </div>
+      <div class="status-bar" id="status-bar">
+        <div class="spinner" id="spinner"></div>
+        <span class="status-text" id="status-text">Starting…</span>
+      </div>
+    </form>
+  </div>
+
+  <!-- Workspace: log + diagram -->
+  <div class="workspace">
+
+    <!-- Log panel -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Scan Output</span>
+        <div class="panel-actions">
+          <button class="btn-small" id="copy-log-btn" title="Copy log">Copy</button>
+          <button class="btn-small" id="clear-log-btn" title="Clear log">Clear</button>
+        </div>
+      </div>
+      <div id="log-output"><span style="color:#484f58">Scan output will appear here…</span></div>
+    </div>
+
+    <!-- Diagram panel -->
+    <div class="panel" id="diagram-panel">
+      <div class="panel-header">
+        <span class="panel-title">Architecture Diagrams</span>
+        <div class="panel-actions">
+          <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
+        </div>
+      </div>
+      <div class="diagram-tabs" id="diagram-tabs"></div>
+      <div id="diagram-views">
+        <div class="diagram-placeholder" id="diagram-placeholder">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
+            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
+          </svg>
+          <p>Architecture diagram will appear<br/>after the scan completes.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: { curve: 'basis', useMaxWidth: false },
+  });
+
+  const form       = document.getElementById('scan-form');
+  const repoSelect = document.getElementById('repo-select');
+  const nameInput  = document.getElementById('scan-name');
+  const scanBtn    = document.getElementById('scan-btn');
+  const resetBtn   = document.getElementById('reset-btn');
+  const statusBar  = document.getElementById('status-bar');
+  const statusText = document.getElementById('status-text');
+  const spinner    = document.getElementById('spinner');
+  const logOutput  = document.getElementById('log-output');
+  const tabsEl     = document.getElementById('diagram-tabs');
+  const viewsEl    = document.getElementById('diagram-views');
+  const placeholder = document.getElementById('diagram-placeholder');
+  const copyDiagramBtn = document.getElementById('copy-diagram-btn');
+
+  // Diagram state
+  let diagrams = [];   // [{title, code}]
+  let activeTab = 0;
+
+  // ── Log helpers ─────────────────────────────────────────────────────────────
+  function classifyLine(line) {
+    if (/^─+$/.test(line) || /^={3,}/.test(line)) return 'line-sep';
+    if (/\[ERROR\]|✗|error/i.test(line))           return 'line-error';
+    if (/\[WARN\]|WARNING/i.test(line))             return 'line-warn';
+    if (/^▶|Phase \d|Pipeline|Rendering|Experiment/i.test(line)) return 'line-phase';
+    if (/✓|✅|complete|success/i.test(line))        return 'line-ok';
+    if (/\[Web\]/.test(line))                       return 'line-done';
+    return '';
+  }
+
+  function appendLog(line) {
+    const wasEmpty = logOutput.querySelector('span[style]');
+    if (wasEmpty) logOutput.innerHTML = '';
+
+    const span = document.createElement('span');
+    const cls = classifyLine(line);
+    if (cls) span.className = cls;
+    span.textContent = line + '\n';
+    logOutput.appendChild(span);
+    logOutput.scrollTop = logOutput.scrollHeight;
+  }
+
+  // ── Diagram rendering ────────────────────────────────────────────────────────
+  async function renderDiagrams(data) {
+    diagrams = data;
+    placeholder.style.display = 'none';
+    tabsEl.innerHTML = '';
+    // Remove old diagram views (but not placeholder)
+    viewsEl.querySelectorAll('.diagram-view').forEach(el => el.remove());
+
+    for (let i = 0; i < diagrams.length; i++) {
+      const { title, code } = diagrams[i];
+
+      // Tab button
+      const tab = document.createElement('button');
+      tab.className = 'tab-btn' + (i === 0 ? ' active' : '');
+      tab.textContent = title;
+      tab.dataset.idx = i;
+      tab.addEventListener('click', () => switchTab(i));
+      tabsEl.appendChild(tab);
+
+      // Diagram view div
+      const view = document.createElement('div');
+      view.className = 'diagram-view' + (i === 0 ? ' active' : '');
+      view.dataset.idx = i;
+
+      const mermaidEl = document.createElement('div');
+      mermaidEl.className = 'mermaid';
+      mermaidEl.textContent = code;
+      view.appendChild(mermaidEl);
+      viewsEl.appendChild(view);
+    }
+
+    if (diagrams.length > 1) tabsEl.classList.add('visible');
+
+    // Render all mermaid blocks
+    await mermaid.run({ nodes: viewsEl.querySelectorAll('.mermaid') });
+    activeTab = 0;
+  }
+
+  function switchTab(idx) {
+    activeTab = idx;
+    tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', +b.dataset.idx === idx));
+    viewsEl.querySelectorAll('.diagram-view').forEach(v => v.classList.toggle('active', +v.dataset.idx === idx));
+  }
+
+  // ── SSE stream parsing ───────────────────────────────────────────────────────
+  // We use fetch() + ReadableStream since we need POST.
+  let buffer = '';
+
+  function parseSSEChunk(chunk) {
+    buffer += chunk;
+    const messages = buffer.split('\n\n');
+    buffer = messages.pop(); // keep incomplete last message
+
+    for (const msg of messages) {
+      if (!msg.trim()) continue;
+      const eventMatch = msg.match(/^event:\s*(.+)$/m);
+      const dataMatch  = msg.match(/^data:\s*(.+)$/m);
+      if (!dataMatch) continue;
+
+      const eventType = eventMatch ? eventMatch[1].trim() : 'message';
+      let payload;
+      try { payload = JSON.parse(dataMatch[1].trim()); } catch { payload = dataMatch[1].trim(); }
+
+      handleEvent(eventType, payload);
+    }
+  }
+
+  function handleEvent(type, payload) {
+    if (type === 'log') {
+      appendLog(payload);
+    } else if (type === 'diagrams') {
+      renderDiagrams(payload);
+    } else if (type === 'error') {
+      appendLog('[ERROR] ' + payload);
+      setStatus('Error: ' + payload, 'error');
+    } else if (type === 'done') {
+      const code = payload.exit_code;
+      const expId = payload.experiment_id;
+      if (code === 0) {
+        setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
+      } else {
+        setStatus(`⚠ Pipeline exited with code ${code}`, 'error');
+      }
+      spinner.style.display = 'none';
+      scanBtn.disabled = false;
+      repoSelect.disabled = false;
+      nameInput.disabled = false;
+      resetBtn.style.display = 'inline-block';
+    }
+  }
+
+  function setStatus(text, cls) {
+    statusText.textContent = text;
+    statusText.className = 'status-text' + (cls ? ' ' + cls : '');
+    statusBar.classList.add('visible');
+  }
+
+  // ── Form submit ──────────────────────────────────────────────────────────────
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const repoPath = repoSelect.value;
+    const scanName = (nameInput.value.trim() || 'web_scan');
+
+    // Reset UI
+    logOutput.innerHTML = '';
+    viewsEl.querySelectorAll('.diagram-view').forEach(el => el.remove());
+    tabsEl.innerHTML = '';
+    tabsEl.classList.remove('visible');
+    placeholder.style.display = '';
+    buffer = '';
+    diagrams = [];
+
+    scanBtn.disabled = true;
+    repoSelect.disabled = true;
+    nameInput.disabled = true;
+    resetBtn.style.display = 'none';
+    spinner.style.display = '';
+    setStatus('Connecting…');
+
+    const formData = new FormData();
+    formData.append('repo_path', repoPath);
+    formData.append('scan_name', scanName);
+
+    let response;
+    try {
+      response = await fetch('/scan', { method: 'POST', body: formData });
+    } catch (err) {
+      setStatus('Connection failed: ' + err, 'error');
+      scanBtn.disabled = false;
+      repoSelect.disabled = false;
+      nameInput.disabled = false;
+      spinner.style.display = 'none';
+      return;
+    }
+
+    if (!response.ok) {
+      const err = await response.text();
+      setStatus('Server error: ' + err, 'error');
+      scanBtn.disabled = false;
+      repoSelect.disabled = false;
+      nameInput.disabled = false;
+      spinner.style.display = 'none';
+      return;
+    }
+
+    setStatus('Scanning…');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parseSSEChunk(decoder.decode(value, { stream: true }));
+    }
+  });
+
+  // ── Reset button ─────────────────────────────────────────────────────────────
+  resetBtn.addEventListener('click', () => {
+    repoSelect.disabled = false;
+    nameInput.disabled = false;
+    repoSelect.value = '';
+    resetBtn.style.display = 'none';
+    statusBar.classList.remove('visible');
+  });
+
+  // Auto-fill scan name from selected repo
+  repoSelect.addEventListener('change', () => {
+    const selected = repoSelect.options[repoSelect.selectedIndex];
+    if (selected && selected.value) {
+      nameInput.value = selected.text.split(' — ')[0].trim();
+    }
+  });
+  document.getElementById('copy-log-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(logOutput.innerText).catch(() => {});
+  });
+
+  document.getElementById('clear-log-btn').addEventListener('click', () => {
+    logOutput.innerHTML = '<span style="color:#484f58">Scan output will appear here…</span>';
+  });
+
+  copyDiagramBtn.addEventListener('click', () => {
+    if (diagrams[activeTab]) {
+      navigator.clipboard.writeText(diagrams[activeTab].code).catch(() => {});
+    }
+  });
+</script>
+</body>
+</html>

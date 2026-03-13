@@ -16,19 +16,13 @@ _lookup_conn: sqlite3.Connection | None = None
 def _get_lookup_db() -> sqlite3.Connection | None:
     global _lookup_conn
     if _lookup_conn is None:
-        # Prefer the consolidated Cozo DB if present, otherwise fall back to legacy triage DB
+        # Use the configured DB_PATH from resource_type_db (prefer cozo.db)
         db_path = None
         try:
-            if getattr(_rtdb, 'COZO_DB', None) and Path(_rtdb.COZO_DB).exists():
-                db_path = Path(_rtdb.COZO_DB)
+            if getattr(_rtdb, 'DB_PATH', None) and Path(_rtdb.DB_PATH).exists():
+                db_path = Path(_rtdb.DB_PATH)
         except Exception:
             pass
-        if db_path is None:
-            try:
-                if getattr(_rtdb, 'TRIAGE_DB', None) and Path(_rtdb.TRIAGE_DB).exists():
-                    db_path = Path(_rtdb.TRIAGE_DB)
-            except Exception:
-                pass
         if db_path:
             _lookup_conn = sqlite3.connect(str(db_path))
             # Return rows as mappings where callers expect dict-like access

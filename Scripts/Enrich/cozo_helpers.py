@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 import sqlite3
 from pycozo import Client
 
+
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
 
 

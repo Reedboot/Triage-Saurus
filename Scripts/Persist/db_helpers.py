@@ -3,21 +3,42 @@
 
 import json
 import sqlite3
+import sys
+import time
+import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 try:
     import cozo_helpers
     _COZO_HELPERS_AVAILABLE = True
-except Exception:
-    cozo_helpers = None
-    _COZO_HELPERS_AVAILABLE = False
+except Exception as e:
+    # Attempt to dynamically load the local implementation from Scripts/Enrich/cozo_helpers.py
+    import importlib.util
+    impl_path = Path(__file__).resolve().parents[2] / "Scripts" / "Enrich" / "cozo_helpers.py"
+    if impl_path.exists():
+        spec = importlib.util.spec_from_file_location("cozo_helpers", str(impl_path))
+        module = importlib.util.module_from_spec(spec)
+        loader = spec.loader
+        if loader is None:
+            raise ImportError("Failed to load cozo_helpers implementation (no loader)")
+        loader.exec_module(module)
+        cozo_helpers = module
+        sys.modules.setdefault("cozo_helpers", module)
+        _COZO_HELPERS_AVAILABLE = True
+    else:
+        _COZO_HELPERS_AVAILABLE = False
+        raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
-TRIAGE_DB = ROOT / "Output/Learning/triage.db"
 COZO_DB = ROOT / "Output/Data/cozo.db"
-DB_PATH = COZO_DB if COZO_DB.exists() else TRIAGE_DB
+# Prefer Cozo DB for all scripts.
+DB_PATH = COZO_DB
+
+# Track which DB paths have had their schema ensured in this process so
+# _ensure_schema skips the expensive DDL + lock on every subsequent connection.
+_schema_ensured_for: set = set()
 
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
 ENRICHMENT_DECISION_MAP = {
@@ -278,8 +299,78 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
 
 
 def _ensure_schema(conn: sqlite3.Connection):
-    """Ensure tables used by db_helpers exist on the active database."""
-    conn.executescript("""
+    """Ensure tables used by db_helpers exist on the active database.
+
+    To avoid transient sqlite "database is locked" errors during concurrent runs,
+    acquire a lightweight filesystem-based migration lock so only one process
+    applies schema migrations at a time. This avoids multiple processes attempting
+    concurrent ALTER TABLE/CREATE INDEX operations which often lead to "database
+    is locked" errors on sqlite.
+    """
+    # Skip DDL entirely if this process has already ensured the schema for this DB.
+    db_file = conn.execute("PRAGMA database_list").fetchone()[2]
+    if db_file in _schema_ensured_for:
+        return
+
+    # Migration lock file (sibling to DB file)
+    lock_path = COZO_DB.with_name(COZO_DB.name + ".schema_lock")
+    lock_fd = None
+    acquired = False
+    # Try to acquire an exclusive lock file with retries
+    for attempt in range(6):
+        try:
+            # O_CREAT | O_EXCL ensures this fails if file already exists
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            # Write PID for diagnostics
+            try:
+                os.write(lock_fd, str(os.getpid()).encode())
+            except Exception:
+                pass
+            acquired = True
+            break
+        except FileExistsError:
+            # Another process is running migrations; wait and retry
+            time.sleep(1 + attempt)
+            continue
+        except Exception:
+            # If something unexpected happens, don't block migrations entirely
+            break
+
+    if not acquired:
+        # If lock couldn't be acquired, wait for the lock file to disappear and
+        # attempt to acquire it again. If the lock appears stale (>5min) remove it.
+        wait_start = time.time()
+        waited = False
+        while lock_path.exists() and (time.time() - wait_start) < 30:
+            time.sleep(1)
+            waited = True
+        if lock_path.exists():
+            try:
+                mtime = os.path.getmtime(str(lock_path))
+                # Remove stale lock older than 5 minutes
+                if time.time() - mtime > 300:
+                    try:
+                        os.unlink(str(lock_path))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Try one final time to create the lock before proceeding
+        if not acquired:
+            try:
+                lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(lock_fd, str(os.getpid()).encode())
+                except Exception:
+                    pass
+                acquired = True
+            except Exception:
+                # Give up acquiring lock; proceed but migrations may contend
+                pass
+
+    # Perform migrations under a try/finally so the lock is removed on exit
+    try:
+        conn.executescript("""
     CREATE TABLE IF NOT EXISTS repositories (
       id INTEGER PRIMARY KEY,
       experiment_id TEXT NOT NULL,
@@ -467,6 +558,23 @@ def _ensure_schema(conn: sqlite3.Connection):
       UNIQUE(source_id, target_id, relationship_type)
     );
 
+    CREATE TABLE IF NOT EXISTS findings (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT,
+      repo_id INTEGER,
+      title TEXT,
+      description TEXT,
+      severity TEXT,
+      severity_score INTEGER,
+      resource_id INTEGER,
+      rule_id TEXT,
+      source_file TEXT,
+      source_line_start INTEGER,
+      source_line_end INTEGER,
+      code_snippet TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS resource_equivalences (
       id INTEGER PRIMARY KEY,
       resource_node_id INTEGER NOT NULL,
@@ -507,177 +615,213 @@ def _ensure_schema(conn: sqlite3.Connection):
     );
     """)
 
-    # Ensure optional columns exist for backward compatibility.
-    resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
-    if "parent_resource_id" not in resource_columns:
-        conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
+        # Ensure optional columns exist for backward compatibility.
+        resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
+        if "parent_resource_id" not in resource_columns:
+            conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
 
-    connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
-    for col_name, col_type in (
-        ("source_repo_id", "INTEGER"),
-        ("target_repo_id", "INTEGER"),
-        ("is_cross_repo", "BOOLEAN DEFAULT 0"),
-        ("connection_type", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("authentication", "TEXT"),
-        ("authorization", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("via_component", "TEXT"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in connection_columns:
-            conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
-
-    flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flows)").fetchall()}
-    for col_name, col_type in (
-        ("flow_type", "TEXT"),
-        ("description", "TEXT"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in flow_columns:
-            conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
-
-    flow_step_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flow_steps)").fetchall()}
-    for col_name, col_type in (
-        ("resource_id", "INTEGER"),
-        ("component_label", "TEXT"),
-        ("protocol", "TEXT"),
-        ("port", "TEXT"),
-        ("auth_method", "TEXT"),
-        ("is_encrypted", "BOOLEAN"),
-        ("notes", "TEXT"),
-    ):
-        if col_name not in flow_step_columns:
-            conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
-
-    node_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_nodes)").fetchall()}
-    for col_name, col_type in (
-        ("canonical_name", "TEXT"),
-        ("friendly_name", "TEXT"),
-        ("display_label", "TEXT"),
-        ("provider", "TEXT"),
-        ("source_repo", "TEXT"),
-        ("aliases", "TEXT DEFAULT '[]'"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("properties", "TEXT DEFAULT '{}'"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in node_columns:
-            conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
-
-    relationship_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_relationships)").fetchall()}
-    for col_name, col_type in (
-        ("source_repo", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'extracted'"),
-        ("notes", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in relationship_columns:
-            conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
-
-    equivalence_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
-    for col_name, col_type in (
-        ("resource_node_id", "INTEGER"),
-        ("candidate_resource_type", "TEXT"),
-        ("candidate_terraform_name", "TEXT"),
-        ("candidate_source_repo", "TEXT"),
-        ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("evidence_level", "TEXT DEFAULT 'inferred'"),
-        ("provenance", "TEXT"),
-        ("context", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-        ("updated_at", "TIMESTAMP"),
-    ):
-        if col_name not in equivalence_columns:
-            conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
-        "ON resource_equivalences(resource_node_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
-        "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
-    )
-
-    queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment_queue)").fetchall()}
-    for col_name, col_type in (
-        ("assumption_basis", "TEXT"),
-        ("confidence", "TEXT DEFAULT 'medium'"),
-        ("suggested_value", "TEXT"),
-        ("status", "TEXT DEFAULT 'pending_review'"),
-        ("resolved_by", "TEXT"),
-        ("resolved_at", "TIMESTAMP"),
-        ("rejection_reason", "TEXT"),
-        ("created_at", "TIMESTAMP"),
-    ):
-        if col_name not in queue_columns:
-            conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
-
-    resource_types_exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
-    ).fetchone()
-    if resource_types_exists:
-        resource_type_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+        connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
         for col_name, col_type in (
-            ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
-            ("parent_type", "TEXT"),
+            ("source_repo_id", "INTEGER"),
+            ("target_repo_id", "INTEGER"),
+            ("is_cross_repo", "BOOLEAN DEFAULT 0"),
+            ("connection_type", "TEXT"),
+            ("protocol", "TEXT"),
+            ("port", "TEXT"),
+            ("authentication", "TEXT"),
+            ("authorization", "TEXT"),
+            ("auth_method", "TEXT"),
+            ("is_encrypted", "BOOLEAN"),
+            ("via_component", "TEXT"),
+            ("notes", "TEXT"),
         ):
-            if col_name not in resource_type_columns:
-                conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
+            if col_name not in connection_columns:
+                conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
+
+        flow_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flows)").fetchall()}
+        for col_name, col_type in (
+            ("flow_type", "TEXT"),
+            ("description", "TEXT"),
+            ("notes", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in flow_columns:
+                conn.execute(f"ALTER TABLE data_flows ADD COLUMN {col_name} {col_type}")
+
+        flow_step_columns = {row[1] for row in conn.execute("PRAGMA table_info(data_flow_steps)").fetchall()}
+        for col_name, col_type in (
+            ("resource_id", "INTEGER"),
+            ("component_label", "TEXT"),
+            ("protocol", "TEXT"),
+            ("port", "TEXT"),
+            ("auth_method", "TEXT"),
+            ("is_encrypted", "BOOLEAN"),
+            ("notes", "TEXT"),
+        ):
+            if col_name not in flow_step_columns:
+                conn.execute(f"ALTER TABLE data_flow_steps ADD COLUMN {col_name} {col_type}")
+
+        node_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_nodes)").fetchall()}
+        for col_name, col_type in (
+            ("canonical_name", "TEXT"),
+            ("friendly_name", "TEXT"),
+            ("display_label", "TEXT"),
+            ("provider", "TEXT"),
+            ("source_repo", "TEXT"),
+            ("aliases", "TEXT DEFAULT '[]'"),
+            ("confidence", "TEXT DEFAULT 'extracted'"),
+            ("properties", "TEXT DEFAULT '{}'"),
+            ("created_at", "TIMESTAMP"),
+            ("updated_at", "TIMESTAMP"),
+        ):
+            if col_name not in node_columns:
+                conn.execute(f"ALTER TABLE resource_nodes ADD COLUMN {col_name} {col_type}")
+
+        relationship_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_relationships)").fetchall()}
+        for col_name, col_type in (
+            ("source_repo", "TEXT"),
+            ("confidence", "TEXT DEFAULT 'extracted'"),
+            ("notes", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in relationship_columns:
+                conn.execute(f"ALTER TABLE resource_relationships ADD COLUMN {col_name} {col_type}")
+
+        equivalence_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_equivalences)").fetchall()}
+        for col_name, col_type in (
+            ("resource_node_id", "INTEGER"),
+            ("candidate_resource_type", "TEXT"),
+            ("candidate_terraform_name", "TEXT"),
+            ("candidate_source_repo", "TEXT"),
+            ("equivalence_kind", "TEXT DEFAULT 'cross_repo_alias'"),
+            ("confidence", "TEXT DEFAULT 'medium'"),
+            ("evidence_level", "TEXT DEFAULT 'inferred'"),
+            ("provenance", "TEXT"),
+            ("context", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+            ("updated_at", "TIMESTAMP"),
+        ):
+            if col_name not in equivalence_columns:
+                conn.execute(f"ALTER TABLE resource_equivalences ADD COLUMN {col_name} {col_type}")
         conn.execute(
-            "UPDATE resource_types SET display_on_architecture_chart = 1 "
-            "WHERE display_on_architecture_chart IS NULL"
+            "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_node "
+            "ON resource_equivalences(resource_node_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resource_equivalences_candidate "
+            "ON resource_equivalences(candidate_source_repo, candidate_resource_type, candidate_terraform_name)"
         )
 
-    findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
-    if "repo_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
-    if "resource_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
-    if "category" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
-    if "base_severity" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
-    if "evidence_location" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
-    if "title" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
-    if "description" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
-    if "severity_score" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
-    if "source_file" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
-    if "source_line_start" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
-    if "source_line_end" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
-    if "code_snippet" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
-    if "reason" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
-    if "rule_id" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
-    if "proposed_fix" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
-    if "llm_enriched_at" not in findings_columns:
-        conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+        queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(enrichment_queue)").fetchall()}
+        for col_name, col_type in (
+            ("assumption_basis", "TEXT"),
+            ("confidence", "TEXT DEFAULT 'medium'"),
+            ("suggested_value", "TEXT"),
+            ("status", "TEXT DEFAULT 'pending_review'"),
+            ("resolved_by", "TEXT"),
+            ("resolved_at", "TIMESTAMP"),
+            ("rejection_reason", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in queue_columns:
+                conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
 
-    apply_topology_backfills(conn)
+        resource_types_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
+        ).fetchone()
+        if resource_types_exists:
+            resource_type_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_types)").fetchall()}
+            for col_name, col_type in (
+                ("display_on_architecture_chart", "BOOLEAN DEFAULT 1"),
+                ("parent_type", "TEXT"),
+            ):
+                if col_name not in resource_type_columns:
+                    conn.execute(f"ALTER TABLE resource_types ADD COLUMN {col_name} {col_type}")
+            conn.execute(
+                "UPDATE resource_types SET display_on_architecture_chart = 1 "
+                "WHERE display_on_architecture_chart IS NULL"
+            )
+
+        findings_columns = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+        if "repo_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN repo_id INTEGER")
+        if "resource_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN resource_id INTEGER")
+        if "category" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN category TEXT")
+        if "base_severity" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN base_severity TEXT")
+        if "evidence_location" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN evidence_location TEXT")
+        if "title" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN title TEXT")
+        if "description" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN description TEXT")
+        if "severity_score" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN severity_score INTEGER")
+        if "source_file" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_file TEXT")
+        if "source_line_start" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_line_start INTEGER")
+        if "source_line_end" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN source_line_end INTEGER")
+        if "code_snippet" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN code_snippet TEXT")
+        if "reason" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN reason TEXT")
+        if "rule_id" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN rule_id TEXT")
+        if "proposed_fix" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
+        if "llm_enriched_at" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+
+        apply_topology_backfills(conn)
+    finally:
+        # Release filesystem migration lock if we acquired one
+        try:
+            if acquired and lock_fd is not None:
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
+                try:
+                    os.unlink(str(lock_path))
+                except Exception:
+                    pass
+        except Exception:
+            # Best-effort cleanup only; don't fail migrations for cleanup errors
+            pass
+
+    # Mark schema as ensured for this DB path so subsequent connections skip DDL.
+    _schema_ensured_for.add(db_file)
 
 
 @contextmanager
 def get_db_connection(db_path: Optional[Path] = None):
     """Context manager for database connections."""
     path = db_path or DB_PATH
-    conn = sqlite3.connect(path)
+    # Ensure parent directory exists so sqlite can create the DB file if needed
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p), timeout=30)
+    # Improve concurrency: enable WAL and set busy timeout
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    conn.execute("PRAGMA busy_timeout = 30000;")
     conn.row_factory = sqlite3.Row  # Access columns by name
-    _ensure_schema(conn)
+    # Ensure schema with retries to avoid concurrent migration lock errors
+    for attempt in range(6):
+        try:
+            _ensure_schema(conn)
+            break
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < 5:
+                time.sleep(1 + attempt)
+                continue
+            raise
     try:
         yield conn
         conn.commit()
@@ -850,30 +994,28 @@ def insert_resource(
                       _infer_property_type(key), 
                       _is_security_relevant(key)))
 
-        # Record lightweight provenance for resource creation when cozo_helpers available
-        if _COZO_HELPERS_AVAILABLE:
-            try:
-                # Use a self-referential audit row to indicate node creation
-                try:
-                    cozo_helpers._insert_relationship_audit(
-                        from_node=f"resource:{resource_id}",
-                        to_node=f"resource:{resource_id}",
-                        rel_type="resource_created",
-                        action="created",
-                        actor_type="context_discovery",
-                        actor_id=experiment_id,
-                        scan_id=experiment_id,
-                        evidence_finding_id=None,
-                        confidence=None,
-                        details_json=json.dumps({"repo": repo_name, "resource_type": resource_type}),
-                    )
-                except Exception:
-                    # Non-fatal provenance failures should not break resource insertion
-                    pass
-            except Exception:
-                pass
-        
-        return resource_id
+    # Record provenance AFTER the main transaction commits to avoid a write-lock
+    # deadlock: cozo_helpers._execute_sql opens its own sqlite3 connection, which
+    # would block waiting for this connection to release while we'd be waiting for
+    # it to return — each call would time out after Python's default 5s connect timeout.
+    if _COZO_HELPERS_AVAILABLE:
+        try:
+            cozo_helpers._insert_relationship_audit(
+                from_node=f"resource:{resource_id}",
+                to_node=f"resource:{resource_id}",
+                rel_type="resource_created",
+                action="created",
+                actor_type="context_discovery",
+                actor_id=experiment_id,
+                scan_id=experiment_id,
+                evidence_finding_id=None,
+                confidence=None,
+                details_json=json.dumps({"repo": repo_name, "resource_type": resource_type}),
+            )
+        except Exception:
+            pass
+
+    return resource_id
 
 
 def get_resource_id(
@@ -1022,98 +1164,70 @@ def insert_connection(
                         existing[0],
                     ),
                 )
-                # Record provenance for update
-                if _COZO_HELPERS_AVAILABLE:
-                    try:
-                        try:
-                            cozo_helpers._insert_relationship_audit(
-                                from_node=f"resource:{source_result[0]}",
-                                to_node=f"resource:{target_result[0]}",
-                                rel_type=connection_type or 'connection',
-                                action="updated",
-                                actor_type="context_discovery",
-                                actor_id=experiment_id,
-                                scan_id=experiment_id,
-                                evidence_finding_id=None,
-                                confidence=None,
-                                details_json=json.dumps({
-                                    "protocol": protocol,
-                                    "port": port,
-                                    "authentication": authentication,
-                                    "authorization": authorization,
-                                    "auth_method": auth_method,
-                                    "is_encrypted": is_encrypted,
-                                    "via_component": via_component,
-                                    "notes": notes,
-                                }),
-                            )
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                return existing[0]
+                _audit = ("updated", source_result[0], target_result[0])
+                _return_id = existing[0]
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO resource_connections
+                    (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
+                     is_cross_repo, connection_type, protocol, port, authentication, authorization,
+                     auth_method, is_encrypted, via_component, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        experiment_id,
+                        source_result[0],
+                        target_result[0],
+                        source_repo_id,
+                        target_repo_id,
+                        is_cross_repo,
+                        connection_type,
+                        protocol,
+                        port,
+                        effective_authentication,
+                        authorization,
+                        effective_auth_method,
+                        is_encrypted,
+                        via_component,
+                        notes,
+                    ),
+                )
+                row = cursor.fetchone()
+                new_id = row[0] if row else None
+                _audit = ("created", source_result[0], target_result[0]) if new_id else None
+                _return_id = new_id
+        else:
+            _audit = None
+            _return_id = None
 
-            cursor = conn.execute(
-                """
-                INSERT INTO resource_connections
-                (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
-                 is_cross_repo, connection_type, protocol, port, authentication, authorization,
-                 auth_method, is_encrypted, via_component, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                RETURNING id
-                """,
-                (
-                    experiment_id,
-                    source_result[0],
-                    target_result[0],
-                    source_repo_id,
-                    target_repo_id,
-                    is_cross_repo,
-                    connection_type,
-                    protocol,
-                    port,
-                    effective_authentication,
-                    authorization,
-                    effective_auth_method,
-                    is_encrypted,
-                    via_component,
-                    notes,
-                ),
+    # Fire provenance audit AFTER the transaction commits to avoid a write-lock
+    # deadlock (same issue as insert_resource — cozo_helpers opens its own connection).
+    if _audit and _COZO_HELPERS_AVAILABLE:
+        _action, _src_id, _tgt_id = _audit
+        audit_details = json.dumps({
+            "protocol": protocol, "port": port,
+            "authentication": authentication, "authorization": authorization,
+            "auth_method": auth_method, "is_encrypted": is_encrypted,
+            "via_component": via_component, "notes": notes,
+        })
+        try:
+            cozo_helpers._insert_relationship_audit(
+                from_node=f"resource:{_src_id}",
+                to_node=f"resource:{_tgt_id}",
+                rel_type=connection_type or 'connection',
+                action=_action,
+                actor_type="context_discovery",
+                actor_id=experiment_id,
+                scan_id=experiment_id,
+                evidence_finding_id=None,
+                confidence=None,
+                details_json=audit_details,
             )
-            row = cursor.fetchone()
-            new_id = row[0] if row else None
-
-            # Record provenance for creation
-            if new_id and _COZO_HELPERS_AVAILABLE:
-                try:
-                    try:
-                        cozo_helpers._insert_relationship_audit(
-                            from_node=f"resource:{source_result[0]}",
-                            to_node=f"resource:{target_result[0]}",
-                            rel_type=connection_type or 'connection',
-                            action="created",
-                            actor_type="context_discovery",
-                            actor_id=experiment_id,
-                            scan_id=experiment_id,
-                            evidence_finding_id=None,
-                            confidence=None,
-                            details_json=json.dumps({
-                                "protocol": protocol,
-                                "port": port,
-                                "authentication": authentication,
-                                "authorization": authorization,
-                                "auth_method": auth_method,
-                                "is_encrypted": is_encrypted,
-                                "via_component": via_component,
-                                "notes": notes,
-                            }),
-                        )
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-            return new_id
-    return None
+        except Exception:
+            pass
+    return _return_id
 
 
 # ============================================================================

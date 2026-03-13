@@ -1,6 +1,6 @@
 # Database Schema Documentation
 
-**Location:** `Output/Learning/triage.db`
+**Location:** `Output/Data/cozo.db` (preferred)
 **Type:** SQLite 3
 **Purpose:** Single source of truth for assets, findings, context, flows, countermeasures, and scoring. Scripts read/write this DB at every phase. LLM enrichment is additive and idempotent — once a finding is enriched it is never re-processed unless new context explicitly invalidates it.
 
@@ -644,5 +644,5 @@ python3 Scripts/init_database.py
 # - resource_equivalences / enrichment_queue default normalization
 
 # Backup before migrations
-cp Output/Learning/triage.db Output/Learning/triage_backup_$(date +%Y%m%d).db
+cp Output/Data/cozo.db Output/Learning/triage_backup_$(date +%Y%m%d).db
 ```

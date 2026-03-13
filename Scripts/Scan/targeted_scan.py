@@ -21,7 +21,7 @@ from pathlib import Path
 # ── Root paths ────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR   = Path(__file__).resolve().parent
-REPO_ROOT    = SCRIPT_DIR.parent
+REPO_ROOT    = SCRIPT_DIR.parent.parent
 RULES_ROOT   = REPO_ROOT / "Rules"
 DETECTION    = RULES_ROOT / "Detection"
 MISCONFIGS   = RULES_ROOT / "Misconfigurations"
@@ -301,7 +301,7 @@ def main() -> None:
 
     store_cmd = [
         sys.executable,
-        str(SCRIPT_DIR / "store_findings.py"),
+        str(REPO_ROOT / "Scripts" / "Persist" / "store_findings.py"),
         str(misconfig_json),
         "--experiment", args.experiment,
         "--repo", args.repo,

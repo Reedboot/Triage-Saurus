@@ -95,7 +95,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    workspace_root = Path(__file__).resolve().parents[1]
+    workspace_root = Path(__file__).resolve().parents[2]
     default_repos_root = workspace_root.parent
     repos_root = Path(args.repos_root).expanduser() if args.repos_root else default_repos_root
     repos_root = repos_root.resolve()

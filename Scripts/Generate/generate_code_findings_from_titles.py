@@ -26,7 +26,7 @@ from pathlib import Path
 from output_paths import OUTPUT_RENDER_INPUTS_DIR
 from markdown_validator import validate_markdown_file
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def now_uk() -> str:

@@ -29,7 +29,12 @@ DEFAULT_COZO_DB = ROOT / "Output/Data/cozo.db"
 
 def init(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception:
+        pass
+    conn.execute("PRAGMA busy_timeout = 30000;")
     try:
         cur = conn.cursor()
         # Create providers table if missing (create minimal expected tables BEFORE calling db_helpers._ensure_schema

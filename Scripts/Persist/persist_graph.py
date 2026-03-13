@@ -20,14 +20,17 @@ from pathlib import Path
 from typing import Optional
 
 from models import RepositoryContext, Relationship, RelationshipType
-from cozo_helpers import (
-    insert_resource_node,
-    insert_enrichment_node,
-    insert_relationship,
-    insert_equivalence,
-    link_enrichment,
-)
-
+# cozo_helpers is required — fail fast with a clear message if missing
+try:
+    from cozo_helpers import (
+        insert_resource_node,
+        insert_enrichment_node,
+        insert_relationship,
+        insert_equivalence,
+        link_enrichment,
+    )
+except Exception as e:
+    raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Prefer cozo consolidated DB if present; fall back to legacy triage DB
 import db_helpers as _db_helpers
@@ -137,8 +140,7 @@ def persist_context(context: RepositoryContext, db_path: Path = DB_PATH, scan_id
             from_id=node_id_map[src_key],
             to_id=node_id_map[tgt_key],
             relationship_type=rel.relationship_type.value,
-            confidence=rel.confidence,
-            evidence_level="extracted",
+            evidence_level=rel.confidence,
             actor_type=actor_type,
             actor_id=actor_id,
             scan_id=scan_id,

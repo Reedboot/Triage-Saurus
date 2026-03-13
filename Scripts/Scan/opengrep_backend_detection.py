@@ -126,7 +126,7 @@ def _detect_provider(check_id: str) -> str:
 def extract_backend_for_api(repo_path: Path, api_name: str, rules_dir: Optional[Path] = None) -> Optional[str]:
     """Extract backend URL for a specific API using opengrep."""
     if rules_dir is None:
-        rules_dir = Path(__file__).resolve().parents[1] / "Rules/Detection"
+        rules_dir = Path(__file__).resolve().parents[2] / "Rules/Detection"
     
     findings = run_opengrep_rules(repo_path, rules_dir)
     
@@ -140,7 +140,7 @@ def extract_backend_for_api(repo_path: Path, api_name: str, rules_dir: Optional[
 def extract_kubernetes_deployments(repo_path: Path, rules_dir: Optional[Path] = None) -> List[Dict]:
     """Extract Kubernetes deployments using opengrep."""
     if rules_dir is None:
-        rules_dir = Path(__file__).resolve().parents[1] / "Rules/Detection"
+        rules_dir = Path(__file__).resolve().parents[2] / "Rules/Detection"
     
     findings = run_opengrep_rules(repo_path, rules_dir)
     return findings.get("deployments", [])
@@ -149,7 +149,7 @@ def extract_kubernetes_deployments(repo_path: Path, rules_dir: Optional[Path] = 
 def extract_database_connections(repo_path: Path, rules_dir: Optional[Path] = None) -> List[Dict]:
     """Extract database connections using opengrep."""
     if rules_dir is None:
-        rules_dir = Path(__file__).resolve().parents[1] / "Rules/Detection"
+        rules_dir = Path(__file__).resolve().parents[2] / "Rules/Detection"
     
     findings = run_opengrep_rules(repo_path, rules_dir)
     return findings.get("databases", [])

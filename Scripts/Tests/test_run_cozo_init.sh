@@ -7,9 +7,9 @@ cd "$ROOT_DIR"
 
 echo "[test] Python: $(python3 --version 2>&1)"
 
-echo "[test] Creating venv .venv-cozo"
-python3 -m venv .venv-cozo
-. .venv-cozo/bin/activate
+echo "[test] Creating venv .venv"
+python3 -m venv .venv
+. .venv/bin/activate
 
 echo "[test] Installing requirements"
 pip install -r requirements.txt

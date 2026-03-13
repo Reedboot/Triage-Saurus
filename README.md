@@ -109,7 +109,15 @@ python3 Scripts/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--re
 
 By default the database lives under `Output/Data/cozo.db` (directory created automatically) but you can override the path with `--cozo-db`. Run the script before or after the existing SQLite pipeline so that Cozo contains the same structured detection data that future rules will enrich or relate to other resources.
 
-To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.txt`, runs opengrep for every listed repo, imports the JSON result into `Output/Data/cozo.db`, prints the resources detected per repo, and now automatically invokes `Scripts/generate_repo_summary_from_cozo.py` so every scan also emits a repo-level Markdown summary under `Output/Summary/Repos/`. The script tracks recent scans via the Cozo `repo_scans` table (skip within one hour unless you pass `--force`), writes a timestamped audit log under `Output/Audit/CozoScan_<timestamp>.md`, and continues to surface detected providers/lines in the console for quick review.
+To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.txt`, runs opengrep for every listed repo, imports the JSON result into `Output/Data/cozo.db`, and prints a colour-coded findings summary per repo. It:
+
+- **Requires `.venv` at the repo root** — run `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` once to create it. The script auto-activates it if not already active and prints step-by-step setup instructions if the environment is missing or broken.
+- **Verifies requirements** before starting — lists any missing packages and exits with install instructions rather than failing mid-scan.
+- **Flags rule errors loudly** — any opengrep rule parse/run errors are shown in a red banner box so broken rules are impossible to miss.
+- **Classifies findings by rule metadata** (`finding_kind`, `rule_type`) — 🔍 green for asset-detection rules, 🔥 orange for misconfigurations, with `confidence`/`impact`/`subcategory` badges inline.
+- **Skips recently scanned repos** — tracks scans via the `repo_scans` table (skip within one hour unless you pass `--force`).
+- **Writes a timestamped audit log** to `Output/Audit/CozoScan_<timestamp>.md`.
+- **Generates a repo-level Markdown summary** under `Output/Summary/Repos/` for each scan.
 
 Use `Scripts/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
 
@@ -217,19 +225,19 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - `Scripts/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **SQLite 3** — Required (used by the pipeline and accessible from Python):
-  - Database location: `Output/Learning/triage.db`
-  - Initialize the DB: `python3 Scripts/init_database.py`
+  - Database location: `Output/Data/cozo.db` (preferred consolidated DB for findings and resources)
+  - Initialize the DB: `python3 Scripts/init_database.py` (this creates schema in the configured DB)
   - CLI (optional but useful): `sqlite3` (Debian/Ubuntu: `sudo apt update && sudo apt install -y sqlite3`; macOS Homebrew: `brew install sqlite`)
 - **opengrep** — REQUIRED for Phase 1 detection rules (preferred engine):
   - Used by: `opengrep scan --config Rules/ /path/to/repo`
   - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
 - **Python dependencies** — Install all required packages via the provided `requirements.txt`:
   ```bash
-  python3 -m venv .venv-cozo
-  source .venv-cozo/bin/activate
+  python3 -m venv .venv
+  source .venv/bin/activate
   pip install -r requirements.txt
   ```
-  This installs `pycozo`, `jinja2`, and `PyYAML`. The `Scripts/run_cozo_repos.sh` script automatically uses `.venv-cozo` if present.
+  This installs `pycozo`, `jinja2`, `Flask`, and `PyYAML`. The virtual environment **must be located at `.venv`** in the repo root — `Scripts/run_cozo_repos.sh` will auto-activate it if it is not already active, and will print clear setup instructions if it cannot be found.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
@@ -242,3 +250,42 @@ Notes:
 ## Auto-regenerate risk register
 - Run `python3 Scripts/watch_risk_register.py` in a separate terminal to regenerate `Output/Summary/Risk Register.xlsx` whenever `Output/Findings/**/*.md` changes.
 - Use `python3 Scripts/watch_risk_register.py --full` to also refresh summaries/descriptions/scores before regenerating.
+
+---
+
+## Web UI (Experimental)
+Triage-Saurus includes a lightweight web portal (web/app.py) that provides a browser-based interface to run scans and stream pipeline output in real time.
+
+Quick start (local only):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 web/app.py
+# Open http://localhost:5000 in your browser
+```
+
+What the web UI does:
+- Presents a pre-populated dropdown from `Intake/ReposToScan.txt` to select a repository (server-side paths are resolved).
+- Runs the same offline Phase 1–3 pipeline (Scripts/Utils/run_pipeline.py) as subprocesses on the machine where the web server runs.
+- Streams the pipeline stdout/stderr to the browser using Server-Sent Events and renders any generated Mermaid diagrams.
+
+Security warning
+
+This web portal executes scanning commands against the server's filesystem. If the web server is exposed to untrusted users, it can be abused to browse directories, read files the web process can access, or trigger expensive scans. In short: yes — this is a potentially dangerous capability if published publicly.
+
+Important safety notes (read carefully):
+- The UI is intended for local, single-user usage. Do NOT deploy it to public networks without adding proper authentication, authorization, and network protections.
+- The current UI limits selection to repos listed in `Intake/ReposToScan.txt`, but that is only a convenience and not a security boundary.
+- If you must expose the portal, protect it with an authenticated reverse proxy or VPN, run the service as an unprivileged user (or inside a container), restrict allowed target paths (allow-list), and enable rate-limiting and auditing.
+- Treat any scan outputs as potentially sensitive: the process may read configuration files, credentials, or other secrets present in scanned directories.
+
+Recommendations
+
+- Use the web UI only on trusted, isolated hosts (your laptop or a locked admin VM).
+- Consider adding server-side allow-lists, request authentication, and CSRF protections before enabling network access.
+- Run the server in a container, with a dedicated low-privilege user and minimal filesystem mounts.
+
+---
+
