@@ -1297,15 +1297,13 @@ def insert_finding(
             INSERT INTO findings
             (experiment_id, repo_id, resource_id, title, description, category,
              severity_score, base_severity, evidence_location, source_file, source_line_start,
-             source_line_end, detected_by, detection_method, rule_id, proposed_fix,
-             code_snippet, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source_line_end, rule_id, proposed_fix, code_snippet, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
         """, (
             experiment_id, repo_id, resource_id, effective_title, description, category,
             effective_severity_score, severity, evidence_location, source_file, source_line_start,
-            source_line_end, discovered_by, None, rule_id, proposed_fix,
-            code_snippet, reason,
+            source_line_end, rule_id, proposed_fix, code_snippet, reason,
         ))
 
         return cursor.fetchone()[0]
