@@ -35,6 +35,9 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-app-service-plan":          ["Azure/AppService"],
     "context-azure-app-service-environment":   ["Azure/AppService"],
     "context-azure-container-registry":        ["Azure/ContainerRegistry"],
+    "context-azure-linux-vm":                 ["Azure/VM"],
+    "context-azure-windows-vm":               ["Azure/VM"],
+    "context-azure-nsg":                      ["Azure/NSG"],
 
     # Azure — Data
     "context-azure-sql-server":                ["Azure/SQL"],
@@ -79,6 +82,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-aws-helm-ingress-nginx":          ["Kubernetes/Ingress", "Kubernetes/Service", "AWS/SecurityGroup"],
     "context-aws-helm-lb-controller":          ["Kubernetes/Ingress", "AWS/SecurityGroup"],
     "context-helm-release-generic":            ["Kubernetes/Workload"],
+    "context-kubernetes-manifest":              ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
 
     # AWS — Data
     "context-aws-rds-instance":                ["AWS/RDS"],
@@ -111,6 +115,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-appinsights-connection":    ["Secrets"],
     "context-azure-redis-connection":          ["Secrets"],
     "context-azure-servicebus-connection-appconfig": ["Secrets"],
+    "context-cicd-pipeline":                      ["CICD"],
 }
 
 # ── Always-on folders (run regardless of what was detected) ──────────────────
@@ -122,24 +127,11 @@ ALWAYS_INCLUDE: list[str] = [
     "Secrets",
 ]
 
-# ── File-pattern fallbacks (for resource types with no detection rule yet) ───
-# Checked directly against target repo files when detection scan misses them.
-
-FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = [
-    # (description, glob_pattern_fragment, [misconfig folders])
-    ("Azure VM",  "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine|azurerm_virtual_machine",
-                  ["Azure/VM"]),
-    ("Azure NSG", "azurerm_network_security_group",
-                  ["Azure/NSG"]),
-    ("Kubernetes manifests", r"^kind:\s+(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|ClusterRoleBinding|RoleBinding)",
-                  ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"]),
-    ("CI/CD pipelines", r"\.gitlab-ci\.yml|Jenkinsfile|\.github/workflows/",
-                  ["CICD"]),
-    ("Dockerfiles",    r"^FROM\s+(scratch|alpine|ubuntu|debian|node|python|openjdk|golang|mcr\.microsoft\.com)",
-                  ["Kubernetes/Workload", "Secrets"]),
-    ("Hardcoded secrets (any file)", r"(password|secret|api_key|token)\s*=\s*[\"'][^\"']{6,}[\"']",
-                  ["Secrets"]),
-]
+# ── File-pattern fallbacks (deprecated) ───────────────────────────────────────
+# File-pattern fallback logic has been removed. Detection is performed by opengrep rules only.
+# If a resource type is not detected, add a Detection rule under Rules/Detection and map
+# it in DETECTION_TO_MISCONFIG so scans include the appropriate misconfig checks.
+FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = []
 
 
 def run_opengrep(config_path: Path, target: Path, output_file: Path, label: str) -> dict:
@@ -180,14 +172,9 @@ def resolve_misconfig_paths(fired_ids: set[str], target: Path) -> list[Path]:
         for folder in DETECTION_TO_MISCONFIG.get(rule_id, []):
             folders.add(folder)
 
-    # File-pattern fallbacks
-    for description, pattern, misconfig_folders in FILE_PATTERN_FALLBACKS:
-        grep_cmd = ["grep", "-rEl", pattern, str(target)]
-        result = subprocess.run(grep_cmd, capture_output=True, text=True)
-        if result.stdout.strip():
-            print(f"  [fallback] Detected via file pattern: {description}")
-            for folder in misconfig_folders:
-                folders.add(folder)
+    # No file-pattern fallback scanning is performed. Rely on opengrep detection rule hits.
+    # Add detection rules to Rules/Detection and update DETECTION_TO_MISCONFIG if additional
+    # resource types should map to specific misconfiguration folders.
 
     # Resolve to absolute Paths, filtering to those that actually exist
     resolved = []

@@ -161,12 +161,9 @@ opengrep scan --config Rules/ /path/to/repo
 - Run this command for every IaC/code scan whenever opengrep is installed (default state).
 - Capture the command, timestamp, and target path in the session audit log.
 
-**Fallback (only if opengrep unavailable)**
-```bash
-# Temporary manual grep until opengrep is restored
-grep -r "pattern" --include="*.tf"
-```
-- Document the outage and remediation plan in the audit log, then rerun opengrep ASAP.
+**Fallback policy**
+- Manual grep fallbacks are not permitted. If opengrep is unavailable, document the outage in the audit log, fix the underlying issue, and add missing detection rules under Rules/Detection so opengrep can detect the resource types once restored.
+
 
 **Learning from Gaps**:
 When experiments or external tools find issues we miss → LearningAgent creates rules → Track effectiveness in next run

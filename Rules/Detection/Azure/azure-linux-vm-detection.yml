@@ -1,0 +1,14 @@
+rules:
+  - id: context-azure-linux-vm
+    message: |
+      Terraform azurerm linux virtual machine detected.
+      Detects azurerm_linux_virtual_machine resource declarations.
+    severity: INFO
+    languages: [terraform, hcl, generic]
+    pattern-regex: |
+      (?m)\bazurerm_linux_virtual_machine\b
+    metadata:
+      rule_type: detection
+      category: infrastructure
+      technology: [azure, terraform]
+      target_files: ["**/*.tf"]

@@ -28,7 +28,7 @@ This repository supports consistent security triage. The expected workflow is:
 ### Mandatory opengrep Execution
 
 - When opengrep is installed (default repo state), every IaC/code scan MUST start with `opengrep scan --config Rules/ <target>` to apply the entire ruleset.
-- Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are only acceptable if opengrep becomes unavailable mid-session and must be documented in the audit log.
+- Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are not permitted. If a resource type is missing detection, add a Detection rule under Rules/Detection and map it in DETECTION_TO_MISCONFIG so scans include the appropriate misconfig checks.
 - Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
 - **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/Scan/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
 - **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` and the Cozo knowledge graph, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the Cozo graph rather than keeping prior repo transcripts in memory.
@@ -90,7 +90,7 @@ All findings MUST reference the rule that detected them:
 **CRITICAL: Apply ALL Rules, Not Selective Subsets**
 
 **When scanning IaC/code:**
-1. ✅ Run `opengrep scan --config Rules/ <target>` to apply ALL rules from `Rules/Misconfigurations/*.yml` (currently 48 rules as of Feb 2026). Rules are granular per service; do not rely on generic "detect resource then ask LLM" fallbacks. If opengrep fails, log it and immediately rerun after fixing the issue; only use manual grep as a temporary fallback.
+1. ✅ Run `opengrep scan --config Rules/ <target>` to apply ALL rules from `Rules/Misconfigurations/*.yml`. Rules are granular per service; do not rely on generic "detect resource then ask LLM" patterns. If opengrep fails, log the issue, fix the cause, and rerun the scan. Do not use manual grep fallbacks; instead add the missing detection rule under Rules/Detection.
 2. ✅ Run skeptic reviews (DevSkeptic + PlatformSkeptic) for each finding
 3. ✅ Adjust severity based on mitigating controls identified by skeptics
 4. ✅ Document findings with proper rule metadata (`detected_by_rule: <rule-id>`)
