@@ -9,6 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Initialise Cozo DB schema
+        run: python3 Scripts/Utils/init_cozo_learning.py init Output/Data/cozo.db
+
       - name: Run cozo DB check
-        run: |
-          bash Scripts/ci/check_cozo_db.sh
+        run: bash Scripts/ci/check_cozo_db.sh
