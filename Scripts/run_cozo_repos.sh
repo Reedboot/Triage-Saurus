@@ -66,21 +66,48 @@ if ! command -v opengrep >/dev/null 2>&1; then
   exit 1
 fi
 
+_venv_setup_box() {
+  local venv_path="$1"
+  local req_path="$2"
+  echo -e "${RED}${BOLD}" >&2
+  echo -e "  ╔══════════════════════════════════════════════════════════════╗" >&2
+  echo -e "  ║  ❌  Python virtual environment not found                   ║" >&2
+  echo -e "  ╚══════════════════════════════════════════════════════════════╝${RESET}" >&2
+  echo -e "" >&2
+  echo -e "  ${BOLD}Triage-Saurus requires a .venv at:${RESET}" >&2
+  echo -e "    ${CYAN}$venv_path${RESET}" >&2
+  echo -e "" >&2
+  echo -e "  ${BOLD}Set it up with these three commands:${RESET}" >&2
+  echo -e "" >&2
+  echo -e "    ${GREEN}python3 -m venv $venv_path${RESET}" >&2
+  echo -e "    ${GREEN}source $venv_path/bin/activate${RESET}" >&2
+  echo -e "    ${GREEN}pip install -r $req_path${RESET}" >&2
+  echo -e "" >&2
+  echo -e "  Then re-run:  ${BOLD}bash Scripts/run_cozo_repos.sh${RESET}" >&2
+  echo -e "" >&2
+}
+
 if [ ! -d "$REPO_ROOT/.venv" ]; then
-  echo -e "${RED}❌ .venv not found at $REPO_ROOT/.venv${RESET}" >&2
-  echo -e "${YELLOW}   Create it with: python3 -m venv $REPO_ROOT/.venv && $REPO_ROOT/.venv/bin/pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
+  _venv_setup_box "$REPO_ROOT/.venv" "$REPO_ROOT/requirements.txt"
   exit 1
 fi
 
 EXPECTED_VENV="$REPO_ROOT/.venv"
 if [ -z "${VIRTUAL_ENV:-}" ] || [ "$VIRTUAL_ENV" != "$EXPECTED_VENV" ]; then
-  echo -e "${YELLOW}⚡ .venv not activated — activating $EXPECTED_VENV${RESET}"
+  echo -e "${YELLOW}⚡ .venv not activated — activating automatically${RESET}"
   # shellcheck disable=SC1091
-  source "$EXPECTED_VENV/bin/activate"
+  if ! source "$EXPECTED_VENV/bin/activate" 2>/dev/null; then
+    echo -e "${RED}❌ Failed to activate $EXPECTED_VENV${RESET}" >&2
+    _venv_setup_box "$EXPECTED_VENV" "$REPO_ROOT/requirements.txt"
+    exit 1
+  fi
 fi
 
 if [ ! -x "$PYTHON_BIN" ]; then
-  echo -e "${RED}❌ Python not found at $PYTHON_BIN${RESET}" >&2
+  echo -e "${RED}❌ Python binary not found at $PYTHON_BIN${RESET}" >&2
+  echo -e "${YELLOW}   The .venv may be corrupt — try recreating it:${RESET}" >&2
+  echo -e "    ${GREEN}rm -rf $REPO_ROOT/.venv${RESET}" >&2
+  echo -e "    ${GREEN}python3 -m venv $REPO_ROOT/.venv && pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
   exit 1
 fi
 
@@ -98,7 +125,10 @@ check_requirements() {
   done < "$REPO_ROOT/requirements.txt"
   if [ "${#missing[@]}" -gt 0 ]; then
     echo -e "${ORANGE}⚠️  Missing packages: ${missing[*]}${RESET}" >&2
-    echo -e "${YELLOW}   Run: $PYTHON_BIN -m pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
+    echo -e "" >&2
+    echo -e "  ${BOLD}Install them with:${RESET}" >&2
+    echo -e "    ${GREEN}source $REPO_ROOT/.venv/bin/activate${RESET}" >&2
+    echo -e "    ${GREEN}pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
     return 1
   fi
 }

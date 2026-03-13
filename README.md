@@ -109,7 +109,15 @@ python3 Scripts/store_opengrep_for_cozo.py scan_<repo>.json --repo my-repo [--re
 
 By default the database lives under `Output/Data/cozo.db` (directory created automatically) but you can override the path with `--cozo-db`. Run the script before or after the existing SQLite pipeline so that Cozo contains the same structured detection data that future rules will enrich or relate to other resources.
 
-To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.txt`, runs opengrep for every listed repo, imports the JSON result into `Output/Data/cozo.db`, prints the resources detected per repo, and now automatically invokes `Scripts/generate_repo_summary_from_cozo.py` so every scan also emits a repo-level Markdown summary under `Output/Summary/Repos/`. The script tracks recent scans via the Cozo `repo_scans` table (skip within one hour unless you pass `--force`), writes a timestamped audit log under `Output/Audit/CozoScan_<timestamp>.md`, and continues to surface detected providers/lines in the console for quick review.
+To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.txt`, runs opengrep for every listed repo, imports the JSON result into `Output/Data/cozo.db`, and prints a colour-coded findings summary per repo. It:
+
+- **Requires `.venv` at the repo root** — run `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` once to create it. The script auto-activates it if not already active and prints step-by-step setup instructions if the environment is missing or broken.
+- **Verifies requirements** before starting — lists any missing packages and exits with install instructions rather than failing mid-scan.
+- **Flags rule errors loudly** — any opengrep rule parse/run errors are shown in a red banner box so broken rules are impossible to miss.
+- **Classifies findings by rule metadata** (`finding_kind`, `rule_type`) — 🔍 green for asset-detection rules, 🔥 orange for misconfigurations, with `confidence`/`impact`/`subcategory` badges inline.
+- **Skips recently scanned repos** — tracks scans via the `repo_scans` table (skip within one hour unless you pass `--force`).
+- **Writes a timestamped audit log** to `Output/Audit/CozoScan_<timestamp>.md`.
+- **Generates a repo-level Markdown summary** under `Output/Summary/Repos/` for each scan.
 
 Use `Scripts/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
 
@@ -225,11 +233,11 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - Ensure `opengrep` is installed and on PATH. If `opengrep` is not available, the system falls back to manual grep (document the outage and re-run with `opengrep` as soon as possible).
 - **Python dependencies** — Install all required packages via the provided `requirements.txt`:
   ```bash
-  python3 -m venv .venv-cozo
-  source .venv-cozo/bin/activate
+  python3 -m venv .venv
+  source .venv/bin/activate
   pip install -r requirements.txt
   ```
-  This installs `pycozo`, `jinja2`, and `PyYAML`. The `Scripts/run_cozo_repos.sh` script automatically uses `.venv-cozo` if present.
+  This installs `pycozo`, `jinja2`, `Flask`, and `PyYAML`. The virtual environment **must be located at `.venv`** in the repo root — `Scripts/run_cozo_repos.sh` will auto-activate it if it is not already active, and will print clear setup instructions if it cannot be found.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
