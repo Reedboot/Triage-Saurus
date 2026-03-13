@@ -4,7 +4,7 @@ rules:
       Terraform azurerm windows virtual machine detected.
       Detects azurerm_windows_virtual_machine resource declarations.
     severity: INFO
-    languages: [terraform, hcl, generic]
+    languages: [terraform, hcl]
     pattern-regex: |
       (?m)\bazurerm_windows_virtual_machine\b
     metadata:

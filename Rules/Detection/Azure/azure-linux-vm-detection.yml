@@ -4,7 +4,7 @@ rules:
       Terraform azurerm linux virtual machine detected.
       Detects azurerm_linux_virtual_machine resource declarations.
     severity: INFO
-    languages: [terraform, hcl, generic]
+    languages: [terraform, hcl]
     pattern-regex: |
       (?m)\bazurerm_linux_virtual_machine\b
     metadata:

@@ -4,7 +4,7 @@ rules:
       Terraform azurerm network security group detected.
       Detects azurerm_network_security_group resource declarations.
     severity: INFO
-    languages: [terraform, hcl, generic]
+    languages: [terraform, hcl]
     pattern-regex: |
       (?m)\bazurerm_network_security_group\b
     metadata:
