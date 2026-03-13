@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Colours ------------------------------------------------------------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+ORANGE='\033[38;5;208m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_PARENT="$(cd "$REPO_ROOT/.." && pwd)"
@@ -56,33 +66,73 @@ if ! command -v opengrep >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -x "$PYTHON_BIN" ]; then
-  echo "⚠️  Warning: .venv-cozo/bin/python not found — falling back to python3 (required packages may be missing)" >&2
-  PYTHON_BIN="python3"
+if [ ! -d "$REPO_ROOT/.venv" ]; then
+  echo -e "${RED}❌ .venv not found at $REPO_ROOT/.venv${RESET}" >&2
+  echo -e "${YELLOW}   Create it with: python3 -m venv $REPO_ROOT/.venv && $REPO_ROOT/.venv/bin/pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
+  exit 1
 fi
+
+EXPECTED_VENV="$REPO_ROOT/.venv"
+if [ -z "${VIRTUAL_ENV:-}" ] || [ "$VIRTUAL_ENV" != "$EXPECTED_VENV" ]; then
+  echo -e "${YELLOW}⚡ .venv not activated — activating $EXPECTED_VENV${RESET}"
+  # shellcheck disable=SC1091
+  source "$EXPECTED_VENV/bin/activate"
+fi
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  echo -e "${RED}❌ Python not found at $PYTHON_BIN${RESET}" >&2
+  exit 1
+fi
+
+# --- Requirements check -------------------------------------------------------
+check_requirements() {
+  local missing=()
+  while IFS= read -r line; do
+    line=$(echo "$line" | sed 's/#.*//' | tr -d ' \t')
+    [ -z "$line" ] && continue
+    pkg=$(echo "$line" | sed 's/[><=!~].*//')
+    [ -z "$pkg" ] && continue
+    if ! "$PYTHON_BIN" -m pip show "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done < "$REPO_ROOT/requirements.txt"
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo -e "${ORANGE}⚠️  Missing packages: ${missing[*]}${RESET}" >&2
+    echo -e "${YELLOW}   Run: $PYTHON_BIN -m pip install -r $REPO_ROOT/requirements.txt${RESET}" >&2
+    return 1
+  fi
+}
+
+echo -e "${CYAN}⚙️  Checking requirements...${RESET}"
+if ! check_requirements; then
+  exit 1
+fi
+echo -e "${GREEN}✅ All requirements satisfied${RESET}"
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$SUMMARY_OUTPUT_DIR"
 mkdir -p "$(dirname "$AUDIT_LOG")"
 mkdir -p "$ANALYTICS_DB_DIR"
 
-log() {
-  echo "[$(date '+%H:%M:%S')] $*"
-}
+log()      { echo -e "${DIM}[$(date '+%H:%M:%S')]${RESET} $*"; }
+log_ok()   { echo -e "${DIM}[$(date '+%H:%M:%S')]${RESET} ${GREEN}$*${RESET}"; }
+log_warn() { echo -e "${DIM}[$(date '+%H:%M:%S')]${RESET} ${YELLOW}$*${RESET}"; }
+log_err()  { echo -e "${DIM}[$(date '+%H:%M:%S')]${RESET} ${RED}$*${RESET}"; }
+log_step() { echo -e "${DIM}[$(date '+%H:%M:%S')]${RESET} ${CYAN}$*${RESET}"; }
 
-log "Ensuring Cozo DB exists at $COZO_DB_PATH"
+log "Ensuring Cozo DB exists at ${CYAN}$COZO_DB_PATH${RESET}"
 if [ ! -f "$COZO_DB_PATH" ]; then
   log "Cozo DB not found — initializing learning schema at $COZO_DB_PATH"
   if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH"; then
-    log "  ❌ Failed to initialize Cozo DB at $COZO_DB_PATH"
+    log_err "  ❌ Failed to initialize Cozo DB at $COZO_DB_PATH"
     exit 1
   fi
-  log "  ✅ Initialized Cozo DB at $COZO_DB_PATH"
+  log_ok "  ✅ Initialized Cozo DB at $COZO_DB_PATH"
 else
   log "Cozo DB already present at $COZO_DB_PATH — ensuring learning schema"
   # Try to ensure relations/schema but don't fail the entire run if it errors
   if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB_PATH" >/dev/null 2>&1; then
-    log "  ⚠️  Warning: failed to ensure learning schema (non-fatal)"
+    log_warn "  ⚠️  Warning: failed to ensure learning schema (non-fatal)"
   fi
 fi
 
@@ -128,11 +178,11 @@ cat > "$AUDIT_LOG" <<EOF
 
 EOF
 
-log "🦖 Starting Cozo repo scan"
-log "- Repos: $REPO_LIST_COUNT entries from $REPOS_FILE"
-log "- Cozo DB: $COZO_DB_PATH"
+log "${BOLD}${CYAN}🦖 Starting Cozo repo scan${RESET}"
+log "- Repos: ${BOLD}$REPO_LIST_COUNT${RESET} entries from $REPOS_FILE"
+log "- Cozo DB: ${CYAN}$COZO_DB_PATH${RESET}"
 log "- Force mode: $FORCE_SCAN"
-log "- Audit log: $AUDIT_LOG"
+log "- Audit log: ${DIM}$AUDIT_LOG${RESET}"
 log ""
 
 TOTAL=0
@@ -150,26 +200,26 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   TOTAL=$((TOTAL + 1))
-  log "[$TOTAL] Processing repo: $repo_name"
+  log "[$TOTAL] Processing ${BOLD}$repo_name${RESET}"
   repo_path="$REPO_PARENT/$repo_name"
 
   if [ ! -d "$repo_path" ]; then
-    log "  ⚠️  SKIP: Directory not found at $repo_path"
+    log_warn "  ⚠️  SKIP: Directory not found at $repo_path"
     SKIPPED_NOTFOUND=$((SKIPPED_NOTFOUND + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — SKIPPED (not found)" >> "$AUDIT_LOG"
     continue
   fi
 
   if should_skip_repo "$repo_name"; then
-    log "  ⏭️  SKIP: Scanned within last hour, use --force to override"
+    log_warn "  ⏭️  SKIP: Scanned within last hour, use --force to override"
     SKIPPED_RECENT=$((SKIPPED_RECENT + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — SKIPPED (recent scan)" >> "$AUDIT_LOG"
     continue
   fi
 
-  log "  Phase 1-2: Context discovery (learning DB: $ANALYTICS_DB)"
+  log_step "  Phase 1-2: Context discovery (learning DB: $ANALYTICS_DB)"
   if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Context/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
-    log "  ❌ Context discovery failed for $repo_name"
+    log_err "  ❌ Context discovery failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (context discovery)" >> "$AUDIT_LOG"
     continue
@@ -180,21 +230,71 @@ while IFS= read -r line || [ -n "$line" ]; do
   scan_id="${repo_name}_${timestamp}"
 
   if ! opengrep scan --config "$RULES_DIR" "$repo_path" --json --output "$json_output"; then
-    log "  ❌ opengrep scan failed for $repo_name (see $json_output)"
+    log_err "  ❌ opengrep scan failed for $repo_name (see $json_output)"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (opengrep)" >> "$AUDIT_LOG"
     continue
   fi
 
   if [ ! -f "$json_output" ]; then
-    log "  ⚠️  No scan output for $repo_name"
+    log_warn "  ⚠️  No scan output for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (no JSON output)" >> "$AUDIT_LOG"
     continue
   fi
 
+  # --- Check for rule parse/run errors in the opengrep output ----------------
+  "$PYTHON_BIN" -u - <<'PY' "$json_output" "$RULES_DIR" || true
+import json, sys, os
+
+BG_RED  = "\033[41m"
+RED     = "\033[0;31m"
+YELLOW  = "\033[1;33m"
+BOLD    = "\033[1m"
+RESET   = "\033[0m"
+
+json_path, rules_dir = sys.argv[1], sys.argv[2]
+
+with open(json_path) as f:
+    data = json.load(f)
+
+issues = []
+for e in data.get("errors", []):
+    rule_id = (
+        e.get("rule_id")
+        or (e.get("path") or {}).get("value", "")
+        or "unknown"
+    )
+    msg     = e.get("message", str(e)).strip()
+    level   = e.get("level", "error").upper()
+    issues.append((rule_id, level, msg))
+
+for s in data.get("skipped_rules", []):
+    rule_id = s.get("rule_id", "unknown")
+    reason  = s.get("reason", "unknown reason")
+    issues.append((rule_id, "SKIPPED", reason))
+
+if issues:
+    width = 56
+    bar = "═" * width
+    print(f"\n  {BG_RED}{BOLD}╔{bar}╗{RESET}")
+    print(f"  {BG_RED}{BOLD}║  🚨  RULE ERRORS / SKIPPED RULES{' ' * (width - 33)}║{RESET}")
+    print(f"  {BG_RED}{BOLD}╚{bar}╝{RESET}")
+    for rule_id, level, msg in issues:
+        # Shorten rule_id to Rules-relative path
+        marker = "Rules" + os.sep
+        idx = rule_id.replace(".", os.sep).find(marker)
+        short = rule_id[idx + len(marker):].replace(".", "/") if idx != -1 else rule_id
+        colour = RED if level not in ("SKIPPED", "WARN") else YELLOW
+        print(f"  {colour}{BOLD}[{level}]{RESET} {BOLD}{short}{RESET}")
+        print(f"         {colour}{msg}{RESET}")
+    print(f"  {BOLD}{RED}↑ Fix the above rules before relying on scan results ↑{RESET}\n")
+    # Also write to stderr so it's hard to miss in CI
+    print(f"RULE ERRORS DETECTED — {len(issues)} issue(s) in opengrep rules", file=sys.stderr)
+PY
+
   if ! "$PYTHON_BIN" -u "$PYTHON_SCRIPT" "$json_output" --repo "$repo_name" --repo-path "$repo_path" --scan-id "$scan_id"; then
-    log "  ❌ Cozo import failed for $repo_name"
+    log_err "  ❌ Cozo import failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (Cozo import)" >> "$AUDIT_LOG"
     continue
@@ -202,17 +302,60 @@ while IFS= read -r line || [ -n "$line" ]; do
 
   # remove the opengrep json after successful import
   if rm -f "$json_output"; then
-    log "  🗑️  Removed opengrep JSON: $json_output"
+    log "  🗑️  Removed opengrep JSON"
   else
-    log "  ⚠️  Failed to remove opengrep JSON: $json_output (manual cleanup may be required)"
+    log_warn "  ⚠️  Failed to remove opengrep JSON: $json_output (manual cleanup may be required)"
   fi
 
-  echo "Resources detected for $repo_name (scan $scan_id):"
-  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name" || log "  ⚠️  Failed to display findings summary for $repo_name"
+  echo -e "${CYAN}Resources detected for ${BOLD}$repo_name${RESET}${CYAN} (scan $scan_id):${RESET}"
+  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name" "$repo_path" || log_warn "  ⚠️  Failed to display findings summary for $repo_name"
 from pycozo import Client
-import sys
+import json, sys
 
-cozo_db, scan_id_arg, repo_arg = sys.argv[1:4]
+ORANGE = "\033[38;5;208m"
+GREEN  = "\033[0;32m"
+CYAN   = "\033[0;36m"
+DIM    = "\033[2m"
+BOLD   = "\033[1m"
+RESET  = "\033[0m"
+
+cozo_db, scan_id_arg, repo_arg, repo_path_arg = sys.argv[1:5]
+
+
+def shorten_rule(rule_id):
+    """Strip the full dotted path prefix, keep only Rules-relative portion.
+
+    e.g. home.neil.code.Triage-Saurus.Rules.Misconfigurations.Azure.SQL.azure-sql-tls
+         → Misconfigurations/Azure/SQL/azure-sql-tls
+    """
+    marker = "Rules."
+    idx = rule_id.find(marker)
+    if idx != -1:
+        return rule_id[idx + len(marker):].replace(".", "/")
+    return rule_id
+
+
+def classify_from_metadata(metadata_json):
+    """Use the rule's own metadata fields to determine finding kind.
+
+    Returns ('detection' | 'misconfiguration', meta_dict).
+    Prefers finding_kind / rule_type over path heuristics.
+    """
+    try:
+        meta = json.loads(metadata_json) if metadata_json else {}
+    except Exception:
+        meta = {}
+    finding_kind = meta.get("finding_kind", "")
+    rule_type    = meta.get("rule_type", "")
+    if finding_kind == "Asset" or rule_type == "context_discovery":
+        return "detection", meta
+    return "misconfiguration", meta
+
+
+def shorten_source(source):
+    prefix = repo_path_arg.rstrip("/") + "/"
+    return source[len(prefix):] if source.startswith(prefix) else source
+
 
 client = Client(engine="sqlite", path=cozo_db, dataframe=False)
 try:
@@ -227,22 +370,55 @@ rows = [
 ]
 
 if not rows:
-    print(f"  (no findings stored for scan {scan_id_arg})")
+    print(f"  {DIM}(no findings stored for scan {scan_id_arg}){RESET}")
 else:
+    misconfig_count = 0
+    asset_count = 0
     for row in rows:
-        provider = row[label_map["provider"]] or "unknown"
-        severity = row[label_map["severity"]]
-        rule_id = row[label_map["rule_id"]]
-        source = row[label_map["source_file"]]
-        line = row[label_map["start_line"]]
-        print(f"  - {rule_id} @ {source}:{line} [{severity}] ({provider})")
+        provider      = row[label_map["provider"]] or "unknown"
+        rule_id       = row[label_map["rule_id"]]
+        source        = row[label_map["source_file"]]
+        line          = row[label_map["start_line"]]
+        metadata_json = row[label_map["metadata_json"]]
+
+        short_rule = shorten_rule(rule_id)
+        rel_source = shorten_source(source)
+        kind, meta = classify_from_metadata(metadata_json)
+
+        if kind == "detection":
+            asset_count += 1
+            subcategory = meta.get("subcategory", "")
+            sub_str = f"  {DIM}[{subcategory}]{RESET}" if subcategory else ""
+            print(f"  {GREEN}🔍 Asset   {RESET}{BOLD}{short_rule}{RESET}{sub_str}  {DIM}{rel_source}:{line}{RESET}  ({provider})")
+        else:
+            misconfig_count += 1
+            confidence = meta.get("confidence", "")
+            impact     = meta.get("impact", "")
+            subcategory = meta.get("subcategory", "")
+            # Build a compact badge string from available metadata
+            badges = "  ".join(filter(None, [
+                f"confidence:{confidence}" if confidence else "",
+                f"impact:{impact}"         if impact     else "",
+                f"[{subcategory}]"         if subcategory and not isinstance(subcategory, list)
+                    else (f"[{', '.join(subcategory)}]" if isinstance(subcategory, list) else ""),
+            ]))
+            badge_str = f"  {DIM}{badges}{RESET}" if badges else ""
+            print(f"  {ORANGE}🔥 Miscfg  {RESET}{BOLD}{short_rule}{RESET}{badge_str}  {DIM}{rel_source}:{line}{RESET}  ({provider})")
+
+    parts = []
+    if asset_count:
+        parts.append(f"{GREEN}{asset_count} asset(s) detected{RESET}")
+    if misconfig_count:
+        parts.append(f"{ORANGE}{misconfig_count} misconfiguration(s){RESET}")
+    if parts:
+        print(f"  {'  '.join(parts)}")
 PY
 
   if ! "$PYTHON_BIN" "$SUMMARY_SCRIPT" --repo "$repo_name" --scan-id "$scan_id" --output-dir "$SUMMARY_OUTPUT_DIR"; then
-    echo "Failed to render repo summary for $repo_name" >&2
+    log_warn "Failed to render repo summary for $repo_name" >&2
   fi
 
-  log "  ✅ Scan + Cozo import complete for $repo_name"
+  log_ok "  ✅ Scan + Cozo import complete for $repo_name"
   SUCCESS=$((SUCCESS + 1))
   echo "### $(date '+%H:%M:%S') - Repo $repo_name — COMPLETE (scan_id: $scan_id)" >> "$AUDIT_LOG"
 done < "$REPOS_FILE"
@@ -252,12 +428,16 @@ TOTAL_HOURS=$((TOTAL_TIME / 3600))
 REMAINING_MIN=$(( (TOTAL_TIME % 3600) / 60 ))
 
 log ""
-log "✅ Cozo repo scan complete"
+log_ok "✅ Cozo repo scan complete"
 log "- Processed: $TOTAL"
-log "- Success: $SUCCESS"
-log "- Failed: $FAILED"
-log "- Skipped (missing): $SKIPPED_NOTFOUND"
-log "- Skipped (recent): $SKIPPED_RECENT"
+log_ok "- Success:   $SUCCESS"
+if [ "$FAILED" -gt 0 ]; then
+  log_err "- Failed:    $FAILED"
+else
+  log "- Failed:    $FAILED"
+fi
+log_warn "- Skipped (missing): $SKIPPED_NOTFOUND"
+log_warn "- Skipped (recent):  $SKIPPED_RECENT"
 log "- Duration: ${TOTAL_HOURS}h ${REMAINING_MIN}m"
 
 cat >> "$AUDIT_LOG" <<EOF
