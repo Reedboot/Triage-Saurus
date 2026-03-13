@@ -216,10 +216,18 @@ def main() -> int:
         ok = skipped = 0
         for fid in finding_ids:
             out_path = findings_dir / f"finding_{fid}.md"
+            # Ensure subprocess has correct PYTHONPATH so internal modules import
+            import os
+            env = os.environ.copy()
+            existing = env.get('PYTHONPATH', '')
+            paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils')]
+            if existing:
+                paths.append(existing)
+            env['PYTHONPATH'] = ':'.join(paths)
             result = subprocess.run(
-                [sys.executable, str(_RENDER),
-                 "--id", str(fid), "--out", str(out_path)],
+                [sys.executable, str(_RENDER), "--id", str(fid), "--out", str(out_path)],
                 cwd=str(REPO_ROOT),
+                env=env,
                 capture_output=True,
                 text=True,
             )
@@ -227,7 +235,9 @@ def main() -> int:
                 print(f"  ✓ [{fid}] → {out_path.relative_to(REPO_ROOT)}")
                 ok += 1
             else:
-                print(f"  ✗ [{fid}] {result.stderr.strip()[:80]}")
+                # Print first stderr line for succinct diagnostics
+                err = result.stderr.strip().splitlines()[0] if result.stderr else ''
+                print(f"  ✗ [{fid}] {err[:200]}")
                 skipped += 1
         print(f"\n  Rendered: {ok}  Failed: {skipped}")
     else:
