@@ -32,14 +32,9 @@ _setup_box() {
   echo ""
 }
 
-# ── Verify Python is available ────────────────────────────────────────────────
-if ! command -v python3 &>/dev/null; then
-  _setup_box
-  echo -e "  ${RED}python3 was not found in PATH. Install Python 3.11+ first.${RESET}"
-  echo ""
-  exit 1
-fi
+# ── Ensure or activate virtualenv first ─────────────────────────────────────
 
+# Print repo root early for visibility
 echo "Repo root: $ROOT"
 
 if [ "${1-}" = "--no-install" ]; then
@@ -47,6 +42,7 @@ if [ "${1-}" = "--no-install" ]; then
     _setup_box
     exit 1
   fi
+  # Activate existing venv
   # shellcheck source=/dev/null
   if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
     echo -e "${RED}Failed to activate .venv — it may be corrupt.${RESET}"
@@ -54,7 +50,23 @@ if [ "${1-}" = "--no-install" ]; then
     exit 1
   fi
 else
-  if [ ! -d "$VENV_DIR" ]; then
+  if [ -d "$VENV_DIR" ]; then
+    echo -e "${CYAN}Using existing virtualenv at $VENV_DIR${RESET}"
+    # shellcheck source=/dev/null
+    if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
+      echo -e "${RED}Failed to activate .venv — it may be corrupt.${RESET}"
+      _setup_box
+      exit 1
+    fi
+  else
+    # Need system python3 to create the venv
+    if ! command -v python3 &>/dev/null; then
+      _setup_box
+      echo -e "  ${RED}python3 was not found in PATH. Install Python 3.11+ first.${RESET}"
+      echo ""
+      exit 1
+    fi
+
     echo -e "${CYAN}Creating virtualenv at $VENV_DIR...${RESET}"
     if ! python3 -m venv "$VENV_DIR"; then
       _setup_box
@@ -63,18 +75,25 @@ else
       echo ""
       exit 1
     fi
-  fi
-  # shellcheck source=/dev/null
-  if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
-    echo -e "${RED}Failed to activate .venv — it may be corrupt.${RESET}"
-    _setup_box
-    exit 1
+
+    # shellcheck source=/dev/null
+    if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
+      echo -e "${RED}Failed to activate .venv after creation — something went wrong.${RESET}"
+      _setup_box
+      exit 1
+    fi
   fi
 
   echo -e "${CYAN}Upgrading pip and installing requirements...${RESET}"
-  python3 -m pip install --upgrade pip -q
+  # Prefer using the venv python executable directly to avoid system python ambiguity
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    PIP_PY="$VENV_DIR/bin/python"
+  else
+    PIP_PY=$(command -v python3 || command -v python)
+  fi
+  "$PIP_PY" -m pip install --upgrade pip -q
   if [ -f "$REQ_FILE" ]; then
-    python3 -m pip install -r "$REQ_FILE" -q
+    "$PIP_PY" -m pip install -r "$REQ_FILE" -q
     echo -e "${GREEN}✅ Dependencies installed.${RESET}"
   else
     echo -e "${YELLOW}⚠ requirements.txt not found at $REQ_FILE — skipping pip install.${RESET}"
