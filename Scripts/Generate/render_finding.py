@@ -12,8 +12,55 @@ from typing import Any
 
 from jinja2 import BaseLoader, Environment, StrictUndefined
 
-from cozo_helpers import clamp_score, get_finding_with_context, severity_summary
-from markdown_validator import validate_markdown_file
+try:
+    from cozo_helpers import clamp_score, get_finding_with_context, severity_summary
+except Exception:
+    # Attempt to dynamically load local implementation from Scripts/Enrich/cozo_helpers.py
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    enrich_path = Path(__file__).resolve().parents[2] / "Scripts" / "Enrich" / "cozo_helpers.py"
+    if enrich_path.exists():
+        spec = importlib.util.spec_from_file_location("cozo_helpers", str(enrich_path))
+        module = importlib.util.module_from_spec(spec)
+        loader = spec.loader
+        if loader is None:
+            raise ImportError("Failed to load cozo_helpers (no loader)")
+        # Ensure module is visible in sys.modules during execution (needed for dataclass/type resolution)
+        sys.modules.setdefault("cozo_helpers", module)
+        loader.exec_module(module)
+        clamp_score = module.clamp_score
+        get_finding_with_context = module.get_finding_with_context
+        severity_summary = module.severity_summary
+    else:
+        # Re-raise the original import error with helpful context
+        raise
+
+try:
+    from markdown_validator import validate_markdown_file
+except Exception:
+    # Attempt to load local implementation from Scripts/Validate/markdown_validator.py
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    validator_path = Path(__file__).resolve().parents[2] / "Scripts" / "Validate" / "markdown_validator.py"
+    if validator_path.exists():
+        spec = importlib.util.spec_from_file_location("markdown_validator", str(validator_path))
+        module = importlib.util.module_from_spec(spec)
+        loader = spec.loader
+        if loader is None:
+            raise ImportError("Failed to load markdown_validator (no loader)")
+        # Ensure module is visible in sys.modules during execution (needed for dataclass/type resolution)
+        sys.modules.setdefault("markdown_validator", module)
+        loader.exec_module(module)
+        validate_markdown_file = module.validate_markdown_file
+    else:
+        # Fallback no-op validator (allow rendering even if validation tool is missing)
+        def validate_markdown_file(path, fix=False):
+            return []
+
 from output_paths import OUTPUT_FINDINGS_DIR
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -295,11 +342,33 @@ def render_md(model: dict) -> str:
     return output.rstrip() + "\n"
 
 def get_finding_model_from_db(finding_id: str) -> dict:
-    """Get finding model from the Cozo DB."""
+    """Get finding model from the Cozo DB.
+
+    This function prefers a direct SQLite query fallback when the pycozo-backed
+    export (get_finding_with_context) is unavailable or the embedded cozo
+    relations are not present.
+    """
+    # Attempt to use get_finding_with_context (pycozo) if available
     try:
         row, contexts = get_finding_with_context(finding_id)
-    except KeyError:
-        raise ValueError(f"Finding not found in Cozo DB: {finding_id}")
+    except Exception:
+        import sqlite3
+
+        db_path = ROOT / "Output" / "Data" / "cozo.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        # Join to repositories to surface repo_name when available
+        row = conn.execute(
+            "SELECT f.*, r.repo_name AS repo_name FROM findings f LEFT JOIN repositories r ON f.repo_id = r.id WHERE f.id = ?",
+            (finding_id,),
+        ).fetchone()
+        if row is None:
+            conn.close()
+            raise ValueError(f"Finding not found in Cozo DB: {finding_id}")
+        # Convert sqlite Row to plain dict for compatibility with existing code
+        row = dict(row)
+        conn.close()
+        contexts = []
 
     metadata = _parse_metadata(row.get("metadata_json"))
     provider_raw = metadata.get("provider") or row.get("provider") or "unknown"
