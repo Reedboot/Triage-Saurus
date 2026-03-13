@@ -88,4 +88,10 @@ echo -e "   ${CYAN}Press Ctrl-C to stop.${RESET}"
 echo ""
 
 # Run the web app with the active venv so subprocesses inherit the same environment
-python3 "$ROOT/web/app.py"
+if [ -x "$VENV_DIR/bin/python" ]; then
+  PY_EXEC="$VENV_DIR/bin/python"
+else
+  PY_EXEC=$(command -v python3 || command -v python)
+fi
+echo -e "  ${CYAN}Launching web app with: ${BOLD}${PY_EXEC}${RESET}"
+exec "$PY_EXEC" "$ROOT/web/app.py"
