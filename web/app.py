@@ -113,12 +113,19 @@ def _sanitize_mermaid(code: str) -> str:
     # 5. Remove linkStyle directives which can reference out-of-range indices
     code = re.sub(r'^\s*linkStyle\s+\d+[^\n]*\n', '', code, flags=re.M)
 
-    # 6. Remove explicit "contains" edges — containment should be represented via subgraphs
+    # 6. Collapse newlines inside bracketed labels across the whole document
+    # This handles cases where the opening '[' and closing ']' are on different lines
+    code = re.sub(r'\[([^\]]*\n[^\]]*)\]', lambda m: '[' + m.group(1).replace('\n', ' ').replace('\r',' ') + ']', code, flags=re.M|re.S)
+
+    # 7. Remove explicit "contains" edges — containment should be represented via subgraphs
     lines = [ln for ln in code.splitlines() if not re.search(r'\bcontains\b', ln, flags=re.I)]
 
-    # 7. Remove self-edges (node linking to itself)
-    filtered = []
-    for ln in lines:
+    # 7. Collapse newlines inside bracketed labels across all lines first
+    collapsed = [re.sub(r'\[([^\]]*\n[^\]]*)\]', lambda m: '[' + m.group(1).replace('\n', ' ').replace('\r',' ') + ']', ln) for ln in lines]
+
+    # 8. Remove self-edges (node linking to itself) from the collapsed lines
+    filtered: list[str] = []
+    for ln in collapsed:
         if re.search(r'[-.]+>', ln):
             parts = re.split(r'[-.]+>', ln)
             if len(parts) >= 2:
@@ -430,6 +437,37 @@ def api_diagrams(experiment_id: str):
     if not diagrams:
         return jsonify({"diagrams": [], "error": f"No diagrams found for experiment {experiment_id}"}), 404
     return jsonify({"diagrams": diagrams})
+
+
+@app.route("/api/repo_summary/<experiment_id>/<repo_name>")
+def api_repo_summary(experiment_id: str, repo_name: str):
+    """Return parsed sections for a repo summary Markdown file inside an experiment folder."""
+    candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}_*"))
+    if not candidates:
+        return jsonify({"sections": [], "error": f"Experiment {experiment_id} not found"}), 404
+    exp_dir = candidates[0]
+    repo_file = exp_dir / "Summary" / "Repos" / f"{repo_name}.md"
+    if not repo_file.exists():
+        return jsonify({"sections": [], "error": f"Repo summary not found for {repo_name} in experiment {experiment_id}"}), 404
+    try:
+        text = repo_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return jsonify({"sections": [], "error": "Failed to read summary file"}), 500
+
+    pattern = re.compile(r'^(#{2,3})\s*(.+)$', re.M)
+    matches = list(pattern.finditer(text))
+    sections = []
+    if not matches:
+        sections.append({"title": f"Summary: {repo_name}", "level": 1, "markdown": text})
+        return jsonify({"sections": sections})
+    for i, m in enumerate(matches):
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        start = m.end()
+        end = matches[i+1].start() if i+1 < len(matches) else len(text)
+        content = text[start:end].strip()
+        sections.append({"title": title, "level": level, "markdown": content})
+    return jsonify({"sections": sections})
 
 
 @app.route("/api/diff")

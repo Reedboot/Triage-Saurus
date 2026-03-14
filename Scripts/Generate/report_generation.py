@@ -3015,6 +3015,29 @@ def write_repo_summary(
         db_connections=db_topology_connections,
     )
 
+    # Build service-only diagram (inner mermaid) and prefer provider-level cloud architecture if available.
+    svc_diagram = _build_service_only_architecture_diagram(repo_name, context, repo_path=repo)
+    architecture_diagram_content = svc_diagram
+    try:
+        if providers:
+            provider_file = summary_dir / "Cloud" / f"Architecture_{_provider_title(providers[0])}.md"
+            if provider_file.exists():
+                txt = provider_file.read_text(encoding="utf-8", errors="ignore")
+                start_idx = txt.find("```mermaid")
+                if start_idx != -1:
+                    start_idx = txt.find("\n", start_idx) + 1
+                    end_idx = txt.find("```", start_idx)
+                    if end_idx != -1:
+                        architecture_diagram_content = txt[start_idx:end_idx].strip()
+    except Exception:
+        architecture_diagram_content = svc_diagram
+
+    # If the generated service diagram looks like a permissions map and no explicit permissions
+    # mapping exists, promote the service diagram into the permissions section.
+    if "grants access to" in svc_diagram.lower() and permissions_mapping.strip().lower().startswith("- no permissions mapping"):
+        permissions_mapping = "```mermaid\n" + svc_diagram + "\n```"
+        # Try to use cloud architecture for the main architecture diagram (architecture_diagram_content already set above).
+
     # Optional fallback when APIs exist but no topology edges were captured from DB/extraction.
     api_types = (
         "azurerm_api_management_api",
@@ -3126,7 +3149,7 @@ def write_repo_summary(
             "repo_name": repo_name,
             "repo_type": "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other",
             "timestamp": now_uk(),
-            "architecture_diagram": _build_service_only_architecture_diagram(repo_name, context, repo_path=repo),
+            "architecture_diagram": architecture_diagram_content,
             "languages": language_text,
             "hosting": hosting_text,
             "ci_cd": ci_cd_text,

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Triage-Saurus — Repo Scanner</title>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -677,6 +678,13 @@
     .diagram-view { overflow: auto; }
     .diagram-view .mermaid { transform-origin: 0 0; transition: transform 0.12s ease; }
     .diagram-views { min-height: 360px; overflow: auto; }
+    .summary-tabs { display: none; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid #30363d; overflow-x: auto; flex-shrink: 0; }
+    .summary-tabs.visible { display: flex; }
+    .summary-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: #8b949e; font-size: 0.8rem; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+    .summary-tab-btn:hover:not(:disabled) { color: #c9d1d9; }
+    .summary-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .summary-view { display: none; padding: 14px; overflow: auto; }
+    .summary-view.active { display: block; }
   </style>
 </head>
 <body>
@@ -796,6 +804,7 @@
       <div class="panel-header">
         <div class="panel-nav">
           <button class="panel-nav-btn active" id="nav-arch-btn">🏗 Architecture</button>
+          <button class="panel-nav-btn" id="nav-summary-btn">📄 Summary</button>
           <button class="panel-nav-btn" id="nav-assets-btn">📦 Assets <span id="assets-nav-count" style="font-weight:400;color:#484f58"></span></button>
         </div>
         <div class="panel-actions">
@@ -817,6 +826,19 @@
               <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
             </svg>
             <p>Architecture diagram will appear<br/>after the scan completes.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary section -->
+      <div id="panel-summary" class="panel-section hidden">
+        <div class="summary-tabs" id="summary-tabs"></div>
+        <div id="summary-views">
+          <div class="summary-placeholder" id="summary-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 7h18M3 12h18M3 17h18"/>
+            </svg>
+            <p>Select a repository scan to view<br/>its summary.</p>
           </div>
         </div>
       </div>
@@ -886,8 +908,10 @@
   const runCompareBtn   = document.getElementById('run-compare-btn');
 
   const navArchBtn      = document.getElementById('nav-arch-btn');
+  const navSummaryBtn   = document.getElementById('nav-summary-btn');
   const navAssetsBtn    = document.getElementById('nav-assets-btn');
   const panelArch       = document.getElementById('panel-arch');
+  const panelSummary    = document.getElementById('panel-summary');
   const panelAssets     = document.getElementById('panel-assets');
   const assetsNavCount  = document.getElementById('assets-nav-count');
   const assetsSummary   = document.getElementById('assets-summary');
@@ -909,14 +933,19 @@
   // ── Panel nav (Architecture ↔ Assets) ────────────────────────────────────────
   function switchPanel(panel) {
     const isArch = panel === 'arch';
+    const isAssets = panel === 'assets';
+    const isSummary = panel === 'summary';
     navArchBtn.classList.toggle('active', isArch);
-    navAssetsBtn.classList.toggle('active', !isArch);
+    navAssetsBtn.classList.toggle('active', isAssets);
+    if (navSummaryBtn) navSummaryBtn.classList.toggle('active', isSummary);
     panelArch.classList.toggle('hidden', !isArch);
-    panelAssets.classList.toggle('hidden', isArch);
+    panelAssets.classList.toggle('hidden', !isAssets);
+    if (panelSummary) panelSummary.classList.toggle('hidden', !isSummary);
     copyDiagramBtn.style.display = isArch ? '' : 'none';
   }
 
   navArchBtn.addEventListener('click', () => switchPanel('arch'));
+  if (navSummaryBtn) navSummaryBtn.addEventListener('click', () => switchPanel('summary'));
   navAssetsBtn.addEventListener('click', () => switchPanel('assets'));
 
   // Zoom & log controls
@@ -1303,6 +1332,9 @@
     // Remove explicit "contains" edges: containment should be represented via subgraphs
     s = s.split('\n').filter(line => !/\bcontains\b/i.test(line)).join('\n');
 
+    // Collapse newlines inside bracketed labels: [a\n b] => [a b]
+    s = s.replace(/\[([^\]]*\n[^\]]*)\]/g, (m, g1) => '[' + g1.replace(/\n|\r/g, ' ') + ']');
+
     // Remove self-edges (node linking to itself) which add clutter
     const lines = s.split('\n');
     const filtered = [];
@@ -1422,6 +1454,95 @@
     });
     // Re-apply zoom to the newly active diagram
     applyZoomToActive();
+  }
+
+  async function loadRepoSummary(repoName, expId) {
+    if (!repoName || !expId) return;
+    try {
+      const resp = await fetch(`/api/repo_summary/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        summaryPlaceholder.style.display = '';
+        summaryPlaceholder.innerHTML = `<p style="color:#484f58">No summary found for this scan.</p>`;
+        return;
+      }
+      const data = await resp.json();
+      const sections = data.sections || [];
+      await renderRepoSummary(sections);
+    } catch (err) {
+      summaryPlaceholder.style.display = '';
+      summaryPlaceholder.innerHTML = `<p style="color:#f85149">Failed to load summary: ${err}</p>`;
+    }
+  }
+
+  async function renderRepoSummary(sections) {
+    const tabs = document.getElementById('summary-tabs');
+    const views = document.getElementById('summary-views');
+    tabs.innerHTML = '';
+    views.querySelectorAll('.summary-view').forEach(el => el.remove());
+    summaryPlaceholder.style.display = 'none';
+
+    if (!sections || sections.length === 0) {
+      summaryPlaceholder.style.display = '';
+      summaryPlaceholder.innerHTML = '<p style="color:#484f58">No summary sections available for this scan.</p>';
+      return;
+    }
+
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
+      const tab = document.createElement('button');
+      tab.className = 'summary-tab-btn' + (i === 0 ? ' active' : '');
+      tab.textContent = sec.title;
+      tab.dataset.idx = i;
+      tab.addEventListener('click', () => switchSummaryTab(i));
+      tabs.appendChild(tab);
+
+      const view = document.createElement('div');
+      view.className = 'summary-view' + (i === 0 ? ' active' : '');
+      view.dataset.idx = i;
+
+      // Split markdown into mermaid blocks and other markdown
+      const parts = [];
+      const regex = /```mermaid\n([\s\S]*?)\n```/g;
+      let lastIndex = 0;
+      let m;
+      while ((m = regex.exec(sec.markdown)) !== null) {
+        const before = sec.markdown.slice(lastIndex, m.index);
+        if (before.trim()) parts.push({type: 'md', text: before});
+        parts.push({type: 'mermaid', code: m[1]});
+        lastIndex = regex.lastIndex;
+      }
+      const tail = sec.markdown.slice(lastIndex);
+      if (tail.trim()) parts.push({type: 'md', text: tail});
+
+      for (const p of parts) {
+        if (p.type === 'md') {
+          const wrapper = document.createElement('div');
+          try { wrapper.innerHTML = marked.parse(p.text || ''); } catch(e) { wrapper.textContent = p.text || ''; }
+          view.appendChild(wrapper);
+        } else if (p.type === 'mermaid') {
+          const mer = document.createElement('div');
+          mer.className = 'mermaid';
+          mer.textContent = sanitizeMermaid(p.code || '');
+          view.appendChild(mer);
+        }
+      }
+
+      views.appendChild(view);
+    }
+
+    if (sections.length > 1) tabs.classList.add('visible');
+
+    // Render mermaid in summary
+    const merNodes = document.querySelectorAll('#summary-views .mermaid');
+    if (merNodes.length) await _runMermaid(merNodes);
+  }
+
+  function switchSummaryTab(idx) {
+    const tabs = document.getElementById('summary-tabs');
+    const views = document.getElementById('summary-views');
+    tabs.querySelectorAll('.summary-tab-btn').forEach(b => b.classList.toggle('active', +b.dataset.idx === idx));
+    views.querySelectorAll('.summary-view').forEach(v => v.classList.toggle('active', +v.dataset.idx === idx));
   }
 
   // ── Diff rendering ───────────────────────────────────────────────────────────
@@ -1699,6 +1820,7 @@
         if (currentRepoName) {
           loadPastScans(currentRepoName);
           loadAssets(currentRepoName, expId);
+          loadRepoSummary(currentRepoName, expId);
         }
       } else {
         setStatus(`⚠ Pipeline exited with code ${code}`, 'error');
