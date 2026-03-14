@@ -1967,8 +1967,6 @@ def _build_simple_architecture_diagram(
                                         label = r.name or r.resource_type
                                         lines.append(f'          {node_id}["{label}"]')
                                         style_id(node_id, "data")
-                                        # connect namespace root to child
-                                        add_link(sb_root, node_id)
                                 lines.append("        end")
                             # Close Data subgraph
                             lines.append("      end")
@@ -2952,6 +2950,91 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
     return "\n".join(lines)
 
 
+def _md_to_html(md: str) -> str:
+    """Convert a minimal subset of Markdown to HTML for DB persistence.
+
+    Handles: headings (##/###), bullet lists, inline code, bold, Mermaid fences,
+    horizontal rules, and plain paragraphs.
+    """
+    import html as _html_mod
+
+    lines = md.splitlines()
+    out: list[str] = []
+    in_list = False
+    in_mermaid = False
+    mermaid_lines: list[str] = []
+
+    def _flush_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    def _inline(text: str) -> str:
+        # Bold **text**
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        # Inline code `text`
+        text = re.sub(r"`([^`]+)`", lambda m: f"<code>{_html_mod.escape(m.group(1))}</code>", text)
+        return text
+
+    for line in lines:
+        if in_mermaid:
+            if line.strip() == "```":
+                out.append(f'<div class="mermaid">\n{chr(10).join(mermaid_lines)}\n</div>')
+                mermaid_lines = []
+                in_mermaid = False
+            else:
+                mermaid_lines.append(line)
+            continue
+
+        if line.strip().startswith("```mermaid"):
+            _flush_list()
+            in_mermaid = True
+            mermaid_lines = []
+            continue
+
+        if line.strip().startswith("```"):
+            _flush_list()
+            # skip other code fences
+            continue
+
+        if re.match(r"^#{1,6}\s", line):
+            _flush_list()
+            level = len(line) - len(line.lstrip("#"))
+            text = line.lstrip("#").strip()
+            out.append(f"<h{level}>{_inline(text)}</h{level}>")
+            continue
+
+        if line.startswith("- ") or line.startswith("  - "):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            indent = len(line) - len(line.lstrip(" "))
+            text = line.lstrip(" -").strip()
+            out.append(f"{'  ' * (indent // 2)}<li>{_inline(text)}</li>")
+            continue
+
+        if line.strip() in ("---", "***", "___"):
+            _flush_list()
+            out.append("<hr>")
+            continue
+
+        # Markdown table row (contains | chars) — skip raw, already rendered as structured data
+        if "|" in line and line.strip().startswith("|"):
+            _flush_list()
+            # Very simple table: collect and render
+            out.append(f"<p>{_inline(line.strip())}</p>")
+            continue
+
+        _flush_list()
+        stripped = line.strip()
+        if stripped:
+            out.append(f"<p>{_inline(stripped)}</p>")
+
+    _flush_list()
+    return "\n".join(out)
+
+
 def write_repo_summary(
     *,
     repo: Path,
@@ -2959,6 +3042,7 @@ def write_repo_summary(
     providers: list[str],
     context: RepositoryContext,
     summary_dir: Path,
+    experiment_id: str = "001",
 ) -> Path:
     out_path = summary_dir / "Repos" / f"{repo_name}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3143,6 +3227,9 @@ def write_repo_summary(
         except Exception:
             pass
 
+    auto_findings_md = _build_auto_findings(context, repo)
+    resource_inventory_md = _build_resource_inventory(provider_resources, repo_path=repo)
+
     content = render_template(
         "RepoSummary.md",
         {
@@ -3164,8 +3251,8 @@ def write_repo_summary(
             "evidence_list": evidence_list,
             "notes": notes,
             "terraform_modules": modules_list_md,
-            "resource_inventory": _build_resource_inventory(provider_resources, repo_path=repo),
-            "auto_findings": _build_auto_findings(context, repo),
+            "resource_inventory": resource_inventory_md,
+            "auto_findings": auto_findings_md,
             "enrichment_assumptions": _build_enrichment_assumptions(repo_name),
         },
     )
@@ -3183,6 +3270,64 @@ def write_repo_summary(
     except Exception as e:
         with open("Output/Summary/Repos/report_debug.log", "a") as log:
             log.write(f"[ERROR] Failed to write summary content: {e}\n")
+
+    # ── Persist key sections as HTML to DB ───────────────────────────────────
+    try:
+        # TLDR section — summary table + key stats
+        repo_type_label = "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other"
+        tldr_html = (
+            f'<table class="section-table">'
+            f"<thead><tr><th>Aspect</th><th>Value</th></tr></thead>"
+            f"<tbody>"
+            f"<tr><td>Type</td><td>{repo_type_label}</td></tr>"
+            f"<tr><td>Languages</td><td>{language_text}</td></tr>"
+            f"<tr><td>Hosting</td><td>{hosting_text}</td></tr>"
+            f"<tr><td>CI/CD</td><td>{ci_cd_text}</td></tr>"
+            f"<tr><td>Cloud Providers</td><td>{provider_text}</td></tr>"
+            f"<tr><td>Resources Extracted</td><td>{len(context.resources)}</td></tr>"
+            f"<tr><td>Security Status</td><td>&#x1F50D; Phase 1&#x2013;2 discovery &#x2014; security review pending</td></tr>"
+            f"</tbody></table>"
+        )
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="tldr",
+            title="TL;DR",
+            content_html=tldr_html,
+            generated_by="report_generation.py",
+        )
+
+        # Risks section — auto-detected findings
+        risks_html = _md_to_html(auto_findings_md)
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="risks",
+            title="Risks",
+            content_html=risks_html,
+            generated_by="report_generation.py",
+        )
+
+        # Overview section — auth, network, external dependencies
+        overview_md = (
+            "## Authentication & Identity\n\n"
+            f"{auth_summary}\n\n"
+            "## Network Topology\n\n"
+            f"{network_summary}\n\n"
+            "## External Dependencies\n\n"
+            f"{external_deps}"
+        )
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="overview",
+            title="Overview",
+            content_html=_md_to_html(overview_md),
+            generated_by="report_generation.py",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to persist HTML sections to DB: {e}")
+
     return out_path
 
 
@@ -3357,7 +3502,12 @@ def write_experiment_cloud_architecture_summary(
     return out_files
 
 
-def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path: Path | None = None) -> list[Path]:
+def generate_reports(
+    context: RepositoryContext,
+    summary_dir_str: str,
+    repo_path: Path | None = None,
+    experiment_id: str = "001",
+) -> list[Path]:
     summary_dir = Path(summary_dir_str)
     summary_dir.mkdir(parents=True, exist_ok=True)
     repo = repo_path if repo_path is not None else Path(context.repository_name)
@@ -3380,6 +3530,7 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
             providers=providers,
             context=context,
             summary_dir=summary_dir,
+            experiment_id=experiment_id,
         )
     )
     generated.extend(
