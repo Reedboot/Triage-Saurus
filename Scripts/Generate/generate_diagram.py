@@ -585,8 +585,19 @@ def main():
     parser.add_argument("--output", type=Path, help="Output file or directory (default: stdout)")
     parser.add_argument("--repo", help="Repository name to limit diagram to (optional)")
     parser.add_argument("--split-by-provider", action="store_true", help="Write separate Architecture_<PROVIDER>.md files into --output directory")
+    parser.add_argument("--no-db", action="store_true", help="Skip persisting diagrams to cloud_diagrams table")
     
     args = parser.parse_args()
+
+    # Try to import upsert helper for DB persistence
+    _upsert_diagram = None
+    if not args.no_db:
+        try:
+            _root = Path(__file__).resolve().parents[2]
+            sys.path.insert(0, str(_root))
+            from Scripts.Persist.db_helpers import upsert_cloud_diagram as _upsert_diagram  # type: ignore
+        except Exception:
+            pass
 
     # Support per-provider split mode where multiple Architecture_<PROVIDER>.md files are produced
     if args.split_by_provider:
@@ -598,25 +609,59 @@ def main():
         # Discover providers present in resources
         all_res = get_resources_for_diagram(args.experiment_id)
         providers = sorted({(r.get('provider') or 'unknown').lower() for r in all_res})
-        for prov in providers:
+        for idx, prov in enumerate(providers):
             diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
             fname = out_dir / f"Architecture_{prov.upper()}.md"
             fname.write_text(diag)
             print(f"Wrote {fname}")
+            # Also persist to DB
+            if _upsert_diagram:
+                try:
+                    _upsert_diagram(
+                        experiment_id=args.experiment_id,
+                        provider=prov,
+                        diagram_title=f"{prov.capitalize()} Architecture",
+                        mermaid_code=diag,
+                        display_order=idx,
+                    )
+                    print(f"Persisted {prov} diagram to cloud_diagrams table")
+                except Exception as e:
+                    print(f"Warning: failed to persist {prov} diagram to DB: {e}", file=sys.stderr)
         sys.exit(0)
 
     if args.type == 'architecture':
         diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo)
+        provider = args.repo or 'all'
+        title = "Architecture"
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
+        provider = 'security'
+        title = "Security View"
     elif args.type == 'blast-radius':
         if not args.compromised:
             print("Error: --compromised required for blast-radius diagram", file=sys.stderr)
             sys.exit(1)
         diagram = generate_blast_radius_diagram(args.experiment_id, args.compromised)
+        provider = 'blast-radius'
+        title = f"Blast Radius — {args.compromised}"
     elif args.type == 'multi-repo':
         diagram = generate_multi_repo_diagram(args.experiment_id)
-    
+        provider = 'multi-repo'
+        title = "Multi-Repo Architecture"
+
+    # Persist to DB
+    if _upsert_diagram:
+        try:
+            _upsert_diagram(
+                experiment_id=args.experiment_id,
+                provider=provider,
+                diagram_title=title,
+                mermaid_code=diagram,
+            )
+            print(f"Persisted diagram '{title}' to cloud_diagrams table")
+        except Exception as e:
+            print(f"Warning: failed to persist diagram to DB: {e}", file=sys.stderr)
+
     if args.output:
         args.output.write_text(diagram)
         print(f"Diagram written to {args.output}")

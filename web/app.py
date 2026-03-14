@@ -17,6 +17,10 @@ from flask import Flask, Response, render_template, request, stream_with_context
 
 app = Flask(__name__)
 
+# Jinja2 custom filters
+import os as _os
+app.jinja_env.filters["basename"] = lambda p: _os.path.basename(p or "") if p else ""
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "Scripts"
 PIPELINE = SCRIPTS / "Utils" / "run_pipeline.py"
@@ -432,7 +436,27 @@ def api_scans(repo_name: str):
 
 @app.route("/api/diagrams/<experiment_id>")
 def api_diagrams(experiment_id: str):
-    """Return Mermaid diagrams for a past experiment."""
+    """Return Mermaid diagrams for a past experiment.
+
+    Prefers the cloud_diagrams DB table; falls back to Architecture_*.md files
+    for backwards compatibility with experiments run before the DB migration.
+    """
+    # Try DB first
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+        db_diagrams = get_cloud_diagrams(experiment_id)
+        if db_diagrams:
+            return jsonify({
+                "diagrams": [
+                    {"title": d["diagram_title"], "code": d["mermaid_code"]}
+                    for d in db_diagrams
+                ]
+            })
+    except Exception:
+        pass
+
+    # Fall back to legacy file-based approach
     diagrams = _collect_diagrams(experiment_id)
     if not diagrams:
         return jsonify({"diagrams": [], "error": f"No diagrams found for experiment {experiment_id}"}), 404
@@ -688,6 +712,340 @@ def api_assets(repo_name: str):
         return jsonify({"assets": [], "error": str(exc)})
     finally:
         conn.close()
+
+
+# ── /api/view/ — DB-driven section routes ─────────────────────────────────────
+
+def _db_render(template_name: str, **ctx):
+    """Render a partial template with given context."""
+    from flask import render_template as _rt
+    return _rt(f"partials/{template_name}", **ctx)
+
+
+def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> str:
+    """Resolve experiment_id for a repo (provided or latest)."""
+    if not experiment_id:
+        row = conn.execute(
+            """SELECT experiment_id FROM repositories
+               WHERE LOWER(repo_name) = LOWER(?)
+               ORDER BY scanned_at DESC LIMIT 1""",
+            (repo_name,),
+        ).fetchone()
+        if row:
+            experiment_id = row["experiment_id"]
+    return experiment_id
+
+
+@app.route("/api/view/tabs/<experiment_id>/<repo_name>")
+def api_view_tabs(experiment_id: str, repo_name: str):
+    """Return the list of available tabs for this experiment/repo."""
+    tabs = [
+        {"key": "tldr",     "label": "TL;DR"},
+        {"key": "assets",   "label": "Assets"},
+        {"key": "findings", "label": "Findings"},
+        {"key": "risks",    "label": "Risks"},
+        {"key": "roles",    "label": "Roles & Permissions"},
+        {"key": "ingress",  "label": "Ingress"},
+        {"key": "egress",   "label": "Egress"},
+    ]
+    # Append any extra AI section keys stored for this repo
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
+        sections = get_ai_sections(experiment_id, repo_name)
+        known_keys = {"tldr", "risks"}
+        extras = [
+            {"key": s["section_key"], "label": s["title"]}
+            for s in sections
+            if s["section_key"] not in known_keys
+        ]
+        tabs.extend(extras)
+    except Exception:
+        pass
+    return jsonify({"tabs": tabs})
+
+
+@app.route("/api/view/assets/<experiment_id>/<repo_name>")
+def api_view_assets(experiment_id: str, repo_name: str):
+    """Render the assets tab HTML."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_assets.html", assets=[], providers=[])
+    try:
+        rows = conn.execute(
+            """
+            SELECT res.id, res.resource_type, res.resource_name, res.provider,
+                   res.region, res.source_file, res.source_line_start,
+                   res.discovered_by, res.discovery_method, res.status,
+                   COUNT(f.id) AS finding_count,
+                   MAX(CASE f.severity
+                       WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
+                       WHEN 'MEDIUM'   THEN 3 WHEN 'LOW'  THEN 2
+                       WHEN 'INFO'     THEN 1 ELSE 0 END) AS max_sev_rank
+            FROM resources res
+            JOIN repositories repo ON res.repo_id = repo.id
+            LEFT JOIN findings f ON f.resource_id = res.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+            GROUP BY res.id
+            ORDER BY res.provider, res.resource_type, res.resource_name
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
+        assets = []
+        providers = set()
+        provider_counts = {}
+        has_unknown = False
+        for row in rows:
+            a = dict(row)
+            rank = a.pop("max_sev_rank") or 0
+            a["worst_severity"] = sev_labels.get(rank, "")
+            # Normalize provider: use 'unknown' when missing
+            prov = (a.get("provider") or "unknown")
+            a["provider"] = prov
+            # Count providers (preserve original casing in keys)
+            provider_counts[prov] = provider_counts.get(prov, 0) + 1
+            if prov.lower() == 'unknown':
+                has_unknown = True
+            providers.add(prov)
+            assets.append(a)
+        # Ensure 'unknown' option exists if any asset lacked a provider
+        if has_unknown:
+            providers.add('unknown')
+            provider_counts.setdefault('unknown', 0)
+        return _db_render("tab_assets.html", assets=assets, providers=sorted(providers), provider_counts=provider_counts, repo_name=repo_name)
+    except Exception as exc:
+        return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/findings/<experiment_id>/<repo_name>")
+def api_view_findings(experiment_id: str, repo_name: str):
+    """Render the findings tab HTML."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_findings.html", findings=[])
+    try:
+        rows = conn.execute(
+            """
+            SELECT f.id, f.title, f.description, f.severity AS base_severity,
+                   f.severity_score, f.rule_id, f.source_file, f.source_line_start,
+                   f.resource_id, f.category
+            FROM findings f
+            JOIN repositories repo ON f.repo_id = repo.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND f.experiment_id = ?
+            ORDER BY
+                CASE f.severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                                WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4
+                                WHEN 'INFO' THEN 5 ELSE 6 END,
+                f.severity_score DESC
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        findings = [dict(r) for r in rows]
+        return _db_render("tab_findings.html", findings=findings)
+    except Exception as exc:
+        return _db_render("tab_findings.html", findings=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/ingress/<experiment_id>/<repo_name>")
+def api_view_ingress(experiment_id: str, repo_name: str):
+    """Render the ingress tab HTML."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[])
+    try:
+        # Internet-facing resources via resource_properties
+        res_rows = conn.execute(
+            """
+            SELECT res.id, res.resource_name, res.resource_type, res.provider,
+                   res.region, res.source_file, res.source_line_start
+            FROM resources res
+            JOIN repositories repo ON res.repo_id = repo.id
+            JOIN resource_properties rp ON rp.resource_id = res.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
+              AND LOWER(rp.property_key) IN (
+                    'is_internet_facing', 'internet_facing',
+                    'is_internet_facing_capable', 'public_network_access_enabled'
+                  )
+              AND LOWER(rp.property_value) IN ('true', '1', 'enabled', 'yes')
+            GROUP BY res.id
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+
+        # Inbound connections where source is external (NULL or 0 for source_resource_id cross-repo)
+        conn_rows = conn.execute(
+            """
+            SELECT rc.id, rc.protocol, rc.port, rc.authentication, rc.is_encrypted,
+                   src.resource_name AS source_name, tgt.resource_name AS target_name,
+                   rc.source_resource_id, rc.target_resource_id
+            FROM resource_connections rc
+            LEFT JOIN resources src ON rc.source_resource_id = src.id
+            LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
+            WHERE rc.experiment_id = ?
+              AND (rc.is_cross_repo = 1 OR src.id IS NULL)
+              AND tgt.id IN (
+                    SELECT res.id FROM resources res
+                    JOIN repositories repo ON res.repo_id = repo.id
+                    WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
+                  )
+            """,
+            (experiment_id, repo_name, experiment_id),
+        ).fetchall()
+
+        return _db_render(
+            "tab_ingress.html",
+            ingress_resources=[dict(r) for r in res_rows],
+            ingress_connections=[dict(r) for r in conn_rows],
+        )
+    except Exception as exc:
+        return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/egress/<experiment_id>/<repo_name>")
+def api_view_egress(experiment_id: str, repo_name: str):
+    """Render the egress tab HTML."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_egress.html", egress_connections=[])
+    try:
+        rows = conn.execute(
+            """
+            SELECT rc.id, rc.protocol, rc.port, rc.authentication, rc.is_encrypted,
+                   rc.notes AS connection_purpose,
+                   src.resource_name AS source_name, tgt.resource_name AS target_name,
+                   rc.via_component AS target_domain
+            FROM resource_connections rc
+            JOIN resources src ON rc.source_resource_id = src.id
+            LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
+            JOIN repositories repo ON src.repo_id = repo.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND src.experiment_id = ?
+              AND (rc.is_cross_repo = 1 OR tgt.id IS NULL
+                   OR LOWER(rc.connection_type) LIKE '%egress%'
+                   OR LOWER(rc.connection_type) LIKE '%outbound%'
+                   OR LOWER(rc.connection_type) LIKE '%external%')
+            ORDER BY src.resource_name
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        return _db_render("tab_egress.html", egress_connections=[dict(r) for r in rows])
+    except Exception as exc:
+        return _db_render("tab_egress.html", egress_connections=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/roles/<experiment_id>/<repo_name>")
+def api_view_roles(experiment_id: str, repo_name: str):
+    """Render the roles & permissions tab HTML."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_roles.html", roles=[])
+    try:
+        rows = conn.execute(
+            """
+            SELECT res.id, res.resource_name AS identity_name, res.resource_type AS role_type,
+                   res.provider, res.source_file,
+                   MAX(CASE WHEN rp.property_key = 'principal_id' THEN rp.property_value END) AS principal_id,
+                   MAX(CASE WHEN rp.property_key IN ('permissions','role_definition_name','role') THEN rp.property_value END) AS permissions,
+                   MAX(CASE WHEN LOWER(rp.property_key) = 'is_excessive' THEN rp.property_value END) AS is_excessive,
+                   MAX(CASE WHEN rp.property_key = 'scope_resource' THEN rp.property_value END) AS resource_name
+            FROM resources res
+            JOIN repositories repo ON res.repo_id = repo.id
+            LEFT JOIN resource_properties rp ON rp.resource_id = res.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
+              AND LOWER(res.resource_type) IN (
+                    'azurerm_role_assignment', 'azurerm_role_definition',
+                    'aws_iam_role', 'aws_iam_policy', 'aws_iam_user_policy',
+                    'google_project_iam_member', 'google_project_iam_binding',
+                    'kubernetes_cluster_role', 'kubernetes_role_binding',
+                    'kubernetes_cluster_role_binding',
+                    'managed_identity', 'user_assigned_identity',
+                    'service_account', 'service_principal'
+                  )
+            GROUP BY res.id
+            ORDER BY res.provider, res.resource_type, res.resource_name
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        roles = [dict(r) for r in rows]
+        # Convert is_excessive to integer if stored as string
+        for role in roles:
+            val = role.get("is_excessive")
+            if val is not None:
+                role["is_excessive"] = 1 if str(val).lower() in ("1", "true", "yes") else 0
+        return _db_render("tab_roles.html", roles=roles)
+    except Exception as exc:
+        return _db_render("tab_roles.html", roles=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/ai/<experiment_id>/<repo_name>/<section_key>")
+def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
+    """Render an AI-generated HTML section from repo_ai_content.
+
+    Fallback behavior:
+    - If the DB has a section, return it.
+    - If not and section_key == 'tldr', attempt to extract the TL;DR markdown table
+      from Output/Summary/Repos/<repo_name>.md and convert it to HTML.
+    """
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
+        sections = get_ai_sections(experiment_id, repo_name)
+        section = next((s for s in sections if s["section_key"] == section_key), None)
+        if section:
+            return _db_render("tab_ai_content.html", section=section)
+
+        # Fallback for TL;DR: try to read the generated RepoSummary.md
+        if section_key == 'tldr':
+            try:
+                import html as _html
+                summary_path = REPO_ROOT / 'Output' / 'Summary' / 'Repos' / f"{repo_name}.md"
+                if summary_path.exists():
+                    txt = summary_path.read_text(encoding='utf-8', errors='ignore')
+                    m = re.search(r"^##\s*📊\s*TL;DR\s*\n(.*?)(^##\s+|\Z)", txt, flags=re.S | re.M)
+                    if m:
+                        block = m.group(1).strip()
+                        # Extract table lines and other lines
+                        lines = [ln.rstrip() for ln in block.splitlines() if ln.strip()]
+                        table_lines = [ln for ln in lines if ln.strip().startswith('|')]
+                        other_lines = [ln for ln in lines if not ln.strip().startswith('|')]
+
+                        parts = []
+                        if table_lines:
+                            # Parse header
+                            header = [h.strip() for h in table_lines[0].strip().strip('|').split('|')]
+                            rows = []
+                            for r in table_lines[2:]:
+                                cols = [c.strip() for c in r.strip().strip('|').split('|')]
+                                rows.append(cols)
+                            html_table = '<table class="section-table"><thead><tr>' + ''.join(f'<th>{_html.escape(h)}</th>' for h in header) + '</tr></thead><tbody>'
+                            for r in rows:
+                                html_table += '<tr>' + ''.join(f'<td>{_html.escape(c)}</td>' for c in r) + '</tr>'
+                            html_table += '</tbody></table>'
+                            parts.append(html_table)
+
+                        if other_lines:
+                            parts.append('<p>' + '<br/>'.join(_html.escape(l) for l in other_lines) + '</p>')
+
+                        content_html = '\n'.join(parts) if parts else ''
+                        if content_html:
+                            section = {"section_key": "tldr", "title": "TL;DR", "content_html": content_html}
+                            return _db_render("tab_ai_content.html", section=section)
+            except Exception:
+                pass
+
+        return _db_render("tab_ai_content.html", section=None)
+    except Exception as exc:
+        return _db_render("tab_ai_content.html", section=None, error=str(exc))
 
 
 # ── Page Routes ───────────────────────────────────────────────────────────────

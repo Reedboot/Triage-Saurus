@@ -447,7 +447,15 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
     - Use for post-scan validation to measure True Positives, False Negatives, False Positives
     - Document validation results in experiment `validation.json` if applicable
   - Prefer using `python3 Scripts/Scan/scan_repo_quick.py <abs-repo-path>` for an initial structure + module + secrets skim (stdout only).
-  - **Create repo summary FIRST:** Before creating any findings, immediately create `Output/Summary/Repos/<RepoName>.md` following the `Templates/RepoFinding.md` template. This ensures all findings can link to the summary and the summary can be progressively updated as the scan progresses. Use the exact repo name as-is (e.g., `my_api.md` for repo `my_api`, not `Repo_my_api.md` or `Repo_MY_API.md`).
+  - **Create repo summary FIRST:** Before creating any findings, persist a TLDR section to the database AND create `Output/Summary/Repos/<RepoName>.md` (legacy fallback). Use `persist_section.py` to store AI-generated HTML sections in the DB so the web app can display them:
+    ```bash
+    python3 Scripts/Persist/persist_section.py \
+      --repo <RepoName> --experiment <experiment_id> \
+      --key tldr --title "TL;DR" \
+      --html "<h2>TL;DR</h2><p>…</p>" \
+      --generated-by <AgentName>
+    ```
+    Section keys: `tldr`, `risks`, `architecture`, `auth`, `containers`, `kubernetes`, `network`, `cicd`, `dependencies`, `detection`, `roles`, `ingress`, `egress`.
   - Repo findings should include `## 🤔 Skeptic` with both `### 🛠️ Dev` and `### 🏗️ Platform` sections (same as Cloud/Code findings).
   - **Track scan timing and tools used:** For each scan type (IaC, SCA, SAST, Secrets), record start time, end time, duration, tools/commands used, findings count, and status. Log in audit file under `## Scan Timing & Tools` section. See `Agents/RepoAgent.md` for details and tool examples.
   - **After creating findings, automatically run skeptic reviews:** Once repo scan findings are created, immediately run both Dev and Platform skeptic reviews in parallel:

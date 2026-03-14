@@ -1,0 +1,90 @@
+{# partials/tab_ingress.html — Internet-facing resources and inbound paths #}
+{% if ingress_resources or ingress_connections %}
+<div class="callout info" style="margin-bottom:14px;">
+  <strong>{{ (ingress_resources | length) + (ingress_connections | length) }}</strong>
+  internet-facing entry point{{ 's' if (ingress_resources | length) + (ingress_connections | length) != 1 }}
+  detected in this experiment.
+</div>
+
+{% if ingress_resources %}
+<h3 style="margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Internet-Facing Resources</h3>
+<div class="section-table-wrap" style="margin-bottom:18px;">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Resource</th>
+        <th>Type</th>
+        <th>Provider</th>
+        <th>Region</th>
+        <th>Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in ingress_resources %}
+      <tr>
+        <td><span class="asset-name">{{ r.resource_name }}</span></td>
+        <td><span class="asset-type-badge">{{ r.resource_type }}</span></td>
+        <td>
+          {% set p = (r.provider or 'unknown') | lower %}
+          <span class="prov-pill {{ p }}">{{ r.provider or '—' }}</span>
+        </td>
+        <td>{{ r.region or '—' }}</td>
+        <td>
+          {% if r.source_file %}
+            <span class="file-link" title="{{ r.source_file }}">{{ r.source_file | basename }}</span>
+            {% if r.source_line_start %}
+              <span class="line-num">:{{ r.source_line_start }}</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if ingress_connections %}
+<h3 style="margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Inbound Connections</h3>
+<div class="section-table-wrap">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>From</th>
+        <th>To</th>
+        <th>Protocol</th>
+        <th>Port</th>
+        <th>Auth</th>
+        <th>Encrypted</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in ingress_connections %}
+      <tr>
+        <td><span class="asset-name">{{ c.source_name or c.source_resource_id }}</span></td>
+        <td><span class="asset-name">{{ c.target_name or c.target_resource_id }}</span></td>
+        <td>{{ c.protocol or '—' }}</td>
+        <td>{{ c.port or '—' }}</td>
+        <td>{{ c.authentication or c.auth_method or '—' }}</td>
+        <td>
+          {% if c.is_encrypted == 1 %}
+            <span style="color:var(--green)">✓ Yes</span>
+          {% elif c.is_encrypted == 0 %}
+            <span style="color:var(--red)">✗ No</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+  </svg>
+  <p>No internet-facing resources detected.<br/>Ingress paths will appear here once resources<br/>with <code>is_internet_facing_capable</code> are discovered.</p>
+</div>
+{% endif %}

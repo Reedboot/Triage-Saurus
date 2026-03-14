@@ -33,5 +33,14 @@
   - `python3 Scripts/extract_finding_scores.py Findings/Cloud`
 
 ## Output Location
-- Write resource summaries under provider folders: `Summary/Cloud/<Provider>/<ResourceType>.md` (for example `Summary/Cloud/AWS/EKS.md`).
+- **DB-first:** Persist AI-generated summaries to the database using `persist_section.py` so the web app displays them in section tabs:
+  ```bash
+  python3 Scripts/Persist/persist_section.py \
+    --repo <RepoName> --experiment <experiment_id> \
+    --key <section_key> --title "<Tab Label>" \
+    --html "<section HTML>" \
+    --generated-by CloudSummaryAgent
+  ```
+  Section keys: `tldr`, `risks`, `architecture`, `auth`, `network`, `ingress`, `egress`, `containers`, `kubernetes`, `cicd`, `dependencies`
+- Write resource summaries under provider folders: `Summary/Cloud/<Provider>/<ResourceType>.md` (legacy fallback; for example `Summary/Cloud/AWS/EKS.md`).
 - Keep top-level `Summary/Cloud/` for `Architecture_*.md` files only.

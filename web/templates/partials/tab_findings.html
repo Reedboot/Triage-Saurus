@@ -1,0 +1,95 @@
+{# partials/tab_findings.html — Findings table from DB #}
+{% if findings %}
+<div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+  <input type="text" id="findings-search" class="assets-search" style="max-width:280px"
+         placeholder="Filter findings…" autocomplete="off" oninput="filterFindings()" />
+  <select id="findings-sev-filter" class="assets-provider-filter" onchange="filterFindings()">
+    <option value="">All severities</option>
+    <option value="CRITICAL">Critical</option>
+    <option value="HIGH">High</option>
+    <option value="MEDIUM">Medium</option>
+    <option value="LOW">Low</option>
+    <option value="INFO">Info</option>
+  </select>
+  <span style="font-size:0.75rem; color:var(--text-muted);">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
+</div>
+<div class="section-table-wrap">
+  <table class="section-table" id="findings-table">
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Title / Rule</th>
+        <th>Category</th>
+        <th>Source</th>
+        <th>Resource</th>
+        <th>Score</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in findings %}
+      {% set sev = (f.base_severity or f.severity or '') | upper %}
+      {% set sev_css = sev | lower %}
+      <tr data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
+          data-sev="{{ sev }}">
+        <td><span class="severity-badge {{ sev_css }}">{{ sev or '—' }}</span></td>
+        <td class="wrap">
+          <div style="font-weight:500; color:var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
+          {% if f.rule_id and f.rule_id != f.title %}
+            <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ f.rule_id }}</div>
+          {% endif %}
+          {% if f.description %}
+            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">{{ f.description | truncate(120) }}</div>
+          {% endif %}
+        </td>
+        <td>{{ f.category or '—' }}</td>
+        <td>
+          {% if f.source_file %}
+            <span class="file-link" title="{{ f.source_file }}">{{ f.source_file | basename }}</span>
+            {% if f.source_line_start %}
+              <span class="line-num">:{{ f.source_line_start }}</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if f.resource_id %}
+            <span class="asset-type-badge">#{{ f.resource_id }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% if f.severity_score %}
+            <span style="font-weight:600; color:{% if f.severity_score >= 9 %}var(--red-bright){% elif f.severity_score >= 7 %}var(--orange){% elif f.severity_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}">
+              {{ f.severity_score }}/10
+            </span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div id="findings-empty" class="assets-empty" style="display:none">No findings match the current filter.</div>
+<script>
+function filterFindings() {
+  var q = document.getElementById('findings-search').value.toLowerCase();
+  var s = document.getElementById('findings-sev-filter').value.toUpperCase();
+  var rows = document.querySelectorAll('#findings-table tbody tr');
+  var shown = 0;
+  rows.forEach(function(row) {
+    var matchQ = !q || row.dataset.search.includes(q);
+    var matchS = !s || row.dataset.sev === s;
+    row.style.display = (matchQ && matchS) ? '' : 'none';
+    if (matchQ && matchS) shown++;
+  });
+  document.getElementById('findings-empty').style.display = shown === 0 ? '' : 'none';
+}
+</script>
+{% else %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M10 21H3v-7l11-11 7 7-11 11z"/><path d="M14 7l3 3"/>
+  </svg>
+  <p>No findings in the database for this scan.<br/>
+     This may mean the scan pipeline hasn't run yet, or<br/>
+     opengrep rules didn't fire on the scanned repository.</p>
+</div>
+{% endif %}

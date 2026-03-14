@@ -1,197 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Triage-Saurus — Repo Scanner</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-  <link rel="stylesheet" href="/static/app.css" />
-  <style>/* legacy: summary panels kept until full section-tabs migration */
-    .diagram-views { min-height: 360px; overflow: auto; }
-    .summary-tabs { display: none; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid #30363d; overflow-x: auto; flex-shrink: 0; }
-    .summary-tabs.visible { display: flex; }
-    .summary-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: #8b949e; font-size: 0.8rem; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
-    .summary-tab-btn:hover:not(:disabled) { color: #c9d1d9; }
-    .summary-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
-    .summary-view { display: none; padding: 14px; overflow: auto; }
-    .summary-view.active { display: block; }
-  </style>
-</head>
-<body>
+(function(){
+  // app.js - main UI logic extracted from index.html inline script
+  // This file is loaded with `defer` so DOM elements are available.
 
-<header>
-  <span class="dino">🦕</span>
-  <h1>Triage-Saurus</h1>
-  <span class="badge">Repo Scanner</span>
-</header>
-
-<div class="container">
-
-  <!-- Scan form -->
-  <div class="scan-card">
-    <h2>Scan</h2>
-    <form id="scan-form">
-      <div class="form-row">
-        <div class="field grow">
-          <label for="repo-select">Repository</label>
-          <select id="repo-select" name="repo_path" required>
-            <option value="" disabled selected>— select a repository —</option>
-            {% for repo in repos %}
-              {% if repo.found %}
-                <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
-              {% else %}
-                <option value="" disabled class="not-found">{{ repo.name }} (not found locally)</option>
-              {% endif %}
-            {% else %}
-              <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field" style="min-width:160px">
-          <label for="scan-name">Scan name</label>
-          <input type="text" id="scan-name" name="scan_name"
-                 placeholder="web_scan" value="web_scan"
-                 autocomplete="off" />
-        </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button type="submit" id="scan-btn">▶ Run Scan</button>
-        </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <button type="button" class="secondary" id="reset-btn" style="display:none">↺ New Scan</button>
-        </div>
-      </div>
-
-      <!-- Past scans row (shown when a repo with history is selected) -->
-      <div class="past-scans-row" id="past-scans-row">
-        <div class="row-inner">
-          <span class="section-label">📁 Past Scans</span>
-          <div class="field grow">
-            <label for="past-scan-select">Load previous result</label>
-            <select id="past-scan-select">
-              <option value="" disabled selected>— select a past scan —</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="secondary" id="load-scan-btn">📂 Load</button>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="secondary" id="compare-toggle-btn">↔ Compare</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Compare row (shown when Compare is clicked) -->
-      <div class="compare-row" id="compare-row">
-        <div class="row-inner">
-          <span class="section-label">↔ Compare</span>
-          <div class="field" style="min-width:180px">
-            <label for="compare-from">From scan</label>
-            <select id="compare-from">
-              <option value="" disabled selected>— from —</option>
-            </select>
-          </div>
-          <div class="field" style="min-width:180px">
-            <label for="compare-to">To scan</label>
-            <select id="compare-to">
-              <option value="" disabled selected>— to —</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="primary" id="run-compare-btn">📊 Compare</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="status-bar" id="status-bar">
-        <div class="spinner" id="spinner"></div>
-        <span class="status-text" id="status-text">Starting…</span>
-      </div>
-    </form>
-  </div>
-
-  <!-- Workspace: log + diagram -->
-  <div class="workspace">
-
-    <!-- Log panel -->
-    <div class="panel" id="log-panel">
-      <div class="panel-header">
-        <span class="panel-title">Scan Output</span>
-        <div class="panel-actions">
-          <button class="btn-small" id="copy-log-btn" title="Copy log">Copy</button>
-          <button class="btn-small" id="clear-log-btn" title="Clear log">Clear</button>
-          <button class="btn-small" id="toggle-sections-btn" title="Show sections">Sections</button>
-        </div>
-      </div>
-
-      <!-- Section tabs live inside the log panel (replaces raw log after scan completes) -->
-      <div class="section-tab-bar" id="section-tab-bar">
-        <span id="tab-bar-placeholder" style="padding:8px 14px;font-size:0.75rem;color:var(--text-faint)">
-          Run or load a scan to see sections
-        </span>
-      </div>
-      <div class="section-panel-content" id="section-panel-content" style="display:none">
-        <div class="empty-state" id="section-placeholder">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M3 7h18M3 12h18M3 17h18"/>
-          </svg>
-          <p>Run or load a scan to view<br/>section details.</p>
-        </div>
-      </div>
-
-      <div id="log-output"><span style="color:#484f58">Scan output will appear here…</span></div>
-    </div>
-
-    <!-- Diagram panel: SPLIT LAYOUT (right=architecture) -->
-    <div class="panel" id="diagram-panel">
-      <div class="split-layout">
-
-<!-- RIGHT: Architecture diagram with zoom/pan -->
-        <div class="split-right">
-          <div class="right-panel-header">
-            <span class="right-panel-title">Architecture</span>
-            <div class="panel-actions">
-              <div class="diagram-provider-tabs" id="diagram-tabs" style="border:none;padding:0;background:transparent;"></div>
-              <button class="btn-small" id="zoom-in-btn" title="Zoom in">＋</button>
-              <button class="btn-small" id="zoom-out-btn" title="Zoom out">－</button>
-              <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">↺</button>
-              <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">Hide log</button>
-              <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
-            </div>
-          </div>
-          <div class="diagram-zoom-wrap" id="diagram-zoom-wrap">
-            <div class="diagram-zoom-inner" id="diagram-zoom-inner">
-              <div id="diagram-views">
-                <div class="diagram-placeholder" id="diagram-placeholder">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
-                    <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
-                  </svg>
-                  <p>Architecture diagram will appear<br/>after the scan completes.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<script>
   const MERMAID_BASE_CONFIG = {
     startOnLoad: false,
     theme: 'dark',
     securityLevel: 'loose',
     flowchart: { curve: 'basis', useMaxWidth: false },
   };
-  mermaid.initialize(MERMAID_BASE_CONFIG);
+  try { if (typeof mermaid !== 'undefined') mermaid.initialize(MERMAID_BASE_CONFIG); } catch(e){}
 
   const form            = document.getElementById('scan-form');
   const repoSelect      = document.getElementById('repo-select');
@@ -218,7 +35,6 @@
   const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
 
   let showingSections = false; // whether sections are currently shown in the log panel
-
 
   // Zoom/pan state
   let zoomLevel = 1, panX = 0, panY = 0;
@@ -383,9 +199,6 @@
       try {
         if (key === 'assets' && window.initAssets) {
           try { window.initAssets(sectionContent, repoName); } catch (e) { console.warn('initAssets error:', e); }
-        }
-        if (key === 'roles' && window.initRoles) {
-          try { window.initRoles(sectionContent, repoName); } catch (e) { console.warn('initRoles error:', e); }
         }
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
@@ -561,7 +374,7 @@
       }
 
       // node definition like: nodeId[Label] or nodeId("Label")
-      const nodeMatch = trimmed.match(/^([^\s\[]+)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)/);
+      const nodeMatch = trimmed.match(/^([^\s\[]+)\s*(?:\[\[|\[\(|\[|\(\[|\("|\(\(|\{)/);
       if (nodeMatch) {
         const id = nodeMatch[1];
         if (seenNodes.has(id)) continue;
@@ -590,9 +403,9 @@
 
   async function renderDiagrams(data) {
     diagrams = data;
-    placeholder.style.display = 'none';
-    tabsEl.innerHTML = '';
-    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
+    if (placeholder) placeholder.style.display = 'none';
+    if (tabsEl) tabsEl.innerHTML = '';
+    if (viewsEl) viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
 
     for (let i = 0; i < diagrams.length; i++) {
       const { title, code } = diagrams[i];
@@ -633,10 +446,10 @@
   async function renderDiff(data) {
     const { from: idFrom, to: idTo, diagrams_from, diagrams_to, timeline } = data;
 
-    placeholder.style.display = 'none';
-    tabsEl.innerHTML = '';
-    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
-    tabsEl.classList.add('visible');
+    if (placeholder) placeholder.style.display = 'none';
+    if (tabsEl) tabsEl.innerHTML = '';
+    if (viewsEl) viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
+    if (tabsEl) tabsEl.classList.add('visible');
     diagrams = [];
     activeTab = 0;
 
@@ -822,7 +635,7 @@
     }
   }
 
-  loadScanBtn.addEventListener('click', async () => {
+  if (loadScanBtn) loadScanBtn.addEventListener('click', async () => {
     const expId = pastScanSelect.value;
     if (!expId) return;
     loadScanBtn.disabled = true;
@@ -839,11 +652,11 @@
     }
   });
 
-  compareToggle.addEventListener('click', () => {
+  if (compareToggle) compareToggle.addEventListener('click', () => {
     compareRow.classList.toggle('visible');
   });
 
-  runCompareBtn.addEventListener('click', async () => {
+  if (runCompareBtn) runCompareBtn.addEventListener('click', async () => {
     const from = compareFrom.value;
     const to   = compareTo.value;
     if (!from || !to) { setStatus('Select both From and To scans', 'error'); return; }
@@ -950,7 +763,7 @@
   }
 
   // ── Form submit ──────────────────────────────────────────────────────────────
-  form.addEventListener('submit', async (e) => {
+  if (form) form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const repoPath = repoSelect.value;
@@ -1005,7 +818,7 @@
   });
 
   // ── Reset button ─────────────────────────────────────────────────────────────
-  resetBtn.addEventListener('click', () => {
+  if (resetBtn) resetBtn.addEventListener('click', () => {
     repoSelect.disabled = false;
     nameInput.disabled = false;
     repoSelect.value = '';
@@ -1033,7 +846,7 @@
   });
 
   // Auto-fill scan name from selected repo, load past scans, and latest diagram+sections
-  repoSelect.addEventListener('change', async () => {
+  if (repoSelect) repoSelect.addEventListener('change', async () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
       const name = selected.dataset.name || selected.text.split(' — ')[0].trim();
@@ -1067,11 +880,11 @@
     }
   });
 
-  document.getElementById('copy-log-btn').addEventListener('click', () => {
+  document.getElementById('copy-log-btn')?.addEventListener('click', () => {
     navigator.clipboard.writeText(logOutput.innerText).catch(() => {});
   });
 
-  document.getElementById('clear-log-btn').addEventListener('click', () => {
+  document.getElementById('clear-log-btn')?.addEventListener('click', () => {
     logOutput.innerHTML = '<span style="color:#484f58">Scan output will appear here…</span>';
   });
 
@@ -1107,14 +920,19 @@
   // Run annotation in background
   annotateRepoOptions();
 
-  copyDiagramBtn.addEventListener('click', () => {
+  copyDiagramBtn?.addEventListener('click', () => {
     if (diagrams[activeTab]) {
       navigator.clipboard.writeText(diagrams[activeTab].code).catch(() => {});
     }
   });
-</script>
-<script src="/static/app.js" defer></script>
-<script src="/static/assets.js" defer></script>
-<script src="/static/roles.js" defer></script>
-</body>
-</html>
+
+  // Expose a few helpers for external modules/tests
+  window._triage = {
+    loadSectionTabs,
+    loadSectionContent,
+    renderDiagrams,
+    renderDiff,
+    fitDiagram,
+  };
+
+})();

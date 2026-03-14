@@ -613,6 +613,31 @@ def _ensure_schema(conn: sqlite3.Connection):
       rejection_reason TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS repo_ai_content (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT NOT NULL,
+      section_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content_html TEXT,
+      generated_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_name, section_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS cloud_diagrams (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      diagram_title TEXT NOT NULL,
+      mermaid_code TEXT NOT NULL,
+      display_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, provider, diagram_title)
+    );
     """)
 
         # Ensure optional columns exist for backward compatibility.
@@ -2317,4 +2342,88 @@ def resolve_enrichment_assumption(
 if __name__ == "__main__":
     # Test basic operations
     pass
+
+
+# ── repo_ai_content helpers ───────────────────────────────────────────────────
+
+def upsert_ai_section(
+    experiment_id: str,
+    repo_name: str,
+    section_key: str,
+    title: str,
+    content_html: str,
+    generated_by: str = "system",
+) -> None:
+    """Insert or update an AI-generated HTML section for a repo/experiment."""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO repo_ai_content
+                (experiment_id, repo_name, section_key, title, content_html, generated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(experiment_id, repo_name, section_key) DO UPDATE SET
+                title        = excluded.title,
+                content_html = excluded.content_html,
+                generated_by = excluded.generated_by,
+                updated_at   = CURRENT_TIMESTAMP
+            """,
+            (experiment_id, repo_name, section_key, title, content_html, generated_by),
+        )
+        conn.commit()
+
+
+def get_ai_sections(experiment_id: str, repo_name: str) -> list[dict]:
+    """Return all AI content sections for a repo/experiment, ordered by section_key."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT section_key, title, content_html, generated_by, updated_at
+            FROM repo_ai_content
+            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+            ORDER BY section_key
+            """,
+            (experiment_id, repo_name),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── cloud_diagrams helpers ────────────────────────────────────────────────────
+
+def upsert_cloud_diagram(
+    experiment_id: str,
+    provider: str,
+    diagram_title: str,
+    mermaid_code: str,
+    display_order: int = 0,
+) -> None:
+    """Insert or update a Mermaid architecture diagram for a provider/experiment."""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO cloud_diagrams
+                (experiment_id, provider, diagram_title, mermaid_code, display_order, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(experiment_id, provider, diagram_title) DO UPDATE SET
+                mermaid_code  = excluded.mermaid_code,
+                display_order = excluded.display_order,
+                updated_at    = CURRENT_TIMESTAMP
+            """,
+            (experiment_id, provider, diagram_title, mermaid_code, display_order),
+        )
+        conn.commit()
+
+
+def get_cloud_diagrams(experiment_id: str) -> list[dict]:
+    """Return all cloud diagrams for an experiment, ordered by display_order then provider."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT provider, diagram_title, mermaid_code, display_order
+            FROM cloud_diagrams
+            WHERE experiment_id = ?
+            ORDER BY display_order, provider, diagram_title
+            """,
+            (experiment_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
