@@ -68,10 +68,31 @@ def _get_db() -> sqlite3.Connection | None:
         return None
 
 
+def _sanitize_mermaid(code: str) -> str:
+    """Fix CSS property names generated with underscores instead of hyphens.
+
+    Agents occasionally emit ``stroke_width`` / ``stroke_dasharray`` etc.  Mermaid's
+    CSS parser requires hyphenated names, so the diagram silently fails to render.
+    """
+    replacements = [
+        ("stroke_width", "stroke-width"),
+        ("stroke_dasharray", "stroke-dasharray"),
+        ("stroke_opacity", "stroke-opacity"),
+        ("fill_opacity", "fill-opacity"),
+        ("font_size", "font-size"),
+        ("font_weight", "font-weight"),
+        ("text_anchor", "text-anchor"),
+        ("line_height", "line-height"),
+    ]
+    for bad, good in replacements:
+        code = code.replace(bad, good)
+    return code
+
+
 def _extract_mermaid_blocks(md_text: str) -> list[str]:
     """Return all mermaid code block bodies from a markdown string."""
     return [
-        m.group(1).strip()
+        _sanitize_mermaid(m.group(1).strip())
         for m in re.finditer(r"```mermaid\n(.*?)\n```", md_text, re.DOTALL)
     ]
 
@@ -379,6 +400,97 @@ def api_diff():
         "diagrams_to": diagrams_to,
         "timeline": timeline,
     })
+
+
+@app.route("/api/assets/<repo_name>")
+def api_assets(repo_name: str):
+    """Return detected assets for a repo (latest or specified experiment).
+
+    Query params:
+      experiment_id  – optional; defaults to the most-recent scan for the repo.
+
+    Response:
+      {
+        "assets": [{ resource_type, resource_name, provider, region, source_file,
+                     source_line_start, discovered_by, discovery_method, status,
+                     finding_count }, ...],
+        "experiment_id": "022",
+        "total": 50,
+        "by_provider": {"azure": 50, "aws": 67, ...}
+      }
+    """
+    experiment_id = request.args.get("experiment_id", "").strip()
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"assets": [], "error": "DB unavailable"})
+
+    try:
+        if not experiment_id:
+            row = conn.execute(
+                """SELECT experiment_id FROM repositories
+                   WHERE LOWER(repo_name) = LOWER(?)
+                   ORDER BY scanned_at DESC LIMIT 1""",
+                (repo_name,),
+            ).fetchone()
+            if row:
+                experiment_id = row["experiment_id"]
+
+        if not experiment_id:
+            return jsonify({"assets": [], "experiment_id": "", "total": 0, "by_provider": {}})
+
+        rows = conn.execute(
+            """
+            SELECT
+                res.id,
+                res.resource_type,
+                res.resource_name,
+                res.provider,
+                res.region,
+                res.source_file,
+                res.source_line_start,
+                res.source_line_end,
+                res.discovered_by,
+                res.discovery_method,
+                res.status,
+                COUNT(f.id) AS finding_count,
+                MAX(CASE f.base_severity
+                    WHEN 'CRITICAL' THEN 5
+                    WHEN 'HIGH'     THEN 4
+                    WHEN 'MEDIUM'   THEN 3
+                    WHEN 'LOW'      THEN 2
+                    WHEN 'INFO'     THEN 1
+                    ELSE 0 END) AS max_sev_rank
+            FROM resources res
+            JOIN repositories repo ON res.repo_id = repo.id
+            LEFT JOIN findings f ON f.resource_id = res.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+            GROUP BY res.id
+            ORDER BY res.provider, res.resource_type, res.resource_name
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+
+        sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
+        assets: list[dict] = []
+        by_provider: dict[str, int] = {}
+        for row in rows:
+            a = dict(row)
+            rank = a.pop("max_sev_rank") or 0
+            a["worst_severity"] = sev_labels.get(rank, "")
+            provider_key = (a.get("provider") or "unknown").lower()
+            by_provider[provider_key] = by_provider.get(provider_key, 0) + 1
+            assets.append(a)
+
+        return jsonify({
+            "assets": assets,
+            "experiment_id": experiment_id,
+            "total": len(assets),
+            "by_provider": by_provider,
+        })
+    except Exception as exc:
+        return jsonify({"assets": [], "error": str(exc)})
+    finally:
+        conn.close()
 
 
 # ── Page Routes ───────────────────────────────────────────────────────────────

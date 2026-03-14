@@ -420,6 +420,251 @@
       text-align: center;
       padding: 24px 0;
     }
+
+    /* ── Panel-level nav tabs (Architecture | Assets) ── */
+    .panel-nav {
+      display: flex;
+      gap: 2px;
+    }
+
+    .panel-nav-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #8b949e;
+      font-size: 0.82rem;
+      font-weight: 500;
+      padding: 4px 12px;
+      cursor: pointer;
+      border-radius: 4px 4px 0 0;
+      transition: color 0.15s;
+      white-space: nowrap;
+    }
+
+    .panel-nav-btn:hover { color: #c9d1d9; }
+    .panel-nav-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; font-weight: 600; }
+
+    .panel-section { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+    .panel-section.hidden { display: none; }
+
+    /* ── Assets section ── */
+    #assets-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .assets-toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid #21262d;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .assets-search {
+      flex: 1;
+      min-width: 140px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #c9d1d9;
+      font-size: 0.8rem;
+      padding: 5px 10px;
+      outline: none;
+    }
+
+    .assets-search:focus { border-color: #58a6ff; }
+
+    .assets-provider-filter {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #c9d1d9;
+      font-size: 0.8rem;
+      padding: 5px 8px;
+      outline: none;
+    }
+
+    .assets-summary {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 8px 12px;
+      border-bottom: 1px solid #21262d;
+      flex-shrink: 0;
+    }
+
+    .provider-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .provider-badge:hover { border-color: #58a6ff; color: #c9d1d9; }
+    .provider-badge.active { border-color: #58a6ff; background: #1f3a5f; color: #58a6ff; }
+
+    .provider-badge .prov-count {
+      background: #30363d;
+      border-radius: 8px;
+      padding: 0 5px;
+      font-size: 0.68rem;
+      color: #8b949e;
+    }
+
+    .provider-badge.active .prov-count {
+      background: #1f6feb44;
+      color: #79c0ff;
+    }
+
+    .assets-table-wrap {
+      flex: 1;
+      overflow: auto;
+      padding: 0 12px 12px;
+      max-height: 72vh;
+      scrollbar-width: thin;
+      scrollbar-color: #58a6ff #0d1117;
+    }
+
+    .assets-table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
+    .assets-table-wrap::-webkit-scrollbar-track { background: transparent; }
+    .assets-table-wrap::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+    .assets-table-wrap::-webkit-scrollbar-thumb:hover { background: #1f6feb66; }
+
+    .assets-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+
+    .assets-table thead th {
+      position: sticky;
+      top: 0;
+      background: #161b22;
+      color: #8b949e;
+      font-weight: 600;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 8px 8px 6px;
+      text-align: left;
+      border-bottom: 1px solid #30363d;
+      white-space: nowrap;
+    }
+
+    .assets-table tbody tr {
+      border-bottom: 1px solid #21262d;
+      transition: background 0.1s;
+    }
+
+    .assets-table tbody tr:hover { background: #1c2129; }
+
+    .assets-table td {
+      padding: 6px 8px;
+      vertical-align: middle;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .asset-type-badge {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.7rem;
+      color: #79c0ff;
+      background: #1f3a5f33;
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+
+    .asset-name { color: #c9d1d9; font-weight: 500; }
+
+    .prov-pill {
+      font-size: 0.68rem;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .prov-pill.azure   { background: #0078d433; color: #79c0ff; border: 1px solid #0078d466; }
+    .prov-pill.aws     { background: #ff990033; color: #e3b341; border: 1px solid #ff990066; }
+    .prov-pill.gcp     { background: #34a85333; color: #3fb950; border: 1px solid #34a85366; }
+    .prov-pill.oracle  { background: #f8000033; color: #f85149; border: 1px solid #f8000066; }
+    .prov-pill.alicloud { background: #ff6a0033; color: #ffa657; border: 1px solid #ff6a0066; }
+    .prov-pill.unknown { background: #21262d;   color: #8b949e; border: 1px solid #30363d; }
+
+    .file-link {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.7rem;
+      color: #8b949e;
+      cursor: default;
+    }
+
+    .line-num {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.7rem;
+      color: #484f58;
+    }
+
+    .how-badge {
+      font-size: 0.68rem;
+      padding: 2px 6px;
+      border-radius: 10px;
+      background: #21262d;
+      color: #8b949e;
+      border: 1px solid #30363d;
+    }
+
+    .finding-badge {
+      font-size: 0.68rem;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+
+    .finding-badge.none  { color: #3fb950; }
+    .finding-badge.info  { background: #1f3a5f33; color: #79c0ff; border: 1px solid #1f6feb44; }
+    .finding-badge.low   { background: #e3b34122; color: #e3b341; border: 1px solid #e3b34144; }
+    .finding-badge.medium { background: #ffa65722; color: #ffa657; border: 1px solid #ffa65744; }
+    .finding-badge.high  { background: #f8514922; color: #f85149; border: 1px solid #f8514944; }
+    .finding-badge.critical { background: #f8514944; color: #ff7b72; border: 1px solid #f85149; }
+
+    .assets-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      min-height: 520px;
+      color: #484f58;
+      text-align: center;
+      gap: 8px;
+    }
+
+    .assets-placeholder p { font-size: 0.85rem; }
+
+    .assets-empty {
+      text-align: center;
+      padding: 40px;
+      color: #484f58;
+      font-size: 0.82rem;
+    }
+
+    .asset-why-icon {
+      cursor: help;
+      font-size: 0.8rem;
+    }
   </style>
 </head>
 <body>
@@ -537,21 +782,48 @@
     <!-- Diagram panel -->
     <div class="panel" id="diagram-panel">
       <div class="panel-header">
-        <span class="panel-title">Architecture Diagrams</span>
+        <div class="panel-nav">
+          <button class="panel-nav-btn active" id="nav-arch-btn">🏗 Architecture</button>
+          <button class="panel-nav-btn" id="nav-assets-btn">📦 Assets <span id="assets-nav-count" style="font-weight:400;color:#484f58"></span></button>
+        </div>
         <div class="panel-actions">
           <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
         </div>
       </div>
-      <div class="diagram-tabs" id="diagram-tabs"></div>
-      <div id="diagram-views">
-        <div class="diagram-placeholder" id="diagram-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
-            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
-          </svg>
-          <p>Architecture diagram will appear<br/>after the scan completes.</p>
+
+      <!-- Architecture section -->
+      <div id="panel-arch" class="panel-section">
+        <div class="diagram-tabs" id="diagram-tabs"></div>
+        <div id="diagram-views">
+          <div class="diagram-placeholder" id="diagram-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
+            </svg>
+            <p>Architecture diagram will appear<br/>after the scan completes.</p>
+          </div>
         </div>
       </div>
+
+      <!-- Assets section -->
+      <div id="panel-assets" class="panel-section hidden">
+        <div id="assets-summary" class="assets-summary" style="display:none"></div>
+        <div class="assets-toolbar" id="assets-toolbar" style="display:none">
+          <input type="text" class="assets-search" id="assets-search" placeholder="Filter assets…" autocomplete="off" />
+          <select class="assets-provider-filter" id="assets-provider-filter">
+            <option value="">All providers</option>
+          </select>
+        </div>
+        <div class="assets-table-wrap" id="assets-table-wrap">
+          <div class="assets-placeholder" id="assets-placeholder">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 7h18M3 12h18M3 17h18"/>
+            </svg>
+            <p>Select a repository to view<br/>its detected assets.</p>
+          </div>
+        </div>
+      </div>
+
     </div>
 
   </div>
@@ -588,10 +860,280 @@
   const compareTo       = document.getElementById('compare-to');
   const runCompareBtn   = document.getElementById('run-compare-btn');
 
+  const navArchBtn      = document.getElementById('nav-arch-btn');
+  const navAssetsBtn    = document.getElementById('nav-assets-btn');
+  const panelArch       = document.getElementById('panel-arch');
+  const panelAssets     = document.getElementById('panel-assets');
+  const assetsNavCount  = document.getElementById('assets-nav-count');
+  const assetsSummary   = document.getElementById('assets-summary');
+  const assetsToolbar   = document.getElementById('assets-toolbar');
+  const assetsSearch    = document.getElementById('assets-search');
+  const assetsProvFilter= document.getElementById('assets-provider-filter');
+  const assetsTableWrap = document.getElementById('assets-table-wrap');
+  const assetsPlaceholder = document.getElementById('assets-placeholder');
+
   // Diagram state
   let diagrams = [];
   let activeTab = 0;
   let currentRepoName = '';
+
+  // Assets state
+  let allAssets = [];
+  let activeProviderFilter = '';
+
+  // ── Panel nav (Architecture ↔ Assets) ────────────────────────────────────────
+  function switchPanel(panel) {
+    const isArch = panel === 'arch';
+    navArchBtn.classList.toggle('active', isArch);
+    navAssetsBtn.classList.toggle('active', !isArch);
+    panelArch.classList.toggle('hidden', !isArch);
+    panelAssets.classList.toggle('hidden', isArch);
+    copyDiagramBtn.style.display = isArch ? '' : 'none';
+  }
+
+  navArchBtn.addEventListener('click', () => switchPanel('arch'));
+  navAssetsBtn.addEventListener('click', () => switchPanel('assets'));
+
+  // ── Assets helpers ──────────────────────────────────────────────────────────
+
+  const PROVIDER_META = {
+    azure:    { label: 'Azure',    icon: '☁️' },
+    aws:      { label: 'AWS',      icon: '🟧' },
+    gcp:      { label: 'GCP',      icon: '🔵' },
+    oracle:   { label: 'Oracle',   icon: '🔴' },
+    alicloud: { label: 'AliCloud', icon: '🟠' },
+    unknown:  { label: 'Unknown',  icon: '❓' },
+  };
+
+  // Map resource type prefixes to a human-readable "why" tooltip
+  function _resourceWhy(resourceType) {
+    const t = (resourceType || '').toLowerCase();
+    if (/key_vault|secret|kms|ssm.*param|secret_manager/.test(t))
+      return 'Secrets & key management — high sensitivity';
+    if (/storage|bucket|blob|s3|gcs/.test(t))
+      return 'Object storage — potential data exposure';
+    if (/sql|database|mysql|postgres|mssql|cosmosdb|dynamo|rds/.test(t))
+      return 'Database — contains persistent data';
+    if (/virtual_machine|instance|ec2|compute/.test(t))
+      return 'Compute instance — potential attack surface';
+    if (/aks|kubernetes|k8s|gke|eks/.test(t))
+      return 'Container orchestration — broad blast radius';
+    if (/application_gateway|load_balancer|alb|elb|waf/.test(t))
+      return 'Internet-facing ingress — public exposure';
+    if (/network|subnet|vnet|vpc|security_group|nsg|firewall/.test(t))
+      return 'Network layer — controls traffic flow';
+    if (/iam|role|policy|permission|identity|service_account/.test(t))
+      return 'Identity & access — privilege escalation risk';
+    if (/monitor|log|audit|diagnostic|siem/.test(t))
+      return 'Logging & monitoring — visibility control';
+    if (/function|lambda|app_service|web_app/.test(t))
+      return 'Serverless / PaaS compute';
+    if (/cdn|cloudfront|frontdoor/.test(t))
+      return 'Content delivery — public edge';
+    if (/dns|route53|traffic_manager/.test(t))
+      return 'DNS — domain routing control';
+    return 'Infrastructure resource';
+  }
+
+  function _findingBadgeClass(worstSeverity, count) {
+    if (!count) return 'none';
+    const s = (worstSeverity || '').toLowerCase();
+    if (s === 'critical') return 'critical';
+    if (s === 'high')     return 'high';
+    if (s === 'medium')   return 'medium';
+    if (s === 'low')      return 'low';
+    return 'info';
+  }
+
+  function _shortFile(filePath) {
+    if (!filePath) return '—';
+    // Show last two path segments
+    const parts = filePath.replace(/\\/g, '/').split('/');
+    return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : filePath;
+  }
+
+  function _howLabel(discoveredBy, discoveryMethod) {
+    const method = (discoveryMethod || '').toLowerCase();
+    if (method === 'terraform') return 'Terraform HCL';
+    if (method.includes('arm'))  return 'ARM Template';
+    if (method.includes('bicep')) return 'Bicep';
+    if (method.includes('connection')) return 'Connection String';
+    if (method.includes('k8s') || method.includes('kubernetes')) return 'Kubernetes YAML';
+    if (discoveredBy) return discoveredBy.replace('Agent', '').trim();
+    return method || '—';
+  }
+
+  function renderAssetsTable(assets) {
+    // Remove old table
+    assetsTableWrap.querySelectorAll('table, .assets-empty').forEach(el => el.remove());
+
+    if (!assets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'assets-empty';
+      empty.textContent = 'No assets match the current filter.';
+      assetsTableWrap.appendChild(empty);
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'assets-table';
+
+    const thead = document.createElement('thead');
+    thead.innerHTML = `<tr>
+      <th>Provider</th>
+      <th>Resource Type</th>
+      <th>Name</th>
+      <th>Source File</th>
+      <th title="Line number in source file">Line</th>
+      <th title="How this asset was detected">How Detected</th>
+      <th title="Why this asset matters">Why</th>
+      <th title="Security findings linked to this asset">Findings</th>
+    </tr>`;
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    for (const a of assets) {
+      const prov = (a.provider || 'unknown').toLowerCase();
+      const meta = PROVIDER_META[prov] || PROVIDER_META.unknown;
+      const why = _resourceWhy(a.resource_type);
+      const howText = _howLabel(a.discovered_by, a.discovery_method);
+      const findCls = _findingBadgeClass(a.worst_severity, a.finding_count);
+      const findLabel = a.finding_count
+        ? `${a.finding_count} ${a.worst_severity || ''}`
+        : '✓ none';
+
+      const shortType = (a.resource_type || '')
+        .replace(/^azurerm_|^aws_|^google_|^oci_|^alicloud_/, '');
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span class="prov-pill ${prov}" title="${meta.label}">${meta.icon} ${meta.label}</span></td>
+        <td><span class="asset-type-badge" title="${a.resource_type}">${shortType}</span></td>
+        <td class="asset-name" title="${a.resource_name}">${a.resource_name || '—'}</td>
+        <td><span class="file-link" title="${a.source_file || ''}">${_shortFile(a.source_file)}</span></td>
+        <td class="line-num">${a.source_line_start || '—'}</td>
+        <td><span class="how-badge" title="Discovered by: ${a.discovered_by || '—'}\nMethod: ${a.discovery_method || '—'}">${howText}</span></td>
+        <td><span class="asset-why-icon" title="${why}">ℹ️ ${why.split('—')[0].trim()}</span></td>
+        <td><span class="finding-badge ${findCls}">${findLabel}</span></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    assetsPlaceholder.style.display = 'none';
+    assetsTableWrap.appendChild(table);
+  }
+
+  function applyAssetsFilter() {
+    const query = (assetsSearch.value || '').toLowerCase().trim();
+    const prov  = (assetsProvFilter.value || '').toLowerCase();
+
+    let filtered = allAssets;
+    if (prov) {
+      filtered = filtered.filter(a => (a.provider || '').toLowerCase() === prov);
+    }
+    if (query) {
+      filtered = filtered.filter(a =>
+        (a.resource_type || '').toLowerCase().includes(query) ||
+        (a.resource_name || '').toLowerCase().includes(query) ||
+        (a.source_file   || '').toLowerCase().includes(query)
+      );
+    }
+    renderAssetsTable(filtered);
+  }
+
+  function renderAssetsSummary(byProvider, total) {
+    assetsNavCount.textContent = total ? `(${total})` : '';
+    assetsSummary.innerHTML = '';
+
+    // All badge
+    const allBadge = document.createElement('span');
+    allBadge.className = 'provider-badge' + (!activeProviderFilter ? ' active' : '');
+    allBadge.dataset.prov = '';
+    allBadge.innerHTML = `All <span class="prov-count">${total}</span>`;
+    allBadge.addEventListener('click', () => {
+      activeProviderFilter = '';
+      assetsProvFilter.value = '';
+      assetsSummary.querySelectorAll('.provider-badge').forEach(b =>
+        b.classList.toggle('active', b.dataset.prov === ''));
+      applyAssetsFilter();
+    });
+    assetsSummary.appendChild(allBadge);
+
+    for (const [prov, count] of Object.entries(byProvider).sort((a, b) => b[1] - a[1])) {
+      const meta = PROVIDER_META[prov] || PROVIDER_META.unknown;
+      const badge = document.createElement('span');
+      badge.className = 'provider-badge' + (activeProviderFilter === prov ? ' active' : '');
+      badge.dataset.prov = prov;
+      badge.innerHTML = `${meta.icon} ${meta.label} <span class="prov-count">${count}</span>`;
+      badge.addEventListener('click', () => {
+        activeProviderFilter = prov;
+        assetsProvFilter.value = prov;
+        assetsSummary.querySelectorAll('.provider-badge').forEach(b =>
+          b.classList.toggle('active', b.dataset.prov === prov));
+        applyAssetsFilter();
+      });
+      assetsSummary.appendChild(badge);
+    }
+
+    assetsSummary.style.display = 'flex';
+    assetsToolbar.style.display = 'flex';
+  }
+
+  async function loadAssets(repoName, experimentId) {
+    if (!repoName) return;
+    allAssets = [];
+    renderAssetsTable([]);
+    assetsPlaceholder.style.display = '';
+    assetsPlaceholder.innerHTML = '<p style="color:#484f58">Loading assets…</p>';
+    assetsSummary.style.display = 'none';
+    assetsToolbar.style.display = 'none';
+    assetsNavCount.textContent = '';
+
+    try {
+      let url = `/api/assets/${encodeURIComponent(repoName)}`;
+      if (experimentId) url += `?experiment_id=${encodeURIComponent(experimentId)}`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (data.error && !data.assets?.length) {
+        assetsPlaceholder.innerHTML = `<p style="color:#f85149">Error: ${data.error}</p>`;
+        return;
+      }
+
+      allAssets = data.assets || [];
+      activeProviderFilter = '';
+      assetsProvFilter.innerHTML = '<option value="">All providers</option>';
+      for (const prov of Object.keys(data.by_provider || {}).sort()) {
+        const opt = document.createElement('option');
+        opt.value = prov;
+        const meta = PROVIDER_META[prov] || PROVIDER_META.unknown;
+        opt.textContent = meta.label;
+        assetsProvFilter.appendChild(opt);
+      }
+
+      if (allAssets.length) {
+        renderAssetsSummary(data.by_provider || {}, data.total || allAssets.length);
+        assetsPlaceholder.style.display = 'none';
+        applyAssetsFilter();
+      } else {
+        assetsPlaceholder.style.display = '';
+        assetsPlaceholder.innerHTML = '<p style="color:#484f58">No assets found for this scan.</p>';
+      }
+    } catch (err) {
+      assetsPlaceholder.innerHTML = `<p style="color:#f85149">Failed to load assets: ${err}</p>`;
+    }
+  }
+
+  assetsSearch.addEventListener('input', applyAssetsFilter);
+  assetsProvFilter.addEventListener('change', () => {
+    activeProviderFilter = assetsProvFilter.value.toLowerCase();
+    // Sync summary badges
+    assetsSummary.querySelectorAll('.provider-badge').forEach(b =>
+      b.classList.toggle('active', b.dataset.prov === activeProviderFilter));
+    applyAssetsFilter();
+  });
 
   // ── Log helpers ─────────────────────────────────────────────────────────────
   function classifyLine(line) {
@@ -844,6 +1386,8 @@
       } else {
         setStatus(`No diagrams found for scan ${expId}`, 'error');
       }
+      // Always load assets for the selected experiment
+      if (currentRepoName) loadAssets(currentRepoName, expId);
     } catch (err) {
       setStatus('Load failed: ' + err, 'error');
     } finally {
@@ -913,8 +1457,11 @@
       const expId = payload.experiment_id;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
-        // Refresh past scans list
-        if (currentRepoName) loadPastScans(currentRepoName);
+        // Refresh past scans list and assets
+        if (currentRepoName) {
+          loadPastScans(currentRepoName);
+          loadAssets(currentRepoName, expId);
+        }
       } else {
         setStatus(`⚠ Pipeline exited with code ${code}`, 'error');
       }
@@ -993,13 +1540,25 @@
     nameInput.disabled = false;
     repoSelect.value = '';
     currentRepoName = '';
+    allAssets = [];
+    activeProviderFilter = '';
     resetBtn.style.display = 'none';
     statusBar.classList.remove('visible');
     pastScansRow.classList.remove('visible');
     compareRow.classList.remove('visible');
+    assetsNavCount.textContent = '';
+    assetsSummary.style.display = 'none';
+    assetsToolbar.style.display = 'none';
+    assetsTableWrap.querySelectorAll('table, .assets-empty').forEach(el => el.remove());
+    assetsPlaceholder.style.display = '';
+    assetsPlaceholder.innerHTML = `
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M3 7h18M3 12h18M3 17h18"/>
+      </svg>
+      <p>Select a repository to view<br/>its detected assets.</p>`;
   });
 
-  // Auto-fill scan name from selected repo + load past scans
+  // Auto-fill scan name from selected repo + load past scans + load assets
   repoSelect.addEventListener('change', () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
@@ -1007,6 +1566,7 @@
       nameInput.value = name;
       currentRepoName = name;
       loadPastScans(name);
+      loadAssets(name);  // load latest assets for this repo
     }
   });
 
