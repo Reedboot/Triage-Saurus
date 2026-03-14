@@ -1315,6 +1315,65 @@
     }
     s = filtered.join('\n');
 
+    // Deduplicate subgraph blocks, node definitions and style lines which often
+    // occur repeatedly in generated output and can confuse the renderer.
+    const linesArr = s.split('\n');
+    const out = [];
+    const seenSubgraphs = new Set();
+    const seenNodes = new Set();
+    const seenStyles = new Set();
+    let skipSubgraph = 0;
+
+    for (let i = 0; i < linesArr.length; i++) {
+      const line = linesArr[i];
+      const trimmed = line.trim();
+
+      if (skipSubgraph > 0) {
+        if (/^\s*end\s*$/i.test(trimmed)) {
+          skipSubgraph -= 1;
+        }
+        continue;
+      }
+
+      // subgraph <id>[Label]
+      const subMatch = trimmed.match(/^subgraph\s+([^\s\[]+)/i);
+      if (subMatch) {
+        const id = subMatch[1];
+        if (seenSubgraphs.has(id)) {
+          // skip until the matching 'end'
+          skipSubgraph = 1;
+          continue;
+        }
+        seenSubgraphs.add(id);
+        out.push(line);
+        continue;
+      }
+
+      // node definition like: nodeId[Label] or nodeId("Label")
+      const nodeMatch = trimmed.match(/^([^\s\[]+)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)/);
+      if (nodeMatch) {
+        const id = nodeMatch[1];
+        if (seenNodes.has(id)) continue;
+        seenNodes.add(id);
+        out.push(line);
+        continue;
+      }
+
+      // style <id> ...
+      const styleMatch = trimmed.match(/^style\s+([^\s]+)/i);
+      if (styleMatch) {
+        const key = trimmed; // include full style string to detect duplicates
+        if (seenStyles.has(key)) continue;
+        seenStyles.add(key);
+        out.push(line);
+        continue;
+      }
+
+      out.push(line);
+    }
+
+    s = out.join('\n');
+
     return s;
   }
 

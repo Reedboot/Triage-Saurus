@@ -78,6 +78,10 @@ def _sanitize_mermaid(code: str) -> str:
     - ``stroke-dasharray: N N`` with space-separated values (Mermaid needs commas)
     - U+FE0F variation-selector characters after emoji in labels (breaks the lexer)
     - bare ``&`` inside quoted labels (breaks HTML rendering in ``securityLevel:'loose'``)
+
+    Also performs light deduplication and removal of noisy directives that can
+    cause the renderer to fail (duplicate subgraphs/nodes, repeated style
+    lines, explicit "contains" edges, and self-edges).
     """
     # 1. Hyphenate underscore CSS property names
     replacements = [
@@ -97,16 +101,93 @@ def _sanitize_mermaid(code: str) -> str:
     code = code.replace("\ufe0f", "")
 
     # 3. Replace bare & in quoted Mermaid labels with "and"
-    #    Matches content inside double-quoted strings and replaces & not followed by a word char + ;
     code = re.sub(r'("(?:[^"\\]|\\.)*")', lambda m: m.group(0).replace("&", "and"), code)
 
     # 4. Fix stroke-dasharray space-separated values → comma-separated
-    #    e.g. "stroke-dasharray: 5 5" → "stroke-dasharray:5,5"
     code = re.sub(
         r'stroke-dasharray\s*:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)',
         lambda m: f"stroke-dasharray:{m.group(1)},{m.group(2)}",
         code,
     )
+
+    # 5. Remove linkStyle directives which can reference out-of-range indices
+    code = re.sub(r'^\s*linkStyle\s+\d+[^\n]*\n', '', code, flags=re.M)
+
+    # 6. Remove explicit "contains" edges — containment should be represented via subgraphs
+    lines = [ln for ln in code.splitlines() if not re.search(r'\bcontains\b', ln, flags=re.I)]
+
+    # 7. Remove self-edges (node linking to itself)
+    filtered = []
+    for ln in lines:
+        if re.search(r'[-.]+>', ln):
+            parts = re.split(r'[-.]+>', ln)
+            if len(parts) >= 2:
+                # strip common delimiters and whitespace to compare IDs
+                left = re.sub(r"['\"`\[\]\(\)\{\}\s]", '', parts[0]).strip().lower()
+                right = re.sub(r"['\"`\[\]\(\)\{\}\s].*$", '', parts[1])
+                right = re.sub(r"['\"`\[\]\(\)\{\}\s]", '', right).strip().lower()
+                if left and right and left == right:
+                    # skip self-edge
+                    continue
+        filtered.append(ln)
+
+    # 8. Deduplicate subgraph blocks, node defs and style lines
+    out_lines: list[str] = []
+    seen_subs: set[str] = set()
+    seen_nodes: set[str] = set()
+    seen_styles: set[str] = set()
+
+    i = 0
+    skip_sub = 0
+    while i < len(filtered):
+        ln = filtered[i]
+        trimmed = ln.strip()
+
+        if skip_sub > 0:
+            if re.match(r'^\s*end\s*$', trimmed, flags=re.I):
+                skip_sub -= 1
+            i += 1
+            continue
+
+        sub_m = re.match(r'^subgraph\s+([^\s\[]+)', trimmed, flags=re.I)
+        if sub_m:
+            sid = sub_m.group(1)
+            if sid in seen_subs:
+                # skip whole subgraph block until matching 'end'
+                skip_sub = 1
+                i += 1
+                continue
+            seen_subs.add(sid)
+            out_lines.append(ln)
+            i += 1
+            continue
+
+        node_m = re.match(r'^([^\s\[]+)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)', trimmed)
+        if node_m:
+            nid = node_m.group(1)
+            if nid in seen_nodes:
+                i += 1
+                continue
+            seen_nodes.add(nid)
+            out_lines.append(ln)
+            i += 1
+            continue
+
+        style_m = re.match(r'^style\s+([^\s]+)', trimmed, flags=re.I)
+        if style_m:
+            key = trimmed
+            if key in seen_styles:
+                i += 1
+                continue
+            seen_styles.add(key)
+            out_lines.append(ln)
+            i += 1
+            continue
+
+        out_lines.append(ln)
+        i += 1
+
+    code = "\n".join(out_lines)
 
     return code
 
@@ -120,7 +201,13 @@ def _extract_mermaid_blocks(md_text: str) -> list[str]:
 
 
 def _collect_diagrams(experiment_id: str) -> list[dict]:
-    """Return list of {title, code} dicts for all architecture diagrams in an experiment."""
+    """Return list of {title, code} dicts for all architecture diagrams in an experiment.
+
+    Groups Architecture_*.md files by provider (case-insensitive) to avoid duplicate
+    tabs caused by differing filename casing. If a provider has multiple mermaid
+    blocks (or multiple files), each block becomes its own tab with an index when
+    needed: "Azure Architecture (1)", "Azure Architecture (2)".
+    """
     candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}_*"))
     if not candidates:
         return []
@@ -129,21 +216,32 @@ def _collect_diagrams(experiment_id: str) -> list[dict]:
     if not cloud_dir.exists():
         return []
 
-    diagrams: list[dict] = []
+    # Collect blocks keyed by provider (normalized to lowercase)
+    provider_map: dict[str, dict] = {}
     for arch_file in sorted(cloud_dir.glob("Architecture_*.md")):
         try:
             text = arch_file.read_text(encoding="utf-8")
         except OSError:
             continue
         provider = arch_file.stem.replace("Architecture_", "")
+        key = provider.lower()
         blocks = _extract_mermaid_blocks(text)
         if blocks:
-            # Markdown report with ```mermaid``` fenced blocks
-            for block in blocks:
-                diagrams.append({"title": f"{provider} Architecture", "code": block})
-        elif re.match(r"^\s*(flowchart|graph|sequenceDiagram|classDiagram)\b", text):
-            # Raw Mermaid file with no fences
-            diagrams.append({"title": f"{provider} Architecture", "code": text.strip()})
+            provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].extend(blocks)
+        elif re.match(r"^\s*(flowchart|graph|sequenceDiagram|classDiagram)\b", text, re.I):
+            provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].append(_sanitize_mermaid(text.strip()))
+
+    diagrams: list[dict] = []
+    for key in sorted(provider_map.keys()):
+        entry = provider_map[key]
+        raw_provider = entry.get("provider", key)
+        # Normalize display name (Title case the provider)
+        disp = raw_provider.capitalize()
+        blocks = entry.get("blocks", [])
+        for idx, block in enumerate(blocks):
+            title = f"{disp} Architecture" if len(blocks) == 1 else f"{disp} Architecture ({idx+1})"
+            diagrams.append({"title": title, "code": block})
+
     return diagrams
 
 
