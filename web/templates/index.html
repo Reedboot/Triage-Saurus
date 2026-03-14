@@ -225,6 +225,7 @@
       background: #161b22;
       border: 1px solid #30363d;
       border-radius: 8px;
+      position: relative;
       display: flex;
       flex-direction: column;
       min-height: 620px;
@@ -238,6 +239,7 @@
       justify-content: space-between;
       gap: 8px;
       flex-shrink: 0;
+      position: relative;
     }
 
     .panel-title {
@@ -249,6 +251,11 @@
     }
 
     .panel-actions { display: flex; gap: 6px; }
+
+    /* Keep diagram panel actions visible when diagrams are very wide */
+    #diagram-panel .panel { position: relative; }
+    #diagram-panel .panel-actions { position: absolute; right: 12px; top: 8px; z-index: 50; }
+    #diagram-panel .panel-header { padding-right: 160px; }
 
     .btn-small {
       background: #21262d;
@@ -669,7 +676,7 @@
     /* Diagram zoom & scrolling */
     .diagram-view { overflow: auto; }
     .diagram-view .mermaid { transform-origin: 0 0; transition: transform 0.12s ease; }
-    .diagram-views { min-height: 360px; }
+    .diagram-views { min-height: 360px; overflow: auto; }
   </style>
 </head>
 <body>
