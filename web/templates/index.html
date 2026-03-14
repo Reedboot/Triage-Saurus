@@ -665,6 +665,11 @@
       cursor: help;
       font-size: 0.8rem;
     }
+
+    /* Diagram zoom & scrolling */
+    .diagram-view { overflow: auto; }
+    .diagram-view .mermaid { transform-origin: 0 0; transition: transform 0.12s ease; }
+    .diagram-views { min-height: 360px; }
   </style>
 </head>
 <body>
@@ -768,7 +773,7 @@
   <div class="workspace">
 
     <!-- Log panel -->
-    <div class="panel">
+    <div class="panel" id="log-panel">
       <div class="panel-header">
         <span class="panel-title">Scan Output</span>
         <div class="panel-actions">
@@ -787,6 +792,10 @@
           <button class="panel-nav-btn" id="nav-assets-btn">📦 Assets <span id="assets-nav-count" style="font-weight:400;color:#484f58"></span></button>
         </div>
         <div class="panel-actions">
+          <button class="btn-small" id="zoom-in-btn" title="Zoom in">＋</button>
+          <button class="btn-small" id="zoom-out-btn" title="Zoom out">－</button>
+          <button class="btn-small" id="zoom-reset-btn" title="Reset zoom">Reset</button>
+          <button class="btn-small" id="toggle-log-btn" title="Hide/Show scan output">Toggle log</button>
           <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
         </div>
       </div>
@@ -850,6 +859,14 @@
   const viewsEl         = document.getElementById('diagram-views');
   const placeholder     = document.getElementById('diagram-placeholder');
   const copyDiagramBtn  = document.getElementById('copy-diagram-btn');
+  const zoomInBtn       = document.getElementById('zoom-in-btn');
+  const zoomOutBtn      = document.getElementById('zoom-out-btn');
+  const zoomResetBtn    = document.getElementById('zoom-reset-btn');
+  const toggleLogBtn    = document.getElementById('toggle-log-btn');
+
+  // Zoom state
+  let zoomLevel = 1;
+  const ZOOM_STEP = 0.1, ZOOM_MIN = 0.2, ZOOM_MAX = 3;
 
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
@@ -893,6 +910,32 @@
 
   navArchBtn.addEventListener('click', () => switchPanel('arch'));
   navAssetsBtn.addEventListener('click', () => switchPanel('assets'));
+
+  // Zoom & log controls
+  if (zoomInBtn) zoomInBtn.addEventListener('click', () => { zoomLevel = Math.min(ZOOM_MAX, +(zoomLevel + ZOOM_STEP).toFixed(2)); applyZoomToActive(); });
+  if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => { zoomLevel = Math.max(ZOOM_MIN, +(zoomLevel - ZOOM_STEP).toFixed(2)); applyZoomToActive(); });
+  if (zoomResetBtn) zoomResetBtn.addEventListener('click', () => { zoomLevel = 1; applyZoomToActive(); });
+  if (toggleLogBtn) {
+    // initial label
+    toggleLogBtn.textContent = 'Hide log';
+    toggleLogBtn.addEventListener('click', () => {
+      const lp = document.getElementById('log-panel');
+      if (!lp) return;
+      if (lp.style.display === 'none') {
+        lp.style.display = '';
+        toggleLogBtn.textContent = 'Hide log';
+      } else {
+        lp.style.display = 'none';
+        toggleLogBtn.textContent = 'Show log';
+      }
+    });
+  }
+
+  function applyZoomToActive() {
+    const node = viewsEl.querySelector('.diagram-view.active .mermaid');
+    if (!node) return;
+    try { node.style.transform = `scale(${zoomLevel})`; } catch (e) { /* ignore */ }
+  }
 
   // ── Assets helpers ──────────────────────────────────────────────────────────
 
@@ -1010,7 +1053,7 @@
       tr.innerHTML = `
         <td><span class="prov-pill ${prov}" title="${meta.label}">${meta.icon} ${meta.label}</span></td>
         <td><span class="asset-type-badge" title="${a.resource_type}">${shortType}</span></td>
-        <td class="asset-name" title="${a.resource_name}">${a.resource_name || '—'}</td>
+        <td class="asset-name" title="${a.resource_type || ''}">${shortType}: ${a.resource_name || '—'}</td>
         <td><span class="file-link" title="${a.source_file || ''}">${_shortFile(a.source_file)}</span></td>
         <td class="line-num">${a.source_line_start || '—'}</td>
         <td><span class="how-badge" title="Discovered by: ${a.discovered_by || '—'}\nMethod: ${a.discovery_method || '—'}">${howText}</span></td>
@@ -1103,6 +1146,15 @@
       }
 
       allAssets = data.assets || [];
+
+      // Filter out identity-only resources (roles, policies, service accounts) by default — these clutter the view.
+      const identityPattern = /iam|role|policy|permission|identity|service_account|serviceaccount|serviceprincipal|profile/i;
+      const originalCount = allAssets.length;
+      allAssets = allAssets.filter(a => {
+        const combined = ((a.resource_type || '') + ' ' + (a.resource_name || '')).toLowerCase();
+        return !identityPattern.test(combined);
+      });
+
       activeProviderFilter = '';
       assetsProvFilter.innerHTML = '<option value="">All providers</option>';
       for (const prov of Object.keys(data.by_provider || {}).sort()) {
@@ -1119,7 +1171,11 @@
         applyAssetsFilter();
       } else {
         assetsPlaceholder.style.display = '';
-        assetsPlaceholder.innerHTML = '<p style="color:#484f58">No assets found for this scan.</p>';
+        if (originalCount && !allAssets.length) {
+          assetsPlaceholder.innerHTML = '<p style="color:#484f58">No visible assets after filtering (identity-only assets are hidden by default).</p>';
+        } else {
+          assetsPlaceholder.innerHTML = '<p style="color:#484f58">No assets found for this scan.</p>';
+        }
       }
     } catch (err) {
       assetsPlaceholder.innerHTML = `<p style="color:#f85149">Failed to load assets: ${err}</p>`;
@@ -1163,6 +1219,8 @@
     for (const node of nodes) {
       try {
         await mermaid.run({ nodes: [node] });
+        // Apply current zoom level so rendered SVG scales appropriately
+        try { node.style.transform = `scale(${zoomLevel})`; } catch (e) { /* ignore */ }
       } catch (err) {
         node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${err?.message || err}</div>`;
         console.error('Mermaid render error:', err);
@@ -1189,6 +1247,33 @@
     s = s.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (m, g1) => '"' + g1.replace(/&/g, 'and') + '"');
     // Convert space-separated stroke-dasharray values to comma-separated
     s = s.replace(/stroke-dasharray\s*:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, (m, a, b) => `stroke-dasharray:${a},${b}`);
+    // Remove px units from numeric stroke widths (Mermaid prefers numbers)
+    s = s.replace(/stroke-width\s*:\s*(\d+)px/g, 'stroke-width:$1');
+    // Remove linkStyle lines which can reference out-of-range indices and crash the renderer
+    s = s.replace(/^\s*linkStyle\s+\d+[^\n]*\n/gm, '');
+
+    // Remove explicit "contains" edges: containment should be represented via subgraphs
+    s = s.split('\n').filter(line => !/\bcontains\b/i.test(line)).join('\n');
+
+    // Remove self-edges (node linking to itself) which add clutter
+    const lines = s.split('\n');
+    const filtered = [];
+    for (let line of lines) {
+      if (/[-.]+>/.test(line)) {
+        const parts = line.split(/[-.]+>/);
+        if (parts.length >= 2) {
+          const left = parts[0].replace(/["'`\[\]\(\)\{\}\s]/g, '').trim().toLowerCase();
+          const right = parts[1].replace(/["'`\[\]\(\)\{\}\s:].*$/g, '').replace(/["'`\[\]\(\)\{\}\s]/g, '').trim().toLowerCase();
+          if (left && right && left === right) {
+            // skip self-edge
+            continue;
+          }
+        }
+      }
+      filtered.push(line);
+    }
+    s = filtered.join('\n');
+
     return s;
   }
 
@@ -1212,7 +1297,7 @@
       view.dataset.idx = i;
       const mermaidEl = document.createElement('div');
       mermaidEl.className = 'mermaid';
-      mermaidEl.textContent = code;
+      mermaidEl.textContent = sanitizeMermaid(code);
       view.appendChild(mermaidEl);
       viewsEl.appendChild(view);
     }
@@ -1228,6 +1313,8 @@
     viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(v => {
       v.classList.toggle('active', +v.dataset.idx === idx);
     });
+    // Re-apply zoom to the newly active diagram
+    applyZoomToActive();
   }
 
   // ── Diff rendering ───────────────────────────────────────────────────────────
@@ -1265,14 +1352,14 @@
       lbl.textContent = label;
       side.appendChild(lbl);
       if (diags && diags.length > 0) {
-        const m = document.createElement('div');
-        m.className = 'mermaid';
-        m.textContent = diags[0].code;  // show first provider diagram
-        side.appendChild(m);
-      } else {
-        side.innerHTML += '<p style="color:#484f58;font-size:0.8rem">No diagram available</p>';
-      }
-      return side;
+          const m = document.createElement('div');
+          m.className = 'mermaid';
+          m.textContent = sanitizeMermaid(diags[0].code);  // show first provider diagram (sanitized)
+          side.appendChild(m);
+        } else {
+          side.innerHTML += '<p style="color:#484f58;font-size:0.8rem">No diagram available</p>';
+        }
+        return side;
     }
 
     const sideFrom = await buildSide(`Scan ${idFrom}`, diagrams_from);
@@ -1616,11 +1703,27 @@
         loadAssets(name),
       ]);
 
-      // Note: do NOT auto-run or auto-render scans when a repo is selected.
-      // Populate scan history and assets so the user can choose what to load.
-      // If the user wants to view the latest diagram, they can select it
-      // in the "Load previous result" dropdown and click "Load".
-      // (Auto-rendering was removed to avoid accidental scan-like behavior.)
+      // Auto-load the most recent scan that has a diagram (if any).
+      if (scans && scans.length > 0) {
+        let latest = null;
+        for (let i = scans.length - 1; i >= 0; i--) {
+          if (scans[i].has_diagrams) { latest = scans[i]; break; }
+        }
+        if (!latest) latest = scans[scans.length -1];
+        if (latest && latest.experiment_id) {
+          try {
+            setStatus(`Loading latest scan ${latest.experiment_id}…`);
+            spinner.style.display = '';
+            await _loadDiagrams(latest.experiment_id);
+            await loadAssets(name, latest.experiment_id);
+            setStatus(`Loaded latest scan ${latest.experiment_id}`, 'success');
+          } catch (err) {
+            setStatus('Failed to load latest scan: ' + err, 'error');
+          } finally {
+            spinner.style.display = 'none';
+          }
+        }
+      }
     }
   });
 
@@ -1631,6 +1734,38 @@
   document.getElementById('clear-log-btn').addEventListener('click', () => {
     logOutput.innerHTML = '<span style="color:#484f58">Scan output will appear here…</span>';
   });
+
+  // Annotate repository options with a small icon if a past scan contains diagrams.
+  // Runs in the background so the UI remains responsive.
+  async function annotateRepoOptions() {
+    const opts = Array.from(repoSelect.options || []);
+    for (const opt of opts) {
+      try {
+        const name = opt.dataset.name;
+        if (!name) continue;
+        const resp = await fetch(`/api/scans/${encodeURIComponent(name)}`);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        const scans = data.scans || [];
+        if (scans.length) {
+          let hasDiags = false;
+          for (let i = scans.length - 1; i >= 0; i--) {
+            if (scans[i].has_diagrams) { hasDiags = true; break; }
+          }
+          if (hasDiags) {
+            if (!opt.textContent.includes('🖼')) opt.textContent = opt.textContent + ' 🖼';
+          } else {
+            if (!opt.textContent.includes('⬜')) opt.textContent = opt.textContent + ' ⬜';
+          }
+        }
+      } catch (err) {
+        // Ignore per-repo errors
+      }
+    }
+  }
+
+  // Run annotation in background
+  annotateRepoOptions();
 
   copyDiagramBtn.addEventListener('click', () => {
     if (diagrams[activeTab]) {

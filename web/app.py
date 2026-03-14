@@ -9,6 +9,8 @@ import sqlite3
 import subprocess
 import sys
 import os
+import select
+import time
 from pathlib import Path
 
 from flask import Flask, Response, render_template, request, stream_with_context, jsonify
@@ -69,11 +71,15 @@ def _get_db() -> sqlite3.Connection | None:
 
 
 def _sanitize_mermaid(code: str) -> str:
-    """Fix CSS property names generated with underscores instead of hyphens.
+    """Fix CSS property names and known syntax issues in generated Mermaid code.
 
-    Agents occasionally emit ``stroke_width`` / ``stroke_dasharray`` etc.  Mermaid's
-    CSS parser requires hyphenated names, so the diagram silently fails to render.
+    Agents occasionally emit:
+    - ``stroke_width`` / ``stroke_dasharray`` with underscores (CSS requires hyphens)
+    - ``stroke-dasharray: N N`` with space-separated values (Mermaid needs commas)
+    - U+FE0F variation-selector characters after emoji in labels (breaks the lexer)
+    - bare ``&`` inside quoted labels (breaks HTML rendering in ``securityLevel:'loose'``)
     """
+    # 1. Hyphenate underscore CSS property names
     replacements = [
         ("stroke_width", "stroke-width"),
         ("stroke_dasharray", "stroke-dasharray"),
@@ -86,6 +92,22 @@ def _sanitize_mermaid(code: str) -> str:
     ]
     for bad, good in replacements:
         code = code.replace(bad, good)
+
+    # 2. Strip U+FE0F emoji variation selectors — invisible chars that break Mermaid's lexer
+    code = code.replace("\ufe0f", "")
+
+    # 3. Replace bare & in quoted Mermaid labels with "and"
+    #    Matches content inside double-quoted strings and replaces & not followed by a word char + ;
+    code = re.sub(r'("(?:[^"\\]|\\.)*")', lambda m: m.group(0).replace("&", "and"), code)
+
+    # 4. Fix stroke-dasharray space-separated values → comma-separated
+    #    e.g. "stroke-dasharray: 5 5" → "stroke-dasharray:5,5"
+    code = re.sub(
+        r'stroke-dasharray\s*:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)',
+        lambda m: f"stroke-dasharray:{m.group(1)},{m.group(2)}",
+        code,
+    )
+
     return code
 
 
@@ -170,7 +192,12 @@ def _sse(event: str, data) -> str:
 
 
 def _stream_scan(repo_path: str, scan_name: str):
-    """Generator yielding SSE events for the full scan pipeline."""
+    """Generator yielding SSE events for the full scan pipeline.
+
+    Uses a select-based read loop and runs the pipeline in unbuffered Python mode
+    so output appears promptly. Emits periodic heartbeat log entries while the
+    pipeline produces no output so the UI knows work is ongoing.
+    """
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
@@ -178,6 +205,7 @@ def _stream_scan(repo_path: str, scan_name: str):
 
     cmd = [
         sys.executable,
+        "-u",
         str(PIPELINE),
         "--repo", str(repo),
         "--name", scan_name,
@@ -187,6 +215,9 @@ def _stream_scan(repo_path: str, scan_name: str):
     yield _sse("log", f"   Command: {' '.join(cmd)}")
     yield _sse("log", "")
 
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
     try:
         process = subprocess.Popen(
             cmd,
@@ -195,24 +226,54 @@ def _stream_scan(repo_path: str, scan_name: str):
             text=True,
             cwd=str(REPO_ROOT),
             bufsize=1,
+            env=env,
         )
     except Exception as exc:
         yield _sse("error", f"Failed to start pipeline: {exc}")
         return
 
     experiment_id: str | None = None
+    start_time = time.time()
+    last_hb = start_time
 
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        yield _sse("log", line)
+    try:
+        # Read using select so we can emit heartbeats when the child is silent
+        while True:
+            reads, _, _ = select.select([process.stdout], [], [], 1.0)
+            if reads:
+                raw_line = process.stdout.readline()
+                if raw_line == '' and process.poll() is not None:
+                    break
+                line = raw_line.rstrip()
+                yield _sse("log", line)
 
-        # Capture experiment ID printed by run_pipeline.py
-        if experiment_id is None:
-            m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
-            if m:
-                experiment_id = m.group(1)
+                # Capture experiment ID printed by run_pipeline.py
+                if experiment_id is None:
+                    m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                    if m:
+                        experiment_id = m.group(1)
 
-    process.wait()
+                last_hb = time.time()
+            else:
+                # No output available — send a gentle heartbeat every 5s
+                now = time.time()
+                if now - last_hb >= 5:
+                    elapsed = int(now - start_time)
+                    yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s")
+                    last_hb = now
+
+            if process.poll() is not None:
+                # Drain remaining output
+                for raw_line in process.stdout:
+                    line = raw_line.rstrip()
+                    yield _sse("log", line)
+                    if experiment_id is None:
+                        m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                        if m:
+                            experiment_id = m.group(1)
+                break
+    except Exception as exc:
+        yield _sse("error", f"Stream error: {exc}")
 
     if experiment_id:
         diagrams = _collect_diagrams(experiment_id)
@@ -222,7 +283,7 @@ def _stream_scan(repo_path: str, scan_name: str):
             yield _sse("log", "[Web] No architecture diagrams found in experiment output.")
 
     yield _sse("done", {
-        "exit_code": process.returncode,
+        "exit_code": process.returncode if process else -1,
         "experiment_id": experiment_id,
     })
 
