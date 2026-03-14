@@ -49,6 +49,10 @@ ${auth_summary}
 
 ${roles_permissions}
 
+### 🔐 Permissions mapping
+
+${permissions_mapping}
+
 ### 🌐 Network Topology
 
 ${network_summary}

@@ -149,6 +149,8 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
+    # Exclude permission-style edges (grants_access_to) from architecture diagrams
+    connections = [c for c in connections if str(c.get("connection_type") or "").strip() != "grants_access_to"]
 
     # If a specific repo is requested, filter resources to that repo
     if repo_name:

@@ -2649,6 +2649,7 @@ def _connection_summary_label(connection: dict) -> str:
 def _collect_db_topology_edges(
     repo_name: str,
     db_connections: list[dict],
+    exclude_connection_types: set[str] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     ingress_types = {"routes_ingress_to", "ingress", "public_ingress", "internet_ingress"}
     egress_types = {
@@ -2672,9 +2673,13 @@ def _collect_db_topology_edges(
         if not src_name or not dst_name:
             continue
 
+        connection_type = str(connection.get("connection_type") or "").strip()
+        # Optionally exclude connection types (e.g., permissions) from diagram edge generation
+        if exclude_connection_types and connection_type in exclude_connection_types:
+            continue
+
         source_repo = str(connection.get("source_repo") or "").strip()
         target_repo = str(connection.get("target_repo") or "").strip()
-        connection_type = str(connection.get("connection_type") or "").strip()
         label = _connection_summary_label(connection) or connection_type.replace("_", " ")
         edge = (src_name, dst_name, label)
 
@@ -2695,6 +2700,55 @@ def _collect_db_topology_edges(
             egress_edges.append(edge)
 
     return ingress_edges, egress_edges
+
+
+def _collect_permissions_edges(context: RepositoryContext, repo_name: str, db_connections: list[dict] | None = None) -> list[tuple[str, str, str]]:
+    """Collect edges representing permissions relationships (grants_access_to) from both
+    extracted relationships and DB-backed topology connections. Returns a deduplicated
+    list of (source, target, label) tuples suitable for rendering as a Mermaid flow.
+    """
+    edges: set[tuple[str, str, str]] = set()
+
+    # Relationships extracted into the RepositoryContext
+    relationships = list(getattr(context, "relationships", []) or [])
+    for rel in relationships:
+        rel_type = _relationship_kind_value(rel)
+        if rel_type == "grants_access_to":
+            src = str(getattr(rel, "source_name", "") or "").strip()
+            dst = str(getattr(rel, "target_name", "") or "").strip()
+            if src and dst:
+                edges.add((src, dst, "grants access to"))
+
+    # DB-backed connections
+    if db_connections is None:
+        try:
+            db_connections = _load_repo_topology_connections(repo_name)
+        except Exception:
+            db_connections = []
+
+    for conn in db_connections or []:
+        ct = str(conn.get("connection_type") or "").strip()
+        if ct == "grants_access_to":
+            src = str(conn.get("source") or "").strip()
+            dst = str(conn.get("target") or "").strip()
+            if src and dst:
+                label = _connection_summary_label(conn) or "grants access to"
+                edges.add((src, dst, label))
+
+    return sorted(edges)
+
+
+def _build_permissions_section(context: RepositoryContext, *, repo_name: str, db_connections: list[dict] | None = None) -> str:
+    """Render a permissions mapping section (Mermaid) for grant-style relationships.
+
+    This is intended for repository-level summaries and MUST NOT be included on
+    provider/architecture diagrams.
+    """
+    edges = _collect_permissions_edges(context, repo_name, db_connections=db_connections)
+    if not edges:
+        return "- No permissions mapping detected (no 'grants_access_to' relationships captured)."
+    # Render as a fenced Mermaid flowchart without Internet node
+    return _build_flow_mermaid(edges, include_internet=False)
 
 
 def _build_ingress_egress_summaries(
@@ -2807,7 +2861,12 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
     # Attempt to use DB topology if present
     try:
         db_connections = _load_repo_topology_connections(repo_name)
-        db_ingress_edges, db_egress_edges = _collect_db_topology_edges(repo_name, db_connections)
+        # Exclude permission-style topology edges (e.g., grants_access_to) from the
+        # service-only architecture diagram so permissions are shown only in the
+        # Repo summary permissions section.
+        db_ingress_edges, db_egress_edges = _collect_db_topology_edges(
+            repo_name, db_connections, exclude_connection_types={"grants_access_to"}
+        )
         all_db_edges = db_ingress_edges + db_egress_edges
     except Exception:
         all_db_edges = []
@@ -2949,6 +3008,7 @@ def write_repo_summary(
         roles_permissions = "- No role assignments detected."
 
     db_topology_connections = _load_repo_topology_connections(repo_name)
+    permissions_mapping = _build_permissions_section(context, repo_name=repo_name, db_connections=db_topology_connections)
     ingress_summary, egress_summary, topology_flags = _build_ingress_egress_summaries(
         context,
         repo_name=repo_name,
@@ -3073,6 +3133,7 @@ def write_repo_summary(
             "providers": provider_text,
             "auth_summary": auth_summary,
             "roles_permissions": roles_permissions,
+            "permissions_mapping": permissions_mapping,
             "network_summary": network_summary,
             "ingress_summary": ingress_summary,
             "egress_summary": egress_summary,
