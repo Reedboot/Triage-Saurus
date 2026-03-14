@@ -1158,6 +1158,17 @@
   }
 
   // ── Diagram rendering ────────────────────────────────────────────────────────
+  async function _runMermaid(nodes) {
+    // Render each node individually so one bad diagram can't block the others.
+    for (const node of nodes) {
+      try {
+        await mermaid.run({ nodes: [node] });
+      } catch (err) {
+        node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${err?.message || err}</div>`;
+      }
+    }
+  }
+
   async function renderDiagrams(data) {
     diagrams = data;
     placeholder.style.display = 'none';
@@ -1184,7 +1195,7 @@
     }
 
     if (diagrams.length > 1) tabsEl.classList.add('visible');
-    await mermaid.run({ nodes: viewsEl.querySelectorAll('.mermaid') });
+    await _runMermaid(viewsEl.querySelectorAll('.mermaid'));
     activeTab = 0;
   }
 
@@ -1250,7 +1261,7 @@
     // Render mermaid in both sides
     const mermaidNodes = diffView.querySelectorAll('.mermaid');
     if (mermaidNodes.length) {
-      await mermaid.run({ nodes: mermaidNodes });
+      await _runMermaid(mermaidNodes);
     }
 
     // Timeline
@@ -1329,7 +1340,7 @@
     // Render mermaid in the individual tabs too
     const remaining = viewsEl.querySelectorAll('.diagram-view .mermaid');
     if (remaining.length) {
-      await mermaid.run({ nodes: remaining });
+      await _runMermaid(remaining);
     }
   }
 
@@ -1582,16 +1593,11 @@
         loadAssets(name),
       ]);
 
-      // Auto-render the most recent saved diagram
-      if (scans && scans.length > 0) {
-        const latest = scans[scans.length - 1]; // oldest→newest, so last = most recent
-        if (latest.has_diagrams) {
-          setStatus(`Loading scan ${latest.experiment_id}…`);
-          statusBar.classList.add('visible');
-          await _loadDiagrams(latest.experiment_id, { silent: true });
-          setStatus(`Scan ${latest.experiment_id} — ${latest.scanned_at ? latest.scanned_at.slice(0, 16).replace('T', ' ') : ''}`, 'success');
-        }
-      }
+      // Note: do NOT auto-run or auto-render scans when a repo is selected.
+      // Populate scan history and assets so the user can choose what to load.
+      // If the user wants to view the latest diagram, they can select it
+      // in the "Load previous result" dropdown and click "Load".
+      // (Auto-rendering was removed to avoid accidental scan-like behavior.)
     }
   });
 
