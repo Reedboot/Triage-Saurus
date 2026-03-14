@@ -1165,8 +1165,31 @@
         await mermaid.run({ nodes: [node] });
       } catch (err) {
         node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${err?.message || err}</div>`;
+        console.error('Mermaid render error:', err);
       }
     }
+  }
+
+  // Sanitize Mermaid source to fix common issues emitted by generator
+  function sanitizeMermaid(src) {
+    if (!src || typeof src !== 'string') return src;
+    let s = src;
+    // Hyphenate known underscored CSS props
+    s = s.replace(/stroke_width/g, 'stroke-width')
+         .replace(/stroke_dasharray/g, 'stroke-dasharray')
+         .replace(/stroke_opacity/g, 'stroke-opacity')
+         .replace(/fill_opacity/g, 'fill-opacity')
+         .replace(/font_size/g, 'font-size')
+         .replace(/font_weight/g, 'font-weight')
+         .replace(/text_anchor/g, 'text-anchor')
+         .replace(/line_height/g, 'line-height');
+    // Remove invisible variation selectors
+    s = s.replace(/\uFE0F/g, '');
+    // Replace & inside quoted labels with 'and'
+    s = s.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (m, g1) => '"' + g1.replace(/&/g, 'and') + '"');
+    // Convert space-separated stroke-dasharray values to comma-separated
+    s = s.replace(/stroke-dasharray\s*:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, (m, a, b) => `stroke-dasharray:${a},${b}`);
+    return s;
   }
 
   async function renderDiagrams(data) {
@@ -1332,7 +1355,7 @@
       view.dataset.idx = i + 1;
       const mermaidEl = document.createElement('div');
       mermaidEl.className = 'mermaid';
-      mermaidEl.textContent = allDiags[i].code;
+      mermaidEl.textContent = sanitizeMermaid(allDiags[i].code);
       view.appendChild(mermaidEl);
       viewsEl.appendChild(view);
     }
