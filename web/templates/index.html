@@ -1353,7 +1353,7 @@
   }
 
   async function loadPastScans(repoName) {
-    if (!repoName) return;
+    if (!repoName) return [];
     try {
       const resp = await fetch(`/api/scans/${encodeURIComponent(repoName)}`);
       const data = await resp.json();
@@ -1365,8 +1365,27 @@
         pastScansRow.classList.remove('visible');
         compareRow.classList.remove('visible');
       }
+      return scans;
     } catch {
       pastScansRow.classList.remove('visible');
+      return [];
+    }
+  }
+
+  async function _loadDiagrams(expId, { silent = false } = {}) {
+    try {
+      const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
+      const data = await resp.json();
+      if (data.diagrams && data.diagrams.length > 0) {
+        await renderDiagrams(data.diagrams);
+        if (!silent) setStatus(`Loaded scan ${expId}`, 'success');
+        return true;
+      }
+      if (!silent) setStatus(`No diagrams found for scan ${expId}`, 'error');
+      return false;
+    } catch (err) {
+      if (!silent) setStatus('Load failed: ' + err, 'error');
+      return false;
     }
   }
 
@@ -1378,18 +1397,9 @@
     spinner.style.display = '';
     statusBar.classList.add('visible');
     try {
-      const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
-      const data = await resp.json();
-      if (data.diagrams && data.diagrams.length > 0) {
-        await renderDiagrams(data.diagrams);
-        setStatus(`Loaded scan ${expId}`, 'success');
-      } else {
-        setStatus(`No diagrams found for scan ${expId}`, 'error');
-      }
+      await _loadDiagrams(expId);
       // Always load assets for the selected experiment
       if (currentRepoName) loadAssets(currentRepoName, expId);
-    } catch (err) {
-      setStatus('Load failed: ' + err, 'error');
     } finally {
       spinner.style.display = 'none';
       loadScanBtn.disabled = false;
@@ -1558,15 +1568,30 @@
       <p>Select a repository to view<br/>its detected assets.</p>`;
   });
 
-  // Auto-fill scan name from selected repo + load past scans + load assets
-  repoSelect.addEventListener('change', () => {
+  // Auto-fill scan name from selected repo, load past scans, assets, and latest diagram
+  repoSelect.addEventListener('change', async () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
       const name = selected.dataset.name || selected.text.split(' — ')[0].trim();
       nameInput.value = name;
       currentRepoName = name;
-      loadPastScans(name);
-      loadAssets(name);  // load latest assets for this repo
+
+      // Fetch scan history and assets in parallel
+      const [scans] = await Promise.all([
+        loadPastScans(name),
+        loadAssets(name),
+      ]);
+
+      // Auto-render the most recent saved diagram
+      if (scans && scans.length > 0) {
+        const latest = scans[scans.length - 1]; // oldest→newest, so last = most recent
+        if (latest.has_diagrams) {
+          setStatus(`Loading scan ${latest.experiment_id}…`);
+          statusBar.classList.add('visible');
+          await _loadDiagrams(latest.experiment_id, { silent: true });
+          setStatus(`Scan ${latest.experiment_id} — ${latest.scanned_at ? latest.scanned_at.slice(0, 16).replace('T', ' ') : ''}`, 'success');
+        }
+      }
     }
   });
 
