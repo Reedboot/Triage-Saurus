@@ -125,7 +125,7 @@ def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     return f"|{'; '.join(details)}|"
 
 
-def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None) -> str:
+def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None, provider: str | None = None) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
     with _get_db_conn() as _conn:
@@ -137,15 +137,31 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
             if alt_check and alt_check['c'] > 0:
                 experiment_id = alt
 
-    """Generate full architecture diagram from database with parent-child hierarchies."""
+    """Generate full architecture diagram from database with parent-child hierarchies.
+
+    Optional `provider` can be provided to limit diagram to a single cloud provider
+    (e.g., 'aws', 'azure', 'gcp', 'oracle'). When provided, resources and
+    connections are filtered to that provider so per-provider Architecture_*.md
+    files can be produced.
+    """
     
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
+
     # If a specific repo is requested, filter resources to that repo
     if repo_name:
         resources = [r for r in resources if r.get('repo_name') == repo_name]
+
+    # If a provider filter is requested, limit resources and connections to it
+    if provider:
+        prov_lower = provider.lower()
+        resources = [r for r in resources if (r.get('provider') or '').lower() == prov_lower]
+        # Only keep connections where at least one endpoint is in the filtered resource set
+        resource_names = {r['resource_name'] for r in resources}
+        connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
+
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -564,11 +580,29 @@ def main():
     parser.add_argument("--min-score", type=int, default=7, 
                         help="Minimum score for security view")
     parser.add_argument("--compromised", help="Compromised resource for blast radius")
-    parser.add_argument("--output", type=Path, help="Output file (default: stdout)")
+    parser.add_argument("--output", type=Path, help="Output file or directory (default: stdout)")
     parser.add_argument("--repo", help="Repository name to limit diagram to (optional)")
+    parser.add_argument("--split-by-provider", action="store_true", help="Write separate Architecture_<PROVIDER>.md files into --output directory")
     
     args = parser.parse_args()
-    
+
+    # Support per-provider split mode where multiple Architecture_<PROVIDER>.md files are produced
+    if args.split_by_provider:
+        if not args.output:
+            print("Error: --output (directory) is required when using --split-by-provider", file=sys.stderr)
+            sys.exit(1)
+        out_dir = Path(args.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Discover providers present in resources
+        all_res = get_resources_for_diagram(args.experiment_id)
+        providers = sorted({(r.get('provider') or 'unknown').lower() for r in all_res})
+        for prov in providers:
+            diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
+            fname = out_dir / f"Architecture_{prov.upper()}.md"
+            fname.write_text(diag)
+            print(f"Wrote {fname}")
+        sys.exit(0)
+
     if args.type == 'architecture':
         diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo)
     elif args.type == 'security':

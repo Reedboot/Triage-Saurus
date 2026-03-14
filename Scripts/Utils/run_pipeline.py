@@ -244,12 +244,13 @@ def main() -> int:
         print("\n[Pipeline] No findings in DB for this experiment — skipping render.")
 
     # ── Phase 3b: Architecture diagram ───────────────────────────────────────
-    diagram_out = exp_dir / "Summary" / "Cloud" / "Architecture_AWS.md"
-    diagram_out.parent.mkdir(parents=True, exist_ok=True)
+    cloud_dir = exp_dir / "Summary" / "Cloud"
+    cloud_dir.mkdir(parents=True, exist_ok=True)
+    # Generate per-provider architecture files (Architecture_AWS.md, Architecture_Azure.md, ...)
     _run(
         [sys.executable, str(_GEN_DIAGRAM), experiment_id,
-         "--output", str(diagram_out)],
-        "Phase 3b — Generate architecture diagram",
+         "--split-by-provider", "--output", str(cloud_dir)],
+        "Phase 3b — Generate architecture diagrams (per-provider)",
     )
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -259,7 +260,7 @@ def main() -> int:
     print(f"\n  Experiment ID : {experiment_id}")
     print(f"  Findings      : {len(finding_ids)} (see {exp_dir}/Findings/)")
     print(f"  Repo summary  : {exp_dir}/Summary/Repos/{repo_name}.md")
-    print(f"  Architecture  : {exp_dir}/Summary/Cloud/Architecture_AWS.md")
+    print(f"  Architectures : {cloud_dir}/Architecture_<PROVIDER>.md (per-provider files written)")
     print(f"\n  Next steps (require LLM):")
     print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
     print(f"    python3 Scripts/run_skeptics.py --experiment {experiment_id} --reviewer all")
