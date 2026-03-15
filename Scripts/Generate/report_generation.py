@@ -3324,19 +3324,37 @@ def write_repo_summary(
         },
     )
     try:
-        with open("Output/Summary/Repos/report_debug.log", "a") as log:
-            log.write(f"[DEBUG] Writing summary to: {out_path}\n")
-            log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
-            log.write(f"[DEBUG] Providers: {providers}\n")
-            log.write(f"[DEBUG] Repo name: {repo_name}\n")
+        # Use the summary_dir-provided log path when available
+        try:
+            log_path = out_path.parent.parent / "Repos" / "report_debug.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a") as log:
+                log.write(f"[DEBUG] Writing summary to: {out_path}\n")
+                log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
+                log.write(f"[DEBUG] Providers: {providers}\n")
+                log.write(f"[DEBUG] Repo name: {repo_name}\n")
+        except Exception:
+            # Fallback to legacy path if something goes wrong
+            with open("Output/Summary/Repos/report_debug.log", "a") as log:
+                log.write(f"[DEBUG] Writing summary to: {out_path}\n")
+                log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
+                log.write(f"[DEBUG] Providers: {providers}\n")
+                log.write(f"[DEBUG] Repo name: {repo_name}\n")
     except Exception as e:
         print(f"[ERROR] Failed to log debug info: {e}")
     try:
         out_path.write_text(content, encoding="utf-8")
         validate_markdown_file(out_path, fix=True)
     except Exception as e:
-        with open("Output/Summary/Repos/report_debug.log", "a") as log:
-            log.write(f"[ERROR] Failed to write summary content: {e}\n")
+        try:
+            log_path = out_path.parent.parent / "Repos" / "report_debug.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a") as log:
+                log.write(f"[ERROR] Failed to write summary content: {e}\n")
+        except Exception:
+            # Last-resort fallback to legacy path
+            with open("Output/Summary/Repos/report_debug.log", "a") as log:
+                log.write(f"[ERROR] Failed to write summary content: {e}\n")
 
     # ── Persist key sections as HTML to DB ───────────────────────────────────
     try:
