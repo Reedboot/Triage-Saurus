@@ -169,9 +169,11 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
         # Use resource_type_db to determine display preference (fallbacks handled inside)
         _display_filtered = []
         for r in resources:
-            rt = r.get('resource_type') or ''
+            rt = (r.get('resource_type') or '').strip()
             rt_info = _rtdb.get_resource_type(None, rt)
-            if rt_info.get('display_on_architecture_chart', True):
+            # Explicitly exclude resource groups (some legacy rows use non-standard type names)
+            is_resource_group = 'resource_group' in rt.lower() or (r.get('resource_name') or '').lower().endswith('resource group')
+            if rt_info.get('display_on_architecture_chart', True) and not is_resource_group:
                 _display_filtered.append(r)
         resources = _display_filtered
         # Also filter connections to endpoints that remain
