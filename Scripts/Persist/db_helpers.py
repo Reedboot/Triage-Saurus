@@ -309,26 +309,30 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
     # ------------------------------------------------------------------
     # Backfill provider IDs and textual provider columns for legacy rows.
     # This ensures older DBs created before provider-detection changes get
-    # updated when schema migrations run.
+    # updated when schema migrations run. The logic is resilient when
+    # providers/resource_types tables are missing (e.g., fresh or legacy DBs).
     try:
         import resource_type_db as rtdb
+        cur = conn.cursor()
 
-        # Ensure providers table contains keys for known provider prefixes
+        # Derive provider keys (for potential seeding) but do not rely on providers table existing
         prov_keys = {prov for _, prov in getattr(rtdb, "_PROVIDER_PREFIXES", [])}
         prov_keys.update({"unknown", "terraform"})
-        cur = conn.cursor()
-        for key in sorted(prov_keys):
-            cur.execute(
-                "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
-                (key, key.title(), ""),
-            )
-        conn.commit()
 
-        # Map provider keys to ids
-        cur.execute("SELECT id, key FROM providers")
-        prov_map = {row[1]: row[0] for row in cur.fetchall()}
+        # If providers table exists, ensure keys are present and build prov_map
+        prov_map = {}
+        has_providers = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='providers'").fetchone())
+        if has_providers:
+            for key in sorted(prov_keys):
+                cur.execute(
+                    "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+                    (key, key.title(), ""),
+                )
+            conn.commit()
+            cur.execute("SELECT id, key FROM providers")
+            prov_map = {row[1]: row[0] for row in cur.fetchall()}
 
-        # Update resource_types.provider_id using derived provider where missing
+        # Update resource_types.provider_id using derived provider where missing (if resource_types table exists)
         has_resource_types = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resource_types'").fetchone())
         rt_updates = 0
         if has_resource_types:
@@ -339,7 +343,7 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
                 if not pkey or pkey == "unknown":
                     continue
                 pid = prov_map.get(pkey)
-                if not pid:
+                if has_providers and not pid:
                     cur.execute(
                         "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
                         (pkey, pkey.title(), ""),
@@ -347,13 +351,13 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
                     conn.commit()
                     pid = cur.execute("SELECT id FROM providers WHERE key=?", (pkey,)).fetchone()[0]
                     prov_map[pkey] = pid
-                if current_pid != pid:
+                if current_pid != pid and pid is not None:
                     cur.execute("UPDATE resource_types SET provider_id = ? WHERE id = ?", (pid, rt_id))
                     rt_updates += 1
             conn.commit()
         updates["resource_types_provider_ids"] = rt_updates
 
-        # Backfill textual provider on resources table for legacy rows
+        # Backfill textual provider on resources table for legacy rows (do this regardless of providers table existence)
         has_resources = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resources'").fetchone())
         res_updates = 0
         if has_resources:
@@ -362,13 +366,15 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
             ).fetchall()
             for rid, rtype in res_rows:
                 # Prefer provider from resource_types table if available
-                p_row = cur.execute(
-                    "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
-                    (rtype,),
-                ).fetchone()
-                if p_row and p_row[0]:
-                    pkey = p_row[0]
-                else:
+                pkey = None
+                if has_resource_types:
+                    p_row = cur.execute(
+                        "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                        (rtype,),
+                    ).fetchone()
+                    if p_row and p_row[0]:
+                        pkey = p_row[0]
+                if not pkey:
                     pkey = rtdb._derive(rtype).get("provider", "unknown")
                 if not pkey or pkey == "unknown":
                     continue
@@ -385,13 +391,15 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
                 "SELECT id, resource_type FROM resource_nodes WHERE provider IS NULL OR TRIM(provider) = '' OR lower(provider) = 'unknown'"
             ).fetchall()
             for nid, ntype in rn_rows:
-                p_row = cur.execute(
-                    "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
-                    (ntype,),
-                ).fetchone()
-                if p_row and p_row[0]:
-                    pkey = p_row[0]
-                else:
+                pkey = None
+                if has_resource_types:
+                    p_row = cur.execute(
+                        "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                        (ntype,),
+                    ).fetchone()
+                    if p_row and p_row[0]:
+                        pkey = p_row[0]
+                if not pkey:
                     pkey = rtdb._derive(ntype).get("provider", "unknown")
                 if not pkey or pkey == "unknown":
                     continue

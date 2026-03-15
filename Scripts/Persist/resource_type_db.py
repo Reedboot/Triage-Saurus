@@ -219,6 +219,11 @@ _FALLBACK: dict[str, dict] = {
 
 _PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("azurerm_", "azure"),
+    ("azuread_", "azure"),
+    ("kubernetes_", "kubernetes"),
+    ("random_", "terraform"),
+    ("time_", "terraform"),
+    ("null_resource", "terraform"),
     ("aws_",     "aws"),
     ("google_",  "gcp"),
     ("alicloud_","alicloud"),
