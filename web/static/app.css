@@ -85,6 +85,9 @@ header span.badge {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 14px;
+  /* Keep the scan form compact when past scans are shown; allow internal scrolling */
+  max-height: 260px;
+  overflow: auto;
 }
 
 .scan-card h2 {
@@ -153,6 +156,8 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Past scans row ── */
 .past-scans-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
 .past-scans-row.visible { display: flex; }
+/* Constrain the past scans area to avoid pushing the page down; add internal scroll when many items */
+.past-scans-row { max-height: 160px; overflow-y: auto; }
 .past-scans-row .row-inner, .compare-row .row-inner {
   display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; width: 100%;
 }
