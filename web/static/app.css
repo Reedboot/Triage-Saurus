@@ -74,6 +74,9 @@ header span.badge {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Prevent the overall page growing beyond the viewport; allow internal scrolling instead */
+  max-height: calc(100vh - 72px);
+  overflow: auto;
 }
 
 /* ── Scan form ── */
