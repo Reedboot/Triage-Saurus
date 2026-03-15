@@ -197,9 +197,9 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
 
     
     if not resources:
-        return "flowchart TB\n  empty[No resources found]"
+        return "flowchart LR\n  empty[No resources found]"
     
-    lines = ["flowchart TB"]
+    lines = ["flowchart LR"]
     
     # Build parent-child mapping
     parent_children: Dict[int, List] = {}

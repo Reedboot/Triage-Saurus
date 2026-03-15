@@ -31,8 +31,9 @@ def generate_finding_model(repo_context: dict) -> dict:
     # This is a simplified model. A real implementation would have more logic.
     return {
         "title": repo["repo_name"],
-        "architecture_mermaid": "graph TB\n  A --> B",
+        "architecture_mermaid": "flowchart LR\n  A --> B",
         "description": "Repo scan summary.",
+
         "overall_score": {"severity": "Low", "score": 3},
         "overview_bullets": [f"**Repo name:** {repo['repo_name']}"],
         "security_review": {

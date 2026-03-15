@@ -409,7 +409,7 @@ def _write_summary(
         for i, img in enumerate(images[:6])
     ) or 'Svc0["services"]'
     mermaid = f"""```mermaid
-graph TD
+flowchart LR
     Internet["🌐 Internet"] --> {ingress_nodes or "Ingress"}
     {ingress_nodes or "Ingress"} --> {service_nodes.split(chr(10))[0].split('[')[0].strip() or 'Svc0'}
     {chr(10).join('    ' + n.split('[')[0].strip() + ' --> DB[("data")]' for n in service_nodes.splitlines() if 'DB' not in n and n.strip())}
