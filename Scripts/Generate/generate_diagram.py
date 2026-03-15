@@ -227,7 +227,8 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     aks            = [r for r in root_resources if _in_render_cat(r, 'Container')]
     sql_servers    = [r for r in root_resources if _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in root_resources if _in_render_cat(r, 'Storage')]
-    nsgs           = [r for r in root_resources if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower())]
+    # Network/Firewall nodes: only include true firewall/appliance devices for Network category
+    nsgs           = [r for r in root_resources if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
     paas           = [r for r in root_resources if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     other          = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     

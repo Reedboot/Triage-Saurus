@@ -434,6 +434,31 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
     return 'Other'
 
 
+# New helper: determine whether a network-type resource should be treated as a physical network device
+def is_physical_network_device(conn: sqlite3.Connection | None, terraform_type: str) -> bool:
+    """Return True if terraform_type corresponds to a physical/edge network device we want on architecture diagrams.
+
+    Heuristics: match common appliance keywords (firewall, load balancer, gateway, appliance, nat).
+    Can be extended by adding an explicit flag to resource_types rows.
+    """
+    if not terraform_type:
+        return False
+    lower = terraform_type.lower()
+    # If DB has explicit flag, prefer it
+    try:
+        if conn is not None:
+            row = conn.execute("SELECT display_on_architecture_chart FROM resource_types WHERE terraform_type = ?", (terraform_type,)).fetchone()
+            if row is not None:
+                # If display_on_architecture_chart is true but category is Network, we still require it to be physical device
+                # So don't return True solely based on display flag here.
+                pass
+    except Exception:
+        pass
+
+    physical_tokens = ('firewall', 'application_gateway', 'load_balancer', 'lb', 'nat_gateway', 'gateway', 'appliance', 'virtual_appliance', 'edge', 'vpn_gateway')
+    return any(tok in lower for tok in physical_tokens)
+
+
 # ---------------------------------------------------------------------------
 # Canonical type preferences — for diagram de-duplication.
 # When multiple related terraform types map to the same logical service,
