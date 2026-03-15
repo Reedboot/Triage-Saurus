@@ -1,0 +1,77 @@
+rules:
+  - id: azure-cosmosdb-public-access
+    message: |
+      Cosmos DB account may be accessible from the public internet. Set
+      `public_network_access_enabled = "Disabled"` or configure `ip_range_filter`
+      / VNet rules to restrict access.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_cosmosdb_account" "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "azurerm_cosmosdb_account" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_cosmosdb_account" "$NAME" {
+                ...
+                public_network_access_enabled = "Disabled"
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_cosmosdb_account" "$NAME" {
+                ...
+                ip_range_filter = "..."
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_cosmosdb_account" "$NAME" {
+                ...
+                is_virtual_network_filter_enabled = true
+                ...
+              }
+      - pattern: |
+          resource azurerm_cosmosdb_account "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource azurerm_cosmosdb_account "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_cosmosdb_account "$NAME" {
+                ...
+                public_network_access_enabled = "Disabled"
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_cosmosdb_account "$NAME" {
+                ...
+                ip_range_filter = "..."
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_cosmosdb_account "$NAME" {
+                ...
+                is_virtual_network_filter_enabled = true
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

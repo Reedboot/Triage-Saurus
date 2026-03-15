@@ -43,3 +43,4 @@ rules:
         This requires a VNet with sufficient address space for the private endpoint.
         If private cluster is not feasible, set api_server_authorized_ip_ranges to
         restrict access to known CIDR ranges as a compensating control.
+      internet_exposure: true

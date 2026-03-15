@@ -1,21 +1,21 @@
 rules:
-  - id: azure-storage-missing-network-rules
+  - id: azure-eventhub-public-access
     message: |
-      Storage accounts without network_rules blocks allow traffic from any network.
-      Add network_rules with default_action = "Deny" and explicit allowlists or private endpoints.
+      Event Hub namespace has public network access enabled. Restrict access via
+      Private Endpoint or network rules.
     severity: WARNING
     languages: [terraform, hcl]
-    patterns:
+    pattern-either:
       - pattern: |
-          resource "azurerm_storage_account" "$NAME" {
+          resource "azurerm_eventhub_namespace" "$NAME" {
+            ...
+            public_network_access_enabled = true
             ...
           }
-      - pattern-not: |
-          resource "azurerm_storage_account" "$NAME" {
+      - pattern: |
+          resource azurerm_eventhub_namespace "$NAME" {
             ...
-            network_rules {
-              ...
-            }
+            public_network_access_enabled = true
             ...
           }
     metadata:

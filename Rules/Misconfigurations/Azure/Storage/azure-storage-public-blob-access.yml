@@ -1,0 +1,44 @@
+rules:
+  - id: azure-storage-public-blob-access
+    message: |
+      Storage Account has public blob access or public network access enabled.
+      This exposes storage data to anonymous internet access. Set
+      `allow_blob_public_access = false` and
+      `public_network_access_enabled = false`.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            allow_blob_public_access = true
+            ...
+          }
+      - pattern: |
+          resource "azurerm_storage_account" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_storage_account "$NAME" {
+            ...
+            allow_blob_public_access = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_storage_account "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

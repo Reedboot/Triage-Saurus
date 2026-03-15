@@ -1,21 +1,21 @@
 rules:
-  - id: azure-storage-missing-network-rules
+  - id: azure-acr-public-access
     message: |
-      Storage accounts without network_rules blocks allow traffic from any network.
-      Add network_rules with default_action = "Deny" and explicit allowlists or private endpoints.
+      Container Registry has public network access enabled. Images can be pulled
+      from any internet IP. Disable and use Private Endpoints.
     severity: WARNING
     languages: [terraform, hcl]
-    patterns:
+    pattern-either:
       - pattern: |
-          resource "azurerm_storage_account" "$NAME" {
+          resource "azurerm_container_registry" "$NAME" {
+            ...
+            public_network_access_enabled = true
             ...
           }
-      - pattern-not: |
-          resource "azurerm_storage_account" "$NAME" {
+      - pattern: |
+          resource azurerm_container_registry "$NAME" {
             ...
-            network_rules {
-              ...
-            }
+            public_network_access_enabled = true
             ...
           }
     metadata:

@@ -1,0 +1,52 @@
+rules:
+  - id: azure-mysql-flexible-public-access
+    message: |
+      MySQL Flexible Server has public network access enabled. Disable and deploy
+      in a VNet using delegated subnet.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_mysql_flexible_server" "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "azurerm_mysql_flexible_server" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_mysql_flexible_server" "$NAME" {
+                ...
+                public_network_access_enabled = "Disabled"
+                ...
+              }
+      - pattern: |
+          resource azurerm_mysql_flexible_server "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource azurerm_mysql_flexible_server "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource azurerm_mysql_flexible_server "$NAME" {
+                ...
+                public_network_access_enabled = "Disabled"
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true
