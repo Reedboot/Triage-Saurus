@@ -796,6 +796,14 @@ def api_view_assets(experiment_id: str, repo_name: str):
         providers = set()
         provider_counts = {}
         has_unknown = False
+        # Attempt to enrich with render category and display flag using resource_type_db
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from Scripts.Persist.resource_type_db import get_render_category, _derive  # type: ignore
+        except Exception:
+            get_render_category = None
+            _derive = None
+
         for row in rows:
             a = dict(row)
             rank = a.pop("max_sev_rank") or 0
@@ -808,6 +816,23 @@ def api_view_assets(experiment_id: str, repo_name: str):
             if prov.lower() == 'unknown':
                 has_unknown = True
             providers.add(prov)
+            # Enrich with render_category and display_on_architecture_chart
+            rtype = (a.get('resource_type') or '')
+            try:
+                if get_render_category:
+                    a['render_category'] = get_render_category(conn, rtype)
+                else:
+                    a['render_category'] = ''
+            except Exception:
+                a['render_category'] = ''
+            try:
+                if _derive:
+                    a['display_on_architecture_chart'] = _derive(rtype).get('display_on_architecture_chart', True)
+                else:
+                    a['display_on_architecture_chart'] = True
+            except Exception:
+                a['display_on_architecture_chart'] = True
+
             assets.append(a)
         # Ensure 'unknown' option exists if any asset lacked a provider
         if has_unknown:
