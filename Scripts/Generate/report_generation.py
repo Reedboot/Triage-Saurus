@@ -1457,6 +1457,10 @@ def _build_simple_architecture_diagram(
             
             # Identify storage hierarchies:
             # - Storage Account -> Storage Container/Blob/Queue/File/Table
+            # Friendly-name defaults (ensure variables exist regardless of detection path)
+            _STORAGE_PARENT = "Storage Account"
+            _STORAGE_CONTAINER = "Storage Container"
+            _STORAGE_BLOB = "Storage Blob"
             _STORAGE_PARENT_TYPES = frozenset({"azurerm_storage_account"})
             _STORAGE_CHILD_TYPES = frozenset({
                 "azurerm_storage_container", "azurerm_storage_blob", "azurerm_storage_queue",
