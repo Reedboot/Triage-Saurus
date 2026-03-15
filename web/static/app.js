@@ -58,7 +58,7 @@
   // Zoom/pan state
   let zoomLevel = 1, panX = 0, panY = 0;
   let isPanning = false, panStartX = 0, panStartY = 0, panStartPX = 0, panStartPY = 0;
-  const ZOOM_STEP = 0.2, ZOOM_MIN = 0.2, ZOOM_MAX = 5;
+  const ZOOM_STEP = 0.1, ZOOM_MIN = 0.1, ZOOM_MAX = 20;
 
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
