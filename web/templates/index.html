@@ -4,7 +4,28 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Triage-Saurus — Repo Scanner</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>
+  (function(){
+    function loadScript(src, onload, onerror){
+      var s = document.createElement('script');
+      s.src = src; s.defer = true; s.onload = onload; s.onerror = onerror;
+      document.head.appendChild(s);
+    }
+    // Try local vendor first (works offline/intranet), then fall back to CDN
+    loadScript('/static/vendor/mermaid.min.js', function(){ console.info('mermaid loaded from /static/vendor'); }, function(){
+      loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function(){ console.info('mermaid loaded from CDN'); }, function(){
+        console.warn('Mermaid library failed to load from vendor and CDN. Diagrams will not render.');
+        try{
+          var b = document.createElement('div');
+          b.className = 'mermaid-error';
+          b.textContent = 'Mermaid library unavailable — diagrams may not render. Place mermaid.min.js at /static/vendor/';
+          b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px';
+          document.body.appendChild(b);
+        } catch(e){}
+      });
+    });
+  })();
+  </script>
   <link rel="stylesheet" href="/static/app.css" />
   <style>/* legacy: summary panels kept until full section-tabs migration */
     .diagram-views { min-height: 360px; overflow: auto; }
@@ -191,7 +212,7 @@
     securityLevel: 'loose',
     flowchart: { curve: 'basis', useMaxWidth: false },
   };
-  mermaid.initialize(MERMAID_BASE_CONFIG);
+  /* mermaid initialization deferred to static/app.js */
 
   const form            = document.getElementById('scan-form');
   const repoSelect      = document.getElementById('repo-select');
@@ -831,8 +852,11 @@
     statusBar.classList.add('visible');
     try {
       await _loadDiagrams(expId);
-      // Load section tabs for the selected experiment
-      if (currentRepoName) loadSectionTabs(expId, currentRepoName);
+      // Load section tabs for the selected experiment and switch to Assets
+      if (currentRepoName) {
+        await loadSectionTabs(expId, currentRepoName);
+        try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+      }
     } finally {
       spinner.style.display = 'none';
       loadScanBtn.disabled = false;
@@ -953,6 +977,9 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
+    // Ensure the raw scan log is visible when a scan starts
+    try { showRawLog(); } catch (err) { /* ignore if not available */ }
+
     const repoPath = repoSelect.value;
     const scanName = (nameInput.value.trim() || 'web_scan');
 
@@ -1055,6 +1082,8 @@
             spinner.style.display = '';
             await _loadDiagrams(latest.experiment_id);
             await loadSectionTabs(latest.experiment_id, name);
+            // Switch to Assets tab after loading a previous scan
+            try { activateSectionKey('assets', latest.experiment_id, name); } catch (e) {}
             setTimeout(fitDiagram, 500);
             setStatus(`Loaded latest scan ${latest.experiment_id}`, 'success');
           } catch (err) {

@@ -9,6 +9,25 @@
     flowchart: { curve: 'basis', useMaxWidth: false },
   };
   try { if (typeof mermaid !== 'undefined') mermaid.initialize(MERMAID_BASE_CONFIG); } catch(e){}
+  if (typeof mermaid === 'undefined') {
+    let mermaidInitAttempts = 0;
+    const mermaidInitTimer = setInterval(() => {
+      mermaidInitAttempts++;
+      if (typeof mermaid !== 'undefined') {
+        try { mermaid.initialize(MERMAID_BASE_CONFIG); } catch (e) {}
+        clearInterval(mermaidInitTimer);
+      } else if (mermaidInitAttempts >= 10) {
+        clearInterval(mermaidInitTimer);
+        try {
+          const warn = document.createElement('div');
+          warn.className = 'mermaid-error';
+          warn.textContent = 'Mermaid library unavailable — diagrams may not render. To fix, place mermaid.min.js at /static/vendor/mermaid.min.js or enable CDN access.';
+          warn.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#ffcc00;color:#000;padding:8px;border-radius:6px;z-index:9999;font-size:12px';
+          document.body.appendChild(warn);
+        } catch (e) {}
+      }
+    }, 500);
+  }
 
   const form            = document.getElementById('scan-form');
   const repoSelect      = document.getElementById('repo-select');
@@ -121,15 +140,30 @@
     diagramWrap.addEventListener('pointercancel', () => { isPanning = false; });
   }
 
+  // Collapse/expand the scan (left) sidebar and resize diagram accordingly
+  const workspaceEl = document.querySelector('.workspace');
+  function setSidebarCollapsed(collapsed) {
+    if (!workspaceEl) return;
+    if (collapsed) workspaceEl.classList.add('collapsed'); else workspaceEl.classList.remove('collapsed');
+    try { localStorage.setItem('scanCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    if (toggleLogBtn) {
+      toggleLogBtn.textContent = collapsed ? 'Expand scan' : 'Hide scan';
+      toggleLogBtn.title = collapsed ? 'Expand/Show scan output' : 'Hide/Collapse scan output';
+    }
+    setTimeout(fitDiagram, 120);
+  }
+
+  // Initialize state from localStorage
+  try {
+    const saved = localStorage.getItem('scanCollapsed');
+    if (saved === '1') setSidebarCollapsed(true);
+    else if (toggleLogBtn) { toggleLogBtn.textContent = 'Hide scan'; toggleLogBtn.title = 'Hide/Collapse scan output'; }
+  } catch (e) {}
+
   if (toggleLogBtn) {
     toggleLogBtn.addEventListener('click', () => {
-      const lp = document.getElementById('log-panel');
-      if (!lp) return;
-      if (lp.style.display === 'none') {
-        lp.style.display = ''; toggleLogBtn.textContent = 'Hide log';
-      } else {
-        lp.style.display = 'none'; toggleLogBtn.textContent = 'Show log';
-      }
+      const collapsed = workspaceEl && workspaceEl.classList.contains('collapsed');
+      setSidebarCollapsed(!collapsed);
     });
   }
 
@@ -143,10 +177,27 @@
       const resp = await fetch(`/api/view/tabs/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
       const data = await resp.json();
       renderSectionTabs(data.tabs || [], expId, repoName);
-      // Show sections in the log panel once tabs are loaded
-      showSectionsInLog();
+      // Intentionally do not auto-switch to a content tab here; renderSectionTabs will
+      // show the Log tab by default so live logs remain visible when loading tabs.
     } catch (err) {
       console.warn('Failed to load section tabs:', err);
+    }
+  }
+
+  // Helper to activate a section tab by key (or show raw log for __log__)
+  function activateSectionKey(key, expId, repoName) {
+    if (!sectionTabBar) return;
+    const btn = sectionTabBar.querySelector(`.section-tab-btn[data-key="${key}"]`);
+    if (!btn) return;
+    // Toggle active class
+    sectionTabBar.querySelectorAll('.section-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    if (key === '__log__') {
+      showRawLog();
+      activeSection = '__log__';
+    } else {
+      // Load content for the requested key
+      loadSectionContent(key, expId || currentExpId, repoName || currentRepoName);
+      activeSection = key;
     }
   }
 
@@ -155,17 +206,39 @@
     if (!tabs.length) return;
     tabBarPlaceholder && (tabBarPlaceholder.style.display = 'none');
 
-    for (const tab of tabs) {
+    // Build a map of available tabs for quick lookup
+    const tabMap = new Map();
+    for (const t of tabs) tabMap.set(t.key, t);
+
+    // Desired order: Log, Assets, TLDR, then the rest in server order
+    const ordered = ['__log__', 'assets', 'tldr'];
+    for (const t of tabs) {
+      if (!ordered.includes(t.key)) ordered.push(t.key);
+    }
+
+    for (const key of ordered) {
+      if (key === '__log__') {
+        const logBtn = document.createElement('button');
+        logBtn.className = 'section-tab-btn';
+        logBtn.textContent = 'Log';
+        logBtn.dataset.key = '__log__';
+        logBtn.addEventListener('click', () => { activateSectionKey('__log__'); });
+        sectionTabBar.appendChild(logBtn);
+        continue;
+      }
+
+      const tab = tabMap.get(key);
+      if (!tab) continue;
       const btn = document.createElement('button');
       btn.className = 'section-tab-btn';
       btn.textContent = tab.label;
       btn.dataset.key = tab.key;
-      btn.addEventListener('click', () => loadSectionContent(tab.key, expId, repoName));
+      btn.addEventListener('click', () => { activateSectionKey(tab.key, expId, repoName); });
       sectionTabBar.appendChild(btn);
     }
 
-    // Auto-load first tab
-    if (tabs.length > 0) loadSectionContent(tabs[0].key, expId, repoName);
+    // Default to Log tab so logs are visible before TLDR
+    activateSectionKey('__log__');
   }
 
   async function loadSectionContent(key, expId, repoName) {
@@ -644,8 +717,11 @@
     statusBar.classList.add('visible');
     try {
       await _loadDiagrams(expId);
-      // Load section tabs for the selected experiment
-      if (currentRepoName) loadSectionTabs(expId, currentRepoName);
+      // Load section tabs for the selected experiment and switch to Assets
+      if (currentRepoName) {
+        await loadSectionTabs(expId, currentRepoName);
+        try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+      }
     } finally {
       spinner.style.display = 'none';
       loadScanBtn.disabled = false;
@@ -716,8 +792,12 @@
         // Refresh past scans list and section tabs
         if (currentRepoName) {
           loadPastScans(currentRepoName);
-          loadSectionTabs(expId, currentRepoName);
-          setTimeout(fitDiagram, 500); // fit diagram after render
+          (async () => {
+            await loadSectionTabs(expId, currentRepoName);
+            // After scan completes, switch to Assets tab
+            try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+            setTimeout(fitDiagram, 500); // fit diagram after render
+          })();
         }
       } else {
         setStatus(`⚠ Pipeline exited with code ${code}`, 'error');
@@ -868,6 +948,8 @@
             spinner.style.display = '';
             await _loadDiagrams(latest.experiment_id);
             await loadSectionTabs(latest.experiment_id, name);
+            // Switch to Assets tab after loading a previous scan
+            try { activateSectionKey('assets', latest.experiment_id, name); } catch (e) {}
             setTimeout(fitDiagram, 500);
             setStatus(`Loaded latest scan ${latest.experiment_id}`, 'success');
           } catch (err) {
