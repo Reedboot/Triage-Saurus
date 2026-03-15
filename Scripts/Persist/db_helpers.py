@@ -295,6 +295,104 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
         """,
     )
 
+    # ------------------------------------------------------------------
+    # Backfill provider IDs and textual provider columns for legacy rows.
+    # This ensures older DBs created before provider-detection changes get
+    # updated when schema migrations run.
+    try:
+        import resource_type_db as rtdb
+
+        # Ensure providers table contains keys for known provider prefixes
+        prov_keys = {prov for _, prov in getattr(rtdb, "_PROVIDER_PREFIXES", [])}
+        prov_keys.update({"unknown", "terraform"})
+        cur = conn.cursor()
+        for key in sorted(prov_keys):
+            cur.execute(
+                "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+                (key, key.title(), ""),
+            )
+        conn.commit()
+
+        # Map provider keys to ids
+        cur.execute("SELECT id, key FROM providers")
+        prov_map = {row[1]: row[0] for row in cur.fetchall()}
+
+        # Update resource_types.provider_id using derived provider where missing
+        has_resource_types = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resource_types'").fetchone())
+        rt_updates = 0
+        if has_resource_types:
+            rt_rows = cur.execute("SELECT id, terraform_type, provider_id FROM resource_types").fetchall()
+            for row in rt_rows:
+                rt_id, tf_type, current_pid = row
+                pkey = rtdb._derive(tf_type).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                pid = prov_map.get(pkey)
+                if not pid:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+                        (pkey, pkey.title(), ""),
+                    )
+                    conn.commit()
+                    pid = cur.execute("SELECT id FROM providers WHERE key=?", (pkey,)).fetchone()[0]
+                    prov_map[pkey] = pid
+                if current_pid != pid:
+                    cur.execute("UPDATE resource_types SET provider_id = ? WHERE id = ?", (pid, rt_id))
+                    rt_updates += 1
+            conn.commit()
+        updates["resource_types_provider_ids"] = rt_updates
+
+        # Backfill textual provider on resources table for legacy rows
+        has_resources = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resources'").fetchone())
+        res_updates = 0
+        if has_resources:
+            res_rows = cur.execute(
+                "SELECT id, resource_type FROM resources WHERE provider IS NULL OR TRIM(provider) = '' OR lower(provider) = 'unknown'"
+            ).fetchall()
+            for rid, rtype in res_rows:
+                # Prefer provider from resource_types table if available
+                p_row = cur.execute(
+                    "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                    (rtype,),
+                ).fetchone()
+                if p_row and p_row[0]:
+                    pkey = p_row[0]
+                else:
+                    pkey = rtdb._derive(rtype).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                cur.execute("UPDATE resources SET provider = ? WHERE id = ?", (pkey, rid))
+                res_updates += 1
+            conn.commit()
+        updates["resources_provider_backfill"] = res_updates
+
+        # Backfill resource_nodes.provider as well
+        has_resource_nodes = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resource_nodes'").fetchone())
+        rn_updates = 0
+        if has_resource_nodes:
+            rn_rows = cur.execute(
+                "SELECT id, resource_type FROM resource_nodes WHERE provider IS NULL OR TRIM(provider) = '' OR lower(provider) = 'unknown'"
+            ).fetchall()
+            for nid, ntype in rn_rows:
+                p_row = cur.execute(
+                    "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                    (ntype,),
+                ).fetchone()
+                if p_row and p_row[0]:
+                    pkey = p_row[0]
+                else:
+                    pkey = rtdb._derive(ntype).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                cur.execute("UPDATE resource_nodes SET provider = ? WHERE id = ?", (pkey, nid))
+                rn_updates += 1
+            conn.commit()
+        updates["resource_nodes_provider_backfill"] = rn_updates
+
+    except Exception:
+        # Best-effort backfill: do not fail migrations on errors
+        pass
+
     return updates
 
 
