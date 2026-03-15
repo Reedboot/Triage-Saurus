@@ -18,6 +18,8 @@
       <tr>
         <th data-key="resource_name" class="sortable">Resource <span class="sort-indicator"></span></th>
         <th data-key="resource_type" class="sortable">Type <span class="sort-indicator"></span></th>
+        <th data-key="render_category" class="sortable">Category <span class="sort-indicator"></span></th>
+        <th data-key="display_on_architecture_chart">Shown on Diagram</th>
         <th data-key="provider" class="sortable">Provider <span class="sort-indicator"></span></th>
         <th data-key="region" class="sortable">Region <span class="sort-indicator"></span></th>
         <th data-key="finding_count" class="sortable">Findings <span class="sort-indicator"></span></th>
@@ -31,6 +33,7 @@
           data-search="{{ [a.resource_name, a.resource_type, a.provider, a.region] | join(' ') | lower }}"
           data-resource_name="{{ a.resource_name | e }}"
           data-resource_type="{{ a.resource_type | e }}"
+          data-render_category="{{ a.render_category | e }}"
           data-provider_raw="{{ a.provider | e }}"
           data-region="{{ a.region | e }}"
           data-finding_count="{{ a.finding_count or 0 }}"
@@ -38,6 +41,8 @@
           data-discovered_by="{{ (a.discovered_by or a.discovery_method or '') | e }}">
         <td><span class="asset-name">{{ a.resource_name }}</span></td>
         <td><span class="asset-type-badge">{{ a.resource_type }}</span></td>
+        <td>{{ (a.render_category or '') }}</td>
+        <td>{% if a.display_on_architecture_chart %}<span class="finding-badge info">Shown</span>{% else %}<span class="finding-badge none">Hidden</span>{% endif %}</td>
         <td>
           {% set p = (a.provider or 'unknown') | lower %}
           <span class="prov-pill {{ p }}">{{ a.provider or '—' }}</span>
