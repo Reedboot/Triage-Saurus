@@ -19,10 +19,17 @@
       el: r,
       resource_name: toLower(r.dataset.resource_name || r.querySelector('.asset-name')?.textContent || ''),
       resource_type: toLower(r.dataset.resource_type || ''),
+      render_category: toLower(r.dataset.renderCategory || r.dataset.render-category || ''),
       provider: toLower(r.dataset.provider || ''),
       provider_raw: r.dataset.provider_raw || '',
       region: toLower(r.dataset.region || ''),
       finding_count: parseInt(r.dataset.finding_count || '0', 10) || 0,
+      display_on_diagram: (function(){
+        const v = (r.dataset.displayOnDiagram || r.dataset.displayOnDiagram === '0' ? r.dataset.displayOnDiagram : r.getAttribute('data-display-on-diagram')) || r.dataset.display_on_diagram || '';
+        if (!v) return false;
+        const s = v.toString().toLowerCase();
+        return ['1','true','yes','on'].includes(s);
+      })(),
       source_file: r.dataset.source_file || '',
       discovered_by: toLower(r.dataset.discovered_by || ''),
       search: toLower(r.dataset.search || ''),
