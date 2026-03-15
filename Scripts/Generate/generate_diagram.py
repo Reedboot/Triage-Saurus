@@ -171,6 +171,77 @@ def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     return f"|{'; '.join(details)}|"
 
 
+def _add_internet_connections(connections: list, experiment_id: str, repo_name: str | None = None) -> list:
+    """Synthesise Internet→resource edges from internet-exposure findings.
+
+    Looks for findings whose rules carry internet_exposure=true metadata,
+    plus legacy context keys for backward compatibility.
+    """
+    existing_internet_targets = {c['target'] for c in connections if c.get('source') == 'Internet'}
+
+    try:
+        with get_db_connection() as conn:
+            repo_filter = ""
+            params_base = [experiment_id]
+            if repo_name:
+                repo_filter = "AND LOWER(repo.repo_name) = LOWER(?)"
+                params_base.append(repo_name)
+
+            # Primary: metadata.internet_exposure = true
+            rows = conn.execute(f"""
+                SELECT DISTINCT
+                    COALESCE(parent.resource_name, r.resource_name) AS target_name,
+                    COALESCE(parent.resource_type, r.resource_type) AS target_type
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE f.experiment_id = ?
+                  AND fc.context_key = 'metadata.internet_exposure'
+                  AND LOWER(fc.context_value) = 'true'
+                  {repo_filter}
+            """, params_base).fetchall()
+
+            for row in rows:
+                name = row['target_name']
+                if name and name not in existing_internet_targets:
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': 'internet exposed', 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+
+            # Fallback: start_ip_address = 0.0.0.0 (legacy / firewall rule direct)
+            rows2 = conn.execute(f"""
+                SELECT DISTINCT COALESCE(parent.resource_name, r.resource_name) AS target_name
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE f.experiment_id = ?
+                  AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
+                  AND fc.context_value = '0.0.0.0'
+                  {repo_filter}
+            """, params_base).fetchall()
+            for row in rows2:
+                name = row['target_name']
+                if name and name not in existing_internet_targets:
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': 'firewall: 0.0.0.0', 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+
+    except Exception:
+        pass
+
+    return connections
+
+
 def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None, provider: str | None = None) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
@@ -228,6 +299,10 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     except Exception:
         # Best-effort: if resource_type_db lookup fails, continue without filtering
         pass
+
+    # Append synthetic Internet connections based on finding_context evidence.
+    # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
+    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name)
 
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:

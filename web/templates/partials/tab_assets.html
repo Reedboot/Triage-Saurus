@@ -32,7 +32,7 @@
     <option value="{{ provider | lower }}">{{ provider | upper }} ({{ provider_counts.get(provider, 0) }})</option>
     {% endfor %}
   </select>
-  <div id="assets-sort-stack" style="font-size:0.8rem;color:var(--text-muted);margin-left:auto"></div>
+  <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);margin-left:auto"></div>
   <span style="font-size:0.75rem; color:var(--text-muted);">{{ assets | length }} resource{{ 's' if assets | length != 1 }}</span>
 </div>
 <div id="assets-meta" data-repo="{{ repo_name }}" style="display:none"></div>

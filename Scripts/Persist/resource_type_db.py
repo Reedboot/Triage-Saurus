@@ -17,8 +17,8 @@ COZO_DB = ROOT / "Output/Data/cozo.db"
 DB_PATH = COZO_DB
 
 # ---------------------------------------------------------------------------
-# Seed / fallback data  (kept in sync with init_database.py seed rows)
-# New entries here should also be added to _SEED_ROWS in init_database.py
+# Seed / fallback data — init_database.py reads this dict directly at startup.
+# Adding entries here is sufficient; no separate _SEED_ROWS list exists.
 # ---------------------------------------------------------------------------
 _FALLBACK: dict[str, dict] = {
     # Azure — Identity
@@ -63,8 +63,10 @@ _FALLBACK: dict[str, dict] = {
     # Azure — Storage
     "azurerm_storage_account":                    {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_account_network_rules":      {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
-    "azurerm_storage_container":                  {"friendly_name": "Storage Container",        "category": "Storage",     "icon": "🗄️"},
-    "azurerm_storage_blob":                       {"friendly_name": "Storage Blob",             "category": "Storage",     "icon": "🗄️"},
+    "azurerm_storage_container":                  {"friendly_name": "Storage Container",        "category": "Storage",     "icon": "📦", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
+    "azurerm_storage_blob":                       {"friendly_name": "Storage Blob",             "category": "Storage",     "icon": "📄", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
+    "azurerm_storage_queue":                      {"friendly_name": "Storage Queue",            "category": "Storage",     "icon": "📋", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
+    "azurerm_storage_share":                      {"friendly_name": "Storage File Share",       "category": "Storage",     "icon": "📁", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
     "azurerm_managed_disk":                       {"friendly_name": "Managed Disk",             "category": "Storage",     "icon": "💾"},
     # Azure — Auth/Credentials (classified as Identity; excluded from diagram via _is_data_routing_resource)
     "azurerm_storage_account_sas":                {"friendly_name": "Storage Account SAS",      "category": "Identity",    "icon": "🔑"},
@@ -75,7 +77,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_mssql_server_transparent_data_encryption":       {"friendly_name": "SQL Transparent Encryption", "category": "",   "icon": "📋"},
     "azurerm_mssql_virtual_network_rule":                     {"friendly_name": "SQL VNet Rule",              "category": "Security", "icon": "🛡️"},
     # Azure — VM extensions (agents on VMs; excluded from diagram via _is_data_routing_resource)
-    "azurerm_virtual_machine_extension":                      {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
+    "azurerm_virtual_machine_extension":                      {"friendly_name": "VM Extension",               "category": "Compute",    "icon": "🧩", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine"},
     "azurerm_linux_virtual_machine_extension":                {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
     "azurerm_windows_virtual_machine_extension":              {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
     # Azure — Compute
@@ -88,13 +90,16 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_service_plan":                       {"friendly_name": "Service Plan",              "category": "Compute",     "icon": "⚙️"},
     # Azure — Container
     "azurerm_kubernetes_cluster":                 {"friendly_name": "AKS Cluster",              "category": "Container",   "icon": "☸️"},
+    "azurerm_kubernetes_cluster_node_pool":       {"friendly_name": "AKS Node Pool",            "category": "Container",   "icon": "🏊", "display_on_architecture_chart": False, "parent_type": "azurerm_kubernetes_cluster"},
     "azurerm_container_registry":                 {"friendly_name": "Container Registry",       "category": "Container",   "icon": "📦"},
     "azurerm_container_group":                    {"friendly_name": "Container Instance",       "category": "Container",   "icon": "📦"},
     # Azure — Network & Gateways
     "azurerm_application_gateway":                {"friendly_name": "Application Gateway",      "category": "Network",     "icon": "🌐"},
     "azurerm_lb":                                 {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
+    "azurerm_lb_rule":                            {"friendly_name": "Load Balancer Rule",       "category": "Network",     "icon": "⚖️", "display_on_architecture_chart": False, "parent_type": "azurerm_lb"},
+    "azurerm_lb_probe":                           {"friendly_name": "Load Balancer Probe",      "category": "Network",     "icon": "🔍", "display_on_architecture_chart": False, "parent_type": "azurerm_lb"},
     "azurerm_api_management":                     {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_api":                 {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management_api":                 {"friendly_name": "APIM API",                 "category": "API",         "icon": "🔗", "display_on_architecture_chart": False, "parent_type": "azurerm_api_management"},
     "azurerm_api_management_api_operation":       {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
     "azurerm_api_management_api_policy":          {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
     "azurerm_api_management_product":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
@@ -103,12 +108,12 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_api_management_backend":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
     "azurerm_api_management_named_value":         {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
     "azurerm_virtual_network":                    {"friendly_name": "Virtual Network",          "category": "Network",     "icon": "🔷"},
-    "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
-    "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔷"},
-    "azurerm_public_ip":                          {"friendly_name": "Public IP",                "category": "Network",     "icon": "🌍"},
-    "azurerm_private_endpoint":                   {"friendly_name": "Private Endpoint",         "category": "Network",     "icon": "🔒"},
+    "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🕸️", "display_on_architecture_chart": False, "parent_type": "azurerm_virtual_network"},
+    "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine"},
+    "azurerm_public_ip":                          {"friendly_name": "Public IP",                "category": "Network",     "icon": "🌐", "display_on_architecture_chart": False, "parent_type": None},
+    "azurerm_private_endpoint":                   {"friendly_name": "Private Endpoint",         "category": "Network",     "icon": "🔒", "display_on_architecture_chart": False, "parent_type": None},
     "azurerm_network_interface_security_group_association":{"friendly_name": "NIC Security Group Association","category": "Security","icon": "🔗","display_on_architecture_chart": False},
-    "azurerm_network_security_rule":              {"friendly_name": "Network Security Rule",    "category": "Security",    "icon": "🛡️", "display_on_architecture_chart": False},
+    "azurerm_network_security_rule":              {"friendly_name": "NSG Rule",                 "category": "Security",    "icon": "🛡️", "display_on_architecture_chart": False, "parent_type": "azurerm_network_security_group"},
     "azurerm_network_watcher":                    {"friendly_name": "Network Watcher",          "category": "Monitoring",  "icon": "📡", "display_on_architecture_chart": False},
     "azurerm_network_watcher_flow_log":           {"friendly_name": "Network Watcher Flow Log", "category": "Monitoring",  "icon": "📡", "display_on_architecture_chart": False},
     "azurerm_resource_group":                     {"friendly_name": "Resource Group",           "category": "Network",     "icon": "📦", "display_on_architecture_chart": False},
@@ -127,9 +132,57 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_monitor_action_group":               {"friendly_name": "Monitor Action Group",     "category": "Monitoring",  "icon": "🔔"},
     "azurerm_monitor_metric_alert":               {"friendly_name": "Metric Alert",             "category": "Monitoring",  "icon": "🔔"},
     "azurerm_monitor_scheduled_query_rules_alert":{"friendly_name": "Query Alert",              "category": "Monitoring",  "icon": "🔔"},
+    # Azure — Messaging
+    "azurerm_servicebus_queue":                   {"friendly_name": "Service Bus Queue",        "category": "Messaging",   "icon": "📨", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_namespace"},
+    "azurerm_servicebus_topic":                   {"friendly_name": "Service Bus Topic",        "category": "Messaging",   "icon": "📢", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_namespace"},
+    "azurerm_servicebus_subscription":            {"friendly_name": "Service Bus Subscription", "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_topic"},
+    "azurerm_eventhub":                           {"friendly_name": "Event Hub",                "category": "Messaging",   "icon": "📡", "display_on_architecture_chart": False, "parent_type": "azurerm_eventhub_namespace"},
+    "azurerm_eventhub_consumer_group":            {"friendly_name": "Event Hub Consumer Group", "category": "Messaging",   "icon": "👥", "display_on_architecture_chart": False, "parent_type": "azurerm_eventhub"},
     # Alibaba Cloud
     "alicloud_actiontrail_trail":                 {"friendly_name": "Actiontrail Trail",        "category": "Monitoring",  "icon": "📜"},
-    "alicloud_ram_role":                          {"friendly_name": "RAM Role",                 "category": "Identity",    "icon": "👤"},
+    "alicloud_instance":                          {"friendly_name": "ECS Instance",             "category": "Compute",     "icon": "🖥️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_cs_managed_kubernetes":             {"friendly_name": "ACK Cluster",              "category": "Container",   "icon": "☸️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_cs_kubernetes_node_pool":           {"friendly_name": "ACK Node Pool",            "category": "Container",   "icon": "🏊",  "display_on_architecture_chart": False, "parent_type": "alicloud_cs_managed_kubernetes"},
+    "alicloud_oss_bucket":                        {"friendly_name": "OSS Bucket",               "category": "Storage",     "icon": "🪣",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_db_instance":                       {"friendly_name": "RDS Instance",             "category": "Database",    "icon": "🗄️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_kms_key":                           {"friendly_name": "KMS Key",                  "category": "Security",    "icon": "🔑",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_kms_secret":                        {"friendly_name": "KMS Secret",               "category": "Security",    "icon": "🤫",  "display_on_architecture_chart": False, "parent_type": "alicloud_kms_key"},
+    "alicloud_vpc":                               {"friendly_name": "VPC",                      "category": "Network",     "icon": "🕸️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_vswitch":                           {"friendly_name": "VSwitch",                  "category": "Network",     "icon": "🔌",  "display_on_architecture_chart": False, "parent_type": "alicloud_vpc"},
+    "alicloud_security_group":                    {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_security_group_rule":               {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "📋",  "display_on_architecture_chart": False, "parent_type": "alicloud_security_group"},
+    "alicloud_ram_role":                          {"friendly_name": "RAM Role",                 "category": "Identity",    "icon": "👤",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_ram_policy":                        {"friendly_name": "RAM Policy",               "category": "Identity",    "icon": "📜",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_log_project":                       {"friendly_name": "Log Service Project",      "category": "Logging",     "icon": "📊",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_log_store":                         {"friendly_name": "Log Store",                "category": "Logging",     "icon": "📝",  "display_on_architecture_chart": False, "parent_type": "alicloud_log_project"},
+    "alicloud_slb_load_balancer":                 {"friendly_name": "SLB Load Balancer",        "category": "Network",     "icon": "⚖️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_alb_load_balancer":                 {"friendly_name": "ALB Load Balancer",        "category": "Network",     "icon": "⚖️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_fc_function":                       {"friendly_name": "Function Compute",         "category": "Serverless",  "icon": "⚡",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_kvstore_instance":                  {"friendly_name": "ApsaraDB for Redis",       "category": "Cache",       "icon": "⚡",  "display_on_architecture_chart": True,  "parent_type": None},
+    # --- Oracle Cloud Infrastructure ---
+    "oci_core_instance":                          {"friendly_name": "OCI Compute Instance",     "category": "Compute",     "icon": "🖥️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_containerengine_cluster":                {"friendly_name": "OKE Cluster",              "category": "Container",   "icon": "☸️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_containerengine_node_pool":              {"friendly_name": "OKE Node Pool",            "category": "Container",   "icon": "🏊",  "display_on_architecture_chart": False, "parent_type": "oci_containerengine_cluster"},
+    "oci_objectstorage_bucket":                   {"friendly_name": "OCI Object Storage Bucket","category": "Storage",     "icon": "🪣",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_database_autonomous_database":           {"friendly_name": "Autonomous Database",      "category": "Database",    "icon": "🗄️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_database_db_system":                     {"friendly_name": "OCI DB System",            "category": "Database",    "icon": "🗄️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_mysql_mysql_db_system":                  {"friendly_name": "OCI MySQL DB System",      "category": "Database",    "icon": "🗃️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_kms_vault":                              {"friendly_name": "OCI KMS Vault",            "category": "Security",    "icon": "🏦",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_kms_key":                                {"friendly_name": "OCI KMS Key",              "category": "Security",    "icon": "🔑",  "display_on_architecture_chart": False, "parent_type": "oci_kms_vault"},
+    "oci_vault_secret":                           {"friendly_name": "OCI Vault Secret",         "category": "Security",    "icon": "🤫",  "display_on_architecture_chart": False, "parent_type": "oci_kms_vault"},
+    "oci_core_vcn":                               {"friendly_name": "Virtual Cloud Network",    "category": "Network",     "icon": "🕸️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_core_subnet":                            {"friendly_name": "OCI Subnet",               "category": "Network",     "icon": "🔌",  "display_on_architecture_chart": False, "parent_type": "oci_core_vcn"},
+    "oci_core_network_security_group":            {"friendly_name": "OCI Network Security Group","category": "Security",   "icon": "🛡️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_load_balancer_load_balancer":            {"friendly_name": "OCI Load Balancer",        "category": "Network",     "icon": "⚖️",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_network_load_balancer_network_load_balancer": {"friendly_name": "OCI Network Load Balancer", "category": "Network", "icon": "⚖️", "display_on_architecture_chart": True, "parent_type": None},
+    "oci_functions_application":                  {"friendly_name": "OCI Functions Application","category": "Serverless",  "icon": "📦",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_functions_function":                     {"friendly_name": "OCI Function",             "category": "Serverless",  "icon": "⚡",  "display_on_architecture_chart": False, "parent_type": "oci_functions_application"},
+    "oci_apigateway_gateway":                     {"friendly_name": "OCI API Gateway",          "category": "API",         "icon": "🔗",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_apigateway_deployment":                  {"friendly_name": "OCI API Deployment",       "category": "API",         "icon": "🚀",  "display_on_architecture_chart": False, "parent_type": "oci_apigateway_gateway"},
+    "oci_logging_log_group":                      {"friendly_name": "OCI Log Group",            "category": "Logging",     "icon": "📊",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_logging_log":                            {"friendly_name": "OCI Log",                  "category": "Logging",     "icon": "📝",  "display_on_architecture_chart": False, "parent_type": "oci_logging_log_group"},
+    "oci_identity_policy":                        {"friendly_name": "OCI IAM Policy",           "category": "Identity",    "icon": "📜",  "display_on_architecture_chart": True,  "parent_type": None},
+    "oci_artifacts_container_repository":         {"friendly_name": "OCI Container Registry",   "category": "Container",   "icon": "🐋",  "display_on_architecture_chart": True,  "parent_type": None},
     # AWS — Storage
     "aws_s3_bucket":                              {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
     "aws_s3_bucket_object":                       {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},

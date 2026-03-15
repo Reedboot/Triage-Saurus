@@ -779,7 +779,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
                    res.discovered_by, res.discovery_method, res.status,
                    res.parent_resource_id,
                    COUNT(f.id) AS finding_count,
-                   MAX(CASE f.severity
+                   MAX(CASE f.base_severity
                        WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
                        WHEN 'MEDIUM'   THEN 3 WHEN 'LOW'  THEN 2
                        WHEN 'INFO'     THEN 1 ELSE 0 END) AS max_sev_rank
@@ -898,14 +898,14 @@ def api_view_findings(experiment_id: str, repo_name: str):
     try:
         rows = conn.execute(
             """
-            SELECT f.id, f.title, f.description, f.severity AS base_severity,
+            SELECT f.id, f.title, f.description, f.base_severity,
                    f.severity_score, f.rule_id, f.source_file, f.source_line_start,
                    f.resource_id, f.category
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
             WHERE LOWER(repo.repo_name) = LOWER(?) AND f.experiment_id = ?
             ORDER BY
-                CASE f.severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                CASE f.base_severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
                                 WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4
                                 WHEN 'INFO' THEN 5 ELSE 6 END,
                 f.severity_score DESC
@@ -927,49 +927,84 @@ def api_view_ingress(experiment_id: str, repo_name: str):
     if conn is None:
         return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[])
     try:
-        # Internet-facing resources via resource_properties
+        # Primary: findings with internet_exposure metadata
         res_rows = conn.execute(
             """
-            SELECT res.id, res.resource_name, res.resource_type, res.provider,
-                   res.region, res.source_file, res.source_line_start
-            FROM resources res
-            JOIN repositories repo ON res.repo_id = repo.id
-            JOIN resource_properties rp ON rp.resource_id = res.id
-            WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
-              AND LOWER(rp.property_key) IN (
-                    'is_internet_facing', 'internet_facing',
-                    'is_internet_facing_capable', 'public_network_access_enabled'
-                  )
-              AND LOWER(rp.property_value) IN ('true', '1', 'enabled', 'yes')
-            GROUP BY res.id
+            SELECT DISTINCT
+                COALESCE(parent.id, r.id) AS id,
+                COALESCE(parent.resource_name, r.resource_name) AS resource_name,
+                COALESCE(parent.resource_type, r.resource_type) AS resource_type,
+                COALESCE(parent.provider, r.provider) AS provider,
+                COALESCE(parent.region, r.region) AS region,
+                COALESCE(parent.source_file, r.source_file) AS source_file,
+                COALESCE(parent.source_line_start, r.source_line_start) AS source_line_start,
+                f.rule_id AS exposure_type,
+                'internet_exposure' AS exposure_value
+            FROM findings f
+            JOIN resources r ON f.resource_id = r.id
+            JOIN repositories repo ON r.repo_id = repo.id
+            LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+            JOIN finding_context fc ON fc.finding_id = f.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+              AND fc.context_key = 'metadata.internet_exposure'
+              AND LOWER(fc.context_value) = 'true'
+            ORDER BY COALESCE(parent.resource_type, r.resource_type), COALESCE(parent.resource_name, r.resource_name)
             """,
             (repo_name, experiment_id),
         ).fetchall()
 
-        # Inbound connections where source is external (NULL or 0 for source_resource_id cross-repo)
-        conn_rows = conn.execute(
-            """
-            SELECT rc.id, rc.protocol, rc.port, rc.authentication, rc.is_encrypted,
-                   src.resource_name AS source_name, tgt.resource_name AS target_name,
-                   rc.source_resource_id, rc.target_resource_id
-            FROM resource_connections rc
-            LEFT JOIN resources src ON rc.source_resource_id = src.id
-            LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
-            WHERE rc.experiment_id = ?
-              AND (rc.is_cross_repo = 1 OR src.id IS NULL)
-              AND tgt.id IN (
-                    SELECT res.id FROM resources res
-                    JOIN repositories repo ON res.repo_id = repo.id
-                    WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
-                  )
-            """,
-            (experiment_id, repo_name, experiment_id),
-        ).fetchall()
+        # Fallback: legacy start_ip_address context
+        try:
+            fw_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    COALESCE(parent.id, r.id) AS id,
+                    COALESCE(parent.resource_name, r.resource_name) AS resource_name,
+                    COALESCE(parent.resource_type, r.resource_type) AS resource_type,
+                    COALESCE(parent.provider, r.provider) AS provider,
+                    COALESCE(parent.region, r.region) AS region,
+                    COALESCE(parent.source_file, r.source_file) AS source_file,
+                    COALESCE(parent.source_line_start, r.source_line_start) AS source_line_start,
+                    'firewall_0.0.0.0' AS exposure_type,
+                    '0.0.0.0' AS exposure_value
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
+                  AND fc.context_value = '0.0.0.0'
+                """,
+                (repo_name, experiment_id),
+            ).fetchall()
+            # Merge, dedup by id
+            existing_ids = {dict(r)['id'] for r in res_rows}
+            for r in fw_rows:
+                if dict(r)['id'] not in existing_ids:
+                    res_rows = list(res_rows) + [r]
+                    existing_ids.add(dict(r)['id'])
+        except Exception:
+            pass
+
+        ingress_resources = [dict(r) for r in res_rows]
+
+        ingress_connections = [
+            {
+                'source_name': 'Internet',
+                'target_name': r['resource_name'],
+                'protocol': 'any',
+                'port': 'any',
+                'authentication': None,
+                'is_encrypted': None,
+            }
+            for r in [dict(x) for x in res_rows]
+        ]
 
         return _db_render(
             "tab_ingress.html",
-            ingress_resources=[dict(r) for r in res_rows],
-            ingress_connections=[dict(r) for r in conn_rows],
+            ingress_resources=ingress_resources,
+            ingress_connections=ingress_connections,
         )
     except Exception as exc:
         return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=str(exc))
@@ -986,20 +1021,24 @@ def api_view_egress(experiment_id: str, repo_name: str):
     try:
         rows = conn.execute(
             """
-            SELECT rc.id, rc.protocol, rc.port, rc.authentication, rc.is_encrypted,
-                   rc.notes AS connection_purpose,
-                   src.resource_name AS source_name, tgt.resource_name AS target_name,
-                   rc.via_component AS target_domain
-            FROM resource_connections rc
-            JOIN resources src ON rc.source_resource_id = src.id
-            LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
-            JOIN repositories repo ON src.repo_id = repo.id
-            WHERE LOWER(repo.repo_name) = LOWER(?) AND src.experiment_id = ?
-              AND (rc.is_cross_repo = 1 OR tgt.id IS NULL
-                   OR LOWER(rc.connection_type) LIKE '%egress%'
-                   OR LOWER(rc.connection_type) LIKE '%outbound%'
-                   OR LOWER(rc.connection_type) LIKE '%external%')
-            ORDER BY src.resource_name
+            SELECT DISTINCT r.id, r.resource_name AS source_name, r.resource_type, r.provider,
+                   r.source_file, r.source_line_start,
+                   fc.context_key AS connection_purpose,
+                   fc.context_value AS target_domain
+            FROM resources r
+            JOIN repositories repo ON r.repo_id = repo.id
+            JOIN findings f ON f.resource_id = r.id
+            JOIN finding_context fc ON fc.finding_id = f.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+              AND LOWER(fc.context_key) IN (
+                'server_id', 'server_name', 'namespace_id', 'namespace_name',
+                'key_vault_id', 'account_name', 'storage_account_name',
+                'kubernetes_cluster_id', 'cluster_id', 'virtual_machine_id',
+                'virtual_network_name', 'connection_string', 'endpoint', 'host'
+              )
+              AND fc.context_value IS NOT NULL
+              AND fc.context_value != ''
+            ORDER BY r.provider, r.resource_type, r.resource_name
             """,
             (repo_name, experiment_id),
         ).fetchall()

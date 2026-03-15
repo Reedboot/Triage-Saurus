@@ -2340,21 +2340,21 @@ def _get_opengrep_misconfig_findings(
     try:
         rows = db_conn.execute(
             """
-            SELECT f.check_id, f.message, f.severity, f.file_path, f.line_start,
+            SELECT f.rule_id, f.message, f.base_severity, f.file_path, f.line_start,
                    r.resource_type, r.resource_name
             FROM findings f
             LEFT JOIN resources r ON f.resource_id = r.id
             JOIN repositories repo ON f.repo_id = repo.id
             WHERE LOWER(repo.repo_name) = LOWER(?)
               AND repo.experiment_id = ?
-              AND f.severity != 'INFO'
-              AND f.check_id NOT LIKE '%-detection'
-              AND f.check_id NOT LIKE '%context%'
+              AND f.base_severity != 'INFO'
+              AND f.rule_id NOT LIKE '%-detection'
+              AND f.rule_id NOT LIKE '%context%'
             ORDER BY
-              CASE f.severity
+              CASE f.base_severity
                 WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'WARNING' THEN 3
                 WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4 ELSE 5 END,
-              f.check_id
+              f.rule_id
             """,
             (repo_name, experiment_id),
         ).fetchall()
@@ -2392,8 +2392,8 @@ def _build_auto_findings(
         lines.append("| Severity | Rule | Resource | File | Message |")
         lines.append("|---|---|---|---|---|")
         for f in db_findings:
-            sev = f.get("severity") or ""
-            rule = f.get("check_id") or ""
+            sev = f.get("base_severity") or ""
+            rule = f.get("rule_id") or ""
             res_name = f.get("resource_name") or ""
             res_type = f.get("resource_type") or ""
             resource_col = f"{res_name} ({res_type})" if res_name else (res_type or "—")
@@ -2505,7 +2505,9 @@ def _build_auto_findings(
             lines.append("")
             lines.append("Recommendation: enable auditing (enabled = true, log_monitoring_enabled = true), set server security alert policy state to \"Enabled\", and remove or restrict any 0.0.0.0 firewall rules. Send diagnostics to Log Analytics or Storage for retention.")
         else:
-            lines.append("- No immediate high-risk policy misconfigurations detected by automated heuristics.")
+            if not db_findings:
+                lines.append("- No misconfigurations detected by opengrep scan.")
+            # If db_findings exist, heuristics found nothing extra — omit the redundant message
 
         if has_tde:
             lines.append("\n- Note: Transparent Data Encryption (TDE) is configured — this protects data at rest but does not replace auditing/alerting.")
@@ -3359,7 +3361,7 @@ def write_repo_summary(
         except Exception:
             pass
 
-    auto_findings_md = _build_auto_findings(context, repo)
+    auto_findings_md = _build_auto_findings(context, repo, experiment_id=experiment_id, repo_name=repo_name)
     resource_inventory_md = _build_resource_inventory(provider_resources, repo_path=repo)
 
     content = render_template(
