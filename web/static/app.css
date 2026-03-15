@@ -594,7 +594,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 
 /* ── Assets panel (existing, preserved) ── */
-#assets-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+#assets-section { flex: 1; display: flex; flex-direction: column; overflow: auto; min-height: 0; }
 
 .assets-toolbar {
   display: flex; gap: 8px; align-items: center;
@@ -633,7 +633,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .provider-badge.active .prov-count { background: #1f6feb44; color: #79c0ff; }
 
 .assets-table-wrap {
-  flex: 1; overflow: auto; padding: 0 12px 12px; max-height: 72vh;
+  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 12px 12px; max-height: 72vh;
   scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-base);
 }
 .assets-table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
