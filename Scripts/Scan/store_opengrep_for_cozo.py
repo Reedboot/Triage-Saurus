@@ -27,6 +27,11 @@ from shared_utils import _severity_score
 
 def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:
     metadata = metadata or {}
+    # Prefer explicit asset_provider metadata if rule provides it
+    asset_provider = metadata.get("asset_provider") or metadata.get("provider")
+    if isinstance(asset_provider, str) and asset_provider.strip():
+        return asset_provider.strip().lower()
+
     tech = metadata.get("technology") or metadata.get("technologies")
     if isinstance(tech, str):
         tech_values = [tech.lower()]

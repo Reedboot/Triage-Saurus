@@ -1456,17 +1456,34 @@ def _build_simple_architecture_diagram(
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
             
             # Identify storage hierarchies:
-            # - Storage Account -> Storage Container/Blob
-            # - S3 Bucket -> Public Access Block/S3 Bucket Policy
-            _STORAGE_PARENT = "Storage Account"
-            _STORAGE_CONTAINER = "Storage Container"
-            _STORAGE_BLOB = "Storage Blob"
+            # - Storage Account -> Storage Container/Blob/Queue/File/Table
+            _STORAGE_PARENT_TYPES = frozenset({"azurerm_storage_account"})
+            _STORAGE_CHILD_TYPES = frozenset({
+                "azurerm_storage_container", "azurerm_storage_blob", "azurerm_storage_queue",
+                "azurerm_storage_share", "azurerm_storage_table",
+            })
+            storage_parent_service = next(
+                (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _STORAGE_PARENT_TYPES),
+                None,
+            )
             storage_nested_services: set[str] = set()
-            if _STORAGE_PARENT in layer_services:
-                if _STORAGE_CONTAINER in layer_services:
-                    storage_nested_services.add(_STORAGE_CONTAINER)
-                if _STORAGE_BLOB in layer_services:
-                    storage_nested_services.add(_STORAGE_BLOB)
+            if storage_parent_service:
+                for s in layer_services:
+                    if s == storage_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_STORAGE_CHILD_TYPES):
+                        storage_nested_services.add(s)
+                # Fallback to friendly-name detection for backwards compatibility
+                if not storage_nested_services:
+                    _STORAGE_PARENT = "Storage Account"
+                    _STORAGE_CONTAINER = "Storage Container"
+                    _STORAGE_BLOB = "Storage Blob"
+                    if _STORAGE_PARENT in layer_services:
+                        if _STORAGE_CONTAINER in layer_services:
+                            storage_nested_services.add(_STORAGE_CONTAINER)
+                        if _STORAGE_BLOB in layer_services:
+                            storage_nested_services.add(_STORAGE_BLOB)
 
             _S3_PARENT = "S3 Bucket"
             # Policy resources remain context-only; do not render policy nodes on architecture.
@@ -1500,6 +1517,28 @@ def _build_simple_architecture_diagram(
                     svc_types = set(non_boundary_parents.get(s, []))
                     if svc_types and svc_types.issubset(_SQL_CHILD_TYPES):
                         sql_nested_services.add(s)
+
+            # Identify Cosmos DB: account -> databases/containers
+            _COSMOS_PARENT_TYPES = frozenset({"azurerm_cosmosdb_account"})
+            _COSMOS_CHILD_TYPES = frozenset({
+                "azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_sql_container",
+                "azurerm_cosmosdb_mongo_database", "azurerm_cosmosdb_mongo_collection",
+                "azurerm_cosmosdb_cassandra_keyspace", "azurerm_cosmosdb_cassandra_table",
+                "azurerm_cosmosdb_table", "azurerm_cosmosdb_gremlin_graph",
+            })
+            cosmos_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _COSMOS_PARENT_TYPES),
+                None,
+            )
+            cosmos_nested_services: set[str] = set()
+            if cosmos_parent_service:
+                for s in layer_services:
+                    if s == cosmos_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_COSMOS_CHILD_TYPES):
+                        cosmos_nested_services.add(s)
 
             # Identify Key Vault hierarchy: keys/secrets nested inside Key Vault
             _KV_PARENT_TYPES = frozenset({"azurerm_key_vault"})
@@ -1567,6 +1606,7 @@ def _build_simple_architecture_diagram(
             kv_child_candidates = set(kv_nested_services)
             lb_child_candidates = set(lb_nested_services)
             ecs_child_candidates = set(ecs_nested_instances)
+            cosmos_child_candidates = set(cosmos_nested_services)
 
             storage_nested_services = storage_child_candidates
             s3_nested_services = s3_child_candidates
@@ -1706,6 +1746,29 @@ def _build_simple_architecture_diagram(
                         db_node = f"{svc_subgraph}_DB"
                         lines.append(f'        {db_node}["{db_label}"]')
                         style_id(db_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
+                    continue
+
+                # Cosmos DB with nested databases/containers
+                is_cosmos_with_children = cosmos_parent_service and service == cosmos_parent_service and bool(cosmos_nested_services)
+                if is_cosmos_with_children:
+                    cosmos_names = service_instances.get(service, [])
+                    cosmos_label = f"Cosmos DB ({cosmos_names[0]})" if len(cosmos_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{cosmos_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for cos_child in sorted(cosmos_nested_services):
+                        child_names = service_instances.get(cos_child, [])
+                        child_label = f"{cos_child} ({child_names[0]})" if len(child_names) == 1 else cos_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', cos_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
                     lines.append("      end")
                     exposure_target = svc_subgraph
                     if exposure_target:
