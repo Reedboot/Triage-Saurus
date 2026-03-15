@@ -22,13 +22,24 @@ except Exception as e:
         loader = spec.loader
         if loader is None:
             raise ImportError("Failed to load cozo_helpers implementation (no loader)")
-        loader.exec_module(module)
-        cozo_helpers = module
-        sys.modules.setdefault("cozo_helpers", module)
-        _COZO_HELPERS_AVAILABLE = True
+        try:
+            loader.exec_module(module)
+            cozo_helpers = module
+            sys.modules.setdefault("cozo_helpers", module)
+            _COZO_HELPERS_AVAILABLE = True
+        except Exception as _load_err:
+            # Best-effort: cozo_helpers failed to load (e.g., pycozo not installed).
+            # Do not raise here; fall back to non-pycozo mode so DB init can proceed.
+            _COZO_HELPERS_AVAILABLE = False
+            # Optional: record the failure for diagnostics but avoid noisy failures.
+            try:
+                print(f"Warning: failed to load cozo_helpers: {_load_err}")
+            except Exception:
+                pass
     else:
         _COZO_HELPERS_AVAILABLE = False
-        raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
+        # Do not raise here; running without cozo_helpers is supported.
+        # raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
