@@ -43,7 +43,7 @@ _FALLBACK: dict[str, dict] = {
     "azuread_service_principal":                  {"friendly_name": "Azure AD Service Principal",           "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
     "azuread_service_principal_password":         {"friendly_name": "Azure AD Service Principal Password",  "category": "Identity",    "icon": "🔐", "display_on_architecture_chart": False},
     "azuread_user":                               {"friendly_name": "Azure AD User",                        "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
-    "azurerm_ssh_public_key":                     {"friendly_name": "SSH Public Key",                       "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
+    "azurerm_ssh_public_key":                     {"friendly_name": "SSH Public Key",                       "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine"},
     # Azure — Database
     "azurerm_mssql_server":                       {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
     "azurerm_sql_server":                         {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
@@ -68,9 +68,9 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_mssql_server_transparent_data_encryption":       {"friendly_name": "SQL Transparent Encryption", "category": "",   "icon": "📋"},
     "azurerm_mssql_virtual_network_rule":                     {"friendly_name": "SQL VNet Rule",              "category": "Security", "icon": "🛡️"},
     # Azure — VM extensions (agents on VMs; excluded from diagram via _is_data_routing_resource)
-    "azurerm_virtual_machine_extension":                      {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
-    "azurerm_linux_virtual_machine_extension":                {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
-    "azurerm_windows_virtual_machine_extension":              {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧"},
+    "azurerm_virtual_machine_extension":                      {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
+    "azurerm_linux_virtual_machine_extension":                {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
+    "azurerm_windows_virtual_machine_extension":              {"friendly_name": "VM Extension",               "category": "",   "icon": "🔧", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine"},
     # Azure — Compute
     "azurerm_linux_virtual_machine":              {"friendly_name": "Linux VM",                 "category": "Compute",     "icon": "🖥️"},
     "azurerm_windows_virtual_machine":            {"friendly_name": "Windows VM",               "category": "Compute",     "icon": "🖥️"},
