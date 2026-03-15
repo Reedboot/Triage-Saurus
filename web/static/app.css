@@ -198,7 +198,8 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 620px;
+  /* Allow panels to shrink so internal sections can scroll instead of expanding the page */
+  min-height: 0;
 }
 
 .panel-header {
