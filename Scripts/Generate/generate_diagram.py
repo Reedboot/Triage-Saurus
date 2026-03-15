@@ -164,6 +164,23 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
         resource_names = {r['resource_name'] for r in resources}
         connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
 
+    # Exclude resource types that are explicitly marked as not to be displayed on architecture charts
+    try:
+        # Use resource_type_db to determine display preference (fallbacks handled inside)
+        _display_filtered = []
+        for r in resources:
+            rt = r.get('resource_type') or ''
+            rt_info = _rtdb.get_resource_type(None, rt)
+            if rt_info.get('display_on_architecture_chart', True):
+                _display_filtered.append(r)
+        resources = _display_filtered
+        # Also filter connections to endpoints that remain
+        allowed_names = {r['resource_name'] for r in resources}
+        connections = [c for c in connections if c.get('source') in allowed_names and c.get('target') in allowed_names]
+    except Exception:
+        # Best-effort: if resource_type_db lookup fails, continue without filtering
+        pass
+
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
