@@ -298,11 +298,16 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* ── Diagram views ── */
-.diagram-placeholder, .assets-placeholder, .summary-placeholder, .section-placeholder {
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  height: 100%; min-height: 400px;
-  color: var(--text-faint); text-align: center; gap: 8px;
+.diagram-placeholder {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  max-width: 92%; color: var(--text-faint); text-align: center; gap: 8px;
+}
+
+/* Other placeholders keep normal flow when used elsewhere */
+.assets-placeholder, .summary-placeholder, .section-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; min-height: 400px; color: var(--text-faint); text-align: center; gap: 8px;
 }
 .diagram-placeholder svg, .assets-placeholder svg, .summary-placeholder svg, .section-placeholder svg { opacity: 0.3; }
 .diagram-placeholder p, .assets-placeholder p, .summary-placeholder p, .section-placeholder p { font-size: 0.85rem; }
@@ -352,6 +357,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .diagram-zoom-wrap {
   height: 100%;
+  position: relative; /* allow absolutely-positioning placeholder centered within */
 }
 
 /* ── Diagram zoom toolbar ── */
