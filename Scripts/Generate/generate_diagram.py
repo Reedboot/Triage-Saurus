@@ -330,7 +330,42 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
                 lines.append(f"  {node_id}[{row['resource_name']}]")
                 node_names_present.add(row['resource_name'])
 
-    for conn in connections:
+    # Prioritise connections so diagram reads as layers (Internet -> Container -> App -> Identity/KeyVault)
+    LAYER_ORDER = {
+        'internet': 0,
+        'Container': 1,
+        'Compute': 2,
+        'Network': 3,
+        'Firewall': 3,
+        'Identity': 4,
+        'Database': 5,
+        'Storage': 6,
+        'Other': 7,
+    }
+
+    def _layer_of(name: str) -> int:
+        if not name:
+            return 7
+        if name == 'Internet':
+            return LAYER_ORDER['internet']
+        r = resource_map.get(name)
+        if not r:
+            return LAYER_ORDER['Other']
+        try:
+            cat = _rtdb.get_render_category(None, r.get('resource_type') or '')
+            return LAYER_ORDER.get(cat, LAYER_ORDER['Other'])
+        except Exception:
+            return LAYER_ORDER['Other']
+
+    # Sort connections by source layer then target layer so arrows flow top->down logically
+    def _conn_sort_key(c):
+        src_name = c.get('source') or ''
+        tgt_name = c.get('target') or ''
+        return (_layer_of(src_name), _layer_of(tgt_name))
+
+    connections_sorted = sorted(connections, key=_conn_sort_key)
+
+    for conn in connections_sorted:
         # Ensure endpoint nodes exist so arrows are drawn
         _ensure_node_exists(conn.get('source'))
         _ensure_node_exists(conn.get('target'))
