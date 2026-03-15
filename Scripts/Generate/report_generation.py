@@ -3574,7 +3574,11 @@ def generate_reports(
     summary_dir = Path(summary_dir_str)
     summary_dir.mkdir(parents=True, exist_ok=True)
     repo = repo_path if repo_path is not None else Path(context.repository_name)
-    with open("Output/Summary/Repos/report_debug.log", "a") as log:
+
+    # Ensure debug log lives under the provided summary_dir so experiments write locally
+    log_path = summary_dir / "Repos" / "report_debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as log:
         log.write(f"[DEBUG] summary_dir: {summary_dir}, repo: {repo}\n")
 
     providers = sorted(
