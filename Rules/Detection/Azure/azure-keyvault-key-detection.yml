@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-keyvault-key
+    message: |
+      Azure Key Vault Key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_key_vault_key" $NAME {
+            ...
+            key_vault_id = $KV
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*key[_-]?vault[_-]?key.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: keyvault
+      technology: [terraform, azure, keyvault]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Key Vault Key
+        resource_type: azurerm_key_vault_key
+        resource_name: $NAME
+        properties:
+          - name: key_vault_id
+            pattern: key_vault_id = $KV
+          - name: key_type
+            pattern: key_type = "$VAL"
+          - name: key_size
+            pattern: key_size = "$VAL"
+    description: |
+      Detects Azure Key Vault Key resources and captures the parent Key Vault reference via key_vault_id.

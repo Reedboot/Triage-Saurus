@@ -1,14 +1,48 @@
 rules:
   - id: context-azure-linux-vm
     message: |
-      Terraform azurerm linux virtual machine detected.
-      Detects azurerm_linux_virtual_machine resource declarations.
+      Azure Linux Virtual Machine detected in infrastructure.
     severity: INFO
     languages: [terraform, hcl]
-    pattern-regex: |
-      (?m)\bazurerm_linux_virtual_machine\b
+    pattern-either:
+      - pattern: |
+          resource "azurerm_linux_virtual_machine" $NAME {
+            ...
+            network_interface_ids = $NIC_IDS
+            ...
+          }
+      - pattern: |
+          resource "azurerm_linux_virtual_machine" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*linux[_-]?vm.*"
     metadata:
-      rule_type: detection
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
       category: infrastructure
-      technology: [azure, terraform]
-      target_files: ["**/*.tf"]
+      subcategory: compute
+      technology: [terraform, azure, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Linux Virtual Machine
+        resource_type: azurerm_linux_virtual_machine
+        resource_name: $NAME
+        properties:
+          - name: network_interface_ids
+            pattern: network_interface_ids = $NIC_IDS
+          - name: size
+            pattern: size = "$SIZE"
+          - name: admin_username
+            pattern: admin_username = "$ADMIN"
+    description: |
+      Detects Azure Linux Virtual Machine resources and captures network interface references for parent-child linking.

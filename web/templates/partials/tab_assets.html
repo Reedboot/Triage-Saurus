@@ -1,4 +1,28 @@
 {# partials/tab_assets.html — Resources table from DB #}
+<style>
+.child-count-badge {
+  display: inline-block;
+  background: var(--accent, #0969da);
+  color: white;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.expand-toggle {
+  font-size: 0.75rem;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.expand-toggle.open {
+  transform: rotate(90deg);
+}
+.child-row td:first-child {
+  padding-left: 2rem;
+}
+</style>
 {% if assets %}
 <div class="assets-toolbar" style="padding:0 0 10px 0; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; gap:8px; align-items:center;">
   <input type="text" id="section-assets-search" class="assets-search" placeholder="Filter assets…" autocomplete="off" />
@@ -39,8 +63,24 @@
           data-region="{{ a.region | e }}"
           data-finding_count="{{ a.finding_count or 0 }}"
           data-source_file="{{ a.source_file | e }}"
-          data-discovered_by="{{ (a.discovered_by or a.discovery_method or '') | e }}">
-        <td><span class="asset-name">{{ a.resource_name }}</span></td>
+          data-discovered_by="{{ (a.discovered_by or a.discovery_method or '') | e }}"
+          data-resource-id="{{ a.id }}"
+          data-parent-id="{{ a.parent_resource_id or '' }}"
+          data-children-count="{{ a.children_count or 0 }}"
+          data-is-child="{{ '1' if a.is_child else '0' }}"
+          {% if a.is_child %}class="child-row" style="display:none"{% endif %}>
+        <td>
+          {% if a.children_count and a.children_count > 0 %}
+            <span class="expand-toggle" data-parent-id="{{ a.id }}" title="Expand/collapse sub-assets" style="cursor:pointer;margin-right:4px;">▶</span>
+            <span class="asset-name">{{ a.resource_name }}</span>
+            <span class="child-count-badge" title="{{ a.children_count }} sub-asset(s)">{{ a.children_count }}</span>
+          {% elif a.is_child %}
+            <span style="display:inline-block;width:1.5rem;"></span>
+            <span class="asset-name" style="opacity:0.8;">{{ a.resource_name }}</span>
+          {% else %}
+            <span class="asset-name">{{ a.resource_name }}</span>
+          {% endif %}
+        </td>
         <td><span class="asset-type-badge">{{ a.resource_type }}</span></td>
         <td>{{ (a.render_category or '') }}</td>
         <td>{% if a.display_on_architecture_chart %}<span class="finding-badge info">Shown</span>{% else %}<span class="finding-badge none">Hidden</span>{% endif %}</td>
@@ -73,6 +113,19 @@
 </div>
 <div id="section-assets-empty" class="assets-empty" style="display:none">No assets match the current filter.</div>
 <!-- assets script moved to /static/assets.js; initialization is triggered from index.html after fragment insertion -->
+<script>
+document.addEventListener('click', function(e) {
+  const toggle = e.target.closest('.expand-toggle');
+  if (!toggle) return;
+  const parentId = toggle.getAttribute('data-parent-id');
+  const childRows = document.querySelectorAll(`tr[data-parent-id="${parentId}"]`);
+  const isOpen = toggle.classList.contains('open');
+  toggle.classList.toggle('open', !isOpen);
+  childRows.forEach(row => {
+    row.style.display = isOpen ? 'none' : '';
+  });
+});
+</script>
 {% else %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">

@@ -1,0 +1,44 @@
+rules:
+  - id: context-alicloud-redis-instance
+    message: |
+      Alibaba Cloud Redis (KVStore) Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_kvstore_instance" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*kvstore[_-]?instance.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: cache
+      technology: [terraform, alicloud, cache]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Redis (KVStore) Instance
+        resource_type: alicloud_kvstore_instance
+        resource_name: $NAME
+        properties:
+          - name: instance_name
+            pattern: instance_name = "$INST_NAME"
+          - name: instance_type
+            pattern: instance_type = "$INST_TYPE"
+          - name: engine_version
+            pattern: engine_version = "$VERSION"
+          - name: vswitch_id
+            pattern: vswitch_id = "$VSWITCH_ID"
+    description: |
+      Detects Redis (KVStore) Instance resources in Alibaba Cloud Terraform configurations.

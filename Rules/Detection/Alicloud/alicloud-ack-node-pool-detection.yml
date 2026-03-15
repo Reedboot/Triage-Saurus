@@ -1,0 +1,48 @@
+rules:
+  - id: context-alicloud-ack-node-pool
+    message: |
+      Alibaba Cloud ACK Node Pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_cs_kubernetes_node_pool" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "alicloud_cs_kubernetes_node_pool" $NAME {
+            ...
+            cluster_id = $CLUSTER_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*ack[_-]?node[_-]?pool.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: container
+      technology: [terraform, alicloud, container]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: ACK Node Pool
+        resource_type: alicloud_cs_kubernetes_node_pool
+        resource_name: $NAME
+        properties:
+          - name: cluster_id
+            pattern: cluster_id = $CLUSTER_ID
+          - name: node_count
+            pattern: node_count = "$COUNT"
+          - name: instance_types
+            pattern: instance_types = "$TYPES"
+    description: |
+      Detects ACK Node Pool resources in Alibaba Cloud Terraform configurations.

@@ -1,0 +1,48 @@
+rules:
+  - id: context-alicloud-fc-function
+    message: |
+      Alibaba Cloud Function Compute Function detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_fc_function" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "alicloud_fc_function" $NAME {
+            ...
+            service_name = $SERVICE_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*fc[_-]?function.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: serverless
+      technology: [terraform, alicloud, serverless]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Function Compute Function
+        resource_type: alicloud_fc_function
+        resource_name: $NAME
+        properties:
+          - name: service_name
+            pattern: service_name = $SERVICE_NAME
+          - name: name
+            pattern: name = "$FUNC_NAME"
+          - name: runtime
+            pattern: runtime = "$RUNTIME"
+    description: |
+      Detects Function Compute Function resources in Alibaba Cloud Terraform configurations.

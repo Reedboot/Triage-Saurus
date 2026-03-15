@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-eventhub
+    message: |
+      Azure Event Hub detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_eventhub" $NAME {
+            ...
+            namespace_name = $NAMESPACE_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*eventhub(?![_-]?(namespace|consumer|authorization)).*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: eventhub
+      technology: [terraform, azure, eventhub]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Event Hub
+        resource_type: azurerm_eventhub
+        resource_name: $NAME
+        properties:
+          - name: namespace_name
+            pattern: namespace_name = $NAMESPACE_NAME
+          - name: partition_count
+            pattern: partition_count = "$VAL"
+          - name: message_retention
+            pattern: message_retention = "$VAL"
+    description: |
+      Detects Azure Event Hub resources and captures the parent namespace reference via namespace_name.

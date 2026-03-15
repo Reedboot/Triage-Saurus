@@ -1,0 +1,54 @@
+rules:
+  - id: context-oci-apigateway
+    message: |
+      Oracle Cloud Infrastructure API Gateway detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_apigateway_gateway" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "oci_apigateway_deployment" $NAME {
+            ...
+            gateway_id = $GATEWAY_ID
+            ...
+          }
+      - pattern: |
+          resource "oci_apigateway_deployment" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?apigateway.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: apim
+      technology: [terraform, oci, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway
+        resource_type: oci_apigateway_gateway
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$NAME"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+          - name: endpoint_type
+            pattern: endpoint_type = "$ENDPOINT_TYPE"
+          - name: gateway_id
+            pattern: gateway_id = "$GATEWAY_ID"
+    description: |
+      Detects API Gateway resources in Oracle Cloud Infrastructure Terraform configurations.

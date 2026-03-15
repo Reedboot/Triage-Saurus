@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-cosmosdb-account
+    message: |
+      Azure Cosmos DB Account detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_cosmosdb_account" $NAME {
+            ...
+            offer_type = "$VAL"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*cosmosdb[_-]?account.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: cosmosdb
+      technology: [terraform, azure, cosmosdb]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cosmos DB Account
+        resource_type: azurerm_cosmosdb_account
+        resource_name: $NAME
+        properties:
+          - name: offer_type
+            pattern: offer_type = "$VAL"
+          - name: kind
+            pattern: kind = "$VAL"
+          - name: location
+            pattern: location = "$VAL"
+    description: |
+      Detects Azure Cosmos DB Account resources and captures offer type, kind, and location.

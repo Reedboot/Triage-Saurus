@@ -1,0 +1,50 @@
+rules:
+  - id: context-oci-subnet
+    message: |
+      Oracle Cloud Infrastructure Subnet detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_core_subnet" $NAME {
+            ...
+            vcn_id = $VCN_ID
+            ...
+          }
+      - pattern: |
+          resource "oci_core_subnet" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?core[_-]?subnet.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, oci, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet
+        resource_type: oci_core_subnet
+        resource_name: $NAME
+        properties:
+          - name: vcn_id
+            pattern: vcn_id = "$VCN_ID"
+          - name: display_name
+            pattern: display_name = "$NAME"
+          - name: cidr_block
+            pattern: cidr_block = "$CIDR"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+    description: |
+      Detects Subnet resources in Oracle Cloud Infrastructure Terraform configurations.

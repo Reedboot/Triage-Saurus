@@ -1,0 +1,28 @@
+rules:
+  - id: alicloud-sg-open-ssh
+    message: |
+      Security group rule allows SSH (port 22) from any IP (0.0.0.0/0).
+      Unrestricted SSH access exposes instances to brute-force and exploitation.
+      Restrict cidr_ip to known administrative IP ranges.
+    severity: HIGH
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "alicloud_security_group_rule" "$NAME" {
+            ...
+            type = "ingress"
+            ...
+            port_range = "22/22"
+            ...
+            cidr_ip = "0.0.0.0/0"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 1 (Network Security)

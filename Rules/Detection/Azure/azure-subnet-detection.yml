@@ -1,0 +1,50 @@
+rules:
+  - id: context-azure-subnet
+    message: |
+      Azure Subnet detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_subnet" $NAME {
+            ...
+            virtual_network_name = $VNET_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_subnet" $NAME {
+            ...
+            resource_group_name = $RG
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*subnet.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet
+        resource_type: azurerm_subnet
+        resource_name: $NAME
+        properties:
+          - name: virtual_network_name
+            pattern: virtual_network_name = $VNET_NAME
+          - name: resource_group_name
+            pattern: resource_group_name = $RG
+          - name: address_prefixes
+            pattern: address_prefixes = "$VAL"
+    description: |
+      Detects Azure Subnet resources and captures the parent virtual network reference via virtual_network_name.

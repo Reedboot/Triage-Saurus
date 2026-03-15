@@ -1,0 +1,50 @@
+rules:
+  - id: context-azure-cosmosdb-sql-container
+    message: |
+      Azure Cosmos DB SQL Container detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_cosmosdb_sql_container" $NAME {
+            ...
+            account_name = $ACCOUNT_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_cosmosdb_sql_container" $NAME {
+            ...
+            database_name = $DB_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*cosmosdb[_-]?sql[_-]?container.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: cosmosdb
+      technology: [terraform, azure, cosmosdb]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cosmos DB SQL Container
+        resource_type: azurerm_cosmosdb_sql_container
+        resource_name: $NAME
+        properties:
+          - name: account_name
+            pattern: account_name = $ACCOUNT_NAME
+          - name: database_name
+            pattern: database_name = $DB_NAME
+          - name: partition_key_path
+            pattern: partition_key_path = "$VAL"
+    description: |
+      Detects Azure Cosmos DB SQL Container resources and captures the parent account and database references.

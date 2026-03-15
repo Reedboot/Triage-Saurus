@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-mssql-firewall-rule
+    message: |
+      Azure MSSQL Firewall Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_mssql_firewall_rule" $NAME {
+            ...
+            server_id = $SERVER_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*mssql[_-]?firewall[_-]?rule.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: sql
+      technology: [terraform, azure, sql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: MSSQL Firewall Rule
+        resource_type: azurerm_mssql_firewall_rule
+        resource_name: $NAME
+        properties:
+          - name: server_id
+            pattern: server_id = $SERVER_ID
+          - name: start_ip_address
+            pattern: start_ip_address = "$VAL"
+          - name: end_ip_address
+            pattern: end_ip_address = "$VAL"
+    description: |
+      Detects Azure MSSQL Firewall Rule resources and captures the parent SQL server reference via server_id.

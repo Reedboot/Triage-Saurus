@@ -1,0 +1,42 @@
+rules:
+  - id: context-alicloud-ecs-instance
+    message: |
+      Alibaba Cloud ECS Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_instance" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*ecs[_-]?instance.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, alicloud, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: ECS Instance
+        resource_type: alicloud_instance
+        resource_name: $NAME
+        properties:
+          - name: instance_type
+            pattern: instance_type = "$INSTANCE_TYPE"
+          - name: image_id
+            pattern: image_id = "$IMAGE_ID"
+          - name: vswitch_id
+            pattern: vswitch_id = "$VSWITCH_ID"
+    description: |
+      Detects ECS Instance resources in Alibaba Cloud Terraform configurations.

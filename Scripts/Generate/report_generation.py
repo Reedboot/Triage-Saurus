@@ -1422,7 +1422,7 @@ def _build_simple_architecture_diagram(
                     keep = False
                     for rt in raw_types:
                         rt_meta = _rtdb.get_resource_type(db, rt)
-                        if rt_meta.get('display_on_architecture_chart', True):
+                        if rt_meta.get('display_on_architecture_chart', False):
                             keep = True
                             break
                     # Hidden child components can still be rendered when vulnerable and parented.
@@ -2331,14 +2331,79 @@ def _build_enrichment_assumptions(repo_name: str) -> str:
     return "\n".join(lines)
 
 
-def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> str:
-    """Auto-detect simple high-risk configurations and format as Markdown.
+def _get_opengrep_misconfig_findings(
+    db_conn, experiment_id: str | None, repo_name: str
+) -> list[dict]:
+    """Query the findings table for opengrep misconfiguration results for this repo."""
+    if db_conn is None or not experiment_id:
+        return []
+    try:
+        rows = db_conn.execute(
+            """
+            SELECT f.check_id, f.message, f.severity, f.file_path, f.line_start,
+                   r.resource_type, r.resource_name
+            FROM findings f
+            LEFT JOIN resources r ON f.resource_id = r.id
+            JOIN repositories repo ON f.repo_id = repo.id
+            WHERE LOWER(repo.repo_name) = LOWER(?)
+              AND repo.experiment_id = ?
+              AND f.severity != 'INFO'
+              AND f.check_id NOT LIKE '%-detection'
+              AND f.check_id NOT LIKE '%context%'
+            ORDER BY
+              CASE f.severity
+                WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'WARNING' THEN 3
+                WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4 ELSE 5 END,
+              f.check_id
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
 
-    Current checks:
+
+def _build_auto_findings(
+    context: RepositoryContext,
+    repo_path: Path | None,
+    experiment_id: str | None = None,
+    repo_name: str | None = None,
+) -> str:
+    """Auto-detect misconfigurations from opengrep DB findings and heuristics.
+
+    Primary source: findings table (opengrep scan results).
+    Fallback heuristics:
     - SQL auditing/alert policies present but disabled + permissive SQL firewall (0.0.0.0) => HIGH RISK
     - Presence of Transparent Data Encryption (TDE) noted as a positive control
     """
     lines: list[str] = []
+    db_findings: list[dict] = []
+    try:
+        from db_helpers import get_db_connection
+        _eff_repo_name = repo_name or (getattr(context, "repo_name", None))
+        if _eff_repo_name and experiment_id:
+            with get_db_connection() as _conn:
+                db_findings = _get_opengrep_misconfig_findings(_conn, experiment_id, _eff_repo_name)
+    except Exception:
+        pass
+
+    if db_findings:
+        lines.append("## Misconfigurations Found\n")
+        lines.append("| Severity | Rule | Resource | File | Message |")
+        lines.append("|---|---|---|---|---|")
+        for f in db_findings:
+            sev = f.get("severity") or ""
+            rule = f.get("check_id") or ""
+            res_name = f.get("resource_name") or ""
+            res_type = f.get("resource_type") or ""
+            resource_col = f"{res_name} ({res_type})" if res_name else (res_type or "—")
+            fp = f.get("file_path") or ""
+            ls = f.get("line_start")
+            file_col = f"{fp}:{ls}" if fp and ls else (fp or "—")
+            msg = (f.get("message") or "").replace("|", "\\|")
+            lines.append(f"| {sev} | {rule} | {resource_col} | {file_col} | {msg} |")
+        lines.append("")
+
     try:
         import re
         from pathlib import Path as _Path

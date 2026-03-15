@@ -1,0 +1,52 @@
+rules:
+  - id: context-alicloud-security-group-rule
+    message: |
+      Alibaba Cloud Security Group Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_security_group_rule" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "alicloud_security_group_rule" $NAME {
+            ...
+            security_group_id = $SG_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*security[_-]?group[_-]?rule.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, alicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group Rule
+        resource_type: alicloud_security_group_rule
+        resource_name: $NAME
+        properties:
+          - name: security_group_id
+            pattern: security_group_id = $SG_ID
+          - name: type
+            pattern: type = "$TYPE"
+          - name: ip_protocol
+            pattern: ip_protocol = "$PROTOCOL"
+          - name: port_range
+            pattern: port_range = "$PORT_RANGE"
+          - name: cidr_ip
+            pattern: cidr_ip = "$CIDR"
+    description: |
+      Detects Security Group Rule resources in Alibaba Cloud Terraform configurations.

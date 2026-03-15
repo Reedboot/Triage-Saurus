@@ -1,0 +1,27 @@
+rules:
+  - id: oci-bucket-no-versioning
+    message: |
+      OCI Object Storage bucket does not have versioning enabled.
+      Enable versioning to protect against accidental deletion and overwrites.
+    severity: LOW
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_objectstorage_bucket" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "oci_objectstorage_bucket" "$NAME" {
+            ...
+            versioning = "Enabled"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [data-protection, cloud]
+      cwe: CWE-311
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, oci]
+      five_pillars: Pillar 5 (Data Protection)

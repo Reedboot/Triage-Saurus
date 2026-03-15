@@ -1,0 +1,40 @@
+rules:
+  - id: context-alicloud-security-group
+    message: |
+      Alibaba Cloud Security Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_security_group" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*security[_-]?group.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, alicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group
+        resource_type: alicloud_security_group
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$SG_NAME"
+          - name: vpc_id
+            pattern: vpc_id = "$VPC_ID"
+    description: |
+      Detects Security Group resources in Alibaba Cloud Terraform configurations.

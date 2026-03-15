@@ -1,12 +1,14 @@
 rules:
-  - id: context-azure-servicebus-namespace
+  - id: context-azure-servicebus-topic
     message: |
-      Azure Service Bus Namespace detected in infrastructure.
+      Azure Service Bus Topic detected in infrastructure.
     severity: INFO
     languages: [terraform, hcl]
     pattern-either:
       - pattern: |
-          resource "azurerm_servicebus_namespace" $NAME {
+          resource "azurerm_servicebus_topic" $NAME {
+            ...
+            namespace_id = $NAMESPACE_ID
             ...
           }
       - patterns:
@@ -18,7 +20,7 @@ rules:
               }
           - metavariable-regex:
               metavariable: $SRC
-              regex: "(?i).*servicebus[_-]?namespace.*"
+              regex: "(?i).*servicebus[_-]?topic.*"
     metadata:
       finding_kind: Asset
       asset_provider: azure
@@ -28,13 +30,13 @@ rules:
       technology: [terraform, azure, servicebus]
       target_files: ["*.tf", "**/*.tf"]
       extracts:
-        service_type: Service Bus Namespace
-        resource_type: azurerm_servicebus_namespace
+        service_type: Service Bus Topic
+        resource_type: azurerm_servicebus_topic
         resource_name: $NAME
         properties:
-          - name: sku
-            pattern: sku = "$SKU"
-          - name: location
-            pattern: location = "$LOC"
+          - name: namespace_id
+            pattern: namespace_id = $NAMESPACE_ID
+          - name: max_size_in_megabytes
+            pattern: max_size_in_megabytes = "$VAL"
     description: |
-      Detects Azure Service Bus Namespace resources for infrastructure mapping.
+      Detects Azure Service Bus Topic resources and captures the parent namespace reference via namespace_id.

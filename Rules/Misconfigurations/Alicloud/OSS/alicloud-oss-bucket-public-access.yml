@@ -1,0 +1,41 @@
+rules:
+  - id: alicloud-oss-bucket-public-access
+    message: |
+      OSS bucket ACL allows public access.
+      Public buckets expose data to the internet without authentication.
+      Set acl = "private" to restrict access.
+    severity: HIGH
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_oss_bucket" "$NAME" {
+            ...
+            acl = "public-read"
+            ...
+          }
+      - pattern: |
+          resource "alicloud_oss_bucket" "$NAME" {
+            ...
+            acl = "public-read-write"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "alicloud_oss_bucket" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "alicloud_oss_bucket" "$NAME" {
+                ...
+                acl = "..."
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [access-control, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 1 (Network Security)

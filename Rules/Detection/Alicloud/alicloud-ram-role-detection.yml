@@ -1,0 +1,38 @@
+rules:
+  - id: context-alicloud-ram-role
+    message: |
+      Alibaba Cloud RAM Role detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_ram_role" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*ram[_-]?role.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: iam
+      technology: [terraform, alicloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: RAM Role
+        resource_type: alicloud_ram_role
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$ROLE_NAME"
+    description: |
+      Detects RAM Role resources in Alibaba Cloud Terraform configurations.

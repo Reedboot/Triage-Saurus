@@ -1,0 +1,27 @@
+rules:
+  - id: oci-policy-allow-all
+    message: |
+      OCI IAM policy grants all-resources access.
+      Apply the principle of least privilege by specifying resource types
+      instead of using all-resources wildcards.
+    severity: HIGH
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_identity_policy" "$NAME" {
+            ...
+            statements = $STMTS
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $STMTS
+          regex: .*all-resources.*
+    metadata:
+      category: security
+      subcategory: [iam, cloud]
+      cwe: CWE-250
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci]
+      five_pillars: Pillar 3 (Identity & Access Management)

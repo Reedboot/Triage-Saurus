@@ -1,0 +1,42 @@
+rules:
+  - id: context-oci-objectstorage-bucket
+    message: |
+      Oracle Cloud Infrastructure Object Storage Bucket detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_objectstorage_bucket" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?objectstorage[_-]?bucket.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, oci, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Object Storage Bucket
+        resource_type: oci_objectstorage_bucket
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$BUCKET_NAME"
+          - name: namespace
+            pattern: namespace = "$NAMESPACE"
+          - name: access_type
+            pattern: access_type = "$ACCESS"
+    description: |
+      Detects Object Storage Bucket resources in Oracle Cloud Infrastructure Terraform configurations.

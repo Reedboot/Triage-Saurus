@@ -1,0 +1,40 @@
+rules:
+  - id: context-alicloud-kms-key
+    message: |
+      Alibaba Cloud KMS Key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_kms_key" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*kms[_-]?key.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kms
+      technology: [terraform, alicloud, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key
+        resource_type: alicloud_kms_key
+        resource_name: $NAME
+        properties:
+          - name: description
+            pattern: description = "$DESC"
+          - name: key_spec
+            pattern: key_spec = "$KEY_SPEC"
+    description: |
+      Detects KMS Key resources in Alibaba Cloud Terraform configurations.

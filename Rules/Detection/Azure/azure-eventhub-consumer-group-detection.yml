@@ -1,0 +1,48 @@
+rules:
+  - id: context-azure-eventhub-consumer-group
+    message: |
+      Azure Event Hub Consumer Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_eventhub_consumer_group" $NAME {
+            ...
+            eventhub_name = $EH_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_eventhub_consumer_group" $NAME {
+            ...
+            namespace_name = $NS_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*eventhub[_-]?consumer[_-]?group.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: eventhub
+      technology: [terraform, azure, eventhub]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Event Hub Consumer Group
+        resource_type: azurerm_eventhub_consumer_group
+        resource_name: $NAME
+        properties:
+          - name: eventhub_name
+            pattern: eventhub_name = $EH_NAME
+          - name: namespace_name
+            pattern: namespace_name = $NS_NAME
+    description: |
+      Detects Azure Event Hub Consumer Group resources and captures the parent event hub and namespace references.

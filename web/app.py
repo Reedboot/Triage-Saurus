@@ -777,6 +777,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
             SELECT res.id, res.resource_type, res.resource_name, res.provider,
                    res.region, res.source_file, res.source_line_start,
                    res.discovered_by, res.discovery_method, res.status,
+                   res.parent_resource_id,
                    COUNT(f.id) AS finding_count,
                    MAX(CASE f.severity
                        WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
@@ -803,6 +804,29 @@ def api_view_assets(experiment_id: str, repo_name: str):
         except Exception:
             get_render_category = None
             _derive = None
+
+        # Build parent-child hierarchy index
+        children_by_parent: dict = {}  # parent_id -> list of child asset dicts
+        child_resource_ids: set = set()
+        try:
+            hierarchy_rows = conn.execute(
+                """
+                SELECT child.id AS child_id, child.parent_resource_id AS parent_id
+                FROM resources child
+                JOIN repositories repo ON child.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND child.parent_resource_id IS NOT NULL
+                """,
+                (repo_name, experiment_id),
+            ).fetchall()
+            for hr in hierarchy_rows:
+                parent_id = hr['parent_id']
+                child_resource_ids.add(hr['child_id'])
+                if parent_id not in children_by_parent:
+                    children_by_parent[parent_id] = []
+                children_by_parent[parent_id].append(hr['child_id'])
+        except Exception:
+            pass
 
         for row in rows:
             a = dict(row)
@@ -832,8 +856,28 @@ def api_view_assets(experiment_id: str, repo_name: str):
                     a['display_on_architecture_chart'] = True
             except Exception:
                 a['display_on_architecture_chart'] = True
+            # Hierarchy fields
+            a['children_count'] = len(children_by_parent.get(a.get('id'), []))
+            a['is_child'] = a.get('id') in child_resource_ids
 
             assets.append(a)
+
+        # Reorder: parents first, children immediately after their parent
+        ordered_assets = []
+        asset_by_id = {a['id']: a for a in assets if a.get('id') is not None}
+        parent_assets = [a for a in assets if not a.get('is_child')]
+        for parent in parent_assets:
+            ordered_assets.append(parent)
+            for child_id in children_by_parent.get(parent.get('id'), []):
+                if child_id in asset_by_id:
+                    ordered_assets.append(asset_by_id[child_id])
+        # Add any remaining assets not yet included (orphaned children, etc.)
+        added_ids = {a.get('id') for a in ordered_assets}
+        for a in assets:
+            if a.get('id') not in added_ids:
+                ordered_assets.append(a)
+        assets = ordered_assets
+
         # Ensure 'unknown' option exists if any asset lacked a provider
         if has_unknown:
             providers.add('unknown')

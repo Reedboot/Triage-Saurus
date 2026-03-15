@@ -1,0 +1,28 @@
+rules:
+  - id: alicloud-rds-no-ssl
+    message: |
+      RDS instance does not enforce SSL connections.
+      Without SSL, data in transit is transmitted in plaintext.
+      Set ssl_action = "Open" on the associated alicloud_db_connection resource.
+    severity: MEDIUM
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "alicloud_db_instance" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "alicloud_db_instance" "$NAME" {
+            ...
+            ssl_action = "Open"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud]
+      cwe: CWE-319
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 5 (Data Protection)

@@ -1,0 +1,44 @@
+rules:
+  - id: context-oci-database
+    message: |
+      Oracle Cloud Infrastructure Database detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_database_autonomous_database" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "oci_database_db_system" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?database.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, oci, database]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Database
+        resource_type: oci_database_autonomous_database
+        resource_name: $NAME
+        properties:
+          - name: db_name
+            pattern: db_name = "$DB_NAME"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+    description: |
+      Detects Database resources in Oracle Cloud Infrastructure Terraform configurations.

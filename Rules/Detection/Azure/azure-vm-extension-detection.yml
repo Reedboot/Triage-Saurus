@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-vm-extension
+    message: |
+      Azure Virtual Machine Extension detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_virtual_machine_extension" $NAME {
+            ...
+            virtual_machine_id = $VM_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*vm[_-]?extension.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, azure, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Machine Extension
+        resource_type: azurerm_virtual_machine_extension
+        resource_name: $NAME
+        properties:
+          - name: virtual_machine_id
+            pattern: virtual_machine_id = $VM_ID
+          - name: type
+            pattern: type = "$VAL"
+          - name: publisher
+            pattern: publisher = "$VAL"
+    description: |
+      Detects Azure Virtual Machine Extension resources and captures the parent VM reference via virtual_machine_id.

@@ -23,8 +23,9 @@ DB_PATH = COZO_DB
 _FALLBACK: dict[str, dict] = {
     # Azure — Identity
     "azurerm_key_vault":                          {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": True},
-    "azurerm_key_vault_key":                      {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False, "parent_type": "azurerm_key_vault"},
-    "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault",                "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False, "parent_type": "azurerm_key_vault"},
+    "azurerm_key_vault_key":                      {"friendly_name": "Key Vault Key",            "category": "Security",    "icon": "🔑", "display_on_architecture_chart": False, "parent_type": "azurerm_key_vault"},
+    "azurerm_key_vault_secret":                   {"friendly_name": "Key Vault Secret",         "category": "Security",    "icon": "🤫", "display_on_architecture_chart": False, "parent_type": "azurerm_key_vault"},
+    "azurerm_key_vault_certificate":              {"friendly_name": "Key Vault Certificate",    "category": "Security",    "icon": "📜", "display_on_architecture_chart": False, "parent_type": "azurerm_key_vault"},
     "azurerm_user_assigned_identity":             {"friendly_name": "Managed Identity",         "category": "Identity",    "icon": "👤", "display_on_architecture_chart": True},
     # Azure — RBAC / Policy (don't display as architecture nodes)
     "azurerm_role_definition":                    {"friendly_name": "Role Definition",         "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
@@ -47,12 +48,18 @@ _FALLBACK: dict[str, dict] = {
     # Azure — Database
     "azurerm_mssql_server":                       {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
     "azurerm_sql_server":                         {"friendly_name": "SQL Server",               "category": "Database",    "icon": "🗃️"},
-    "azurerm_mssql_database":                     {"friendly_name": "SQL Database",             "category": "Database",    "icon": "🗃️"},
+    "azurerm_mssql_database":                     {"friendly_name": "SQL Database",             "category": "Database",    "icon": "🗃️", "display_on_architecture_chart": False, "parent_type": "azurerm_mssql_server"},
+    "azurerm_mssql_firewall_rule":                {"friendly_name": "SQL Firewall Rule",         "category": "Database",    "icon": "🔥", "display_on_architecture_chart": False, "parent_type": "azurerm_mssql_server"},
     "azurerm_mssql_server_security_alert_policy": {"friendly_name": "SQL Alert Policy",          "category": "Security",    "icon": "🚨"},
     "azurerm_mysql_server":                       {"friendly_name": "MySQL Server",             "category": "Database",    "icon": "🗃️"},
+    "azurerm_mysql_database":                     {"friendly_name": "MySQL Database",           "category": "Database",    "icon": "🗃️", "display_on_architecture_chart": False, "parent_type": "azurerm_mysql_server"},
+    "azurerm_mysql_flexible_database":            {"friendly_name": "MySQL Flexible Database",  "category": "Database",    "icon": "🗃️", "display_on_architecture_chart": False, "parent_type": "azurerm_mysql_flexible_server"},
     "azurerm_postgresql_server":                  {"friendly_name": "PostgreSQL Server",        "category": "Database",    "icon": "🗃️"},
+    "azurerm_postgresql_database":                {"friendly_name": "PostgreSQL Database",      "category": "Database",    "icon": "🗃️", "display_on_architecture_chart": False, "parent_type": "azurerm_postgresql_server"},
     "azurerm_postgresql_configuration":           {"friendly_name": "PostgreSQL Server",        "category": "Database",    "icon": "🗃️"},
     "azurerm_cosmosdb_account":                   {"friendly_name": "Cosmos DB",                "category": "Database",    "icon": "🗃️"},
+    "azurerm_cosmosdb_sql_database":              {"friendly_name": "CosmosDB SQL Database",    "category": "Database",    "icon": "🗃️", "display_on_architecture_chart": False, "parent_type": "azurerm_cosmosdb_account"},
+    "azurerm_cosmosdb_sql_container":             {"friendly_name": "CosmosDB SQL Container",   "category": "Database",    "icon": "📦", "display_on_architecture_chart": False, "parent_type": "azurerm_cosmosdb_account"},
     # Azure — Storage
     "azurerm_storage_account":                    {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_account_network_rules":      {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},

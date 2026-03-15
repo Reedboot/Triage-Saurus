@@ -1,0 +1,42 @@
+rules:
+  - id: context-oci-nsg
+    message: |
+      Oracle Cloud Infrastructure Network Security Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_core_network_security_group" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?core[_-]?network[_-]?security[_-]?group.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, oci, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Security Group
+        resource_type: oci_core_network_security_group
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$NAME"
+          - name: vcn_id
+            pattern: vcn_id = "$VCN_ID"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+    description: |
+      Detects Network Security Group resources in Oracle Cloud Infrastructure Terraform configurations.

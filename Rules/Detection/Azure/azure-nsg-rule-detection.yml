@@ -1,0 +1,48 @@
+rules:
+  - id: context-azure-nsg-rule
+    message: |
+      Azure Network Security Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_network_security_rule" $NAME {
+            ...
+            network_security_group_name = $NSG_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*nsg[_-]?rule.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Security Rule
+        resource_type: azurerm_network_security_rule
+        resource_name: $NAME
+        properties:
+          - name: network_security_group_name
+            pattern: network_security_group_name = $NSG_NAME
+          - name: priority
+            pattern: priority = "$VAL"
+          - name: direction
+            pattern: direction = "$VAL"
+          - name: access
+            pattern: access = "$VAL"
+          - name: protocol
+            pattern: protocol = "$VAL"
+    description: |
+      Detects Azure Network Security Rule resources and captures the parent NSG reference via network_security_group_name.

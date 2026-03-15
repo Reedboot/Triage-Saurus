@@ -1,14 +1,48 @@
 rules:
   - id: context-azure-windows-vm
     message: |
-      Terraform azurerm windows virtual machine detected.
-      Detects azurerm_windows_virtual_machine resource declarations.
+      Azure Windows Virtual Machine detected in infrastructure.
     severity: INFO
     languages: [terraform, hcl]
-    pattern-regex: |
-      (?m)\bazurerm_windows_virtual_machine\b
+    pattern-either:
+      - pattern: |
+          resource "azurerm_windows_virtual_machine" $NAME {
+            ...
+            network_interface_ids = $NIC_IDS
+            ...
+          }
+      - pattern: |
+          resource "azurerm_windows_virtual_machine" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*windows[_-]?vm.*"
     metadata:
-      rule_type: detection
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
       category: infrastructure
-      technology: [azure, terraform]
-      target_files: ["**/*.tf"]
+      subcategory: compute
+      technology: [terraform, azure, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Windows Virtual Machine
+        resource_type: azurerm_windows_virtual_machine
+        resource_name: $NAME
+        properties:
+          - name: network_interface_ids
+            pattern: network_interface_ids = $NIC_IDS
+          - name: size
+            pattern: size = "$SIZE"
+          - name: admin_username
+            pattern: admin_username = "$ADMIN"
+    description: |
+      Detects Azure Windows Virtual Machine resources and captures network interface references for parent-child linking.

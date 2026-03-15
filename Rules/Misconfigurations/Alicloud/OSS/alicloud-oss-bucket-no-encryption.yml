@@ -1,0 +1,30 @@
+rules:
+  - id: alicloud-oss-bucket-no-encryption
+    message: |
+      OSS bucket does not have server-side encryption configured.
+      Without encryption, data at rest is unprotected.
+      Add a server_side_encryption_rule block to enable SSE.
+    severity: MEDIUM
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "alicloud_oss_bucket" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "alicloud_oss_bucket" "$NAME" {
+            ...
+            server_side_encryption_rule {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, cloud]
+      cwe: CWE-311
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 5 (Data Protection)

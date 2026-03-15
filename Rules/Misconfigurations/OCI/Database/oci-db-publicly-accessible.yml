@@ -1,0 +1,27 @@
+rules:
+  - id: oci-db-publicly-accessible
+    message: |
+      OCI Autonomous Database is publicly accessible.
+      Set is_access_control_enabled = true to restrict access via ACL rules.
+    severity: HIGH
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_database_autonomous_database" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "oci_database_autonomous_database" "$NAME" {
+            ...
+            is_access_control_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci]
+      five_pillars: Pillar 1 (Network Security)

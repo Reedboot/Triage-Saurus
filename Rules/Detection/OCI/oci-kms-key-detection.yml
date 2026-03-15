@@ -1,0 +1,56 @@
+rules:
+  - id: context-oci-kms-key
+    message: |
+      Oracle Cloud Infrastructure KMS Key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_kms_key" $NAME {
+            ...
+            management_endpoint = $VAULT_ENDPOINT
+            ...
+          }
+      - pattern: |
+          resource "oci_kms_key" $NAME {
+            ...
+            vault_id = $VAULT_ID
+            ...
+          }
+      - pattern: |
+          resource "oci_kms_key" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?kms[_-]?key.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kms
+      technology: [terraform, oci, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key
+        resource_type: oci_kms_key
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$KEY_NAME"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+          - name: management_endpoint
+            pattern: management_endpoint = "$VAULT_ENDPOINT"
+          - name: vault_id
+            pattern: vault_id = "$VAULT_ID"
+    description: |
+      Detects KMS Key resources in Oracle Cloud Infrastructure Terraform configurations.
