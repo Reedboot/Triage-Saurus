@@ -387,6 +387,53 @@ def get_display_label(conn: sqlite3.Connection | None, resource_name: str, terra
     return f"{resource_name} ({get_friendly_name(conn, terraform_type)})"
 
 
+# New: render category (provider-agnostic grouping used for architecture layout)
+# Possible values: Compute, Container, Database, Storage, Network, Firewall, Identity, Security, Monitoring, Other
+def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) -> str:
+    """Return a canonical render category for layout/styling.
+
+    Lookup order: resource_types table -> in-memory fallback -> derived heuristics.
+    """
+    info = get_resource_type(conn, terraform_type)
+    # Use category if present and maps to a known render category
+    cat = (info.get('category') or '').strip()
+    if cat:
+        # Normalize common category names to render categories
+        mapping = {
+            'Compute': 'Compute',
+            'Container': 'Container',
+            'Database': 'Database',
+            'Storage': 'Storage',
+            'Identity': 'Identity',
+            'Security': 'Security',
+            'Network': 'Network',
+            'Monitoring': 'Monitoring',
+            'Other': 'Other',
+        }
+        if cat in mapping:
+            return mapping[cat]
+    # Fallback derive from terraform_type keywords
+    lower = (terraform_type or '').lower()
+    if any(k in lower for k in ['vm', 'instance', 'virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine', 'ec2', 'instance']):
+        return 'Compute'
+    if any(k in lower for k in ['kubernetes', 'aks', 'eks', 'gke', 'cluster', 'container', 'ecs']):
+        return 'Container'
+    if any(k in lower for k in ['sql', 'rds', 'database', 'cosmos', 'postgresql', 'mysql', 'mssql', 'bigquery', 'db_']):
+        return 'Database'
+    if any(k in lower for k in ['storage', 's3', 'blob', 'bucket', 'disk', 'volume']):
+        return 'Storage'
+    if any(k in lower for k in ['vnet', 'virtual_network', 'subnet', 'network', 'public_ip', 'vpc', 'route', 'gateway', 'lb', 'load_balancer']):
+        return 'Network'
+    if any(k in lower for k in ['firewall', 'nsg', 'security_group', 'waf', 'network_security_group']):
+        return 'Firewall'
+    if any(k in lower for k in ['role', 'azuread', 'iam', 'user', 'group', 'service_principal']):
+        return 'Identity'
+    if any(k in lower for k in ['monitor', 'insights', 'log', 'alert', 'diagnostic']):
+        return 'Monitoring'
+    # Default
+    return 'Other'
+
+
 # ---------------------------------------------------------------------------
 # Canonical type preferences — for diagram de-duplication.
 # When multiple related terraform types map to the same logical service,

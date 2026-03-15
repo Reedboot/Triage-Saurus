@@ -214,16 +214,21 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
 
-    # Group by DB category instead of hardcoded type strings
-    def _in_cat(r: dict, *cats: str) -> bool:
-        return _category(r) in cats
+    # Group by canonical render category (provider-agnostic)
+    def _in_render_cat(r: dict, *cats: str) -> bool:
+        try:
+            rc = _rtdb.get_render_category(None, r.get('resource_type') or '')
+        except Exception:
+            # Fallback to old category
+            rc = _category(r)
+        return rc in cats
 
-    vms            = [r for r in root_resources if _in_cat(r, 'Compute')]
-    aks            = [r for r in root_resources if _in_cat(r, 'Container')]
-    sql_servers    = [r for r in root_resources if _in_cat(r, 'Database')]
-    storage_accounts = [r for r in root_resources if _in_cat(r, 'Storage')]
-    nsgs           = [r for r in root_resources if _in_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()]
-    paas           = [r for r in root_resources if _in_cat(r, 'Identity') and r['id'] not in child_ids]
+    vms            = [r for r in root_resources if _in_render_cat(r, 'Compute')]
+    aks            = [r for r in root_resources if _in_render_cat(r, 'Container')]
+    sql_servers    = [r for r in root_resources if _in_render_cat(r, 'Database')]
+    storage_accounts = [r for r in root_resources if _in_render_cat(r, 'Storage')]
+    nsgs           = [r for r in root_resources if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower())]
+    paas           = [r for r in root_resources if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     other          = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
     # Add Internet node if we have internet connections
