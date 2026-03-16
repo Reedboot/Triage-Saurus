@@ -767,10 +767,17 @@ def api_view_tabs(experiment_id: str, repo_name: str):
 
 @app.route("/api/view/assets/<experiment_id>/<repo_name>")
 def api_view_assets(experiment_id: str, repo_name: str):
-    """Render the assets tab HTML."""
+    """Render the assets tab HTML.
+
+    Supports an optional query parameter `include_hidden=1` to show resources
+    that are normally hidden from the Assets view (generator/utility tokens and
+    items marked not to be displayed on architecture charts). Identity/RBAC
+    resources remain excluded (they belong in the Roles tab).
+    """
+    include_hidden = str(request.args.get('include_hidden', '')).lower() in ('1', 'true', 'yes')
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_assets.html", assets=[], providers=[])
+        return _db_render("tab_assets.html", assets=[], providers=[], include_hidden=include_hidden, hidden_count=0, total=0, experiment_id=experiment_id)
     try:
         rows = conn.execute(
             """
@@ -792,6 +799,9 @@ def api_view_assets(experiment_id: str, repo_name: str):
             """,
             (repo_name, experiment_id),
         ).fetchall()
+        total_rows = len(rows)
+        hidden_count = 0
+
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
         assets = []
         providers = set()
@@ -859,10 +869,19 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 'managed_identity', 'user_assigned_identity', 'service_account', 'service_principal'
             }
             rtype_lower = (rtype or '').lower()
-            # Skip generator/utility types (e.g., random_*, time_*, null_resource) — not actual resources
+            # Generator/utility tokens (e.g., random_*, time_*, null_resource) are typically hidden from the Assets view
             hidden_tokens = ("random_", "time_", "null_resource")
-            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types) or any(tok in rtype_lower for tok in hidden_tokens):
+
+            # Always exclude identity/RBAC types from the Assets tab (they belong in Roles)
+            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
                 continue
+
+            # If include_hidden is false, hide generator/utility types and any resource marked
+            # as not to be displayed on the architecture chart.
+            if not include_hidden:
+                if any(tok in rtype_lower for tok in hidden_tokens) or (not a.get('display_on_architecture_chart', True)):
+                    hidden_count += 1
+                    continue
 
             # Normalize provider: use 'unknown' when missing
             prov = (a.get("provider") or "unknown")
@@ -899,9 +918,9 @@ def api_view_assets(experiment_id: str, repo_name: str):
         if has_unknown:
             providers.add('unknown')
             provider_counts.setdefault('unknown', 0)
-        return _db_render("tab_assets.html", assets=assets, providers=sorted(providers), provider_counts=provider_counts, repo_name=repo_name)
+        return _db_render("tab_assets.html", assets=assets, providers=sorted(providers), provider_counts=provider_counts, repo_name=repo_name, hidden_count=hidden_count, total=total_rows, include_hidden=include_hidden, experiment_id=experiment_id)
     except Exception as exc:
-        return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc))
+        return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc), hidden_count=0, total=0, include_hidden=include_hidden, experiment_id=experiment_id)
     finally:
         conn.close()
 

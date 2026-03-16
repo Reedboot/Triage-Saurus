@@ -26,9 +26,7 @@
 }
 /* Child rows: visually differentiate and indent */
 .child-row .asset-name {
-  color: var(--text-faint);
   opacity: 0.9;
-  font-size: 0.95rem;
   font-weight: 500;
 }
 .child-row td {
@@ -44,10 +42,16 @@
     <option value="{{ provider | lower }}">{{ provider | upper }} ({{ provider_counts.get(provider, 0) }})</option>
     {% endfor %}
   </select>
-  <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);margin-left:auto"></div>
-  <span style="font-size:0.75rem; color:var(--text-muted);">{{ assets | length }} resource{{ 's' if assets | length != 1 }}</span>
+  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+    <label style="font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px; align-items:center;">
+      <input type="checkbox" id="assets-show-hidden" {% if include_hidden %}checked{% endif %} />
+      <span>Show hidden assets{% if hidden_count is defined and hidden_count > 0 %} ({{ hidden_count }}){% endif %}</span>
+    </label>
+    <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);"></div>
+    <span style="font-size:0.75rem; color:var(--text-muted);">{{ assets | length }} resource{{ 's' if assets | length != 1 }}</span>
+  </div>
 </div>
-<div id="assets-meta" data-repo="{{ repo_name }}" style="display:none"></div>
+<div id="assets-meta" data-repo="{{ repo_name }}" data-experiment="{{ experiment_id }}" style="display:none"></div>
 <div class="section-table-wrap">
   <table class="section-table" id="section-assets-table">
     <thead>
@@ -87,7 +91,6 @@
             <span class="asset-name">{{ a.resource_name }}</span>
             <span class="child-count-badge" title="{{ a.children_count }} sub-asset(s)">{{ a.children_count }}</span>
           {% elif a.is_child %}
-            <span style="display:inline-block;width:1.5rem;"></span>
             <span class="asset-name">{{ a.resource_name }}</span>
           {% else %}
             <span class="asset-name">{{ a.resource_name }}</span>
@@ -124,20 +127,7 @@
   </table>
 </div>
 <div id="section-assets-empty" class="assets-empty" style="display:none">No assets match the current filter.</div>
-<!-- assets script moved to /static/assets.js; initialization is triggered from index.html after fragment insertion -->
-<script>
-document.addEventListener('click', function(e) {
-  const toggle = e.target.closest('.expand-toggle');
-  if (!toggle) return;
-  const parentId = toggle.getAttribute('data-parent-id');
-  const childRows = document.querySelectorAll(`tr[data-parent-id="${parentId}"]`);
-  const isOpen = toggle.classList.contains('open');
-  toggle.classList.toggle('open', !isOpen);
-  childRows.forEach(row => {
-    row.style.display = isOpen ? 'none' : '';
-  });
-});
-</script>
+
 {% else %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">

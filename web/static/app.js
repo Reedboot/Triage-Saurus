@@ -285,7 +285,7 @@
       // Initialize known section scripts (moved to static JS) so they run when a fragment is inserted.
       try {
         if (key === 'assets' && window.initAssets) {
-          try { window.initAssets(sectionContent, repoName); } catch (e) { console.warn('initAssets error:', e); }
+          try { window.initAssets(sectionContent, repoName, expId); } catch (e) { console.warn('initAssets error:', e); }
         }
       } catch (e) {
         console.warn('Failed to run section initializer:', e);

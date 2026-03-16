@@ -3,9 +3,10 @@
 (function(){
   function toLower(s){ return (s||'').toString().toLowerCase(); }
 
-  function initAssets(container, repoName){
+  function initAssets(container, repoName, experimentId){
     if (!container) container = document;
     repoName = repoName || (container.querySelector('#assets-meta')?.dataset?.repo) || 'global';
+    experimentId = experimentId || (container.querySelector('#assets-meta')?.dataset?.experiment) || '';
 
     const searchInput = container.querySelector('#section-assets-search');
     const providerSelect = container.querySelector('#section-assets-provider');
@@ -134,6 +135,32 @@
     // Hook inputs
     if (searchInput) searchInput.addEventListener('input', scheduleFilter);
     if (providerSelect) providerSelect.addEventListener('change', () => { applyFilterAndSort(); });
+
+    // Show hidden assets toggle: when toggled, re-fetch the assets fragment including hidden items
+    const showHiddenCheckbox = container.querySelector('#assets-show-hidden');
+    if (showHiddenCheckbox) {
+      showHiddenCheckbox.addEventListener('change', async (ev) => {
+        const checked = !!ev.target.checked;
+        if (!experimentId) {
+          console.warn('No experiment id available for reloading assets fragment');
+          return;
+        }
+        try {
+          const url = `/api/view/assets/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}?include_hidden=${checked ? '1' : '0'}`;
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            console.warn('Failed to reload assets fragment:', resp.status, resp.statusText);
+            return;
+          }
+          const html = await resp.text();
+          container.innerHTML = html;
+          // Re-run init on the replaced fragment
+          try { window.initAssets(container, repoName, experimentId); } catch (e) { console.warn('initAssets error after reload:', e); }
+        } catch (e) {
+          console.warn('assets reload error:', e);
+        }
+      });
+    }
 
     // Header click handlers for sorting (Shift+click to multi-sort)
     const headers = table.querySelectorAll('th.sortable');
