@@ -48,7 +48,6 @@
       <span>Show hidden assets{% if hidden_count is defined and hidden_count > 0 and not include_hidden %} ({{ hidden_count }}){% endif %}</span>
     </label>
     <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);"></div>
-    <span style="font-size:0.75rem; color:var(--text-muted);">Showing {{ assets | length }} of {{ total }} resource{{ 's' if total != 1 }}</span>
   </div>
 </div>
 <div id="assets-meta" data-repo="{{ repo_name }}" data-experiment="{{ experiment_id }}" style="display:none"></div>

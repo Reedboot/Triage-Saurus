@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-run_pipeline.py — Offline Phase 1-3 pipeline runner.
+run_pipeline.py — Offline Phase 1-3c pipeline runner.
 
 Runs the complete AI-free triage pipeline against a repository:
   Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
   Phase 2 — Script-based code context discovery → metadata in DB + repo summary MD
-  Phase 3 — Render finding MDs + architecture diagram from DB
+  Phase 3a — Internet exposure analysis → exposure findings + provider diagrams
+  Phase 3b — Render finding MDs from DB
+  Phase 3c — Render architecture diagram from DB
 
 No LLM or internet access required.
 
@@ -42,6 +44,8 @@ sys.path.insert(0, str(SCRIPTS / "Utils"))
 
 _EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
 _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
+_ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
+_RENDER_EXPOSURE = SCRIPTS / "Generate" / "render_exposure_summary.py"
 _RENDER        = SCRIPTS / "Generate"    / "render_finding.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
@@ -205,11 +209,45 @@ def main() -> int:
     else:
         print("\n[Pipeline] Skipping Phase 2 (--skip-phase2)")
 
-    # ── Phase 3a: Render finding MDs ─────────────────────────────────────────
+    # ── Phase 3a: Internet Exposure Analysis ─────────────────────────────────────
+    print(f"\n{'─'*60}")
+    print(f"▶  Phase 3a — Internet Exposure Analysis")
+    print('─'*60)
+    
+    # Run exposure analyzer
+    import os
+    env = os.environ.copy()
+    existing = env.get('PYTHONPATH', '')
+    paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils'), str(SCRIPTS / 'Analyze')]
+    if existing:
+        paths.append(existing)
+    env['PYTHONPATH'] = ':'.join(paths)
+    
+    result = subprocess.run(
+        [sys.executable, str(_ANALYZE_EXPOSURE), "--experiment", experiment_id],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        print("[WARN] Phase 3a (exposure analysis) exited non-zero.", file=sys.stderr)
+    
+    # Render exposure summaries
+    exposure_cloud_dir = exp_dir / "Summary" / "Cloud"
+    exposure_cloud_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [sys.executable, str(_RENDER_EXPOSURE), "--experiment", experiment_id,
+         "--output-dir", str(exposure_cloud_dir)],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        print("[WARN] Phase 3a (exposure rendering) exited non-zero.", file=sys.stderr)
+
+    # ── Phase 3b: Render finding MDs ─────────────────────────────────────────
     finding_ids = _get_experiment_findings(experiment_id)
     if finding_ids:
         print(f"\n{'─'*60}")
-        print(f"▶  Phase 3a — Render {len(finding_ids)} finding MD(s)")
+        print(f"▶  Phase 3b — Render {len(finding_ids)} finding MD(s)")
         print('─'*60)
         findings_dir = exp_dir / "Findings" / repo_name
         findings_dir.mkdir(parents=True, exist_ok=True)
@@ -243,7 +281,7 @@ def main() -> int:
     else:
         print("\n[Pipeline] No findings in DB for this experiment — skipping render.")
 
-    # ── Phase 3b: Architecture diagram ───────────────────────────────────────
+    # ── Phase 3c: Architecture diagram ───────────────────────────────────────
     cloud_dir = exp_dir / "Summary" / "Cloud"
     cloud_dir.mkdir(parents=True, exist_ok=True)
     # Generate per-provider architecture files (Architecture_AWS.md, Architecture_Azure.md, ...)

@@ -2974,13 +2974,13 @@ def _build_external_dependencies_summary(
 
     if fallback_targets:
         lines = [
-            "- Fallback external dependencies (DB topology had no outbound external dependency signals):"
+            "- Fallback externLoad previous resultal dependencies (DB topology had no outbound external dependency signals):"
         ]
         for target in sorted(fallback_targets):
             lines.append(f"  - {target}")
         return "\n".join(lines)
 
-    return "- No external dependencies detected from DB topology."
+    return "- No external dependencies detected."
 
 
 def _build_service_only_architecture_diagram(repo_name: str, context: RepositoryContext, repo_path: "Path | None" = None) -> str:
