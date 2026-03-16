@@ -872,12 +872,17 @@ def api_view_assets(experiment_id: str, repo_name: str):
             # Generator/utility tokens (e.g., random_*, time_*, null_resource) are typically hidden from the Assets view
             hidden_tokens = ("random_", "time_", "null_resource")
 
-            # Always exclude identity/RBAC types from the Assets tab (they belong in Roles)
+            # Identity / RBAC resources are hidden by default (they appear in Roles).
+            # When `include_hidden` is true, include them in the Assets view so the
+            # displayed list can match the repository's total resource count.
             if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
-                continue
+                if not include_hidden:
+                    hidden_count += 1
+                    continue
+                # else: include identity resources when include_hidden is True
 
-            # If include_hidden is false, hide generator/utility types and any resource marked
-            # as not to be displayed on the architecture chart.
+            # If include_hidden is false, hide generator/utility types and any resource
+            # explicitly marked as not to be displayed on architecture diagrams.
             if not include_hidden:
                 if any(tok in rtype_lower for tok in hidden_tokens) or (not a.get('display_on_architecture_chart', True)):
                     hidden_count += 1
