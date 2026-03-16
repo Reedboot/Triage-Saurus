@@ -116,7 +116,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_network_security_rule":              {"friendly_name": "NSG Rule",                 "category": "Security",    "icon": "🛡️", "display_on_architecture_chart": False, "parent_type": "azurerm_network_security_group"},
     "azurerm_network_watcher":                    {"friendly_name": "Network Watcher",          "category": "Monitoring",  "icon": "📡", "display_on_architecture_chart": False},
     "azurerm_network_watcher_flow_log":           {"friendly_name": "Network Watcher Flow Log", "category": "Monitoring",  "icon": "📡", "display_on_architecture_chart": False},
-    "azurerm_resource_group":                     {"friendly_name": "Resource Group",           "category": "Network",     "icon": "📦", "display_on_architecture_chart": False},
+    "azurerm_resource_group":                     {"friendly_name": "Resource Group",           "category": "Group",     "icon": "📦", "display_on_architecture_chart": False},
     "azurerm_resources":                          {"friendly_name": "Resources",                "category": "Other",       "icon": "📦", "display_on_architecture_chart": False},
     # Azure — Security
     "azurerm_network_security_group":             {"friendly_name": "Network Security Group",   "category": "Security",    "icon": "🛡️"},
@@ -583,6 +583,10 @@ def _derive(terraform_type: str) -> dict:
         "_iam_",
         "kms_",
         "binding",
+        # Utility providers / helpers which should not appear on architecture diagrams
+        "random_",
+        "time_",
+        "null_resource",
     )
     display_on_architecture_chart = not any(token in lower for token in hidden_tokens)
 
