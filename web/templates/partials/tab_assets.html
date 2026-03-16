@@ -37,7 +37,7 @@
 <div class="assets-toolbar" style="padding:0 0 10px 0; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; gap:8px; align-items:center;">
   <input type="text" id="section-assets-search" class="assets-search" placeholder="Filter assets…" autocomplete="off" />
   <select id="section-assets-provider" class="assets-provider-filter">
-    <option value="">All providers ({{ assets | length }})</option>
+    <option value="">All providers ({{ total }})</option>
     {% for provider in providers | sort %}
     <option value="{{ provider | lower }}">{{ provider | upper }} ({{ provider_counts.get(provider, 0) }})</option>
     {% endfor %}
@@ -45,10 +45,10 @@
   <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
     <label style="font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px; align-items:center;">
       <input type="checkbox" id="assets-show-hidden" {% if include_hidden %}checked{% endif %} />
-      <span>Show hidden assets{% if hidden_count is defined and hidden_count > 0 %} ({{ hidden_count }}){% endif %}</span>
+      <span>Show hidden assets{% if hidden_count is defined and hidden_count > 0 and not include_hidden %} ({{ hidden_count }}){% endif %}</span>
     </label>
     <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);"></div>
-    <span style="font-size:0.75rem; color:var(--text-muted);">{{ assets | length }} resource{{ 's' if assets | length != 1 }}</span>
+    <span style="font-size:0.75rem; color:var(--text-muted);">Showing {{ assets | length }} of {{ total }} resource{{ 's' if total != 1 }}</span>
   </div>
 </div>
 <div id="assets-meta" data-repo="{{ repo_name }}" data-experiment="{{ experiment_id }}" style="display:none"></div>
