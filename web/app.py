@@ -859,7 +859,9 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 'managed_identity', 'user_assigned_identity', 'service_account', 'service_principal'
             }
             rtype_lower = (rtype or '').lower()
-            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
+            # Skip generator/utility types (e.g., random_*, time_*, null_resource) — not actual resources
+            hidden_tokens = ("random_", "time_", "null_resource")
+            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types) or any(tok in rtype_lower for tok in hidden_tokens):
                 continue
 
             # Normalize provider: use 'unknown' when missing
