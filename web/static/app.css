@@ -696,6 +696,47 @@ tr.child-row + tr.child-row { border-top: 0; }
   flex-wrap: wrap; flex-shrink: 0;
 }
 
+/* Moved from templates/partials/tab_assets.html */
+.child-count-badge {
+  display: inline-block;
+  background: var(--accent, #0969da);
+  color: white;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.expand-toggle {
+  font-size: 0.75rem;
+  transition: transform 0.15s;
+  display: inline-block;
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.expand-toggle.open {
+  transform: rotate(90deg);
+}
+.child-row td:first-child {
+  padding-left: 2rem;
+}
+/* Child rows: visually differentiate and indent */
+.child-row .asset-name {
+  opacity: 0.9;
+  font-weight: 500;
+}
+.child-row td {
+  color: var(--text-faint);
+}
+
+/* Moved from templates/partials/tab_roles.html */
+details[open] > summary .details-arrow { transform: rotate(90deg); display:inline-block; }
+
+/* assets toolbar helpers */
+.assets-toolbar-right { margin-left: auto; display:flex; gap:8px; align-items:center; }
+
 .assets-search {
   flex: 1; min-width: 140px;
   background: var(--bg-base); border: 1px solid var(--border);
