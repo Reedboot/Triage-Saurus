@@ -903,6 +903,15 @@ def api_view_assets(experiment_id: str, repo_name: str):
 
             assets.append(a)
 
+        # Recompute children_count to reflect only assets included in this view
+        included_children_counts: dict = {}
+        for aa in assets:
+            parent_id = aa.get('parent_resource_id')
+            if parent_id:
+                included_children_counts[parent_id] = included_children_counts.get(parent_id, 0) + 1
+        for aa in assets:
+            aa['children_count'] = included_children_counts.get(aa.get('id'), 0)
+
         # Reorder: parents first, children immediately after their parent
         ordered_assets = []
         asset_by_id = {a['id']: a for a in assets if a.get('id') is not None}
