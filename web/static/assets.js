@@ -18,15 +18,18 @@
     // Build data array for sorting/filtering
     let assetsData = rows.map(r => ({
       el: r,
+      id: r.dataset.resourceId || r.getAttribute('data-resource-id') || '',
+      parent_id: r.dataset.parentId || r.getAttribute('data-parent-id') || '',
       resource_name: toLower(r.dataset.resource_name || r.querySelector('.asset-name')?.textContent || ''),
       resource_type: toLower(r.dataset.resource_type || ''),
-      render_category: toLower(r.dataset.renderCategory || r.dataset.render-category || ''),
+      render_category: toLower(r.dataset.renderCategory || r.dataset['render-category'] || r.dataset.render_category || ''),
       provider: toLower(r.dataset.provider || ''),
       provider_raw: r.dataset.provider_raw || '',
       region: toLower(r.dataset.region || ''),
       finding_count: parseInt(r.dataset.finding_count || '0', 10) || 0,
+      children_count: parseInt(r.dataset.childrenCount || r.getAttribute('data-children-count') || '0', 10) || 0,
       display_on_diagram: (function(){
-        const v = (r.dataset.displayOnDiagram || r.dataset.displayOnDiagram === '0' ? r.dataset.displayOnDiagram : r.getAttribute('data-display-on-diagram')) || r.dataset.display_on_diagram || '';
+        const v = r.dataset.displayOnDiagram || r.dataset.display_on_diagram || r.getAttribute('data-display-on-diagram') || '';
         if (!v) return false;
         const s = v.toString().toLowerCase();
         return ['1','true','yes','on'].includes(s);
@@ -121,7 +124,34 @@
         if (emptyEl) emptyEl.style.display = '';
       } else {
         if (emptyEl) emptyEl.style.display = 'none';
-        for (const a of filtered) tbody.appendChild(a.el);
+
+        // Compute visible child counts among filtered rows
+        const visibleChildCounts = {};
+        for (const a of filtered) {
+          if (a.parent_id) {
+            visibleChildCounts[a.parent_id] = (visibleChildCounts[a.parent_id] || 0) + 1;
+          }
+        }
+
+        for (const a of filtered) {
+          // Update the visible child-count badge and expand toggle based on currently visible children
+          const el = a.el;
+          const id = a.id || (el.getAttribute('data-resource-id') || el.dataset.resourceId);
+          const badge = el.querySelector('.child-count-badge');
+          const toggle = el.querySelector('.expand-toggle');
+          const c = visibleChildCounts[id] || 0;
+          if (badge) {
+            badge.textContent = c;
+            badge.title = `${c} sub-asset(s)`;
+            badge.style.display = c ? '' : 'none';
+          }
+          if (toggle) {
+            toggle.style.display = c ? '' : 'none';
+            if (!c) toggle.classList.remove('open');
+          }
+
+          tbody.appendChild(el);
+        }
       }
     }
 
