@@ -257,7 +257,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 
 .panel-header {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -335,8 +335,32 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .panel-section.hidden { display: none; }
 
 /* ── Diagram tabs ── */
+/* Tabs: keep hidden by default, but when visible they should scroll instead of pushing toolbar buttons */
 .diagram-tabs { display: none; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
 .diagram-tabs.visible { display: flex; }
+
+/* Provider tabs inside the header: allow horizontal scroll and let them shrink so buttons stay visible */
+.right-panel-header .diagram-provider-tabs,
+#diagram-tabs,
+.right-panel-header .diagram-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0; /* allow shrinking in flex layout */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure action buttons don't shrink and remain visible */
+.right-panel-header .panel-actions > .btn-small {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Make sure panel-actions aligns items nicely */
+.right-panel-header .panel-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: visible; }
 
 .tab-btn {
   background: transparent;

@@ -755,6 +755,67 @@ def _ensure_schema(conn: sqlite3.Connection):
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(experiment_id, provider, diagram_title)
     );
+
+    CREATE TABLE IF NOT EXISTS exposure_analysis (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      normalized_role TEXT NOT NULL,
+      is_entry_point BOOLEAN DEFAULT 0,
+      is_countermeasure BOOLEAN DEFAULT 0,
+      is_compute_or_data BOOLEAN DEFAULT 0,
+      exposure_level TEXT DEFAULT 'isolated',
+      exposure_path TEXT,
+      has_internet_path BOOLEAN DEFAULT 0,
+      opengrep_violations TEXT DEFAULT '[]',
+      base_severity TEXT,
+      risk_score REAL DEFAULT 0,
+      confidence TEXT DEFAULT 'medium',
+      notes TEXT,
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, resource_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS internet_exposure_paths (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      path_id TEXT NOT NULL,
+      source_resource_id INTEGER NOT NULL,
+      target_resource_id INTEGER NOT NULL,
+      path_length INTEGER DEFAULT 0,
+      path_nodes TEXT NOT NULL,
+      has_countermeasure BOOLEAN DEFAULT 0,
+      countermeasures_in_path TEXT DEFAULT '[]',
+      validation_status TEXT DEFAULT 'pending',
+      validated_by TEXT,
+      validated_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, path_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS exposure_risk_scoring (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      opengrep_rule_id TEXT,
+      rule_severity TEXT,
+      severity_score REAL DEFAULT 0,
+      exposure_multiplier REAL DEFAULT 1.0,
+      final_risk_score REAL DEFAULT 0,
+      exposure_factor TEXT,
+      vulnerability_factor TEXT,
+      combined_factors TEXT DEFAULT '{}',
+      scoring_method TEXT DEFAULT 'exposure_plus_vuln',
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, resource_id, opengrep_rule_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
     """)
 
         # Ensure optional columns exist for backward compatibility.
@@ -917,6 +978,94 @@ def _ensure_schema(conn: sqlite3.Connection):
             conn.execute("ALTER TABLE findings ADD COLUMN proposed_fix TEXT")
         if "llm_enriched_at" not in findings_columns:
             conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
+
+        # Exposure analysis table columns (ensure they exist for backward compatibility)
+        exposure_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}
+        for col_name, col_type in (
+            ("experiment_id", "TEXT"),
+            ("resource_id", "INTEGER"),
+            ("resource_name", "TEXT"),
+            ("resource_type", "TEXT"),
+            ("provider", "TEXT"),
+            ("normalized_role", "TEXT"),
+            ("is_entry_point", "BOOLEAN"),
+            ("is_countermeasure", "BOOLEAN"),
+            ("is_compute_or_data", "BOOLEAN"),
+            ("exposure_level", "TEXT"),
+            ("exposure_path", "TEXT"),
+            ("has_internet_path", "BOOLEAN"),
+            ("opengrep_violations", "TEXT"),
+            ("base_severity", "TEXT"),
+            ("risk_score", "REAL"),
+            ("confidence", "TEXT"),
+            ("notes", "TEXT"),
+            ("computed_at", "TIMESTAMP"),
+        ):
+            if col_name not in exposure_columns:
+                conn.execute(f"ALTER TABLE exposure_analysis ADD COLUMN {col_name} {col_type}")
+        
+        # Create indexes for exposure_analysis queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exposure_analysis_experiment_level "
+            "ON exposure_analysis(experiment_id, exposure_level)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exposure_analysis_provider "
+            "ON exposure_analysis(experiment_id, provider, normalized_role)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exposure_analysis_risk "
+            "ON exposure_analysis(experiment_id, risk_score DESC)"
+        )
+
+        # Internet exposure paths table columns
+        path_columns = {row[1] for row in conn.execute("PRAGMA table_info(internet_exposure_paths)").fetchall()}
+        for col_name, col_type in (
+            ("experiment_id", "TEXT"),
+            ("path_id", "TEXT"),
+            ("source_resource_id", "INTEGER"),
+            ("target_resource_id", "INTEGER"),
+            ("path_length", "INTEGER"),
+            ("path_nodes", "TEXT"),
+            ("has_countermeasure", "BOOLEAN"),
+            ("countermeasures_in_path", "TEXT"),
+            ("validation_status", "TEXT"),
+            ("validated_by", "TEXT"),
+            ("validated_at", "TIMESTAMP"),
+            ("notes", "TEXT"),
+            ("created_at", "TIMESTAMP"),
+        ):
+            if col_name not in path_columns:
+                conn.execute(f"ALTER TABLE internet_exposure_paths ADD COLUMN {col_name} {col_type}")
+        
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_internet_exposure_paths_experiment "
+            "ON internet_exposure_paths(experiment_id, source_resource_id)"
+        )
+
+        # Exposure risk scoring table columns
+        score_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_risk_scoring)").fetchall()}
+        for col_name, col_type in (
+            ("experiment_id", "TEXT"),
+            ("resource_id", "INTEGER"),
+            ("opengrep_rule_id", "TEXT"),
+            ("rule_severity", "TEXT"),
+            ("severity_score", "REAL"),
+            ("exposure_multiplier", "REAL"),
+            ("final_risk_score", "REAL"),
+            ("exposure_factor", "TEXT"),
+            ("vulnerability_factor", "TEXT"),
+            ("combined_factors", "TEXT"),
+            ("scoring_method", "TEXT"),
+            ("computed_at", "TIMESTAMP"),
+        ):
+            if col_name not in score_columns:
+                conn.execute(f"ALTER TABLE exposure_risk_scoring ADD COLUMN {col_name} {col_type}")
+        
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exposure_risk_scoring_resource "
+            "ON exposure_risk_scoring(experiment_id, resource_id)"
+        )
 
         apply_topology_backfills(conn)
     finally:
