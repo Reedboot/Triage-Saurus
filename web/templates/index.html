@@ -83,7 +83,7 @@
         </div>
         <div class="field">
           <label>&nbsp;</label>
-          <button type="button" class="secondary" id="reset-btn" style="display:none">↺ New Scan</button>
+          <button type="button" class="secondary s-inline-cb4589" id="reset-btn">↺ New Scan</button>
         </div>
       </div>
 
@@ -134,7 +134,7 @@
           Run or load a scan to see sections
         </span>
       </div>
-      <div class="section-panel-content" id="section-panel-content" style="display:none">
+      <div class="section-panel-content s-inline-cb4589" id="section-panel-content">
         <div class="empty-state" id="section-placeholder">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 7h18M3 12h18M3 17h18"/>
@@ -143,7 +143,7 @@
         </div>
       </div>
 
-      <div id="log-output"><span style="color:#484f58">Scan output will appear here…</span></div>
+      <div id="log-output"><span class="s-inline-0e3800">Scan output will appear here…</span></div>
     </div>
 
     <!-- Diagram panel: SPLIT LAYOUT (right=architecture) -->
@@ -384,7 +384,7 @@
       // After loading a section, ensure the section area is visible and raw log is hidden
       showSectionsInLog();
     } catch (err) {
-      sectionContent.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load section: ${err}</p></div>`;
+      sectionContent.innerHTML = `<div class="empty-state"><p class="s-inline-e09362">Failed to load section: ${err}</p></div>`;
     }
   }
 
@@ -1041,7 +1041,7 @@
   });
 
   document.getElementById('clear-log-btn').addEventListener('click', () => {
-    logOutput.innerHTML = '<span style="color:#484f58">Scan output will appear here…</span>';
+    logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
   });
 
   // Annotate repository options with a small icon if a past scan contains diagrams.

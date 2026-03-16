@@ -17,7 +17,7 @@
     <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);"></div>
   </div>
 </div>
-<div id="assets-meta" data-repo="{{ repo_name }}" data-experiment="{{ experiment_id }}" style="display:none"></div>
+<div id="assets-meta" data-repo="{{ repo_name }}" data-experiment="{{ experiment_id }}" class="s-inline-cb4589"></div>
 <div class="section-table-wrap">
   <table class="section-table" id="section-assets-table">
     <thead>
@@ -50,7 +50,7 @@
           data-parent-id="{{ a.parent_resource_id or '' }}"
           data-children-count="{{ a.children_count or 0 }}"
           data-is-child="{{ '1' if a.is_child else '0' }}"
-          {% if a.is_child %}class="child-row" style="display:none"{% endif %}>
+          {% if a.is_child %}class="child-row s-inline-cb4589"{% endif %}>
         <td>
           {% if a.children_count and a.children_count > 0 %}
             <span class="expand-toggle" data-parent-id="{{ a.id }}" title="Expand/collapse sub-assets">▶</span>
@@ -92,7 +92,7 @@
     </tbody>
   </table>
 </div>
-<div id="section-assets-empty" class="assets-empty" style="display:none">No assets match the current filter.</div>
+<div id="section-assets-empty" class="assets-empty s-inline-cb4589">No assets match the current filter.</div>
 
 {% else %}
 <div class="empty-state">

@@ -929,3 +929,13 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 }
 .diagram-provider-tab:hover { color: var(--text); }
 .diagram-provider-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Generated inline style classes */
+.s-inline-cb4589 { display:none; }
+.s-inline-0e3800 { color:#484f58; }
+.s-inline-e09362 { color:var(--red); }
+.s-inline-3c88b2 { font-size:0.75rem; color:var(--text-muted); }
+.s-inline-b6d566 { font-size:0.7rem; color:var(--text-muted); font-family:monospace; }
+.s-inline-157a9c { margin-bottom:14px; }
+.s-inline-f1c952 { margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; }
+.s-inline-4bfd80 { color:var(--green); }

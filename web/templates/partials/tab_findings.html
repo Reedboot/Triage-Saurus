@@ -11,7 +11,7 @@
     <option value="LOW">Low</option>
     <option value="INFO">Info</option>
   </select>
-  <span style="font-size:0.75rem; color:var(--text-muted);">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
+  <span class="s-inline-3c88b2">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
 </div>
 <div class="section-table-wrap">
   <table class="section-table" id="findings-table">
@@ -35,7 +35,7 @@
         <td class="wrap">
           <div style="font-weight:500; color:var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
           {% if f.rule_id and f.rule_id != f.title %}
-            <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ f.rule_id }}</div>
+            <div class="s-inline-b6d566">{{ f.rule_id }}</div>
           {% endif %}
           {% if f.description %}
             <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">{{ f.description | truncate(120) }}</div>
@@ -67,7 +67,7 @@
     </tbody>
   </table>
 </div>
-<div id="findings-empty" class="assets-empty" style="display:none">No findings match the current filter.</div>
+<div id="findings-empty" class="assets-empty s-inline-cb4589">No findings match the current filter.</div>
 <script>
 function filterFindings() {
   var q = document.getElementById('findings-search').value.toLowerCase();

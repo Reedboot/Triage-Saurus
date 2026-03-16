@@ -1,6 +1,6 @@
 {# partials/tab_egress.html — Outbound connections and external targets #}
 {% if egress_connections %}
-<div class="callout info" style="margin-bottom:14px;">
+<div class="callout info s-inline-157a9c">
   <strong>{{ egress_connections | length }}</strong>
   outbound connection{{ 's' if egress_connections | length != 1 }}
   detected in this experiment.
@@ -25,16 +25,16 @@
         <td>
           <span class="asset-name">{{ c.target_external or c.target_name or c.target_resource_id }}</span>
           {% if c.target_domain %}
-            <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ c.target_domain }}</div>
+            <div class="s-inline-b6d566">{{ c.target_domain }}</div>
           {% endif %}
         </td>
         <td>{{ c.protocol or '—' }}</td>
         <td>{{ c.port or '—' }}</td>
         <td>
           {% if c.is_encrypted == 1 %}
-            <span style="color:var(--green)">✓ Yes</span>
+            <span class="s-inline-4bfd80">✓ Yes</span>
           {% elif c.is_encrypted == 0 %}
-            <span style="color:var(--red)">✗ No</span>
+            <span class="s-inline-e09362">✗ No</span>
           {% else %}—{% endif %}
         </td>
         <td style="font-size:0.78rem; color:var(--text-muted);">{{ c.connection_purpose or c.description or '—' }}</td>
