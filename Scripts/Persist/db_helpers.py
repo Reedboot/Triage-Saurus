@@ -2662,8 +2662,43 @@ def upsert_cloud_diagram(
     mermaid_code: str,
     display_order: int = 0,
 ) -> None:
-    """Insert or update a Mermaid architecture diagram for a provider/experiment."""
+    """Insert or update a Mermaid architecture diagram for a provider/experiment.
+
+    To avoid duplicate provider tabs across experiments originating from the same
+    repository (caused by repeated pipeline runs that create new experiment ids),
+    delete older diagrams in other experiments that are for the same repo name(s),
+    provider and diagram title before inserting the current diagram. This keeps
+    one authoritative diagram per repo+provider+title while still preserving
+    experiment-scoped storage for the current run.
+    """
     with get_db_connection() as conn:
+        # Find repository names associated with this experiment. Use them to locate
+        # other experiments that reference the same repo name (e.g., previous runs).
+        repo_rows = conn.execute(
+            "SELECT DISTINCT repo_name FROM repositories WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchall()
+        repo_names = [r[0] for r in repo_rows if r[0]]
+
+        # For each repo name, delete stale cloud_diagrams in other experiments that
+        # have the same provider and diagram title. This prevents duplicate tabs
+        # when the same repo was scanned multiple times under different
+        # experiment IDs.
+        if repo_names:
+            for repo_name in repo_names:
+                other_exps = conn.execute(
+                    "SELECT DISTINCT experiment_id FROM repositories WHERE repo_name = ? AND experiment_id != ?",
+                    (repo_name, experiment_id),
+                ).fetchall()
+                for oe in other_exps:
+                    oe_id = oe[0]
+                    # Best-effort delete; ignore if row doesn't exist.
+                    conn.execute(
+                        "DELETE FROM cloud_diagrams WHERE experiment_id = ? AND provider = ? AND diagram_title = ?",
+                        (oe_id, provider, diagram_title),
+                    )
+
+        # Now upsert the diagram for the current experiment
         conn.execute(
             """
             INSERT INTO cloud_diagrams
