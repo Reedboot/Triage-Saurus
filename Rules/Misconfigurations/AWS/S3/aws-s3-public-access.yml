@@ -1,0 +1,25 @@
+rules:
+  - id: aws-s3-public-access
+    message: |
+      S3 bucket allows public access via ACL or public access block disabled.
+      Ensure block_public_acls and block_public_policy are enabled and avoid public ACLs.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_s3_bucket" $NAME {
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              acl = "public-read"
+          - pattern: |
+              acl = "public-read-write"
+          - pattern: |
+              block_public_acls = false
+          - pattern: |
+              block_public_policy = false
+    metadata:
+      category: security
+      subcategory: [storage, exposure]
+      technology: [terraform, aws, s3]
