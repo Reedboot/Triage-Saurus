@@ -98,35 +98,12 @@
             <label>&nbsp;</label>
             <button type="button" class="secondary" id="load-scan-btn">📂 Load</button>
           </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="secondary" id="compare-toggle-btn">↔ Compare</button>
-          </div>
+
         </div>
       </div>
 
       <!-- Compare row (shown when Compare is clicked) -->
-      <div class="compare-row" id="compare-row">
-        <div class="row-inner">
-          <span class="section-label">↔ Compare</span>
-          <div class="field" style="min-width:180px">
-            <label for="compare-from">From scan</label>
-            <select id="compare-from">
-              <option value="" disabled selected>— from —</option>
-            </select>
-          </div>
-          <div class="field" style="min-width:180px">
-            <label for="compare-to">To scan</label>
-            <select id="compare-to">
-              <option value="" disabled selected>— to —</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="primary" id="run-compare-btn">📊 Compare</button>
-          </div>
-        </div>
-      </div>
+
 
       <div class="status-bar" id="status-bar">
         <div class="spinner" id="spinner"></div>
@@ -326,17 +303,7 @@
     diagramWrap.addEventListener('pointercancel', () => { isPanning = false; });
   }
 
-  if (toggleLogBtn) {
-    toggleLogBtn.addEventListener('click', () => {
-      const lp = document.getElementById('log-panel');
-      if (!lp) return;
-      if (lp.style.display === 'none') {
-        lp.style.display = ''; toggleLogBtn.textContent = 'Hide log';
-      } else {
-        lp.style.display = 'none'; toggleLogBtn.textContent = 'Show log';
-      }
-    });
-  }
+  // Toggle handled by static/app.js to avoid duplicate listeners
 
   // ── Section tabs (left panel) ─────────────────────────────────────────────────
   let activeSection = '';
@@ -795,15 +762,15 @@
   }
 
   function _populateScanSelects(scans) {
-    [pastScanSelect, compareFrom, compareTo].forEach(sel => {
-      sel.innerHTML = '<option value="" disabled selected>— select —</option>';
+    if (pastScanSelect) {
+      pastScanSelect.innerHTML = '<option value="" disabled selected>— select —</option>';
       for (const s of scans) {
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
         opt.textContent = _scanOptionLabel(s);
-        sel.appendChild(opt);
+        pastScanSelect.appendChild(opt);
       }
-    });
+    }
   }
 
   async function loadPastScans(repoName) {
@@ -817,7 +784,7 @@
         pastScansRow.classList.add('visible');
       } else {
         pastScansRow.classList.remove('visible');
-        compareRow.classList.remove('visible');
+        if (compareRow) compareRow.classList.remove('visible');
       }
       return scans;
     } catch {
@@ -863,34 +830,6 @@
     }
   });
 
-  compareToggle.addEventListener('click', () => {
-    compareRow.classList.toggle('visible');
-  });
-
-  runCompareBtn.addEventListener('click', async () => {
-    const from = compareFrom.value;
-    const to   = compareTo.value;
-    if (!from || !to) { setStatus('Select both From and To scans', 'error'); return; }
-    if (from === to)  { setStatus('From and To must be different scans', 'error'); return; }
-    const repo = currentRepoName;
-    runCompareBtn.disabled = true;
-    spinner.style.display = '';
-    setStatus(`Comparing scan ${from} → ${to}…`);
-    statusBar.classList.add('visible');
-    try {
-      const url = `/api/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&repo=${encodeURIComponent(repo)}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (data.error) { setStatus('Error: ' + data.error, 'error'); return; }
-      await renderDiff(data);
-      setStatus(`Comparison ready: Scan ${from} → ${to}`, 'success');
-    } catch (err) {
-      setStatus('Compare failed: ' + err, 'error');
-    } finally {
-      spinner.style.display = 'none';
-      runCompareBtn.disabled = false;
-    }
-  });
 
   // ── SSE stream parsing ───────────────────────────────────────────────────────
   let buffer = '';
@@ -1042,7 +981,7 @@
     resetBtn.style.display = 'none';
     statusBar.classList.remove('visible');
     pastScansRow.classList.remove('visible');
-    compareRow.classList.remove('visible');
+    if (compareRow) compareRow.classList.remove('visible');
     // Clear section tabs
     sectionTabBar.innerHTML = '';
     if (tabBarPlaceholder) {
@@ -1059,7 +998,7 @@
     resetZoomPan();
   });
 
-  // Auto-fill scan name from selected repo, load past scans, and latest diagram+sections
+  // Auto-fill scan name from selected repo, load past scans, and silently auto-load latest diagram (no visual jump)
   repoSelect.addEventListener('change', async () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
@@ -1069,7 +1008,7 @@
 
       const scans = await loadPastScans(name);
 
-      // Auto-load the most recent scan that has a diagram (if any).
+      // Auto-load the most recent scan that has a diagram (silently, no spinner/status in the scan card)
       if (scans && scans.length > 0) {
         let latest = null;
         for (let i = scans.length - 1; i >= 0; i--) {
@@ -1078,18 +1017,17 @@
         if (!latest) latest = scans[scans.length -1];
         if (latest && latest.experiment_id) {
           try {
-            setStatus(`Loading latest scan ${latest.experiment_id}…`);
-            spinner.style.display = '';
-            await _loadDiagrams(latest.experiment_id);
-            await loadSectionTabs(latest.experiment_id, name);
-            // Switch to Assets tab after loading a previous scan
-            try { activateSectionKey('assets', latest.experiment_id, name); } catch (e) {}
+            await _loadDiagrams(latest.experiment_id, { silent: true });
+            // Also load section tabs (Assets, TLDR, etc.) and auto-activate Assets so sections populate
+            try {
+              await loadSectionTabs(latest.experiment_id, currentRepoName);
+              try { activateSectionKey('assets', latest.experiment_id, currentRepoName); } catch (e) {}
+            } catch (e) {
+              console.warn('Auto-load sections failed:', e);
+            }
             setTimeout(fitDiagram, 500);
-            setStatus(`Loaded latest scan ${latest.experiment_id}`, 'success');
           } catch (err) {
-            setStatus('Failed to load latest scan: ' + err, 'error');
-          } finally {
-            spinner.style.display = 'none';
+            console.warn('Auto-load diagrams failed:', err);
           }
         }
       }

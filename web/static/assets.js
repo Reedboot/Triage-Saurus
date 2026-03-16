@@ -171,6 +171,33 @@
 
     // Initial render
     applyFilterAndSort();
+
+    // Expand/collapse handler for parent/child rows (attach once per container)
+    if (!container.__assets_expand_bound) {
+      container.__assets_expand_bound = true;
+      container.addEventListener('click', function(e) {
+        const toggle = e.target.closest('.expand-toggle');
+        if (!toggle) return;
+        const parentId = toggle.getAttribute('data-parent-id');
+        if (!parentId) return;
+        const childRows = Array.from(container.querySelectorAll(`tr[data-parent-id="${parentId}"]`));
+        const isOpen = toggle.classList.contains('open');
+        toggle.classList.toggle('open', !isOpen);
+        if (!isOpen && childRows.length) {
+          // Insert child rows immediately after the parent in DOM order for visual proximity
+          const parentRow = toggle.closest('tr');
+          let insertAfter = parentRow;
+          childRows.forEach(row => {
+            insertAfter.parentNode.insertBefore(row, insertAfter.nextSibling);
+            insertAfter = row;
+            row.style.display = '';
+          });
+        } else {
+          // Collapse: hide child rows (keep original order intact)
+          childRows.forEach(row => { row.style.display = 'none'; });
+        }
+      });
+    }
   }
 
   // Expose globally

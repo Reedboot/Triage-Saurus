@@ -74,9 +74,6 @@ header span.badge {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* Prevent the overall page growing beyond the viewport; allow internal scrolling instead */
-  max-height: calc(100vh - 72px);
-  overflow: auto;
 }
 
 /* ── Scan form ── */
@@ -85,10 +82,14 @@ header span.badge {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 14px;
-  /* Keep the scan form compact when past scans are shown; allow internal scrolling */
-  max-height: 260px;
+  /* Keep scan card compact by default; reserve space for internal rows to avoid layout jumps */
+  max-height: 200px;
   overflow: auto;
+  transition: max-height 220ms ease; /* smooth if it ever changes */
 }
+
+/* Avoid toggling page layout — keep scan-card stable; Past scans scroll internally */
+.past-scans-row { max-height: 100px; overflow-y: auto; }
 
 .scan-card h2 {
   font-size: 0.9rem;
@@ -104,6 +105,46 @@ header span.badge {
   gap: 10px;
   flex-wrap: wrap;
   align-items: flex-end;
+}
+
+/* Inline labels for the top scan form to save vertical space */
+.scan-card .form-row .field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.scan-card .form-row .field label {
+  min-width: 96px;
+  text-align: right;
+  margin-right: 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.scan-card .form-row .field.grow select,
+.scan-card .form-row .field.grow input,
+.scan-card .form-row .field.grow textarea {
+  flex: 1;
+  width: auto;
+}
+
+/* Buttons in the scan row align without extra left margin */
+.scan-card .form-row .field button { margin-left: 0; }
+
+/* Responsive: stack labels above controls on small screens */
+@media (max-width: 760px) {
+  .scan-card .form-row .field {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .scan-card .form-row .field label {
+    min-width: 0;
+    text-align: left;
+    margin-right: 0;
+    margin-bottom: 6px;
+  }
 }
 
 .field { display: flex; flex-direction: column; gap: 4px; }
@@ -157,7 +198,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .past-scans-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
 .past-scans-row.visible { display: flex; }
 /* Constrain the past scans area to avoid pushing the page down; add internal scroll when many items */
-.past-scans-row { max-height: 160px; overflow-y: auto; }
+.past-scans-row { max-height: 100px; overflow-y: auto; }
 .past-scans-row .row-inner, .compare-row .row-inner {
   display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; width: 100%;
 }
@@ -193,6 +234,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   grid-template-columns: 1fr 1.4fr;
   gap: 10px;
   flex: 1;
+}
+
+/* When collapsed (log hidden), use a single full-width column so the diagram expands */
+.workspace.collapsed {
+  grid-template-columns: 1fr;
 }
 
 /* Ensure panels can shrink/grow inside grid without causing overflow */
@@ -602,6 +648,15 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .asset-name { color: var(--text); font-weight: 500; }
 
+/* Ensure parent assets have a slightly larger name than children */
+/*tr:not(.child-row) .asset-name { font-size: 1rem; }
+tr.child-row .asset-name { font-size: 0.9rem; }
+
+/* If child has children, visually nest them directly under parent when expanded */
+tr.child-row { padding-left: 0; }
+tr.child-row + tr.child-row { border-top: 0; }
+
+
 /* ── How/method badges ── */
 .how-badge {
   font-size: 0.68rem; padding: 2px 6px; border-radius: 10px;
@@ -775,15 +830,18 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px; /* match .panel-header */
   flex-shrink: 0;
   background: var(--bg-surface);
 }
 
 .right-panel-title {
-  font-size: 0.78rem; font-weight: 600;
+  font-size: 0.8rem; /* match .panel-title */
+  font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 0.05em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
 }
 
 .diagram-provider-tabs {

@@ -63,11 +63,12 @@
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
   const loadScanBtn     = document.getElementById('load-scan-btn');
-  const compareToggle   = document.getElementById('compare-toggle-btn');
-  const compareRow      = document.getElementById('compare-row');
-  const compareFrom     = document.getElementById('compare-from');
-  const compareTo       = document.getElementById('compare-to');
-  const runCompareBtn   = document.getElementById('run-compare-btn');
+  // Compare UI temporarily removed
+  const compareToggle   = null;
+  const compareRow      = null;
+  const compareFrom     = null;
+  const compareTo       = null;
+  const runCompareBtn   = null;
 
   // Diagram state
   let diagrams = [];
@@ -146,11 +147,24 @@
     if (!workspaceEl) return;
     if (collapsed) workspaceEl.classList.add('collapsed'); else workspaceEl.classList.remove('collapsed');
     try { localStorage.setItem('scanCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    // Also ensure the actual log panel is shown/hidden (guard against duplicate inline handlers)
+    const lp = document.getElementById('log-panel');
+    if (lp) lp.style.display = collapsed ? 'none' : '';
     if (toggleLogBtn) {
       toggleLogBtn.textContent = collapsed ? 'Expand scan' : 'Hide scan';
       toggleLogBtn.title = collapsed ? 'Expand/Show scan output' : 'Hide/Collapse scan output';
     }
-    setTimeout(fitDiagram, 120);
+    // Recompute layout immediately and again after a small delay so the Mermaid SVG can be fitted correctly
+    try { fitDiagram(); } catch (e) {}
+    setTimeout(fitDiagram, 260);
+  }
+
+  // Ensure the diagram refits whenever its container changes size
+  if (typeof ResizeObserver !== 'undefined' && diagramWrap) {
+    try {
+      const diagramResizeObserver = new ResizeObserver(() => { requestAnimationFrame(fitDiagram); });
+      diagramResizeObserver.observe(diagramWrap);
+    } catch (e) { console.warn('ResizeObserver error:', e); }
   }
 
   // Initialize state from localStorage
@@ -660,15 +674,15 @@
   }
 
   function _populateScanSelects(scans) {
-    [pastScanSelect, compareFrom, compareTo].forEach(sel => {
-      sel.innerHTML = '<option value="" disabled selected>— select —</option>';
+    if (pastScanSelect) {
+      pastScanSelect.innerHTML = '<option value="" disabled selected>— select —</option>';
       for (const s of scans) {
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
         opt.textContent = _scanOptionLabel(s);
-        sel.appendChild(opt);
+        pastScanSelect.appendChild(opt);
       }
-    });
+    }
   }
 
   async function loadPastScans(repoName) {
@@ -682,7 +696,7 @@
         pastScansRow.classList.add('visible');
       } else {
         pastScansRow.classList.remove('visible');
-        compareRow.classList.remove('visible');
+        // compareRow removed
       }
       return scans;
     } catch {
@@ -728,34 +742,9 @@
     }
   });
 
-  if (compareToggle) compareToggle.addEventListener('click', () => {
-    compareRow.classList.toggle('visible');
-  });
+  // Compare UI removed
+  // compareToggle event and runCompareBtn handler removed while the feature is hidden
 
-  if (runCompareBtn) runCompareBtn.addEventListener('click', async () => {
-    const from = compareFrom.value;
-    const to   = compareTo.value;
-    if (!from || !to) { setStatus('Select both From and To scans', 'error'); return; }
-    if (from === to)  { setStatus('From and To must be different scans', 'error'); return; }
-    const repo = currentRepoName;
-    runCompareBtn.disabled = true;
-    spinner.style.display = '';
-    setStatus(`Comparing scan ${from} → ${to}…`);
-    statusBar.classList.add('visible');
-    try {
-      const url = `/api/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&repo=${encodeURIComponent(repo)}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (data.error) { setStatus('Error: ' + data.error, 'error'); return; }
-      await renderDiff(data);
-      setStatus(`Comparison ready: Scan ${from} → ${to}`, 'success');
-    } catch (err) {
-      setStatus('Compare failed: ' + err, 'error');
-    } finally {
-      spinner.style.display = 'none';
-      runCompareBtn.disabled = false;
-    }
-  });
 
   // ── SSE stream parsing ───────────────────────────────────────────────────────
   let buffer = '';
@@ -908,7 +897,7 @@
     resetBtn.style.display = 'none';
     statusBar.classList.remove('visible');
     pastScansRow.classList.remove('visible');
-    compareRow.classList.remove('visible');
+
     // Clear section tabs
     sectionTabBar.innerHTML = '';
     if (tabBarPlaceholder) {
@@ -925,7 +914,7 @@
     resetZoomPan();
   });
 
-  // Auto-fill scan name from selected repo, load past scans, and latest diagram+sections
+  // Auto-fill scan name from selected repo, load past scans, and silently auto-load latest diagram (no visual jump)
   if (repoSelect) repoSelect.addEventListener('change', async () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
@@ -935,7 +924,7 @@
 
       const scans = await loadPastScans(name);
 
-      // Auto-load the most recent scan that has a diagram (if any).
+      // Auto-load the most recent scan that has a diagram (silently, no spinner/status in the scan card)
       if (scans && scans.length > 0) {
         let latest = null;
         for (let i = scans.length - 1; i >= 0; i--) {
@@ -944,18 +933,17 @@
         if (!latest) latest = scans[scans.length -1];
         if (latest && latest.experiment_id) {
           try {
-            setStatus(`Loading latest scan ${latest.experiment_id}…`);
-            spinner.style.display = '';
-            await _loadDiagrams(latest.experiment_id);
-            await loadSectionTabs(latest.experiment_id, name);
-            // Switch to Assets tab after loading a previous scan
-            try { activateSectionKey('assets', latest.experiment_id, name); } catch (e) {}
+            await _loadDiagrams(latest.experiment_id, { silent: true });
+            // Also load section tabs (Assets, TLDR, etc.) and auto-activate Assets so sections populate
+            try {
+              await loadSectionTabs(latest.experiment_id, currentRepoName);
+              try { activateSectionKey('assets', latest.experiment_id, currentRepoName); } catch (e) {}
+            } catch (e) {
+              console.warn('Auto-load sections failed:', e);
+            }
             setTimeout(fitDiagram, 500);
-            setStatus(`Loaded latest scan ${latest.experiment_id}`, 'success');
           } catch (err) {
-            setStatus('Failed to load latest scan: ' + err, 'error');
-          } finally {
-            spinner.style.display = 'none';
+            console.warn('Auto-load diagrams failed:', err);
           }
         }
       }

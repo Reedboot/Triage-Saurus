@@ -15,12 +15,24 @@
   font-size: 0.75rem;
   transition: transform 0.15s;
   display: inline-block;
+  cursor: pointer;
+  color: var(--text-muted);
 }
 .expand-toggle.open {
   transform: rotate(90deg);
 }
 .child-row td:first-child {
   padding-left: 2rem;
+}
+/* Child rows: visually differentiate and indent */
+.child-row .asset-name {
+  color: var(--text-faint);
+  opacity: 0.9;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+.child-row td {
+  color: var(--text-faint);
 }
 </style>
 {% if assets %}
@@ -76,7 +88,7 @@
             <span class="child-count-badge" title="{{ a.children_count }} sub-asset(s)">{{ a.children_count }}</span>
           {% elif a.is_child %}
             <span style="display:inline-block;width:1.5rem;"></span>
-            <span class="asset-name" style="opacity:0.8;">{{ a.resource_name }}</span>
+            <span class="asset-name">{{ a.resource_name }}</span>
           {% else %}
             <span class="asset-name">{{ a.resource_name }}</span>
           {% endif %}
