@@ -832,14 +832,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
             a = dict(row)
             rank = a.pop("max_sev_rank") or 0
             a["worst_severity"] = sev_labels.get(rank, "")
-            # Normalize provider: use 'unknown' when missing
-            prov = (a.get("provider") or "unknown")
-            a["provider"] = prov
-            # Count providers (preserve original casing in keys)
-            provider_counts[prov] = provider_counts.get(prov, 0) + 1
-            if prov.lower() == 'unknown':
-                has_unknown = True
-            providers.add(prov)
+
             # Enrich with render_category and display_on_architecture_chart
             rtype = (a.get('resource_type') or '')
             try:
@@ -856,6 +849,28 @@ def api_view_assets(experiment_id: str, repo_name: str):
                     a['display_on_architecture_chart'] = True
             except Exception:
                 a['display_on_architecture_chart'] = True
+
+            # Skip identity / RBAC resources — they are shown in the Roles tab
+            skip_types = {
+                'azurerm_role_assignment', 'azurerm_role_definition',
+                'aws_iam_role', 'aws_iam_policy', 'aws_iam_user_policy',
+                'google_project_iam_member', 'google_project_iam_binding',
+                'kubernetes_cluster_role', 'kubernetes_role_binding', 'kubernetes_cluster_role_binding',
+                'managed_identity', 'user_assigned_identity', 'service_account', 'service_principal'
+            }
+            rtype_lower = (rtype or '').lower()
+            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
+                continue
+
+            # Normalize provider: use 'unknown' when missing
+            prov = (a.get("provider") or "unknown")
+            a["provider"] = prov
+            # Count providers (preserve original casing in keys)
+            provider_counts[prov] = provider_counts.get(prov, 0) + 1
+            if prov.lower() == 'unknown':
+                has_unknown = True
+            providers.add(prov)
+
             # Hierarchy fields
             a['children_count'] = len(children_by_parent.get(a.get('id'), []))
             a['is_child'] = a.get('id') in child_resource_ids
