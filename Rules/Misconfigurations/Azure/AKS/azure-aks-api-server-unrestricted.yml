@@ -38,3 +38,4 @@ rules:
       impact: HIGH
       technology: [terraform, azure, kubernetes]
       five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

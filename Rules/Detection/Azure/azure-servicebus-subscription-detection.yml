@@ -1,0 +1,42 @@
+rules:
+  - id: context-azure-servicebus-subscription
+    message: |
+      Azure Service Bus Subscription detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_servicebus_subscription" $NAME {
+            ...
+            topic_id = $TOPIC_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*servicebus[_-]?subscription.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: servicebus
+      technology: [terraform, azure, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Service Bus Subscription
+        resource_type: azurerm_servicebus_subscription
+        resource_name: $NAME
+        properties:
+          - name: topic_id
+            pattern: topic_id = $TOPIC_ID
+          - name: max_delivery_count
+            pattern: max_delivery_count = "$VAL"
+    description: |
+      Detects Azure Service Bus Subscription resources and captures the parent topic reference via topic_id.

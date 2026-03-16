@@ -1,0 +1,30 @@
+rules:
+  - id: azure-eventhub-public-access
+    message: |
+      Event Hub namespace has public network access enabled. Restrict access via
+      Private Endpoint or network rules.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_eventhub_namespace" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_eventhub_namespace "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

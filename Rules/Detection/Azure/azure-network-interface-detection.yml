@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-network-interface
+    message: |
+      Azure Network Interface detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_network_interface" $NAME {
+            ...
+            ip_configuration {
+              ...
+              subnet_id = $SUBNET
+              ...
+            }
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*network[_-]?interface.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Interface
+        resource_type: azurerm_network_interface
+        resource_name: $NAME
+        properties:
+          - name: subnet_id
+            pattern: subnet_id = $SUBNET
+    description: |
+      Detects Azure Network Interface resources and captures the associated subnet reference via subnet_id inside ip_configuration.

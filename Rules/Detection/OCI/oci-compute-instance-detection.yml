@@ -1,0 +1,42 @@
+rules:
+  - id: context-oci-compute-instance
+    message: |
+      Oracle Cloud Infrastructure Compute Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_core_instance" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?core[_-]?instance.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, oci, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Compute Instance
+        resource_type: oci_core_instance
+        resource_name: $NAME
+        properties:
+          - name: shape
+            pattern: shape = "$SHAPE"
+          - name: availability_domain
+            pattern: availability_domain = "$AD"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+    description: |
+      Detects Compute Instance resources in Oracle Cloud Infrastructure Terraform configurations.

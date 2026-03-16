@@ -1,0 +1,27 @@
+rules:
+  - id: alicloud-ram-policy-wildcard
+    message: |
+      RAM policy grants wildcard (*) permissions on Action or Resource.
+      Wildcard permissions violate the principle of least privilege and can lead to privilege escalation.
+      Restrict policy statements to only the required actions and specific resource ARNs.
+    severity: HIGH
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "alicloud_ram_policy" "$NAME" {
+            ...
+            document = $DOC
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $DOC
+          regex: '.*\*.*'
+    metadata:
+      category: security
+      subcategory: [iam, cloud]
+      cwe: CWE-250
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 3 (Identity & Access Management)

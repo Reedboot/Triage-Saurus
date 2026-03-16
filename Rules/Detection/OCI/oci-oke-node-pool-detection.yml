@@ -1,0 +1,48 @@
+rules:
+  - id: context-oci-oke-node-pool
+    message: |
+      Oracle Cloud Infrastructure OKE Node Pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_containerengine_node_pool" $NAME {
+            ...
+            cluster_id = $CLUSTER_ID
+            ...
+          }
+      - pattern: |
+          resource "oci_containerengine_node_pool" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?containerengine[_-]?node[_-]?pool.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: container
+      technology: [terraform, oci, container]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: OKE Node Pool
+        resource_type: oci_containerengine_node_pool
+        resource_name: $NAME
+        properties:
+          - name: cluster_id
+            pattern: cluster_id = "$CLUSTER_ID"
+          - name: node_shape
+            pattern: node_shape = "$SHAPE"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+    description: |
+      Detects OKE Node Pool resources in Oracle Cloud Infrastructure Terraform configurations.

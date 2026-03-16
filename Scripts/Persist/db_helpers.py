@@ -22,13 +22,24 @@ except Exception as e:
         loader = spec.loader
         if loader is None:
             raise ImportError("Failed to load cozo_helpers implementation (no loader)")
-        loader.exec_module(module)
-        cozo_helpers = module
-        sys.modules.setdefault("cozo_helpers", module)
-        _COZO_HELPERS_AVAILABLE = True
+        try:
+            loader.exec_module(module)
+            cozo_helpers = module
+            sys.modules.setdefault("cozo_helpers", module)
+            _COZO_HELPERS_AVAILABLE = True
+        except Exception as _load_err:
+            # Best-effort: cozo_helpers failed to load (e.g., pycozo not installed).
+            # Do not raise here; fall back to non-pycozo mode so DB init can proceed.
+            _COZO_HELPERS_AVAILABLE = False
+            # Optional: record the failure for diagnostics but avoid noisy failures.
+            try:
+                print(f"Warning: failed to load cozo_helpers: {_load_err}")
+            except Exception:
+                pass
     else:
         _COZO_HELPERS_AVAILABLE = False
-        raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
+        # Do not raise here; running without cozo_helpers is supported.
+        # raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Database location
 ROOT = Path(__file__).resolve().parents[2]
@@ -294,6 +305,112 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
         WHERE created_at IS NULL
         """,
     )
+
+    # ------------------------------------------------------------------
+    # Backfill provider IDs and textual provider columns for legacy rows.
+    # This ensures older DBs created before provider-detection changes get
+    # updated when schema migrations run. The logic is resilient when
+    # providers/resource_types tables are missing (e.g., fresh or legacy DBs).
+    try:
+        import resource_type_db as rtdb
+        cur = conn.cursor()
+
+        # Derive provider keys (for potential seeding) but do not rely on providers table existing
+        prov_keys = {prov for _, prov in getattr(rtdb, "_PROVIDER_PREFIXES", [])}
+        prov_keys.update({"unknown", "terraform"})
+
+        # If providers table exists, ensure keys are present and build prov_map
+        prov_map = {}
+        has_providers = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='providers'").fetchone())
+        if has_providers:
+            for key in sorted(prov_keys):
+                cur.execute(
+                    "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+                    (key, key.title(), ""),
+                )
+            conn.commit()
+            cur.execute("SELECT id, key FROM providers")
+            prov_map = {row[1]: row[0] for row in cur.fetchall()}
+
+        # Update resource_types.provider_id using derived provider where missing (if resource_types table exists)
+        has_resource_types = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resource_types'").fetchone())
+        rt_updates = 0
+        if has_resource_types:
+            rt_rows = cur.execute("SELECT id, terraform_type, provider_id FROM resource_types").fetchall()
+            for row in rt_rows:
+                rt_id, tf_type, current_pid = row
+                pkey = rtdb._derive(tf_type).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                pid = prov_map.get(pkey)
+                if has_providers and not pid:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO providers (key, friendly_name, icon) VALUES (?, ?, ?)",
+                        (pkey, pkey.title(), ""),
+                    )
+                    conn.commit()
+                    pid = cur.execute("SELECT id FROM providers WHERE key=?", (pkey,)).fetchone()[0]
+                    prov_map[pkey] = pid
+                if current_pid != pid and pid is not None:
+                    cur.execute("UPDATE resource_types SET provider_id = ? WHERE id = ?", (pid, rt_id))
+                    rt_updates += 1
+            conn.commit()
+        updates["resource_types_provider_ids"] = rt_updates
+
+        # Backfill textual provider on resources table for legacy rows (do this regardless of providers table existence)
+        has_resources = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resources'").fetchone())
+        res_updates = 0
+        if has_resources:
+            res_rows = cur.execute(
+                "SELECT id, resource_type FROM resources WHERE provider IS NULL OR TRIM(provider) = '' OR lower(provider) = 'unknown'"
+            ).fetchall()
+            for rid, rtype in res_rows:
+                # Prefer provider from resource_types table if available
+                pkey = None
+                if has_resource_types:
+                    p_row = cur.execute(
+                        "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                        (rtype,),
+                    ).fetchone()
+                    if p_row and p_row[0]:
+                        pkey = p_row[0]
+                if not pkey:
+                    pkey = rtdb._derive(rtype).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                cur.execute("UPDATE resources SET provider = ? WHERE id = ?", (pkey, rid))
+                res_updates += 1
+            conn.commit()
+        updates["resources_provider_backfill"] = res_updates
+
+        # Backfill resource_nodes.provider as well
+        has_resource_nodes = bool(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='resource_nodes'").fetchone())
+        rn_updates = 0
+        if has_resource_nodes:
+            rn_rows = cur.execute(
+                "SELECT id, resource_type FROM resource_nodes WHERE provider IS NULL OR TRIM(provider) = '' OR lower(provider) = 'unknown'"
+            ).fetchall()
+            for nid, ntype in rn_rows:
+                pkey = None
+                if has_resource_types:
+                    p_row = cur.execute(
+                        "SELECT p.key FROM resource_types rt LEFT JOIN providers p ON rt.provider_id = p.id WHERE rt.terraform_type = ?",
+                        (ntype,),
+                    ).fetchone()
+                    if p_row and p_row[0]:
+                        pkey = p_row[0]
+                if not pkey:
+                    pkey = rtdb._derive(ntype).get("provider", "unknown")
+                if not pkey or pkey == "unknown":
+                    continue
+                cur.execute("UPDATE resource_nodes SET provider = ? WHERE id = ?", (pkey, nid))
+                rn_updates += 1
+            conn.commit()
+        updates["resource_nodes_provider_backfill"] = rn_updates
+
+    except Exception:
+        # Best-effort backfill: do not fail migrations on errors
+        pass
 
     return updates
 
@@ -613,6 +730,31 @@ def _ensure_schema(conn: sqlite3.Connection):
       rejection_reason TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS repo_ai_content (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT NOT NULL,
+      section_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content_html TEXT,
+      generated_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_name, section_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS cloud_diagrams (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      diagram_title TEXT NOT NULL,
+      mermaid_code TEXT NOT NULL,
+      display_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, provider, diagram_title)
+    );
     """)
 
         # Ensure optional columns exist for backward compatibility.
@@ -805,11 +947,6 @@ def get_db_connection(db_path: Optional[Path] = None):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), timeout=30)
-    # Improve concurrency: enable WAL and set busy timeout
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
     conn.execute("PRAGMA busy_timeout = 30000;")
     conn.row_factory = sqlite3.Row  # Access columns by name
     # Ensure schema with retries to avoid concurrent migration lock errors
@@ -1293,22 +1430,97 @@ def insert_finding(
             if repo_row:
                 repo_id = repo_row[0]
 
-        cursor = conn.execute("""
-            INSERT INTO findings
-            (experiment_id, repo_id, resource_id, title, description, category,
-             severity_score, base_severity, evidence_location, source_file, source_line_start,
-             source_line_end, detected_by, detection_method, rule_id, proposed_fix,
-             code_snippet, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-        """, (
-            experiment_id, repo_id, resource_id, effective_title, description, category,
-            effective_severity_score, severity, evidence_location, source_file, source_line_start,
-            source_line_end, discovered_by, None, rule_id, proposed_fix,
-            code_snippet, reason,
-        ))
+        # Attempt insert with retries on SQLITE_BUSY/locked errors.
+        cursor = None
+        for attempt in range(6):
+            try:
+                cursor = conn.execute("""
+                    INSERT INTO findings
+                    (experiment_id, repo_id, resource_id, title, description, category,
+                     severity_score, base_severity, evidence_location, source_file, source_line_start,
+                     source_line_end, rule_id, proposed_fix, code_snippet, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                """, (
+                    experiment_id, repo_id, resource_id, effective_title, description, category,
+                    effective_severity_score, severity, evidence_location, source_file, source_line_start,
+                    source_line_end, rule_id, proposed_fix, code_snippet, reason,
+                ))
+                break
+            except sqlite3.OperationalError as e:
+                if 'locked' in str(e).lower() and attempt < 5:
+                    # Backoff before retrying
+                    time.sleep(1 + attempt)
+                    continue
+                raise
+
+        if cursor is None:
+            raise RuntimeError('Failed to insert finding after retries')
 
         return cursor.fetchone()[0]
+
+
+def batch_insert_findings(
+    conn,
+    findings_data: list,
+) -> list:
+    """
+    Batch insert multiple findings in a single transaction.
+    
+    Args:
+        conn: Database connection (must be managed by caller)
+        findings_data: List of dicts with keys:
+            - experiment_id, repo_id, resource_id, title, description, category,
+              severity_score, base_severity, evidence_location, source_file,
+              source_line_start, source_line_end, rule_id, proposed_fix,
+              code_snippet, reason
+    
+    Returns:
+        List of inserted finding IDs
+    """
+    if not findings_data:
+        return []
+    
+    finding_ids = []
+    
+    for attempt in range(6):
+        try:
+            for finding in findings_data:
+                cursor = conn.execute("""
+                    INSERT INTO findings
+                    (experiment_id, repo_id, resource_id, title, description, category,
+                     severity_score, base_severity, evidence_location, source_file, source_line_start,
+                     source_line_end, rule_id, proposed_fix, code_snippet, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                """, (
+                    finding['experiment_id'],
+                    finding['repo_id'],
+                    finding.get('resource_id'),
+                    finding['title'],
+                    finding.get('description'),
+                    finding['category'],
+                    finding['severity_score'],
+                    finding['base_severity'],
+                    finding['evidence_location'],
+                    finding.get('source_file'),
+                    finding.get('source_line_start'),
+                    finding.get('source_line_end'),
+                    finding.get('rule_id'),
+                    finding.get('proposed_fix'),
+                    finding.get('code_snippet'),
+                    finding.get('reason'),
+                ))
+                finding_ids.append(cursor.fetchone()[0])
+            break
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < 5:
+                time.sleep(1 + attempt)
+                finding_ids.clear()
+                continue
+            raise
+    
+    return finding_ids
 
 
 def store_skeptic_review(
@@ -1356,9 +1568,23 @@ def record_risk_score(
     score: float,
     scored_by: str,
     rationale: str = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    """Append a risk score snapshot to risk_score_history. Returns history row id."""
-    with get_db_connection() as conn:
+    """Append a risk score snapshot to risk_score_history. Returns history row id.
+
+    If `conn` is provided, use it (this allows callers to include the write in an
+    existing transaction to avoid sqlite write-lock contention). Otherwise, open
+    a new connection for a standalone insert.
+    """
+    if conn is None:
+        with get_db_connection() as conn_local:
+            cursor = conn_local.execute("""
+                INSERT INTO risk_score_history (finding_id, score, scored_by, rationale)
+                VALUES (?, ?, ?, ?)
+                RETURNING id
+            """, (finding_id, score, scored_by, rationale))
+            return cursor.fetchone()[0]
+    else:
         cursor = conn.execute("""
             INSERT INTO risk_score_history (finding_id, score, scored_by, rationale)
             VALUES (?, ?, ?, ?)
@@ -2233,4 +2459,88 @@ def resolve_enrichment_assumption(
 if __name__ == "__main__":
     # Test basic operations
     pass
+
+
+# ── repo_ai_content helpers ───────────────────────────────────────────────────
+
+def upsert_ai_section(
+    experiment_id: str,
+    repo_name: str,
+    section_key: str,
+    title: str,
+    content_html: str,
+    generated_by: str = "system",
+) -> None:
+    """Insert or update an AI-generated HTML section for a repo/experiment."""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO repo_ai_content
+                (experiment_id, repo_name, section_key, title, content_html, generated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(experiment_id, repo_name, section_key) DO UPDATE SET
+                title        = excluded.title,
+                content_html = excluded.content_html,
+                generated_by = excluded.generated_by,
+                updated_at   = CURRENT_TIMESTAMP
+            """,
+            (experiment_id, repo_name, section_key, title, content_html, generated_by),
+        )
+        conn.commit()
+
+
+def get_ai_sections(experiment_id: str, repo_name: str) -> list[dict]:
+    """Return all AI content sections for a repo/experiment, ordered by section_key."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT section_key, title, content_html, generated_by, updated_at
+            FROM repo_ai_content
+            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+            ORDER BY section_key
+            """,
+            (experiment_id, repo_name),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── cloud_diagrams helpers ────────────────────────────────────────────────────
+
+def upsert_cloud_diagram(
+    experiment_id: str,
+    provider: str,
+    diagram_title: str,
+    mermaid_code: str,
+    display_order: int = 0,
+) -> None:
+    """Insert or update a Mermaid architecture diagram for a provider/experiment."""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO cloud_diagrams
+                (experiment_id, provider, diagram_title, mermaid_code, display_order, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(experiment_id, provider, diagram_title) DO UPDATE SET
+                mermaid_code  = excluded.mermaid_code,
+                display_order = excluded.display_order,
+                updated_at    = CURRENT_TIMESTAMP
+            """,
+            (experiment_id, provider, diagram_title, mermaid_code, display_order),
+        )
+        conn.commit()
+
+
+def get_cloud_diagrams(experiment_id: str) -> list[dict]:
+    """Return all cloud diagrams for an experiment, ordered by display_order then provider."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT provider, diagram_title, mermaid_code, display_order
+            FROM cloud_diagrams
+            WHERE experiment_id = ?
+            ORDER BY display_order, provider, diagram_title
+            """,
+            (experiment_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 

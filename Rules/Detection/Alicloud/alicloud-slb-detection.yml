@@ -1,0 +1,44 @@
+rules:
+  - id: context-alicloud-slb
+    message: |
+      Alibaba Cloud SLB/ALB Load Balancer detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_slb_load_balancer" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "alicloud_alb_load_balancer" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*(slb|alb)[_-]?load[_-]?balancer.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, alicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: SLB Load Balancer
+        resource_type: alicloud_slb_load_balancer
+        resource_name: $NAME
+        properties:
+          - name: load_balancer_name
+            pattern: load_balancer_name = "$LB_NAME"
+          - name: address_type
+            pattern: address_type = "$ADDR_TYPE"
+    description: |
+      Detects SLB/ALB Load Balancer resources in Alibaba Cloud Terraform configurations.

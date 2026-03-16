@@ -88,3 +88,4 @@ rules:
         Context matters:
         - Inbound Allow with "*" source = internet exposure
         - Outbound Deny with "*" destination = egress lockdown (good)
+      internet_exposure: true

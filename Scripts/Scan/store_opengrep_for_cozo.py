@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -27,6 +28,11 @@ from shared_utils import _severity_score
 
 def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:
     metadata = metadata or {}
+    # Prefer explicit asset_provider metadata if rule provides it
+    asset_provider = metadata.get("asset_provider") or metadata.get("provider")
+    if isinstance(asset_provider, str) and asset_provider.strip():
+        return asset_provider.strip().lower()
+
     tech = metadata.get("technology") or metadata.get("technologies")
     if isinstance(tech, str):
         tech_values = [tech.lower()]
@@ -152,6 +158,210 @@ def _ensure_relations(db: Client) -> None:
             db.create(name, *columns)
 
 
+# Maps (rule_id_substring, context_key, child_resource_type, parent_resource_type)
+PARENT_REF_MAP = [
+    # Azure
+    ("storage-container", "storage_account_name", "azurerm_storage_container", "azurerm_storage_account"),
+    ("storage-container", "$ACCOUNT", "azurerm_storage_container", "azurerm_storage_account"),
+    ("storage-container", "$ACCOUNT_ID", "azurerm_storage_container", "azurerm_storage_account"),
+    ("sql-database", "server_id", "azurerm_mssql_database", "azurerm_mssql_server"),
+    ("sql-database", "$SERVER", "azurerm_mssql_database", "azurerm_mssql_server"),
+    ("keyvault-secret", "key_vault_id", "azurerm_key_vault_secret", "azurerm_key_vault"),
+    ("keyvault-secret", "$KV", "azurerm_key_vault_secret", "azurerm_key_vault"),
+    ("keyvault-key", "key_vault_id", "azurerm_key_vault_key", "azurerm_key_vault"),
+    ("keyvault-key", "$KV", "azurerm_key_vault_key", "azurerm_key_vault"),
+    ("keyvault-certificate", "key_vault_id", "azurerm_key_vault_certificate", "azurerm_key_vault"),
+    ("keyvault-certificate", "$KV", "azurerm_key_vault_certificate", "azurerm_key_vault"),
+    ("vm-extension", "virtual_machine_id", "azurerm_virtual_machine_extension", "azurerm_linux_virtual_machine"),
+    ("vm-extension", "$VM_ID", "azurerm_virtual_machine_extension", "azurerm_linux_virtual_machine"),
+    ("servicebus-queue", "namespace_id", "azurerm_servicebus_queue", "azurerm_servicebus_namespace"),
+    ("servicebus-queue", "$NAMESPACE_ID", "azurerm_servicebus_queue", "azurerm_servicebus_namespace"),
+    ("servicebus-topic", "namespace_id", "azurerm_servicebus_topic", "azurerm_servicebus_namespace"),
+    ("servicebus-topic", "$NAMESPACE_ID", "azurerm_servicebus_topic", "azurerm_servicebus_namespace"),
+    ("servicebus-subscription", "topic_id", "azurerm_servicebus_subscription", "azurerm_servicebus_topic"),
+    ("servicebus-subscription", "$TOPIC_ID", "azurerm_servicebus_subscription", "azurerm_servicebus_topic"),
+    ("eventhub-consumer-group", "eventhub_name", "azurerm_eventhub_consumer_group", "azurerm_eventhub"),
+    ("eventhub-consumer-group", "$EH_NAME", "azurerm_eventhub_consumer_group", "azurerm_eventhub"),
+    ("eventhub", "namespace_name", "azurerm_eventhub", "azurerm_eventhub_namespace"),
+    ("eventhub", "$NAMESPACE_NAME", "azurerm_eventhub", "azurerm_eventhub_namespace"),
+    ("aks-node-pool", "kubernetes_cluster_id", "azurerm_kubernetes_cluster_node_pool", "azurerm_kubernetes_cluster"),
+    ("aks-node-pool", "$CLUSTER_ID", "azurerm_kubernetes_cluster_node_pool", "azurerm_kubernetes_cluster"),
+    ("storage-blob", "storage_account_name", "azurerm_storage_blob", "azurerm_storage_account"),
+    ("storage-blob", "$ACCOUNT_NAME", "azurerm_storage_blob", "azurerm_storage_account"),
+    ("storage-queue", "storage_account_name", "azurerm_storage_queue", "azurerm_storage_account"),
+    ("storage-queue", "$ACCOUNT_NAME", "azurerm_storage_queue", "azurerm_storage_account"),
+    ("storage-share", "storage_account_name", "azurerm_storage_share", "azurerm_storage_account"),
+    ("storage-share", "$ACCOUNT_NAME", "azurerm_storage_share", "azurerm_storage_account"),
+    ("cosmosdb-sql-container", "account_name", "azurerm_cosmosdb_sql_container", "azurerm_cosmosdb_account"),
+    ("cosmosdb-sql-database", "account_name", "azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_account"),
+    ("mysql-database", "server_name", "azurerm_mysql_database", "azurerm_mysql_server"),
+    ("mysql-database", "$SERVER_NAME", "azurerm_mysql_database", "azurerm_mysql_server"),
+    ("postgresql-database", "server_name", "azurerm_postgresql_database", "azurerm_postgresql_server"),
+    ("postgresql-database", "$SERVER_NAME", "azurerm_postgresql_database", "azurerm_postgresql_server"),
+    ("mssql-firewall-rule", "server_id", "azurerm_mssql_firewall_rule", "azurerm_mssql_server"),
+    ("mssql-firewall-rule", "$SERVER_ID", "azurerm_mssql_firewall_rule", "azurerm_mssql_server"),
+    ("nsg-rule", "network_security_group_name", "azurerm_network_security_rule", "azurerm_network_security_group"),
+    ("nsg-rule", "$NSG_NAME", "azurerm_network_security_rule", "azurerm_network_security_group"),
+    ("api-management-api", "api_management_name", "azurerm_api_management_api", "azurerm_api_management"),
+    ("api-management-api", "$APIM_NAME", "azurerm_api_management_api", "azurerm_api_management"),
+    # Alicloud
+    ("ack-node-pool", "cluster_id", "alicloud_cs_kubernetes_node_pool", "alicloud_cs_managed_kubernetes"),
+    ("ack-node-pool", "$CLUSTER_ID", "alicloud_cs_kubernetes_node_pool", "alicloud_cs_managed_kubernetes"),
+    ("kms-secret", "encryption_key_id", "alicloud_kms_secret", "alicloud_kms_key"),
+    ("kms-secret", "$KEY_ID", "alicloud_kms_secret", "alicloud_kms_key"),
+    ("vswitch", "vpc_id", "alicloud_vswitch", "alicloud_vpc"),
+    ("vswitch", "$VPC_ID", "alicloud_vswitch", "alicloud_vpc"),
+    ("security-group-rule", "security_group_id", "alicloud_security_group_rule", "alicloud_security_group"),
+    ("security-group-rule", "$SG_ID", "alicloud_security_group_rule", "alicloud_security_group"),
+    ("log-store", "project", "alicloud_log_store", "alicloud_log_project"),
+    ("log-store", "$PROJECT", "alicloud_log_store", "alicloud_log_project"),
+    ("fc-function", "service_name", "alicloud_fc_function", "alicloud_fc_service"),
+    ("fc-function", "$SERVICE_NAME", "alicloud_fc_function", "alicloud_fc_service"),
+    # OCI
+    ("oke-node-pool", "cluster_id", "oci_containerengine_node_pool", "oci_containerengine_cluster"),
+    ("oke-node-pool", "$CLUSTER_ID", "oci_containerengine_node_pool", "oci_containerengine_cluster"),
+    ("kms-key", "management_endpoint", "oci_kms_key", "oci_kms_vault"),
+    ("vault-secret", "vault_id", "oci_vault_secret", "oci_kms_vault"),
+    ("vault-secret", "$VAULT_ID", "oci_vault_secret", "oci_kms_vault"),
+    ("oci-subnet", "vcn_id", "oci_core_subnet", "oci_core_vcn"),
+    ("oci-subnet", "$VCN_ID", "oci_core_subnet", "oci_core_vcn"),
+    ("functions", "application_id", "oci_functions_function", "oci_functions_application"),
+    ("functions", "$APP_ID", "oci_functions_function", "oci_functions_application"),
+    ("apigateway", "gateway_id", "oci_apigateway_deployment", "oci_apigateway_gateway"),
+    ("apigateway", "$GATEWAY_ID", "oci_apigateway_deployment", "oci_apigateway_gateway"),
+    ("logging", "log_group_id", "oci_logging_log", "oci_logging_log_group"),
+    ("logging", "$LOG_GROUP_ID", "oci_logging_log", "oci_logging_log_group"),
+]
+
+
+def _normalize_parent_ref(value: str) -> str:
+    """Extract the resource name from a Terraform reference.
+
+    Examples:
+      azurerm_storage_account.main.id  -> main
+      data.azurerm_storage_account.sa.id -> sa
+      myaccount                         -> myaccount
+    """
+    if not value:
+        return value
+    if value.startswith("data."):
+        parts = value.split(".")
+        return parts[2] if len(parts) >= 3 else value
+    parts = value.split(".")
+    if len(parts) >= 2:
+        return parts[1]
+    return value
+
+
+def _create_parent_child_relationships(db: "Client", experiment_id: str) -> None:
+    """Post-process finding_context rows to wire parent_resource_id and resource_relationships.
+
+    Queries pycozo for finding_context entries associated with this scan, then uses a
+    separate sqlite3 connection to update the resources and resource_relationships tables
+    in the same database file.
+
+    db: open pycozo Client (must still be open when this function is called)
+    experiment_id: the scan_id used when storing findings
+    """
+    # findings columns (positional): finding_id(0), scan_id(1), repo_name(2), repo_path(3),
+    # rule_id(4), check_id(5), category(6), severity(7), severity_score(8), message(9),
+    # code_snippet(10), metadata_json(11), provider(12), source_file(13), start_line(14),
+    # end_line(15), created_at(16)
+    # finding_context columns: finding_id(0), context_key(1), context_value(2), context_type(3)
+    try:
+        result = db.run(
+            """
+            ?[finding_id, rule_id, source_file, start_line, context_key, context_value] :=
+              *findings[finding_id, $scan_id, _, _, rule_id, _, _, _, _, _, _, _, _, source_file, start_line, _, _],
+              *finding_context[finding_id, context_key, context_value, _]
+            """,
+            {"scan_id": experiment_id},
+        )
+    except Exception as exc:
+        print(f"WARNING: parent-child post-process: pycozo query failed: {exc}", file=sys.stderr)
+        return
+
+    file_line_ctx: dict = defaultdict(list)
+    for row in result.get("rows", []):
+        _fid, rule_id, source_file, start_line, context_key, context_value = row
+        key = (source_file or "", int(start_line) if start_line else 0)
+        file_line_ctx[key].append((rule_id, context_key, context_value))
+
+    if not file_line_ctx:
+        return
+
+    try:
+        sq = sqlite3.connect(str(DEFAULT_COZO_DB), timeout=10)
+        sq.execute("PRAGMA journal_mode=WAL")
+    except Exception as exc:
+        print(f"WARNING: parent-child post-process: sqlite connect failed: {exc}", file=sys.stderr)
+        return
+
+    try:
+        res_rows = sq.execute(
+            "SELECT id, resource_name, resource_type, source_file, source_line_start "
+            "FROM resources WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchall()
+
+        linked = 0
+        rel_inserted = 0
+        for res_id, _res_name, res_type, src_file, src_line in res_rows:
+            key = (src_file or "", int(src_line) if src_line else 0)
+            for rule_id, context_key, context_value in file_line_ctx.get(key, []):
+                for rule_substr, map_key, child_type, parent_type in PARENT_REF_MAP:
+                    if rule_substr not in rule_id.lower():
+                        continue
+                    if map_key != context_key:
+                        continue
+                    if res_type != child_type:
+                        continue
+
+                    norm = _normalize_parent_ref(context_value or "")
+                    parent_row = sq.execute(
+                        "SELECT id FROM resources "
+                        "WHERE experiment_id = ? AND resource_type = ? AND resource_name = ?",
+                        (experiment_id, parent_type, norm),
+                    ).fetchone()
+                    parent_id = parent_row[0] if parent_row else None
+
+                    if parent_id is not None:
+                        sq.execute(
+                            "UPDATE resources SET parent_resource_id = ? WHERE id = ?",
+                            (parent_id, res_id),
+                        )
+                        linked += 1
+
+                    # Always record the relationship; use 0 as sentinel target when
+                    # parent is not yet in the resources table (cross-repo or deferred).
+                    target_id = parent_id if parent_id is not None else 0
+                    sq.execute(
+                        "INSERT OR IGNORE INTO resource_relationships "
+                        "(source_id, target_id, relationship_type, source_repo, confidence, notes) "
+                        "VALUES (?, ?, 'child_of', ?, 'extracted', ?)",
+                        (
+                            res_id,
+                            target_id,
+                            experiment_id,
+                            f"context_key={context_key}; ref={context_value}; parent_type={parent_type}",
+                        ),
+                    )
+                    rel_inserted += 1
+                    break  # First matching PARENT_REF_MAP entry wins per context row
+
+        sq.commit()
+        if linked or rel_inserted:
+            print(f"  Parent-child: {linked} resources linked, {rel_inserted} relationships created.")
+    except Exception as exc:
+        try:
+            sq.rollback()
+        except Exception:
+            pass
+        print(f"WARNING: parent-child post-process: update failed: {exc}", file=sys.stderr)
+    finally:
+        sq.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import opengrep JSON scans into Cozo.")
     parser.add_argument("scan_json", type=Path, help="Path to opengrep JSON output.")
@@ -244,6 +454,8 @@ def main() -> None:
 
             stored += 1
             contexts += len(entries)
+
+        _create_parent_child_relationships(db, scan_id)
 
     finally:
         try:

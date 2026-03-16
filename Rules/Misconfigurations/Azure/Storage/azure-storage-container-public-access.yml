@@ -55,3 +55,4 @@ rules:
       resource-type: "azurerm_storage_container, azurerm_storage_blob_sas"
       detection-method: "Pattern matching for public container_access_type and SAS permissions"
       remediation-time: "30 minutes"
+      internet_exposure: true

@@ -1,0 +1,149 @@
+{# partials/tab_assets.html — Resources table from DB #}
+<style>
+.child-count-badge {
+  display: inline-block;
+  background: var(--accent, #0969da);
+  color: white;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.expand-toggle {
+  font-size: 0.75rem;
+  transition: transform 0.15s;
+  display: inline-block;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.expand-toggle.open {
+  transform: rotate(90deg);
+}
+.child-row td:first-child {
+  padding-left: 2rem;
+}
+/* Child rows: visually differentiate and indent */
+.child-row .asset-name {
+  color: var(--text-faint);
+  opacity: 0.9;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+.child-row td {
+  color: var(--text-faint);
+}
+</style>
+{% if assets %}
+<div class="assets-toolbar" style="padding:0 0 10px 0; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; gap:8px; align-items:center;">
+  <input type="text" id="section-assets-search" class="assets-search" placeholder="Filter assets…" autocomplete="off" />
+  <select id="section-assets-provider" class="assets-provider-filter">
+    <option value="">All providers ({{ assets | length }})</option>
+    {% for provider in providers | sort %}
+    <option value="{{ provider | lower }}">{{ provider | upper }} ({{ provider_counts.get(provider, 0) }})</option>
+    {% endfor %}
+  </select>
+  <div id="assets-sort-stack" style="display:none;font-size:0.8rem;color:var(--text-muted);margin-left:auto"></div>
+  <span style="font-size:0.75rem; color:var(--text-muted);">{{ assets | length }} resource{{ 's' if assets | length != 1 }}</span>
+</div>
+<div id="assets-meta" data-repo="{{ repo_name }}" style="display:none"></div>
+<div class="section-table-wrap">
+  <table class="section-table" id="section-assets-table">
+    <thead>
+      <tr>
+        <th data-key="resource_name" class="sortable">Resource <span class="sort-indicator"></span></th>
+        <th data-key="resource_type" class="sortable">Type <span class="sort-indicator"></span></th>
+        <th data-key="render_category" class="sortable">Category <span class="sort-indicator"></span></th>
+        <th data-key="display_on_architecture_chart">Shown on Diagram</th>
+        <th data-key="provider" class="sortable">Provider <span class="sort-indicator"></span></th>
+        <th data-key="region" class="sortable">Region <span class="sort-indicator"></span></th>
+        <th data-key="finding_count" class="sortable">Findings <span class="sort-indicator"></span></th>
+        <th data-key="source_file">Source</th>
+        <th data-key="discovered_by" class="sortable">Discovered by <span class="sort-indicator"></span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in assets %}
+      <tr data-provider="{{ (a.provider or 'unknown') | lower }}"
+          data-search="{{ [a.resource_name, a.resource_type, a.provider, a.region] | join(' ') | lower }}"
+          data-resource_name="{{ a.resource_name | e }}"
+          data-resource_type="{{ a.resource_type | e }}"
+          data-render-category="{{ a.render_category | e }}"
+          data-display-on-diagram="{{ 1 if a.display_on_architecture_chart else 0 }}"
+          data-provider_raw="{{ a.provider | e }}"
+          data-region="{{ a.region | e }}"
+          data-finding_count="{{ a.finding_count or 0 }}"
+          data-source_file="{{ a.source_file | e }}"
+          data-discovered_by="{{ (a.discovered_by or a.discovery_method or '') | e }}"
+          data-resource-id="{{ a.id }}"
+          data-parent-id="{{ a.parent_resource_id or '' }}"
+          data-children-count="{{ a.children_count or 0 }}"
+          data-is-child="{{ '1' if a.is_child else '0' }}"
+          {% if a.is_child %}class="child-row" style="display:none"{% endif %}>
+        <td>
+          {% if a.children_count and a.children_count > 0 %}
+            <span class="expand-toggle" data-parent-id="{{ a.id }}" title="Expand/collapse sub-assets" style="cursor:pointer;margin-right:4px;">▶</span>
+            <span class="asset-name">{{ a.resource_name }}</span>
+            <span class="child-count-badge" title="{{ a.children_count }} sub-asset(s)">{{ a.children_count }}</span>
+          {% elif a.is_child %}
+            <span style="display:inline-block;width:1.5rem;"></span>
+            <span class="asset-name">{{ a.resource_name }}</span>
+          {% else %}
+            <span class="asset-name">{{ a.resource_name }}</span>
+          {% endif %}
+        </td>
+        <td><span class="asset-type-badge">{{ a.resource_type }}</span></td>
+        <td>{{ (a.render_category or '') }}</td>
+        <td>{% if a.display_on_architecture_chart %}<span class="finding-badge info">Shown</span>{% else %}<span class="finding-badge none">Hidden</span>{% endif %}</td>
+        <td>
+          {% set p = (a.provider or 'unknown') | lower %}
+          <span class="prov-pill {{ p }}">{{ a.provider or '—' }}</span>
+        </td>
+        <td>{{ a.region or '—' }}</td>
+        <td>
+          {% set sev = (a.worst_severity or '') | lower %}
+          {% if a.finding_count and a.finding_count > 0 %}
+            <span class="finding-badge {{ sev }}">{{ a.finding_count }} · {{ a.worst_severity or 'FINDINGS' }}</span>
+          {% else %}
+            <span class="finding-badge none">✓ clean</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if a.source_file %}
+            <span class="file-link" title="{{ a.source_file }}">{{ a.source_file | basename }}</span>
+            {% if a.source_line_start %}
+              <span class="line-num">:{{ a.source_line_start }}</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td><span class="how-badge">{{ a.discovered_by or a.discovery_method or '—' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div id="section-assets-empty" class="assets-empty" style="display:none">No assets match the current filter.</div>
+<!-- assets script moved to /static/assets.js; initialization is triggered from index.html after fragment insertion -->
+<script>
+document.addEventListener('click', function(e) {
+  const toggle = e.target.closest('.expand-toggle');
+  if (!toggle) return;
+  const parentId = toggle.getAttribute('data-parent-id');
+  const childRows = document.querySelectorAll(`tr[data-parent-id="${parentId}"]`);
+  const isOpen = toggle.classList.contains('open');
+  toggle.classList.toggle('open', !isOpen);
+  childRows.forEach(row => {
+    row.style.display = isOpen ? 'none' : '';
+  });
+});
+</script>
+{% else %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
+    <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
+  </svg>
+  <p>No assets detected for this scan.<br/>Run the pipeline to populate resource data.</p>
+</div>
+{% endif %}

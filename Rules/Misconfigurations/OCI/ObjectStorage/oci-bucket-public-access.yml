@@ -1,0 +1,34 @@
+rules:
+  - id: oci-bucket-public-access
+    message: |
+      OCI Object Storage bucket allows public access.
+      Set access_type to "NoPublicAccess" to prevent unauthenticated reads.
+    severity: HIGH
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_objectstorage_bucket" "$NAME" {
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              resource "oci_objectstorage_bucket" "$NAME" {
+                ...
+                access_type = "ObjectRead"
+                ...
+              }
+          - pattern: |
+              resource "oci_objectstorage_bucket" "$NAME" {
+                ...
+                access_type = "ObjectReadWithoutList"
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci]
+      five_pillars: Pillar 1 (Network Security)

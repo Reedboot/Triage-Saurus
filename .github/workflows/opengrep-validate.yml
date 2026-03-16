@@ -1,0 +1,25 @@
+name: "Validate opengrep rules"
+
+on:
+  push:
+    paths:
+      - 'Rules/**'
+  pull_request:
+    paths:
+      - 'Rules/**'
+
+jobs:
+  validate-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      - name: Install opengrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install opengrep
+      - name: Validate rules
+        run: opengrep validate Rules/ -v

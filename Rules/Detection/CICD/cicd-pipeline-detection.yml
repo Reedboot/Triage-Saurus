@@ -1,0 +1,14 @@
+rules:
+  - id: context-cicd-pipeline
+    message: |
+      CI/CD pipeline files detected (Jenkinsfile, .gitlab-ci.yml, GitHub Actions workflows).
+    severity: INFO
+    languages: [yaml]
+    # Narrowed scope: rely on target_files and match typical pipeline markers to avoid scanning large files
+    pattern-regex: |
+      (?m)(^\s*pipeline\s*\{|\bon:\s*|^\s*jobs:\s*|^\s*stages:\s*|^\s*image:\s*|\bscript:|\bbefore_script:|\bworkflow_dispatch:)\b
+    metadata:
+      rule_type: detection
+      category: process
+      technology: [cicd]
+      target_files: ["Jenkinsfile", ".gitlab-ci.yml", ".github/workflows/**"]

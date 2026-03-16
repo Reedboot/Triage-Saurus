@@ -1,0 +1,84 @@
+{# partials/tab_roles.html — RBAC, IAM roles, managed identities, permissions #}
+{% if roles %}
+<div class="assets-toolbar" style="padding:0 0 10px 0; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; gap:8px; align-items:center;">
+  <input type="text" id="roles-search" class="assets-search" style="max-width:320px"
+         placeholder="Filter roles / identities…" autocomplete="off" />
+  <span style="font-size:0.75rem; color:var(--text-muted);">{{ roles | length }} identit{{ 'y' if roles | length == 1 else 'ies' }}</span>
+</div>
+<div class="section-table-wrap">
+  <table class="section-table" id="roles-table">
+    <thead>
+      <tr>
+        <th>Identity / Role</th>
+        <th>Type</th>
+        <th>Provider</th>
+        <th>Resource</th>
+        <th>Permissions</th>
+        <th>Excessive?</th>
+        <th>Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in roles %}
+      <tr data-search="{{ [r.identity_name, r.role_type, r.provider, r.resource_name, r.permissions] | join(' ') | lower }}">
+        <td>
+          <span class="asset-name">{{ r.identity_name or r.role_name or '—' }}</span>
+          {% if r.principal_id %}
+            <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ r.principal_id }}</div>
+          {% endif %}
+        </td>
+        <td><span class="asset-type-badge">{{ r.role_type or r.identity_type or '—' }}</span></td>
+        <td>
+          {% set p = (r.provider or 'unknown') | lower %}
+          <span class="prov-pill {{ p }}">{{ r.provider or '—' }}</span>
+        </td>
+        <td>
+          {% if r.resource_name %}
+            <span style="font-size:0.75rem; padding:2px 6px; background:var(--surface-2,#1e1e1e); border-radius:3px; font-family:monospace;">{{ r.resource_name }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="wrap" style="max-width:220px; font-size:0.76rem;">
+          {% if r.permissions %}
+            <details style="cursor:pointer">
+              <summary style="list-style:none; cursor:pointer; outline:none; display:flex; align-items:center; gap:4px;">
+                <span class="details-arrow" style="font-size:0.65rem; color:var(--accent); transition:transform 0.2s;">▶</span>{{ r.permissions | truncate(60) }}
+              </summary>
+              <div style="margin-top:6px; padding:6px 8px; background:var(--surface-2,#1e1e1e); border-radius:4px; font-family:monospace; font-size:0.72rem; white-space:pre-wrap; word-break:break-all; color:var(--text);">{{ r.permissions }}</div>
+              {% if r.principal_id %}
+                <div style="margin-top:4px; font-size:0.7rem; color:var(--text-muted);">Principal: <code>{{ r.principal_id }}</code></div>
+              {% endif %}
+            </details>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if r.is_excessive == 1 %}
+            <span class="severity-badge high">⚠ Yes</span>
+          {% elif r.is_excessive == 0 %}
+            <span style="color:var(--green); font-size:0.8rem;">✓ No</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if r.source_file %}
+            <span class="file-link" title="{{ r.source_file }}">{{ r.source_file | basename }}</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div id="roles-empty" class="assets-empty" style="display:none">No roles match the current filter.</div>
+<!-- roles JS moved to /static/roles.js; initialized from index.html after fragment load -->
+<style>
+details[open] > summary .details-arrow { transform: rotate(90deg); display:inline-block; }
+</style>
+{% else %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <circle cx="12" cy="8" r="4"/><path d="M6 20v-1a6 6 0 0 1 12 0v1"/><path d="M22 15l-3 3-1.5-1.5"/>
+  </svg>
+  <p>No IAM roles, managed identities or RBAC bindings detected.<br/>
+     Role data is populated from Terraform resources and<br/>
+     <code>resource_properties</code> entries during the scan.</p>
+</div>
+{% endif %}

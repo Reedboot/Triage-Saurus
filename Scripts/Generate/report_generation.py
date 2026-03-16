@@ -1422,7 +1422,7 @@ def _build_simple_architecture_diagram(
                     keep = False
                     for rt in raw_types:
                         rt_meta = _rtdb.get_resource_type(db, rt)
-                        if rt_meta.get('display_on_architecture_chart', True):
+                        if rt_meta.get('display_on_architecture_chart', False):
                             keep = True
                             break
                     # Hidden child components can still be rendered when vulnerable and parented.
@@ -1456,17 +1456,38 @@ def _build_simple_architecture_diagram(
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
             
             # Identify storage hierarchies:
-            # - Storage Account -> Storage Container/Blob
-            # - S3 Bucket -> Public Access Block/S3 Bucket Policy
+            # - Storage Account -> Storage Container/Blob/Queue/File/Table
+            # Friendly-name defaults (ensure variables exist regardless of detection path)
             _STORAGE_PARENT = "Storage Account"
             _STORAGE_CONTAINER = "Storage Container"
             _STORAGE_BLOB = "Storage Blob"
+            _STORAGE_PARENT_TYPES = frozenset({"azurerm_storage_account"})
+            _STORAGE_CHILD_TYPES = frozenset({
+                "azurerm_storage_container", "azurerm_storage_blob", "azurerm_storage_queue",
+                "azurerm_storage_share", "azurerm_storage_table",
+            })
+            storage_parent_service = next(
+                (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _STORAGE_PARENT_TYPES),
+                None,
+            )
             storage_nested_services: set[str] = set()
-            if _STORAGE_PARENT in layer_services:
-                if _STORAGE_CONTAINER in layer_services:
-                    storage_nested_services.add(_STORAGE_CONTAINER)
-                if _STORAGE_BLOB in layer_services:
-                    storage_nested_services.add(_STORAGE_BLOB)
+            if storage_parent_service:
+                for s in layer_services:
+                    if s == storage_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_STORAGE_CHILD_TYPES):
+                        storage_nested_services.add(s)
+                # Fallback to friendly-name detection for backwards compatibility
+                if not storage_nested_services:
+                    _STORAGE_PARENT = "Storage Account"
+                    _STORAGE_CONTAINER = "Storage Container"
+                    _STORAGE_BLOB = "Storage Blob"
+                    if _STORAGE_PARENT in layer_services:
+                        if _STORAGE_CONTAINER in layer_services:
+                            storage_nested_services.add(_STORAGE_CONTAINER)
+                        if _STORAGE_BLOB in layer_services:
+                            storage_nested_services.add(_STORAGE_BLOB)
 
             _S3_PARENT = "S3 Bucket"
             # Policy resources remain context-only; do not render policy nodes on architecture.
@@ -1500,6 +1521,28 @@ def _build_simple_architecture_diagram(
                     svc_types = set(non_boundary_parents.get(s, []))
                     if svc_types and svc_types.issubset(_SQL_CHILD_TYPES):
                         sql_nested_services.add(s)
+
+            # Identify Cosmos DB: account -> databases/containers
+            _COSMOS_PARENT_TYPES = frozenset({"azurerm_cosmosdb_account"})
+            _COSMOS_CHILD_TYPES = frozenset({
+                "azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_sql_container",
+                "azurerm_cosmosdb_mongo_database", "azurerm_cosmosdb_mongo_collection",
+                "azurerm_cosmosdb_cassandra_keyspace", "azurerm_cosmosdb_cassandra_table",
+                "azurerm_cosmosdb_table", "azurerm_cosmosdb_gremlin_graph",
+            })
+            cosmos_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _COSMOS_PARENT_TYPES),
+                None,
+            )
+            cosmos_nested_services: set[str] = set()
+            if cosmos_parent_service:
+                for s in layer_services:
+                    if s == cosmos_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_COSMOS_CHILD_TYPES):
+                        cosmos_nested_services.add(s)
 
             # Identify Key Vault hierarchy: keys/secrets nested inside Key Vault
             _KV_PARENT_TYPES = frozenset({"azurerm_key_vault"})
@@ -1567,6 +1610,7 @@ def _build_simple_architecture_diagram(
             kv_child_candidates = set(kv_nested_services)
             lb_child_candidates = set(lb_nested_services)
             ecs_child_candidates = set(ecs_nested_instances)
+            cosmos_child_candidates = set(cosmos_nested_services)
 
             storage_nested_services = storage_child_candidates
             s3_nested_services = s3_child_candidates
@@ -1706,6 +1750,29 @@ def _build_simple_architecture_diagram(
                         db_node = f"{svc_subgraph}_DB"
                         lines.append(f'        {db_node}["{db_label}"]')
                         style_id(db_node, layer_cat)
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    if exposure_target:
+                        service_anchor_nodes[service] = exposure_target
+                        is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                        if not _is_edge_gateway_service(service) and is_public:
+                            add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
+                    continue
+
+                # Cosmos DB with nested databases/containers
+                is_cosmos_with_children = cosmos_parent_service and service == cosmos_parent_service and bool(cosmos_nested_services)
+                if is_cosmos_with_children:
+                    cosmos_names = service_instances.get(service, [])
+                    cosmos_label = f"Cosmos DB ({cosmos_names[0]})" if len(cosmos_names) == 1 else service
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{cosmos_label}"]')
+                    style_id(svc_subgraph, layer_cat)
+                    for cos_child in sorted(cosmos_nested_services):
+                        child_names = service_instances.get(cos_child, [])
+                        child_label = f"{cos_child} ({child_names[0]})" if len(child_names) == 1 else cos_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', cos_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, layer_cat)
                     lines.append("      end")
                     exposure_target = svc_subgraph
                     if exposure_target:
@@ -1967,8 +2034,6 @@ def _build_simple_architecture_diagram(
                                         label = r.name or r.resource_type
                                         lines.append(f'          {node_id}["{label}"]')
                                         style_id(node_id, "data")
-                                        # connect namespace root to child
-                                        add_link(sb_root, node_id)
                                 lines.append("        end")
                             # Close Data subgraph
                             lines.append("      end")
@@ -2266,14 +2331,79 @@ def _build_enrichment_assumptions(repo_name: str) -> str:
     return "\n".join(lines)
 
 
-def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> str:
-    """Auto-detect simple high-risk configurations and format as Markdown.
+def _get_opengrep_misconfig_findings(
+    db_conn, experiment_id: str | None, repo_name: str
+) -> list[dict]:
+    """Query the findings table for opengrep misconfiguration results for this repo."""
+    if db_conn is None or not experiment_id:
+        return []
+    try:
+        rows = db_conn.execute(
+            """
+            SELECT f.rule_id, f.message, f.base_severity, f.file_path, f.line_start,
+                   r.resource_type, r.resource_name
+            FROM findings f
+            LEFT JOIN resources r ON f.resource_id = r.id
+            JOIN repositories repo ON f.repo_id = repo.id
+            WHERE LOWER(repo.repo_name) = LOWER(?)
+              AND repo.experiment_id = ?
+              AND f.base_severity != 'INFO'
+              AND f.rule_id NOT LIKE '%-detection'
+              AND f.rule_id NOT LIKE '%context%'
+            ORDER BY
+              CASE f.base_severity
+                WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'WARNING' THEN 3
+                WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4 ELSE 5 END,
+              f.rule_id
+            """,
+            (repo_name, experiment_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
 
-    Current checks:
+
+def _build_auto_findings(
+    context: RepositoryContext,
+    repo_path: Path | None,
+    experiment_id: str | None = None,
+    repo_name: str | None = None,
+) -> str:
+    """Auto-detect misconfigurations from opengrep DB findings and heuristics.
+
+    Primary source: findings table (opengrep scan results).
+    Fallback heuristics:
     - SQL auditing/alert policies present but disabled + permissive SQL firewall (0.0.0.0) => HIGH RISK
     - Presence of Transparent Data Encryption (TDE) noted as a positive control
     """
     lines: list[str] = []
+    db_findings: list[dict] = []
+    try:
+        from db_helpers import get_db_connection
+        _eff_repo_name = repo_name or (getattr(context, "repo_name", None))
+        if _eff_repo_name and experiment_id:
+            with get_db_connection() as _conn:
+                db_findings = _get_opengrep_misconfig_findings(_conn, experiment_id, _eff_repo_name)
+    except Exception:
+        pass
+
+    if db_findings:
+        lines.append("## Misconfigurations Found\n")
+        lines.append("| Severity | Rule | Resource | File | Message |")
+        lines.append("|---|---|---|---|---|")
+        for f in db_findings:
+            sev = f.get("base_severity") or ""
+            rule = f.get("rule_id") or ""
+            res_name = f.get("resource_name") or ""
+            res_type = f.get("resource_type") or ""
+            resource_col = f"{res_name} ({res_type})" if res_name else (res_type or "—")
+            fp = f.get("file_path") or ""
+            ls = f.get("line_start")
+            file_col = f"{fp}:{ls}" if fp and ls else (fp or "—")
+            msg = (f.get("message") or "").replace("|", "\\|")
+            lines.append(f"| {sev} | {rule} | {resource_col} | {file_col} | {msg} |")
+        lines.append("")
+
     try:
         import re
         from pathlib import Path as _Path
@@ -2375,7 +2505,9 @@ def _build_auto_findings(context: RepositoryContext, repo_path: Path | None) -> 
             lines.append("")
             lines.append("Recommendation: enable auditing (enabled = true, log_monitoring_enabled = true), set server security alert policy state to \"Enabled\", and remove or restrict any 0.0.0.0 firewall rules. Send diagnostics to Log Analytics or Storage for retention.")
         else:
-            lines.append("- No immediate high-risk policy misconfigurations detected by automated heuristics.")
+            if not db_findings:
+                lines.append("- No misconfigurations detected by opengrep scan.")
+            # If db_findings exist, heuristics found nothing extra — omit the redundant message
 
         if has_tde:
             lines.append("\n- Note: Transparent Data Encryption (TDE) is configured — this protects data at rest but does not replace auditing/alerting.")
@@ -2649,6 +2781,7 @@ def _connection_summary_label(connection: dict) -> str:
 def _collect_db_topology_edges(
     repo_name: str,
     db_connections: list[dict],
+    exclude_connection_types: set[str] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     ingress_types = {"routes_ingress_to", "ingress", "public_ingress", "internet_ingress"}
     egress_types = {
@@ -2672,9 +2805,13 @@ def _collect_db_topology_edges(
         if not src_name or not dst_name:
             continue
 
+        connection_type = str(connection.get("connection_type") or "").strip()
+        # Optionally exclude connection types (e.g., permissions) from diagram edge generation
+        if exclude_connection_types and connection_type in exclude_connection_types:
+            continue
+
         source_repo = str(connection.get("source_repo") or "").strip()
         target_repo = str(connection.get("target_repo") or "").strip()
-        connection_type = str(connection.get("connection_type") or "").strip()
         label = _connection_summary_label(connection) or connection_type.replace("_", " ")
         edge = (src_name, dst_name, label)
 
@@ -2695,6 +2832,55 @@ def _collect_db_topology_edges(
             egress_edges.append(edge)
 
     return ingress_edges, egress_edges
+
+
+def _collect_permissions_edges(context: RepositoryContext, repo_name: str, db_connections: list[dict] | None = None) -> list[tuple[str, str, str]]:
+    """Collect edges representing permissions relationships (grants_access_to) from both
+    extracted relationships and DB-backed topology connections. Returns a deduplicated
+    list of (source, target, label) tuples suitable for rendering as a Mermaid flow.
+    """
+    edges: set[tuple[str, str, str]] = set()
+
+    # Relationships extracted into the RepositoryContext
+    relationships = list(getattr(context, "relationships", []) or [])
+    for rel in relationships:
+        rel_type = _relationship_kind_value(rel)
+        if rel_type == "grants_access_to":
+            src = str(getattr(rel, "source_name", "") or "").strip()
+            dst = str(getattr(rel, "target_name", "") or "").strip()
+            if src and dst:
+                edges.add((src, dst, "grants access to"))
+
+    # DB-backed connections
+    if db_connections is None:
+        try:
+            db_connections = _load_repo_topology_connections(repo_name)
+        except Exception:
+            db_connections = []
+
+    for conn in db_connections or []:
+        ct = str(conn.get("connection_type") or "").strip()
+        if ct == "grants_access_to":
+            src = str(conn.get("source") or "").strip()
+            dst = str(conn.get("target") or "").strip()
+            if src and dst:
+                label = _connection_summary_label(conn) or "grants access to"
+                edges.add((src, dst, label))
+
+    return sorted(edges)
+
+
+def _build_permissions_section(context: RepositoryContext, *, repo_name: str, db_connections: list[dict] | None = None) -> str:
+    """Render a permissions mapping section (Mermaid) for grant-style relationships.
+
+    This is intended for repository-level summaries and MUST NOT be included on
+    provider/architecture diagrams.
+    """
+    edges = _collect_permissions_edges(context, repo_name, db_connections=db_connections)
+    if not edges:
+        return "- No permissions mapping detected (no 'grants_access_to' relationships captured)."
+    # Render as a fenced Mermaid flowchart without Internet node
+    return _build_flow_mermaid(edges, include_internet=False)
 
 
 def _build_ingress_egress_summaries(
@@ -2807,7 +2993,12 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
     # Attempt to use DB topology if present
     try:
         db_connections = _load_repo_topology_connections(repo_name)
-        db_ingress_edges, db_egress_edges = _collect_db_topology_edges(repo_name, db_connections)
+        # Exclude permission-style topology edges (e.g., grants_access_to) from the
+        # service-only architecture diagram so permissions are shown only in the
+        # Repo summary permissions section.
+        db_ingress_edges, db_egress_edges = _collect_db_topology_edges(
+            repo_name, db_connections, exclude_connection_types={"grants_access_to"}
+        )
         all_db_edges = db_ingress_edges + db_egress_edges
     except Exception:
         all_db_edges = []
@@ -2893,6 +3084,91 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
     return "\n".join(lines)
 
 
+def _md_to_html(md: str) -> str:
+    """Convert a minimal subset of Markdown to HTML for DB persistence.
+
+    Handles: headings (##/###), bullet lists, inline code, bold, Mermaid fences,
+    horizontal rules, and plain paragraphs.
+    """
+    import html as _html_mod
+
+    lines = md.splitlines()
+    out: list[str] = []
+    in_list = False
+    in_mermaid = False
+    mermaid_lines: list[str] = []
+
+    def _flush_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    def _inline(text: str) -> str:
+        # Bold **text**
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        # Inline code `text`
+        text = re.sub(r"`([^`]+)`", lambda m: f"<code>{_html_mod.escape(m.group(1))}</code>", text)
+        return text
+
+    for line in lines:
+        if in_mermaid:
+            if line.strip() == "```":
+                out.append(f'<div class="mermaid">\n{chr(10).join(mermaid_lines)}\n</div>')
+                mermaid_lines = []
+                in_mermaid = False
+            else:
+                mermaid_lines.append(line)
+            continue
+
+        if line.strip().startswith("```mermaid"):
+            _flush_list()
+            in_mermaid = True
+            mermaid_lines = []
+            continue
+
+        if line.strip().startswith("```"):
+            _flush_list()
+            # skip other code fences
+            continue
+
+        if re.match(r"^#{1,6}\s", line):
+            _flush_list()
+            level = len(line) - len(line.lstrip("#"))
+            text = line.lstrip("#").strip()
+            out.append(f"<h{level}>{_inline(text)}</h{level}>")
+            continue
+
+        if line.startswith("- ") or line.startswith("  - "):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            indent = len(line) - len(line.lstrip(" "))
+            text = line.lstrip(" -").strip()
+            out.append(f"{'  ' * (indent // 2)}<li>{_inline(text)}</li>")
+            continue
+
+        if line.strip() in ("---", "***", "___"):
+            _flush_list()
+            out.append("<hr>")
+            continue
+
+        # Markdown table row (contains | chars) — skip raw, already rendered as structured data
+        if "|" in line and line.strip().startswith("|"):
+            _flush_list()
+            # Very simple table: collect and render
+            out.append(f"<p>{_inline(line.strip())}</p>")
+            continue
+
+        _flush_list()
+        stripped = line.strip()
+        if stripped:
+            out.append(f"<p>{_inline(stripped)}</p>")
+
+    _flush_list()
+    return "\n".join(out)
+
+
 def write_repo_summary(
     *,
     repo: Path,
@@ -2900,6 +3176,7 @@ def write_repo_summary(
     providers: list[str],
     context: RepositoryContext,
     summary_dir: Path,
+    experiment_id: str = "001",
 ) -> Path:
     out_path = summary_dir / "Repos" / f"{repo_name}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2949,11 +3226,35 @@ def write_repo_summary(
         roles_permissions = "- No role assignments detected."
 
     db_topology_connections = _load_repo_topology_connections(repo_name)
+    permissions_mapping = _build_permissions_section(context, repo_name=repo_name, db_connections=db_topology_connections)
     ingress_summary, egress_summary, topology_flags = _build_ingress_egress_summaries(
         context,
         repo_name=repo_name,
         db_connections=db_topology_connections,
     )
+
+    # Build service-only diagram (inner mermaid) and prefer provider-level cloud architecture if available.
+    svc_diagram = _build_service_only_architecture_diagram(repo_name, context, repo_path=repo)
+    architecture_diagram_content = svc_diagram
+    try:
+        if providers:
+            provider_file = summary_dir / "Cloud" / f"Architecture_{_provider_title(providers[0])}.md"
+            if provider_file.exists():
+                txt = provider_file.read_text(encoding="utf-8", errors="ignore")
+                start_idx = txt.find("```mermaid")
+                if start_idx != -1:
+                    start_idx = txt.find("\n", start_idx) + 1
+                    end_idx = txt.find("```", start_idx)
+                    if end_idx != -1:
+                        architecture_diagram_content = txt[start_idx:end_idx].strip()
+    except Exception:
+        architecture_diagram_content = svc_diagram
+
+    # If the generated service diagram looks like a permissions map and no explicit permissions
+    # mapping exists, promote the service diagram into the permissions section.
+    if "grants access to" in svc_diagram.lower() and permissions_mapping.strip().lower().startswith("- no permissions mapping"):
+        permissions_mapping = "```mermaid\n" + svc_diagram + "\n```"
+        # Try to use cloud architecture for the main architecture diagram (architecture_diagram_content already set above).
 
     # Optional fallback when APIs exist but no topology edges were captured from DB/extraction.
     api_types = (
@@ -3060,19 +3361,23 @@ def write_repo_summary(
         except Exception:
             pass
 
+    auto_findings_md = _build_auto_findings(context, repo, experiment_id=experiment_id, repo_name=repo_name)
+    resource_inventory_md = _build_resource_inventory(provider_resources, repo_path=repo)
+
     content = render_template(
         "RepoSummary.md",
         {
             "repo_name": repo_name,
             "repo_type": "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other",
             "timestamp": now_uk(),
-            "architecture_diagram": _build_service_only_architecture_diagram(repo_name, context, repo_path=repo),
+            "architecture_diagram": architecture_diagram_content,
             "languages": language_text,
             "hosting": hosting_text,
             "ci_cd": ci_cd_text,
             "providers": provider_text,
             "auth_summary": auth_summary,
             "roles_permissions": roles_permissions,
+            "permissions_mapping": permissions_mapping,
             "network_summary": network_summary,
             "ingress_summary": ingress_summary,
             "egress_summary": egress_summary,
@@ -3080,25 +3385,101 @@ def write_repo_summary(
             "evidence_list": evidence_list,
             "notes": notes,
             "terraform_modules": modules_list_md,
-            "resource_inventory": _build_resource_inventory(provider_resources, repo_path=repo),
-            "auto_findings": _build_auto_findings(context, repo),
+            "resource_inventory": resource_inventory_md,
+            "auto_findings": auto_findings_md,
             "enrichment_assumptions": _build_enrichment_assumptions(repo_name),
         },
     )
     try:
-        with open("Output/Summary/Repos/report_debug.log", "a") as log:
-            log.write(f"[DEBUG] Writing summary to: {out_path}\n")
-            log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
-            log.write(f"[DEBUG] Providers: {providers}\n")
-            log.write(f"[DEBUG] Repo name: {repo_name}\n")
+        # Use the summary_dir-provided log path when available
+        try:
+            log_path = out_path.parent.parent / "Repos" / "report_debug.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a") as log:
+                log.write(f"[DEBUG] Writing summary to: {out_path}\n")
+                log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
+                log.write(f"[DEBUG] Providers: {providers}\n")
+                log.write(f"[DEBUG] Repo name: {repo_name}\n")
+        except Exception:
+            # Fallback to legacy path if something goes wrong
+            with open("Output/Summary/Repos/report_debug.log", "a") as log:
+                log.write(f"[DEBUG] Writing summary to: {out_path}\n")
+                log.write(f"[DEBUG] Extracted resources: {len(context.resources)}\n")
+                log.write(f"[DEBUG] Providers: {providers}\n")
+                log.write(f"[DEBUG] Repo name: {repo_name}\n")
     except Exception as e:
         print(f"[ERROR] Failed to log debug info: {e}")
     try:
         out_path.write_text(content, encoding="utf-8")
         validate_markdown_file(out_path, fix=True)
     except Exception as e:
-        with open("Output/Summary/Repos/report_debug.log", "a") as log:
-            log.write(f"[ERROR] Failed to write summary content: {e}\n")
+        try:
+            log_path = out_path.parent.parent / "Repos" / "report_debug.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a") as log:
+                log.write(f"[ERROR] Failed to write summary content: {e}\n")
+        except Exception:
+            # Last-resort fallback to legacy path
+            with open("Output/Summary/Repos/report_debug.log", "a") as log:
+                log.write(f"[ERROR] Failed to write summary content: {e}\n")
+
+    # ── Persist key sections as HTML to DB ───────────────────────────────────
+    try:
+        # TLDR section — summary table + key stats
+        repo_type_label = "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other"
+        tldr_html = (
+            f'<table class="section-table">'
+            f"<thead><tr><th>Aspect</th><th>Value</th></tr></thead>"
+            f"<tbody>"
+            f"<tr><td>Type</td><td>{repo_type_label}</td></tr>"
+            f"<tr><td>Languages</td><td>{language_text}</td></tr>"
+            f"<tr><td>Hosting</td><td>{hosting_text}</td></tr>"
+            f"<tr><td>CI/CD</td><td>{ci_cd_text}</td></tr>"
+            f"<tr><td>Cloud Providers</td><td>{provider_text}</td></tr>"
+            f"<tr><td>Resources Extracted</td><td>{len(context.resources)}</td></tr>"
+            f"<tr><td>Security Status</td><td>&#x1F50D; Phase 1&#x2013;2 discovery &#x2014; security review pending</td></tr>"
+            f"</tbody></table>"
+        )
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="tldr",
+            title="TL;DR",
+            content_html=tldr_html,
+            generated_by="report_generation.py",
+        )
+
+        # Risks section — auto-detected findings
+        risks_html = _md_to_html(auto_findings_md)
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="risks",
+            title="Risks",
+            content_html=risks_html,
+            generated_by="report_generation.py",
+        )
+
+        # Overview section — auth, network, external dependencies
+        overview_md = (
+            "## Authentication & Identity\n\n"
+            f"{auth_summary}\n\n"
+            "## Network Topology\n\n"
+            f"{network_summary}\n\n"
+            "## External Dependencies\n\n"
+            f"{external_deps}"
+        )
+        _db.upsert_ai_section(
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            section_key="overview",
+            title="Overview",
+            content_html=_md_to_html(overview_md),
+            generated_by="report_generation.py",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to persist HTML sections to DB: {e}")
+
     return out_path
 
 
@@ -3273,11 +3654,20 @@ def write_experiment_cloud_architecture_summary(
     return out_files
 
 
-def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path: Path | None = None) -> list[Path]:
+def generate_reports(
+    context: RepositoryContext,
+    summary_dir_str: str,
+    repo_path: Path | None = None,
+    experiment_id: str = "001",
+) -> list[Path]:
     summary_dir = Path(summary_dir_str)
     summary_dir.mkdir(parents=True, exist_ok=True)
     repo = repo_path if repo_path is not None else Path(context.repository_name)
-    with open("Output/Summary/Repos/report_debug.log", "a") as log:
+
+    # Ensure debug log lives under the provided summary_dir so experiments write locally
+    log_path = summary_dir / "Repos" / "report_debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as log:
         log.write(f"[DEBUG] summary_dir: {summary_dir}, repo: {repo}\n")
 
     providers = sorted(
@@ -3296,6 +3686,7 @@ def generate_reports(context: RepositoryContext, summary_dir_str: str, repo_path
             providers=providers,
             context=context,
             summary_dir=summary_dir,
+            experiment_id=experiment_id,
         )
     )
     generated.extend(

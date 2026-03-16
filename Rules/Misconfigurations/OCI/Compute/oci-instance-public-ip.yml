@@ -1,0 +1,27 @@
+rules:
+  - id: oci-instance-public-ip
+    message: |
+      OCI Compute instance has a public IP assigned.
+      Use private subnets and a load balancer for internet-facing traffic
+      instead of assigning public IPs directly to instances.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "oci_core_instance" "$NAME" {
+        ...
+        create_vnic_details {
+          ...
+          assign_public_ip = true
+          ...
+        }
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, oci]
+      five_pillars: Pillar 1 (Network Security)

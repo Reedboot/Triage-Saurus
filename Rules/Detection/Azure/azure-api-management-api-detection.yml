@@ -1,0 +1,46 @@
+rules:
+  - id: context-azure-api-management-api
+    message: |
+      Azure API Management API detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_api_management_api" $NAME {
+            ...
+            api_management_name = $APIM_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*api[_-]?management[_-]?api.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: apim
+      technology: [terraform, azure, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Management API
+        resource_type: azurerm_api_management_api
+        resource_name: $NAME
+        properties:
+          - name: api_management_name
+            pattern: api_management_name = $APIM_NAME
+          - name: revision
+            pattern: revision = "$VAL"
+          - name: display_name
+            pattern: display_name = "$VAL"
+          - name: protocols
+            pattern: protocols = "$VAL"
+    description: |
+      Detects Azure API Management API resources and captures the parent APIM instance reference via api_management_name.

@@ -1,0 +1,38 @@
+rules:
+  - id: alicloud-sg-open-all
+    message: |
+      Security group rule allows all traffic from any IP (0.0.0.0/0).
+      This exposes all ports and protocols to the internet, creating a critical attack surface.
+      Restrict to only required ports and known source IP ranges.
+    severity: CRITICAL
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_security_group_rule" "$NAME" {
+            ...
+            type = "ingress"
+            ...
+            port_range = "-1/-1"
+            ...
+            cidr_ip = "0.0.0.0/0"
+            ...
+          }
+      - pattern: |
+          resource "alicloud_security_group_rule" "$NAME" {
+            ...
+            type = "ingress"
+            ...
+            ip_protocol = "all"
+            ...
+            cidr_ip = "0.0.0.0/0"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 1 (Network Security)

@@ -1,0 +1,42 @@
+rules:
+  - id: context-azure-cosmosdb-sql-database
+    message: |
+      Azure Cosmos DB SQL Database detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_cosmosdb_sql_database" $NAME {
+            ...
+            account_name = $ACCOUNT_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*cosmosdb[_-]?sql[_-]?database.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: cosmosdb
+      technology: [terraform, azure, cosmosdb]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cosmos DB SQL Database
+        resource_type: azurerm_cosmosdb_sql_database
+        resource_name: $NAME
+        properties:
+          - name: account_name
+            pattern: account_name = $ACCOUNT_NAME
+          - name: throughput
+            pattern: throughput = "$VAL"
+    description: |
+      Detects Azure Cosmos DB SQL Database resources and captures the parent Cosmos DB account reference via account_name.

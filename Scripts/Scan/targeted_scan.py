@@ -35,6 +35,9 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-app-service-plan":          ["Azure/AppService"],
     "context-azure-app-service-environment":   ["Azure/AppService"],
     "context-azure-container-registry":        ["Azure/ContainerRegistry"],
+    "context-azure-linux-vm":                 ["Azure/VM", "Azure/Compute"],
+    "context-azure-windows-vm":               ["Azure/VM", "Azure/Compute"],
+    "context-azure-nsg":                      ["Azure/NSG"],
 
     # Azure — Data
     "context-azure-sql-server":                ["Azure/SQL"],
@@ -79,6 +82,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-aws-helm-ingress-nginx":          ["Kubernetes/Ingress", "Kubernetes/Service", "AWS/SecurityGroup"],
     "context-aws-helm-lb-controller":          ["Kubernetes/Ingress", "AWS/SecurityGroup"],
     "context-helm-release-generic":            ["Kubernetes/Workload"],
+    "context-kubernetes-manifest":              ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
 
     # AWS — Data
     "context-aws-rds-instance":                ["AWS/RDS"],
@@ -111,6 +115,92 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-appinsights-connection":    ["Secrets"],
     "context-azure-redis-connection":          ["Secrets"],
     "context-azure-servicebus-connection-appconfig": ["Secrets"],
+    "context-cicd-pipeline":                      ["CICD"],
+
+    # Azure Key Vault children
+    "context-azure-keyvault-key":                  ["Azure/KeyVault"],
+    "context-azure-keyvault-certificate":          ["Azure/KeyVault"],
+
+    # Azure VM extension
+    "context-azure-vm-extension":                  ["Azure/VM", "Azure/Compute"],
+
+    # Azure networking
+    "context-azure-subnet":                        ["Azure/NSG"],
+    "context-azure-network-interface":             ["Azure/NSG"],
+    "context-azure-public-ip":                     ["Azure/NSG"],
+
+    # Azure Service Bus (Rules/Misconfigurations/Azure/ServiceBus does not exist yet)
+    "context-azure-servicebus-namespace":          [],
+    "context-azure-servicebus-queue":              [],
+    "context-azure-servicebus-topic":              [],
+    "context-azure-servicebus-subscription":       [],
+
+    # Azure EventHub (Rules/Misconfigurations/Azure/EventHub does not exist yet)
+    "context-azure-eventhub":                      [],
+    "context-azure-eventhub-consumer-group":       [],
+
+    # Azure AKS node pool
+    "context-azure-aks-node-pool":                 ["Azure/AKS"],
+
+    # Azure Storage children
+    "context-azure-storage-blob":                  ["Azure/Storage"],
+    "context-azure-storage-queue":                 ["Azure/Storage"],
+    "context-azure-storage-share":                 ["Azure/Storage"],
+
+    # Azure CosmosDB (Rules/Misconfigurations/Azure/CosmosDB does not exist yet)
+    "context-azure-cosmosdb-sql-database":         [],
+    "context-azure-cosmosdb-sql-container":        [],
+
+    # Azure databases
+    "context-azure-mysql-database":                ["Azure/SQL"],
+    "context-azure-postgresql-database":           ["Azure/SQL"],
+    "context-azure-mssql-firewall-rule":           ["Azure/SQL"],
+
+    # Azure NSG rule
+    "context-azure-nsg-rule":                      ["Azure/NSG"],
+
+    # Azure APIM (Rules/Misconfigurations/Azure/APIM does not exist yet)
+    "context-azure-api-management-api":            [],
+
+    # Alicloud detection rules
+    "context-alicloud-ecs-instance":               ["Alicloud/SecurityGroup"],
+    "context-alicloud-ack-cluster":                ["Alicloud/ACK"],
+    "context-alicloud-ack-node-pool":              ["Alicloud/ACK"],
+    "context-alicloud-oss-bucket":                 ["Alicloud/OSS"],
+    "context-alicloud-rds-instance":               ["Alicloud/RDS"],
+    "context-alicloud-kms-key":                    [],
+    "context-alicloud-kms-secret":                 [],
+    "context-alicloud-vpc":                        [],
+    "context-alicloud-vswitch":                    [],
+    "context-alicloud-security-group":             ["Alicloud/SecurityGroup"],
+    "context-alicloud-security-group-rule":        ["Alicloud/SecurityGroup"],
+    "context-alicloud-ram-role":                   ["Alicloud/IAM"],
+    "context-alicloud-ram-policy":                 ["Alicloud/IAM"],
+    "context-alicloud-log-project":                [],
+    "context-alicloud-log-store":                  [],
+    "context-alicloud-slb":                        [],
+    "context-alicloud-fc-function":                [],
+    "context-alicloud-redis-instance":             [],
+
+    # OCI detection rules
+    "context-oci-compute-instance":                ["OCI/Compute"],
+    "context-oci-oke-cluster":                     ["OCI/OKE"],
+    "context-oci-oke-node-pool":                   ["OCI/OKE"],
+    "context-oci-objectstorage-bucket":            ["OCI/ObjectStorage"],
+    "context-oci-database":                        ["OCI/Database"],
+    "context-oci-mysql":                           ["OCI/Database"],
+    "context-oci-kms-vault":                       [],
+    "context-oci-kms-key":                         [],
+    "context-oci-vault-secret":                    [],
+    "context-oci-vcn":                             ["OCI/Network"],
+    "context-oci-subnet":                          ["OCI/Network"],
+    "context-oci-nsg":                             ["OCI/Network"],
+    "context-oci-load-balancer":                   [],
+    "context-oci-functions":                       [],
+    "context-oci-apigateway":                      [],
+    "context-oci-logging":                         [],
+    "context-oci-identity-policy":                 ["OCI/IAM"],
+    "context-oci-container-registry":              [],
 }
 
 # ── Always-on folders (run regardless of what was detected) ──────────────────
@@ -122,24 +212,11 @@ ALWAYS_INCLUDE: list[str] = [
     "Secrets",
 ]
 
-# ── File-pattern fallbacks (for resource types with no detection rule yet) ───
-# Checked directly against target repo files when detection scan misses them.
-
-FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = [
-    # (description, glob_pattern_fragment, [misconfig folders])
-    ("Azure VM",  "azurerm_linux_virtual_machine|azurerm_windows_virtual_machine|azurerm_virtual_machine",
-                  ["Azure/VM"]),
-    ("Azure NSG", "azurerm_network_security_group",
-                  ["Azure/NSG"]),
-    ("Kubernetes manifests", r"^kind:\s+(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|ClusterRoleBinding|RoleBinding)",
-                  ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"]),
-    ("CI/CD pipelines", r"\.gitlab-ci\.yml|Jenkinsfile|\.github/workflows/",
-                  ["CICD"]),
-    ("Dockerfiles",    r"^FROM\s+(scratch|alpine|ubuntu|debian|node|python|openjdk|golang|mcr\.microsoft\.com)",
-                  ["Kubernetes/Workload", "Secrets"]),
-    ("Hardcoded secrets (any file)", r"(password|secret|api_key|token)\s*=\s*[\"'][^\"']{6,}[\"']",
-                  ["Secrets"]),
-]
+# ── File-pattern fallbacks (deprecated) ───────────────────────────────────────
+# File-pattern fallback logic has been removed. Detection is performed by opengrep rules only.
+# If a resource type is not detected, add a Detection rule under Rules/Detection and map
+# it in DETECTION_TO_MISCONFIG so scans include the appropriate misconfig checks.
+FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = []
 
 
 def run_opengrep(config_path: Path, target: Path, output_file: Path, label: str) -> dict:
@@ -180,14 +257,9 @@ def resolve_misconfig_paths(fired_ids: set[str], target: Path) -> list[Path]:
         for folder in DETECTION_TO_MISCONFIG.get(rule_id, []):
             folders.add(folder)
 
-    # File-pattern fallbacks
-    for description, pattern, misconfig_folders in FILE_PATTERN_FALLBACKS:
-        grep_cmd = ["grep", "-rEl", pattern, str(target)]
-        result = subprocess.run(grep_cmd, capture_output=True, text=True)
-        if result.stdout.strip():
-            print(f"  [fallback] Detected via file pattern: {description}")
-            for folder in misconfig_folders:
-                folders.add(folder)
+    # No file-pattern fallback scanning is performed. Rely on opengrep detection rule hits.
+    # Add detection rules to Rules/Detection and update DETECTION_TO_MISCONFIG if additional
+    # resource types should map to specific misconfiguration folders.
 
     # Resolve to absolute Paths, filtering to those that actually exist
     resolved = []

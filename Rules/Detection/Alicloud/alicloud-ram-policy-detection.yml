@@ -1,0 +1,40 @@
+rules:
+  - id: context-alicloud-ram-policy
+    message: |
+      Alibaba Cloud RAM Policy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_ram_policy" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*ram[_-]?policy.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: iam
+      technology: [terraform, alicloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: RAM Policy
+        resource_type: alicloud_ram_policy
+        resource_name: $NAME
+        properties:
+          - name: name
+            pattern: name = "$POLICY_NAME"
+          - name: type
+            pattern: type = "$TYPE"
+    description: |
+      Detects RAM Policy resources in Alibaba Cloud Terraform configurations.

@@ -1,0 +1,43 @@
+rules:
+  - id: azure-postgresql-public-access
+    message: |
+      PostgreSQL Server has public network access enabled. This allows connections
+      from the internet. Disable via `public_network_access_enabled = false` and
+      use Private Endpoints.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_postgresql_server" "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - pattern: |
+          resource "azurerm_postgresql_server" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_postgresql_server "$NAME" {
+            ...
+            public_network_access_enabled = "Enabled"
+            ...
+          }
+      - pattern: |
+          resource azurerm_postgresql_server "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

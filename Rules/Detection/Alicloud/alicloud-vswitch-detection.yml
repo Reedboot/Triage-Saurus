@@ -1,0 +1,48 @@
+rules:
+  - id: context-alicloud-vswitch
+    message: |
+      Alibaba Cloud VSwitch detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_vswitch" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "alicloud_vswitch" $NAME {
+            ...
+            vpc_id = $VPC_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*vswitch.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, alicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VSwitch
+        resource_type: alicloud_vswitch
+        resource_name: $NAME
+        properties:
+          - name: vpc_id
+            pattern: vpc_id = $VPC_ID
+          - name: cidr_block
+            pattern: cidr_block = "$CIDR"
+          - name: zone_id
+            pattern: zone_id = "$ZONE"
+    description: |
+      Detects VSwitch resources in Alibaba Cloud Terraform configurations.

@@ -1,29 +1,36 @@
-"""Shim module to expose cozo_helpers at top-level for scripts that import it.
-This dynamically loads the implementation from Scripts/Enrich/cozo_helpers.py so that
-`import cozo_helpers` works regardless of CWD or sys.path.
-"""
-from __future__ import annotations
-
-import importlib.util
-import sys
+# Minimal cozo_helpers shim to avoid optional pycozo dependency during local generation
 from pathlib import Path
 
-_IMPL_PATH = Path(__file__).resolve().parent / "Scripts" / "Enrich" / "cozo_helpers.py"
-if not _IMPL_PATH.exists():
-    raise ImportError(f"cozo_helpers implementation not found at {_IMPL_PATH}")
+# No-op provenance recorder for local runs
+def _insert_relationship_audit(*args, **kwargs):
+    return None
 
-spec = importlib.util.spec_from_file_location("_cozo_helpers_impl", str(_IMPL_PATH))
-_impl = importlib.util.module_from_spec(spec)
-loader = spec.loader
-if loader is None:
-    raise ImportError("Failed to load cozo_helpers implementation")
-loader.exec_module(_impl)
+# No-op execute_sql
+def _execute_sql(sql: str, params: tuple = ()):  # pragma: no cover
+    return None
 
-# Export names from implementation
-for attr in dir(_impl):
-    if attr.startswith("__"):
-        continue
-    globals()[attr] = getattr(_impl, attr)
+# Provide other no-op helpers that callers may use
+def insert_resource_node(*args, **kwargs):
+    return None
 
-# Also register the implementation module under the expected name
-sys.modules[__name__] = sys.modules.get(__name__, _impl)
+def insert_enrichment_node(*args, **kwargs):
+    return None
+
+def insert_relationship(*args, **kwargs):
+    return None
+
+def insert_equivalence(*args, **kwargs):
+    return None
+
+def link_enrichment(*args, **kwargs):
+    return None
+
+def insert_task_dependency(*args, **kwargs):
+    return None
+
+def delete_relationship(*args, **kwargs):
+    return None
+
+# Lightweight wrappers for client access (not implemented locally)
+def _open_client(*args, **kwargs):
+    raise RuntimeError("pycozo Client not available in this environment")

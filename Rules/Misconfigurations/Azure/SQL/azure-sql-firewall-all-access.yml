@@ -28,3 +28,4 @@ rules:
       likelihood: HIGH
       impact: HIGH
       technology: [terraform, azure]
+      internet_exposure: true

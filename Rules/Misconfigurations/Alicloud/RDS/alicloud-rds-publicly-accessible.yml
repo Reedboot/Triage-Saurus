@@ -1,0 +1,30 @@
+rules:
+  - id: alicloud-rds-publicly-accessible
+    message: |
+      RDS instance allows internet access.
+      Exposing RDS to the public internet increases the attack surface significantly.
+      Restrict access by setting address_type = "Intranet" or removing public endpoints.
+    severity: HIGH
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_db_instance" "$NAME" {
+            ...
+            address_type = "Internet"
+            ...
+          }
+      - pattern: |
+          resource "alicloud_db_connection" "$NAME" {
+            ...
+            type = "Public"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 1 (Network Security)

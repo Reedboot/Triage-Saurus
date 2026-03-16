@@ -24,5 +24,6 @@ rules:
       (allowBlobPublicAccess\s*[:=]\s*(?:true|True)|allow_blob_public_access\s*=\s*true|"publicAccess"\s*:\s*"(?:Blob|Container)"|public_access\s*=\s*"?(?:blob|container)")
     metadata:
       category: detection
-notes: |
-  This rule is heuristic: it reports when a SAS-related artifact and a public-access setting appear close together in a file. For complete coverage the script-level extractor correlates signals across files and Terraform/ARM/Bicep constructs. Consider adding automated remediation guidance (revoke SAS, disable public access, restrict via SAS IP/network restrictions).
+# Note: This rule is heuristic: it reports when a SAS-related artifact and a public-access setting appear close together in a file.
+# For complete coverage the script-level extractor correlates signals across files and Terraform/ARM/Bicep constructs.
+# Consider adding automated remediation guidance (revoke SAS, disable public access, restrict via SAS IP/network restrictions).

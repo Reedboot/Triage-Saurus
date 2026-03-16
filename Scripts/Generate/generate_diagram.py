@@ -87,6 +87,52 @@ def sanitize_id(name: str) -> str:
     return name.replace('-', '_').replace('.', '_').replace(' ', '_')
 
 
+def _render_resource_subgraph(
+    resource: dict,
+    parent_children: dict,
+    lines: list,
+    indent: str = "  ",
+    depth: int = 0,
+    max_depth: int = 3,
+) -> None:
+    """Recursively render a resource and its children as Mermaid subgraphs."""
+    node_id = sanitize_id(resource['resource_name'])
+    children = parent_children.get(resource['id'], [])
+
+    if children and depth < max_depth:
+        child_count = len(children)
+        try:
+            rt_meta = _rtdb.get_resource_type(None, resource.get('resource_type', ''))
+            friendly_type = rt_meta.get('friendly_name', resource.get('resource_type', 'Resource'))
+        except Exception:
+            friendly_type = resource.get('resource_type', 'Resource')
+
+        label = f"{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
+        lines.append(f"{indent}subgraph {node_id}_sg[\"{label}\"]")
+        for child_row in children:
+            child_resource = {
+                'id': child_row['child_id'],
+                'resource_name': child_row['child_name'],
+                'resource_type': child_row['child_type'],
+            }
+            _render_resource_subgraph(child_resource, parent_children, lines, indent + "  ", depth + 1, max_depth)
+        lines.append(f"{indent}end")
+    else:
+        label = _display_label(resource)
+        lines.append(f"{indent}{node_id}[{label}]")
+
+
+def _should_show_on_diagram(resource: dict, child_ids: set) -> bool:
+    """Return False for resources marked as hidden that aren't shown as children."""
+    if resource['id'] in child_ids:
+        return False  # Will be shown under parent
+    try:
+        rt_meta = _rtdb.get_resource_type(None, resource.get('resource_type', ''))
+        return rt_meta.get('display_on_architecture_chart', True)
+    except Exception:
+        return True
+
+
 def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     protocol = str(connection.get("protocol") or "").strip()
     port = str(connection.get("port") or "").strip()
@@ -125,7 +171,78 @@ def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     return f"|{'; '.join(details)}|"
 
 
-def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None) -> str:
+def _add_internet_connections(connections: list, experiment_id: str, repo_name: str | None = None) -> list:
+    """Synthesise Internet→resource edges from internet-exposure findings.
+
+    Looks for findings whose rules carry internet_exposure=true metadata,
+    plus legacy context keys for backward compatibility.
+    """
+    existing_internet_targets = {c['target'] for c in connections if c.get('source') == 'Internet'}
+
+    try:
+        with get_db_connection() as conn:
+            repo_filter = ""
+            params_base = [experiment_id]
+            if repo_name:
+                repo_filter = "AND LOWER(repo.repo_name) = LOWER(?)"
+                params_base.append(repo_name)
+
+            # Primary: metadata.internet_exposure = true
+            rows = conn.execute(f"""
+                SELECT DISTINCT
+                    COALESCE(parent.resource_name, r.resource_name) AS target_name,
+                    COALESCE(parent.resource_type, r.resource_type) AS target_type
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE f.experiment_id = ?
+                  AND fc.context_key = 'metadata.internet_exposure'
+                  AND LOWER(fc.context_value) = 'true'
+                  {repo_filter}
+            """, params_base).fetchall()
+
+            for row in rows:
+                name = row['target_name']
+                if name and name not in existing_internet_targets:
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': 'internet exposed', 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+
+            # Fallback: start_ip_address = 0.0.0.0 (legacy / firewall rule direct)
+            rows2 = conn.execute(f"""
+                SELECT DISTINCT COALESCE(parent.resource_name, r.resource_name) AS target_name
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE f.experiment_id = ?
+                  AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
+                  AND fc.context_value = '0.0.0.0'
+                  {repo_filter}
+            """, params_base).fetchall()
+            for row in rows2:
+                name = row['target_name']
+                if name and name not in existing_internet_targets:
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': 'firewall: 0.0.0.0', 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+
+    except Exception:
+        pass
+
+    return connections
+
+
+def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None, provider: str | None = None) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
     with _get_db_conn() as _conn:
@@ -137,15 +254,56 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
             if alt_check and alt_check['c'] > 0:
                 experiment_id = alt
 
-    """Generate full architecture diagram from database with parent-child hierarchies."""
+    """Generate full architecture diagram from database with parent-child hierarchies.
+
+    Optional `provider` can be provided to limit diagram to a single cloud provider
+    (e.g., 'aws', 'azure', 'gcp', 'oracle'). When provided, resources and
+    connections are filtered to that provider so per-provider Architecture_*.md
+    files can be produced.
+    """
     
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
+    # Exclude permission-style edges (grants_access_to) from architecture diagrams
+    connections = [c for c in connections if str(c.get("connection_type") or "").strip() != "grants_access_to"]
+
     # If a specific repo is requested, filter resources to that repo
     if repo_name:
         resources = [r for r in resources if r.get('repo_name') == repo_name]
+
+    # If a provider filter is requested, limit resources and connections to it
+    if provider:
+        prov_lower = provider.lower()
+        resources = [r for r in resources if (r.get('provider') or '').lower() == prov_lower]
+        # Only keep connections where at least one endpoint is in the filtered resource set
+        resource_names = {r['resource_name'] for r in resources}
+        connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
+
+    # Exclude resource types that are explicitly marked as not to be displayed on architecture charts
+    try:
+        # Use resource_type_db to determine display preference (fallbacks handled inside)
+        _display_filtered = []
+        for r in resources:
+            rt = (r.get('resource_type') or '').strip()
+            rt_info = _rtdb.get_resource_type(None, rt)
+            # Explicitly exclude resource groups (some legacy rows use non-standard type names)
+            is_resource_group = 'resource_group' in rt.lower() or (r.get('resource_name') or '').lower().endswith('resource group')
+            if rt_info.get('display_on_architecture_chart', True) and not is_resource_group:
+                _display_filtered.append(r)
+        resources = _display_filtered
+        # Also filter connections to endpoints that remain
+        allowed_names = {r['resource_name'] for r in resources}
+        connections = [c for c in connections if c.get('source') in allowed_names and c.get('target') in allowed_names]
+    except Exception:
+        # Best-effort: if resource_type_db lookup fails, continue without filtering
+        pass
+
+    # Append synthetic Internet connections based on finding_context evidence.
+    # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
+    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name)
+
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -160,9 +318,9 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
 
     
     if not resources:
-        return "flowchart TB\n  empty[No resources found]"
+        return "flowchart LR\n  empty[No resources found]"
     
-    lines = ["flowchart TB"]
+    lines = ["flowchart LR"]
     
     # Build parent-child mapping
     parent_children: Dict[int, List] = {}
@@ -177,17 +335,35 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
 
-    # Group by DB category instead of hardcoded type strings
-    def _in_cat(r: dict, *cats: str) -> bool:
-        return _category(r) in cats
+    # Group by canonical render category (provider-agnostic)
+    def _in_render_cat(r: dict, *cats: str) -> bool:
+        try:
+            rc = _rtdb.get_render_category(None, r.get('resource_type') or '')
+        except Exception:
+            # Fallback to old category
+            rc = _category(r)
+        return rc in cats
 
-    vms            = [r for r in root_resources if _in_cat(r, 'Compute')]
-    aks            = [r for r in root_resources if _in_cat(r, 'Container')]
-    sql_servers    = [r for r in root_resources if _in_cat(r, 'Database')]
-    storage_accounts = [r for r in root_resources if _in_cat(r, 'Storage')]
-    nsgs           = [r for r in root_resources if _in_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()]
-    paas           = [r for r in root_resources if _in_cat(r, 'Identity') and r['id'] not in child_ids]
-    other          = [r for r in root_resources if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
+    def _is_public_ip_resource_obj(r: dict) -> bool:
+        """Return True if a resource appears to be a standalone Public IP resource (EIP/Azure Public IP)."""
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        return any(tok in rt for tok in ('public_ip', 'elastic_ip', 'eip', 'publicip'))
+
+    # Exclude standalone public IP resources from node lists — they'll be collapsed into Internet edges
+    filtered_roots = [r for r in root_resources if not _is_public_ip_resource_obj(r)]
+    # Exclude resources explicitly hidden from architecture diagrams (unless already filtered as children)
+    filtered_roots = [r for r in filtered_roots if _should_show_on_diagram(r, child_ids)]
+
+    vms            = [r for r in filtered_roots if _in_render_cat(r, 'Compute')]
+    aks            = [r for r in filtered_roots if _in_render_cat(r, 'Container')]
+    sql_servers    = [r for r in filtered_roots if _in_render_cat(r, 'Database')]
+    storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
+    # Network/Firewall nodes: only include true firewall/appliance devices for Network category
+    nsgs           = [r for r in filtered_roots if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
+    paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
+    other          = [r for r in filtered_roots if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
     # Add Internet node if we have internet connections
     has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
@@ -199,12 +375,10 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
         lines.append("  subgraph vnet[VNet]")
         
         for vm in vms:
-            node_id = sanitize_id(vm['resource_name'])
-            lines.append(f"    {node_id}[{_display_label(vm)}]")
+            _render_resource_subgraph(vm, parent_children, lines, indent="    ")
         
         for aks_cluster in aks:
-            node_id = sanitize_id(aks_cluster['resource_name'])
-            lines.append(f"    {node_id}[{_display_label(aks_cluster)}]")
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="    ")
         
         for nsg in nsgs:
             node_id = sanitize_id(nsg['resource_name'])
@@ -212,44 +386,13 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
         
         lines.append("  end")
     
-    # SQL Server hierarchies (parent -> databases)
-    for sql_server in sql_servers:
-        node_id = sanitize_id(sql_server['resource_name'])
-        lines.append(f"  subgraph {node_id}_sg[SQL Server: {sql_server['resource_name']}]")
-        
-        if sql_server['id'] in parent_children:
-            for child in parent_children[sql_server['id']]:
-                child_id = sanitize_id(child['child_name'])
-                lines.append(f"    {child_id}[Database: {child['child_name']}]")
-        else:
-            lines.append(f"    {node_id}[{sql_server['resource_name']}]")
-        
-        lines.append("  end")
+    # Database hierarchies (any DB type with children)
+    for db in sql_servers:
+        _render_resource_subgraph(db, parent_children, lines, indent="  ")
     
-    # Storage Account hierarchies (parent -> containers -> blobs)
-    for storage_account in storage_accounts:
-        node_id = sanitize_id(storage_account['resource_name'])
-        lines.append(f"  subgraph {node_id}_sg[Storage Account: {storage_account['resource_name']}]")
-        
-        if storage_account['id'] in parent_children:
-            for container in parent_children[storage_account['id']]:
-                container_id = sanitize_id(container['child_name'])
-                
-                # Check if container has blob children
-                has_blob_children = container['child_id'] in parent_children
-                
-                if has_blob_children:
-                    lines.append(f"    subgraph {container_id}_sg[Container: {container['child_name']}]")
-                    for blob in parent_children[container['child_id']]:
-                        blob_id = sanitize_id(blob['child_name'])
-                        lines.append(f"      {blob_id}[Blob: {blob['child_name']}]")
-                    lines.append("    end")
-                else:
-                    lines.append(f"    {container_id}[Container: {container['child_name']}]")
-        else:
-            lines.append(f"    {node_id}[{storage_account['resource_name']}]")
-        
-        lines.append("  end")
+    # Storage hierarchies (any storage type with children)
+    for sa in storage_accounts:
+        _render_resource_subgraph(sa, parent_children, lines, indent="  ")
     
     # PaaS subgraph
     if paas:
@@ -287,10 +430,105 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
                 lines.append(f"  {node_id}[{row['resource_name']}]")
                 node_names_present.add(row['resource_name'])
 
-    for conn in connections:
+    def _is_public_ip_resource_name(name: str) -> bool:
+        if not name:
+            return False
+        r = resource_map.get(name)
+        if not r:
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        if any(tok in rt for tok in ('public_ip', 'elastic_ip', 'eip', 'publicip')):
+            return True
+        # Also treat explicit 'public' property on a dedicated resource as a hint
+        if r.get('public') and r.get('resource_type') and 'ip' in r.get('resource_type').lower():
+            return True
+        return False
+
+    # Prioritise connections so diagram reads as layers (Internet -> Container -> App -> Identity/KeyVault)
+    LAYER_ORDER = {
+        'internet': 0,
+        'Container': 1,
+        'Compute': 2,
+        'Network': 3,
+        'Firewall': 3,
+        'Identity': 4,
+        'Database': 5,
+        'Storage': 6,
+        'Other': 7,
+    }
+
+    def _layer_of(name: str) -> int:
+        if not name:
+            return 7
+        if name == 'Internet':
+            return LAYER_ORDER['internet']
+        r = resource_map.get(name)
+        if not r:
+            return LAYER_ORDER['Other']
+        try:
+            cat = _rtdb.get_render_category(None, r.get('resource_type') or '')
+            return LAYER_ORDER.get(cat, LAYER_ORDER['Other'])
+        except Exception:
+            return LAYER_ORDER['Other']
+
+    # Sort connections by source layer then target layer so arrows flow top->down logically
+    def _conn_sort_key(c):
+        src_name = c.get('source') or ''
+        tgt_name = c.get('target') or ''
+        return (_layer_of(src_name), _layer_of(tgt_name))
+
+    connections_sorted = sorted(connections, key=_conn_sort_key)
+
+    # Keep track of emitted edges to avoid duplicates when collapsing Public IP nodes
+    emitted_edges = set()
+
+    for conn in connections_sorted:
+        src_name = conn.get('source')
+        tgt_name = conn.get('target')
+
+        # If connection involves a standalone Public IP resource, collapse it into an Internet->resource edge labeled 'public IP'
+        if _is_public_ip_resource_name(src_name) or _is_public_ip_resource_name(tgt_name):
+            # Determine the 'real' resource (the non-public-ip endpoint)
+            if _is_public_ip_resource_name(src_name):
+                public_side = src_name
+                real_name = tgt_name
+            else:
+                public_side = tgt_name
+                real_name = src_name
+
+            # Ensure the real resource node exists
+            _ensure_node_exists(real_name)
+
+            # Ensure Internet node is present
+            if 'Internet' not in node_names_present:
+                lines.append("  internet[Internet]")
+                node_names_present.add('Internet')
+
+            # Build label: include 'public IP' plus any transport/auth details
+            ip_restricted = False
+            if real_name and real_name in resource_map:
+                rreal = resource_map[real_name]
+                if rreal.get('network_acls') or rreal.get('firewall_rules'):
+                    ip_restricted = True
+
+            base_label = _connection_label(conn, ip_restricted=ip_restricted)
+            inner = base_label.strip('|') if base_label else ''
+            new_inner = f"public IP; {inner}" if inner else "public IP"
+            new_label = f"|{new_inner}|"
+
+            edge = ("Internet", real_name, new_label)
+            if edge not in emitted_edges:
+                emitted_edges.add(edge)
+                # direction Internet -> real resource
+                src = sanitize_id('Internet')
+                tgt = sanitize_id(real_name)
+                lines.append(f"  {src} -->{new_label} {tgt}")
+            # Skip normal processing for this connection
+            continue
+
         # Ensure endpoint nodes exist so arrows are drawn
-        _ensure_node_exists(conn.get('source'))
-        _ensure_node_exists(conn.get('target'))
+        _ensure_node_exists(src_name)
+        _ensure_node_exists(tgt_name)
 
         src = sanitize_id(conn['source'])
         tgt = sanitize_id(conn['target'])
@@ -564,23 +802,86 @@ def main():
     parser.add_argument("--min-score", type=int, default=7, 
                         help="Minimum score for security view")
     parser.add_argument("--compromised", help="Compromised resource for blast radius")
-    parser.add_argument("--output", type=Path, help="Output file (default: stdout)")
+    parser.add_argument("--output", type=Path, help="Output file or directory (default: stdout)")
     parser.add_argument("--repo", help="Repository name to limit diagram to (optional)")
+    parser.add_argument("--split-by-provider", action="store_true", help="Write separate Architecture_<PROVIDER>.md files into --output directory")
+    parser.add_argument("--no-db", action="store_true", help="Skip persisting diagrams to cloud_diagrams table")
     
     args = parser.parse_args()
-    
+
+    # Try to import upsert helper for DB persistence
+    _upsert_diagram = None
+    if not args.no_db:
+        try:
+            _root = Path(__file__).resolve().parents[2]
+            sys.path.insert(0, str(_root))
+            from Scripts.Persist.db_helpers import upsert_cloud_diagram as _upsert_diagram  # type: ignore
+        except Exception:
+            pass
+
+    # Support per-provider split mode where multiple Architecture_<PROVIDER>.md files are produced
+    if args.split_by_provider:
+        if not args.output:
+            print("Error: --output (directory) is required when using --split-by-provider", file=sys.stderr)
+            sys.exit(1)
+        out_dir = Path(args.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Discover providers present in resources
+        all_res = get_resources_for_diagram(args.experiment_id)
+        providers = sorted({(r.get('provider') or 'unknown').lower() for r in all_res})
+        for idx, prov in enumerate(providers):
+            diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
+            fname = out_dir / f"Architecture_{prov.upper()}.md"
+            fname.write_text(diag)
+            print(f"Wrote {fname}")
+            # Also persist to DB
+            if _upsert_diagram:
+                try:
+                    _upsert_diagram(
+                        experiment_id=args.experiment_id,
+                        provider=prov,
+                        diagram_title=f"{prov.capitalize()} Architecture",
+                        mermaid_code=diag,
+                        display_order=idx,
+                    )
+                    print(f"Persisted {prov} diagram to cloud_diagrams table")
+                except Exception as e:
+                    print(f"Warning: failed to persist {prov} diagram to DB: {e}", file=sys.stderr)
+        sys.exit(0)
+
     if args.type == 'architecture':
         diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo)
+        provider = args.repo or 'all'
+        title = "Architecture"
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
+        provider = 'security'
+        title = "Security View"
     elif args.type == 'blast-radius':
         if not args.compromised:
             print("Error: --compromised required for blast-radius diagram", file=sys.stderr)
             sys.exit(1)
         diagram = generate_blast_radius_diagram(args.experiment_id, args.compromised)
+        provider = 'blast-radius'
+        title = f"Blast Radius — {args.compromised}"
     elif args.type == 'multi-repo':
         diagram = generate_multi_repo_diagram(args.experiment_id)
-    
+        provider = 'multi-repo'
+        title = "Multi-Repo Architecture"
+
+    # Persist to DB
+    if _upsert_diagram:
+        try:
+            _upsert_diagram(
+                experiment_id=args.experiment_id,
+                provider=provider,
+                diagram_title=title,
+                mermaid_code=diagram,
+            )
+            print(f"Persisted diagram '{title}' to cloud_diagrams table")
+        except Exception as e:
+            print(f"Warning: failed to persist diagram to DB: {e}", file=sys.stderr)
+
     if args.output:
         args.output.write_text(diagram)
         print(f"Diagram written to {args.output}")

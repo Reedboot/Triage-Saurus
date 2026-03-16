@@ -4,314 +4,38 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Triage-Saurus — Repo Scanner</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+  <script>
+  (function(){
+    function loadScript(src, onload, onerror){
+      var s = document.createElement('script');
+      s.src = src; s.defer = true; s.onload = onload; s.onerror = onerror;
+      document.head.appendChild(s);
     }
-
-    header {
-      background: #161b22;
-      border-bottom: 1px solid #30363d;
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-    }
-
-    header h1 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: #58a6ff;
-    }
-
-    header .dino {
-      font-size: 1.5rem;
-      line-height: 1;
-    }
-
-    header span.badge {
-      background: #388bfd26;
-      color: #58a6ff;
-      border: 1px solid #388bfd66;
-      border-radius: 12px;
-      font-size: 0.7rem;
-      padding: 2px 8px;
-    }
-
-    .container {
-      flex: 1;
-      max-width: 1400px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    /* ── Scan form ── */
-    .scan-card {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 12px 16px;
-    }
-
-    .scan-card h2 {
-      font-size: 0.9rem;
-      font-weight: 600;
-      color: #8b949e;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 14px;
-    }
-
-    .form-row {
-      display: flex;
-      gap: 12px;
-      align-items: flex-end;
-      flex-wrap: wrap;
-    }
-
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .field.grow { flex: 1; min-width: 240px; }
-
-    label {
-      font-size: 0.78rem;
-      color: #8b949e;
-      font-weight: 500;
-    }
-
-    input[type="text"],
-    select {
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      color: #c9d1d9;
-      padding: 8px 12px;
-      font-size: 0.9rem;
-      width: 100%;
-      transition: border-color 0.15s;
-    }
-
-    input[type="text"]:focus,
-    select:focus {
-      outline: none;
-      border-color: #58a6ff;
-    }
-
-    input[type="text"]:disabled,
-    select:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    select option:disabled { color: #484f58; }
-    select option.not-found { color: #484f58; font-style: italic; }
-
-    button {
-      background: #238636;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      padding: 9px 20px;
-      font-size: 0.9rem;
-      font-weight: 600;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 0.15s;
-    }
-
-    button:hover:not(:disabled) { background: #2ea043; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    button.secondary {
-      background: #21262d;
-      border: 1px solid #30363d;
-    }
-    button.secondary:hover:not(:disabled) { background: #30363d; }
-
-    /* ── Status bar ── */
-    .status-bar {
-      display: none;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.85rem;
-      margin-top: 12px;
-    }
-
-    .status-bar.visible { display: flex; }
-
-    .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid #30363d;
-      border-top-color: #58a6ff;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      flex-shrink: 0;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .status-text { color: #8b949e; }
-    .status-text.success { color: #3fb950; }
-    .status-text.error   { color: #f85149; }
-
-    /* ── Main workspace ── */
-    .workspace {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-    }
-
-    @media (max-width: 960px) { .workspace { grid-template-columns: 1fr; } }
-
-    .panel {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      display: flex;
-      flex-direction: column;
-      min-height: 480px;
-    }
-
-    .panel-header {
-      padding: 8px 12px;
-      border-bottom: 1px solid #30363d;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .panel-title {
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: #8b949e;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    .panel-actions { display: flex; gap: 6px; }
-
-    .btn-small {
-      background: #21262d;
-      border: 1px solid #30363d;
-      border-radius: 4px;
-      color: #8b949e;
-      font-size: 0.75rem;
-      padding: 3px 8px;
-      cursor: pointer;
-    }
-
-    .btn-small:hover { color: #c9d1d9; background: #30363d; }
-
-    /* ── Log output ── */
-    #log-output {
-      flex: 1;
-      overflow-y: auto;
-      overflow-x: auto;
-      padding: 8px 12px;
-      max-height: 60vh;
-      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-      font-size: 0.78rem;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      word-break: break-all;
-      color: #8b949e;
-      scrollbar-width: thin;
-      scrollbar-color: #58a6ff #0d1117;
-    }
-    /* WebKit scrollbars */
-    #log-output::-webkit-scrollbar { width: 12px; height: 12px; }
-    #log-output::-webkit-scrollbar-track { background: transparent; }
-    #log-output::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
-    #log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb66; }
-
-    #log-output .line-ok     { color: #3fb950; }
-    #log-output .line-warn   { color: #e3b341; }
-    #log-output .line-error  { color: #f85149; }
-    #log-output .line-phase  { color: #58a6ff; font-weight: 600; }
-    #log-output .line-done   { color: #3fb950; font-weight: 600; }
-    #log-output .line-sep    { color: #30363d; }
-
-    /* ── Diagram panel ── */
-    #diagram-panel .panel-body {
-      flex: 1;
-      overflow: auto;
-      padding: 16px;
-    }
-
-    .diagram-placeholder {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      min-height: 300px;
-      color: #484f58;
-      text-align: center;
-      gap: 8px;
-    }
-
-    .diagram-placeholder svg {
-      opacity: 0.3;
-    }
-
-    .diagram-placeholder p { font-size: 0.85rem; }
-
-    .diagram-tabs {
-      display: none;
-      gap: 4px;
-      padding: 6px 12px 0;
-      border-bottom: 1px solid #30363d;
-      overflow-x: auto;
-    }
-
-    .diagram-tabs.visible { display: flex; }
-
-    .tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      border-radius: 0;
-      color: #8b949e;
-      font-size: 0.8rem;
-      padding: 6px 12px;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-
-    .tab-btn:hover:not(:disabled) { background: transparent; color: #c9d1d9; }
-    .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
-
-    .diagram-view {
-      display: none;
-      padding: 12px;
-    }
-
-    .diagram-view.active { display: block; }
-
-    .mermaid { overflow: auto; }
-
-    /* Mermaid dark theme overrides */
-    .mermaid svg {
-      background: transparent !important;
-    }
+    // Try local vendor first (works offline/intranet), then fall back to CDN
+    loadScript('/static/vendor/mermaid.min.js', function(){ console.info('mermaid loaded from /static/vendor'); }, function(){
+      loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function(){ console.info('mermaid loaded from CDN'); }, function(){
+        console.warn('Mermaid library failed to load from vendor and CDN. Diagrams will not render.');
+        try{
+          var b = document.createElement('div');
+          b.className = 'mermaid-error';
+          b.textContent = 'Mermaid library unavailable — diagrams may not render. Place mermaid.min.js at /static/vendor/';
+          b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px';
+          document.body.appendChild(b);
+        } catch(e){}
+      });
+    });
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/app.css" />
+  <style>/* legacy: summary panels kept until full section-tabs migration */
+    .diagram-views { min-height: 360px; overflow: auto; }
+    .summary-tabs { display: none; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid #30363d; overflow-x: auto; flex-shrink: 0; }
+    .summary-tabs.visible { display: flex; }
+    .summary-tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: #8b949e; font-size: 0.8rem; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+    .summary-tab-btn:hover:not(:disabled) { color: #c9d1d9; }
+    .summary-tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .summary-view { display: none; padding: 14px; overflow: auto; }
+    .summary-view.active { display: block; }
   </style>
 </head>
 <body>
@@ -326,7 +50,7 @@
 
   <!-- Scan form -->
   <div class="scan-card">
-    <h2>New Scan</h2>
+    <h2>Scan</h2>
     <form id="scan-form">
       <div class="form-row">
         <div class="field grow">
@@ -335,7 +59,7 @@
             <option value="" disabled selected>— select a repository —</option>
             {% for repo in repos %}
               {% if repo.found %}
-                <option value="{{ repo.path }}">{{ repo.name }} — {{ repo.path }}</option>
+                <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
               {% else %}
                 <option value="" disabled class="not-found">{{ repo.name }} (not found locally)</option>
               {% endif %}
@@ -344,7 +68,7 @@
             {% endfor %}
           </select>
         </div>
-        <div class="field" style="min-width:180px">
+        <div class="field" style="min-width:160px">
           <label for="scan-name">Scan name</label>
           <input type="text" id="scan-name" name="scan_name"
                  placeholder="web_scan" value="web_scan"
@@ -359,6 +83,28 @@
           <button type="button" class="secondary" id="reset-btn" style="display:none">↺ New Scan</button>
         </div>
       </div>
+
+      <!-- Past scans row (shown when a repo with history is selected) -->
+      <div class="past-scans-row" id="past-scans-row">
+        <div class="row-inner">
+          <span class="section-label">📁 Past Scans</span>
+          <div class="field grow">
+            <label for="past-scan-select">Load previous result</label>
+            <select id="past-scan-select">
+              <option value="" disabled selected>— select a past scan —</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button type="button" class="secondary" id="load-scan-btn">📂 Load</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Compare row (shown when Compare is clicked) -->
+
+
       <div class="status-bar" id="status-bar">
         <div class="spinner" id="spinner"></div>
         <span class="status-text" id="status-text">Starting…</span>
@@ -370,34 +116,66 @@
   <div class="workspace">
 
     <!-- Log panel -->
-    <div class="panel">
+    <div class="panel" id="log-panel">
       <div class="panel-header">
         <span class="panel-title">Scan Output</span>
         <div class="panel-actions">
           <button class="btn-small" id="copy-log-btn" title="Copy log">Copy</button>
           <button class="btn-small" id="clear-log-btn" title="Clear log">Clear</button>
+          <button class="btn-small" id="toggle-sections-btn" title="Show sections">Sections</button>
         </div>
       </div>
+
+      <!-- Section tabs live inside the log panel (replaces raw log after scan completes) -->
+      <div class="section-tab-bar" id="section-tab-bar">
+        <span id="tab-bar-placeholder" style="padding:8px 14px;font-size:0.75rem;color:var(--text-faint)">
+          Run or load a scan to see sections
+        </span>
+      </div>
+      <div class="section-panel-content" id="section-panel-content" style="display:none">
+        <div class="empty-state" id="section-placeholder">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 7h18M3 12h18M3 17h18"/>
+          </svg>
+          <p>Run or load a scan to view<br/>section details.</p>
+        </div>
+      </div>
+
       <div id="log-output"><span style="color:#484f58">Scan output will appear here…</span></div>
     </div>
 
-    <!-- Diagram panel -->
+    <!-- Diagram panel: SPLIT LAYOUT (right=architecture) -->
     <div class="panel" id="diagram-panel">
-      <div class="panel-header">
-        <span class="panel-title">Architecture Diagrams</span>
-        <div class="panel-actions">
-          <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
+      <div class="split-layout">
+
+<!-- RIGHT: Architecture diagram with zoom/pan -->
+        <div class="split-right">
+          <div class="right-panel-header">
+            <span class="right-panel-title">Architecture</span>
+            <div class="panel-actions">
+              <div class="diagram-provider-tabs" id="diagram-tabs" style="border:none;padding:0;background:transparent;"></div>
+              <button class="btn-small" id="zoom-in-btn" title="Zoom in">＋</button>
+              <button class="btn-small" id="zoom-out-btn" title="Zoom out">－</button>
+              <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">↺</button>
+              <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">Hide log</button>
+              <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
+            </div>
+          </div>
+          <div class="diagram-zoom-wrap" id="diagram-zoom-wrap">
+            <div class="diagram-zoom-inner" id="diagram-zoom-inner">
+              <div id="diagram-views">
+                <div class="diagram-placeholder" id="diagram-placeholder">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
+                    <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
+                  </svg>
+                  <p>Architecture diagram will appear<br/>after the scan completes.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="diagram-tabs" id="diagram-tabs"></div>
-      <div id="diagram-views">
-        <div class="diagram-placeholder" id="diagram-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/>
-            <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="8"/>
-          </svg>
-          <p>Architecture diagram will appear<br/>after the scan completes.</p>
-        </div>
+
       </div>
     </div>
 
@@ -405,30 +183,208 @@
 </div>
 
 <script>
-  mermaid.initialize({
+  const MERMAID_BASE_CONFIG = {
     startOnLoad: false,
     theme: 'dark',
     securityLevel: 'loose',
     flowchart: { curve: 'basis', useMaxWidth: false },
-  });
+  };
+  /* mermaid initialization deferred to static/app.js */
 
-  const form       = document.getElementById('scan-form');
-  const repoSelect = document.getElementById('repo-select');
-  const nameInput  = document.getElementById('scan-name');
-  const scanBtn    = document.getElementById('scan-btn');
-  const resetBtn   = document.getElementById('reset-btn');
-  const statusBar  = document.getElementById('status-bar');
-  const statusText = document.getElementById('status-text');
-  const spinner    = document.getElementById('spinner');
-  const logOutput  = document.getElementById('log-output');
-  const tabsEl     = document.getElementById('diagram-tabs');
-  const viewsEl    = document.getElementById('diagram-views');
-  const placeholder = document.getElementById('diagram-placeholder');
-  const copyDiagramBtn = document.getElementById('copy-diagram-btn');
+  const form            = document.getElementById('scan-form');
+  const repoSelect      = document.getElementById('repo-select');
+  const nameInput       = document.getElementById('scan-name');
+  const scanBtn         = document.getElementById('scan-btn');
+  const resetBtn        = document.getElementById('reset-btn');
+  const statusBar       = document.getElementById('status-bar');
+  const statusText      = document.getElementById('status-text');
+  const spinner         = document.getElementById('spinner');
+  const logOutput       = document.getElementById('log-output');
+  const tabsEl          = document.getElementById('diagram-tabs');
+  const viewsEl         = document.getElementById('diagram-views');
+  const placeholder     = document.getElementById('diagram-placeholder');
+  const copyDiagramBtn  = document.getElementById('copy-diagram-btn');
+  const zoomInBtn       = document.getElementById('zoom-in-btn');
+  const zoomOutBtn      = document.getElementById('zoom-out-btn');
+  const zoomResetBtn    = document.getElementById('zoom-reset-btn');
+  const toggleLogBtn    = document.getElementById('toggle-log-btn');
+  const diagramWrap     = document.getElementById('diagram-zoom-wrap');
+  const diagramInner    = document.getElementById('diagram-zoom-inner');
+  const sectionTabBar   = document.getElementById('section-tab-bar');
+  const sectionContent  = document.getElementById('section-panel-content');
+  const tabBarPlaceholder = document.getElementById('tab-bar-placeholder');
+  const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
+
+  let showingSections = false; // whether sections are currently shown in the log panel
+
+
+  // Zoom/pan state
+  let zoomLevel = 1, panX = 0, panY = 0;
+  let isPanning = false, panStartX = 0, panStartY = 0, panStartPX = 0, panStartPY = 0;
+  const ZOOM_STEP = 0.2, ZOOM_MIN = 0.2, ZOOM_MAX = 5;
+
+  const pastScansRow    = document.getElementById('past-scans-row');
+  const pastScanSelect  = document.getElementById('past-scan-select');
+  const loadScanBtn     = document.getElementById('load-scan-btn');
+  const compareToggle   = document.getElementById('compare-toggle-btn');
+  const compareRow      = document.getElementById('compare-row');
+  const compareFrom     = document.getElementById('compare-from');
+  const compareTo       = document.getElementById('compare-to');
+  const runCompareBtn   = document.getElementById('run-compare-btn');
 
   // Diagram state
-  let diagrams = [];   // [{title, code}]
+  let diagrams = [];
   let activeTab = 0;
+  let currentRepoName = '';
+  let currentExpId    = '';
+
+  // ── Zoom + Pan (right panel) ──────────────────────────────────────────────────
+  function applyTransform() {
+    if (diagramInner) {
+      diagramInner.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+    }
+  }
+
+  function resetZoomPan() {
+    zoomLevel = 1; panX = 0; panY = 0;
+    applyTransform();
+  }
+
+  function fitDiagram() {
+    if (!diagramWrap || !diagramInner) return;
+    const svg = diagramInner.querySelector('svg');
+    if (!svg) { resetZoomPan(); return; }
+    const wrapW = diagramWrap.clientWidth;
+    const wrapH = diagramWrap.clientHeight;
+    const svgW  = svg.scrollWidth || svg.getBoundingClientRect().width || 400;
+    const svgH  = svg.scrollHeight || svg.getBoundingClientRect().height || 300;
+    if (!svgW || !svgH) { resetZoomPan(); return; }
+    const scale = Math.min(wrapW / svgW, wrapH / svgH, 1) * 0.95;
+    zoomLevel = Math.max(ZOOM_MIN, scale);
+    panX = (wrapW - svgW * zoomLevel) / 2;
+    panY = (wrapH - svgH * zoomLevel) / 2;
+    applyTransform();
+  }
+
+  if (zoomInBtn)    zoomInBtn.addEventListener('click',    () => { zoomLevel = Math.min(ZOOM_MAX, +(zoomLevel + ZOOM_STEP).toFixed(3)); applyTransform(); });
+  if (zoomOutBtn)   zoomOutBtn.addEventListener('click',   () => { zoomLevel = Math.max(ZOOM_MIN, +(zoomLevel - ZOOM_STEP).toFixed(3)); applyTransform(); });
+  if (zoomResetBtn) zoomResetBtn.addEventListener('click', () => fitDiagram());
+
+  // Wheel zoom on diagram
+  if (diagramWrap) {
+    diagramWrap.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoomLevel + delta).toFixed(3)));
+      // Zoom towards cursor
+      const rect = diagramWrap.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      panX = mx - (mx - panX) * (newScale / zoomLevel);
+      panY = my - (my - panY) * (newScale / zoomLevel);
+      zoomLevel = newScale;
+      applyTransform();
+    }, { passive: false });
+
+    diagramWrap.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      isPanning = true;
+      panStartX = e.clientX; panStartY = e.clientY;
+      panStartPX = panX;    panStartPY = panY;
+      diagramWrap.setPointerCapture(e.pointerId);
+    });
+    diagramWrap.addEventListener('pointermove', (e) => {
+      if (!isPanning) return;
+      panX = panStartPX + (e.clientX - panStartX);
+      panY = panStartPY + (e.clientY - panStartY);
+      applyTransform();
+    });
+    diagramWrap.addEventListener('pointerup',   () => { isPanning = false; });
+    diagramWrap.addEventListener('pointercancel', () => { isPanning = false; });
+  }
+
+  // Toggle handled by static/app.js to avoid duplicate listeners
+
+  // ── Section tabs (left panel) ─────────────────────────────────────────────────
+  let activeSection = '';
+
+  async function loadSectionTabs(expId, repoName) {
+    if (!expId || !repoName) return;
+    currentExpId = expId;
+    try {
+      const resp = await fetch(`/api/view/tabs/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
+      const data = await resp.json();
+      renderSectionTabs(data.tabs || [], expId, repoName);
+      // Show sections in the log panel once tabs are loaded
+      showSectionsInLog();
+    } catch (err) {
+      console.warn('Failed to load section tabs:', err);
+    }
+  }
+
+  function renderSectionTabs(tabs, expId, repoName) {
+    sectionTabBar.innerHTML = '';
+    if (!tabs.length) return;
+    tabBarPlaceholder && (tabBarPlaceholder.style.display = 'none');
+
+    for (const tab of tabs) {
+      const btn = document.createElement('button');
+      btn.className = 'section-tab-btn';
+      btn.textContent = tab.label;
+      btn.dataset.key = tab.key;
+      btn.addEventListener('click', () => loadSectionContent(tab.key, expId, repoName));
+      sectionTabBar.appendChild(btn);
+    }
+
+    // Auto-load first tab
+    if (tabs.length > 0) loadSectionContent(tabs[0].key, expId, repoName);
+  }
+
+  async function loadSectionContent(key, expId, repoName) {
+    activeSection = key;
+    // Mark active tab
+    sectionTabBar.querySelectorAll('.section-tab-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.key === key));
+
+    sectionContent.innerHTML = '<div class="section-loading"><span>Loading…</span></div>';
+
+    const aiKeys = ['tldr', 'risks', 'architecture', 'auth', 'containers', 'kubernetes',
+                    'network', 'cicd', 'dependencies', 'detection', 'meta'];
+    const structuredKeys = ['assets', 'findings', 'ingress', 'egress', 'roles'];
+
+    try {
+      let url;
+      if (structuredKeys.includes(key)) {
+        url = `/api/view/${key}/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`;
+      } else {
+        url = `/api/view/ai/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}/${encodeURIComponent(key)}`;
+      }
+      const resp = await fetch(url);
+      const html = await resp.text();
+      sectionContent.innerHTML = html;
+
+      // Re-run mermaid for any inline diagrams
+      const merNodes = sectionContent.querySelectorAll('.mermaid:not([data-processed])');
+      if (merNodes.length) await _runMermaid(Array.from(merNodes));
+
+      // Initialize known section scripts (moved to static JS) so they run when a fragment is inserted.
+      try {
+        if (key === 'assets' && window.initAssets) {
+          try { window.initAssets(sectionContent, repoName); } catch (e) { console.warn('initAssets error:', e); }
+        }
+        if (key === 'roles' && window.initRoles) {
+          try { window.initRoles(sectionContent, repoName); } catch (e) { console.warn('initRoles error:', e); }
+        }
+      } catch (e) {
+        console.warn('Failed to run section initializer:', e);
+      }
+
+      // After loading a section, ensure the section area is visible and raw log is hidden
+      showSectionsInLog();
+    } catch (err) {
+      sectionContent.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load section: ${err}</p></div>`;
+    }
+  }
 
   // ── Log helpers ─────────────────────────────────────────────────────────────
   function classifyLine(line) {
@@ -442,9 +398,10 @@
   }
 
   function appendLog(line) {
+    // If sections are currently visible in the log panel, don't append streaming logs.
+    if (showingSections) return;
     const wasEmpty = logOutput.querySelector('span[style]');
     if (wasEmpty) logOutput.innerHTML = '';
-
     const span = document.createElement('span');
     const cls = classifyLine(line);
     if (cls) span.className = cls;
@@ -454,17 +411,179 @@
   }
 
   // ── Diagram rendering ────────────────────────────────────────────────────────
+  async function _runMermaid(nodes) {
+    // Render each node individually so one bad diagram can't block the others.
+    async function tryRender(node, config) {
+      try {
+        mermaid.initialize(config);
+        await mermaid.run({ nodes: [node] });
+        // Apply current zoom level so rendered SVG scales appropriately
+        try { node.style.transform = `scale(${zoomLevel})`; } catch (e) { /* ignore */ }
+        return null;
+      } catch (e) {
+        return e;
+      }
+    }
+
+    for (const node of nodes) {
+      const origText = node.textContent || '';
+      let lastErr = null;
+
+      // Attempt 1: base config
+      let err = await tryRender(node, MERMAID_BASE_CONFIG);
+      if (!err) continue;
+      lastErr = err;
+
+      // Attempt 2: linear curve
+      const cfgLinear = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
+      cfgLinear.flowchart = Object.assign({}, cfgLinear.flowchart, { curve: 'linear' });
+      err = await tryRender(node, cfgLinear);
+      if (!err) continue;
+      lastErr = err;
+
+      // Attempt 3: useMaxWidth true
+      const cfgMax = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
+      cfgMax.flowchart = Object.assign({}, cfgMax.flowchart, { useMaxWidth: true });
+      err = await tryRender(node, cfgMax);
+      if (!err) continue;
+      lastErr = err;
+
+      // Attempt 4: remove edge labels and try base config again
+      const stripped = sanitizeMermaid(origText.replace(/\|[^|]*\|/g, ''));
+      node.textContent = stripped;
+      err = await tryRender(node, MERMAID_BASE_CONFIG);
+      if (!err) continue;
+      lastErr = err;
+
+      // Restore original sanitized content and show error
+      node.textContent = sanitizeMermaid(origText);
+      node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${(lastErr && lastErr.message) || lastErr}</div>`;
+      console.error('Mermaid render error:', lastErr);
+    }
+
+    // Restore base config after attempts
+    try { mermaid.initialize(MERMAID_BASE_CONFIG); } catch (e) { /* ignore */ }
+  }
+
+  // Sanitize Mermaid source to fix common issues emitted by generator
+  function sanitizeMermaid(src) {
+    if (!src || typeof src !== 'string') return src;
+    let s = src;
+    // Hyphenate known underscored CSS props
+    s = s.replace(/stroke_width/g, 'stroke-width')
+         .replace(/stroke_dasharray/g, 'stroke-dasharray')
+         .replace(/stroke_opacity/g, 'stroke-opacity')
+         .replace(/fill_opacity/g, 'fill-opacity')
+         .replace(/font_size/g, 'font-size')
+         .replace(/font_weight/g, 'font-weight')
+         .replace(/text_anchor/g, 'text-anchor')
+         .replace(/line_height/g, 'line-height');
+    // Remove invisible variation selectors
+    s = s.replace(/\uFE0F/g, '');
+    // Replace & inside quoted labels with 'and'
+    s = s.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (m, g1) => '"' + g1.replace(/&/g, 'and') + '"');
+    // Convert space-separated stroke-dasharray values to comma-separated
+    s = s.replace(/stroke-dasharray\s*:\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, (m, a, b) => `stroke-dasharray:${a},${b}`);
+    // Remove px units from numeric stroke widths (Mermaid prefers numbers)
+    s = s.replace(/stroke-width\s*:\s*(\d+)px/g, 'stroke-width:$1');
+    // Remove linkStyle lines which can reference out-of-range indices and crash the renderer
+    s = s.replace(/^\s*linkStyle\s+\d+[^\n]*\n/gm, '');
+
+    // Remove explicit "contains" edges: containment should be represented via subgraphs
+    s = s.split('\n').filter(line => !/\bcontains\b/i.test(line)).join('\n');
+
+    // Collapse newlines inside bracketed labels: [a\n b] => [a b]
+    s = s.replace(/\[([^\]]*\n[^\]]*)\]/g, (m, g1) => '[' + g1.replace(/\n|\r/g, ' ') + ']');
+
+    // Remove self-edges (node linking to itself) which add clutter
+    const lines = s.split('\n');
+    const filtered = [];
+    for (let line of lines) {
+      if (/[-.]+>/.test(line)) {
+        const parts = line.split(/[-.]+>/);
+        if (parts.length >= 2) {
+          const left = parts[0].replace(/["'`\[\]\(\)\{\}\s]/g, '').trim().toLowerCase();
+          const right = parts[1].replace(/["'`\[\]\(\)\{\}\s:].*$/g, '').replace(/["'`\[\]\(\)\{\}\s]/g, '').trim().toLowerCase();
+          if (left && right && left === right) {
+            // skip self-edge
+            continue;
+          }
+        }
+      }
+      filtered.push(line);
+    }
+    s = filtered.join('\n');
+
+    // Deduplicate subgraph blocks, node definitions and style lines which often
+    // occur repeatedly in generated output and can confuse the renderer.
+    const linesArr = s.split('\n');
+    const out = [];
+    const seenSubgraphs = new Set();
+    const seenNodes = new Set();
+    const seenStyles = new Set();
+    let skipSubgraph = 0;
+
+    for (let i = 0; i < linesArr.length; i++) {
+      const line = linesArr[i];
+      const trimmed = line.trim();
+
+      if (skipSubgraph > 0) {
+        if (/^\s*end\s*$/i.test(trimmed)) {
+          skipSubgraph -= 1;
+        }
+        continue;
+      }
+
+      // subgraph <id>[Label]
+      const subMatch = trimmed.match(/^subgraph\s+([^\s\[]+)/i);
+      if (subMatch) {
+        const id = subMatch[1];
+        if (seenSubgraphs.has(id)) {
+          // skip until the matching 'end'
+          skipSubgraph = 1;
+          continue;
+        }
+        seenSubgraphs.add(id);
+        out.push(line);
+        continue;
+      }
+
+      // node definition like: nodeId[Label] or nodeId("Label")
+      const nodeMatch = trimmed.match(/^([^\s\[]+)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)/);
+      if (nodeMatch) {
+        const id = nodeMatch[1];
+        if (seenNodes.has(id)) continue;
+        seenNodes.add(id);
+        out.push(line);
+        continue;
+      }
+
+      // style <id> ...
+      const styleMatch = trimmed.match(/^style\s+([^\s]+)/i);
+      if (styleMatch) {
+        const key = trimmed; // include full style string to detect duplicates
+        if (seenStyles.has(key)) continue;
+        seenStyles.add(key);
+        out.push(line);
+        continue;
+      }
+
+      out.push(line);
+    }
+
+    s = out.join('\n');
+
+    return s;
+  }
+
   async function renderDiagrams(data) {
     diagrams = data;
     placeholder.style.display = 'none';
     tabsEl.innerHTML = '';
-    // Remove old diagram views (but not placeholder)
-    viewsEl.querySelectorAll('.diagram-view').forEach(el => el.remove());
+    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
 
     for (let i = 0; i < diagrams.length; i++) {
       const { title, code } = diagrams[i];
-
-      // Tab button
       const tab = document.createElement('button');
       tab.className = 'tab-btn' + (i === 0 ? ' active' : '');
       tab.textContent = title;
@@ -472,50 +591,261 @@
       tab.addEventListener('click', () => switchTab(i));
       tabsEl.appendChild(tab);
 
-      // Diagram view div
       const view = document.createElement('div');
       view.className = 'diagram-view' + (i === 0 ? ' active' : '');
       view.dataset.idx = i;
-
       const mermaidEl = document.createElement('div');
       mermaidEl.className = 'mermaid';
-      mermaidEl.textContent = code;
+      mermaidEl.textContent = sanitizeMermaid(code);
       view.appendChild(mermaidEl);
       viewsEl.appendChild(view);
     }
 
     if (diagrams.length > 1) tabsEl.classList.add('visible');
-
-    // Render all mermaid blocks
-    await mermaid.run({ nodes: viewsEl.querySelectorAll('.mermaid') });
+    await _runMermaid(viewsEl.querySelectorAll('.mermaid'));
     activeTab = 0;
+    setTimeout(fitDiagram, 200);
   }
 
   function switchTab(idx) {
     activeTab = idx;
     tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', +b.dataset.idx === idx));
-    viewsEl.querySelectorAll('.diagram-view').forEach(v => v.classList.toggle('active', +v.dataset.idx === idx));
+    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(v => {
+      v.classList.toggle('active', +v.dataset.idx === idx);
+    });
+    // Re-apply transform to the newly active diagram
+    setTimeout(fitDiagram, 100);
   }
 
+  // ── Diff rendering ───────────────────────────────────────────────────────────
+  async function renderDiff(data) {
+    const { from: idFrom, to: idTo, diagrams_from, diagrams_to, timeline } = data;
+
+    placeholder.style.display = 'none';
+    tabsEl.innerHTML = '';
+    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
+    tabsEl.classList.add('visible');
+    diagrams = [];
+    activeTab = 0;
+
+    // Build compare tab (index 0)
+    const diffTab = document.createElement('button');
+    diffTab.className = 'tab-btn active';
+    diffTab.textContent = `📊 Diff ${idFrom} → ${idTo}`;
+    diffTab.dataset.idx = 0;
+    diffTab.addEventListener('click', () => switchTab(0));
+    tabsEl.appendChild(diffTab);
+
+    const diffView = document.createElement('div');
+    diffView.className = 'diff-view active';
+    diffView.dataset.idx = 0;
+
+    // Side-by-side diagrams
+    const sbs = document.createElement('div');
+    sbs.className = 'diff-side-by-side';
+
+    async function buildSide(label, diags) {
+      const side = document.createElement('div');
+      side.className = 'diff-side';
+      const lbl = document.createElement('div');
+      lbl.className = 'diff-side-label';
+      lbl.textContent = label;
+      side.appendChild(lbl);
+      if (diags && diags.length > 0) {
+          const m = document.createElement('div');
+          m.className = 'mermaid';
+          m.textContent = sanitizeMermaid(diags[0].code);  // show first provider diagram (sanitized)
+          side.appendChild(m);
+        } else {
+          side.innerHTML += '<p style="color:#484f58;font-size:0.8rem">No diagram available</p>';
+        }
+        return side;
+    }
+
+    const sideFrom = await buildSide(`Scan ${idFrom}`, diagrams_from);
+    const sideTo   = await buildSide(`Scan ${idTo}`, diagrams_to);
+    sbs.appendChild(sideFrom);
+    sbs.appendChild(sideTo);
+    diffView.appendChild(sbs);
+
+    // Render mermaid in both sides
+    const mermaidNodes = diffView.querySelectorAll('.mermaid');
+    if (mermaidNodes.length) {
+      await _runMermaid(mermaidNodes);
+    }
+
+    // Timeline
+    const tl = document.createElement('div');
+    tl.className = 'diff-timeline';
+    const tlTitle = document.createElement('h3');
+    tlTitle.textContent = `Change timeline — Scan ${idFrom} → ${idTo}`;
+    tl.appendChild(tlTitle);
+
+    if (!timeline || timeline.length === 0) {
+      const none = document.createElement('div');
+      none.className = 'no-changes';
+      none.textContent = 'No changes detected between these scans.';
+      tl.appendChild(none);
+    } else {
+      for (const entry of timeline) {
+        const el = document.createElement('div');
+        el.className = 'timeline-entry';
+        const scanLabel = document.createElement('div');
+        scanLabel.className = 'timeline-scan-id';
+        scanLabel.textContent = `Scan ${entry.experiment_id}`;
+        el.appendChild(scanLabel);
+
+        for (const f of (entry.new_findings || [])) {
+          const item = document.createElement('div');
+          item.className = 'change-item change-new';
+          item.textContent = `⚠ New finding: ${f.title || f.rule_id}${f.severity ? ' [' + f.severity + ']' : ''}`;
+          el.appendChild(item);
+        }
+        for (const ruleId of (entry.resolved_findings || [])) {
+          const item = document.createElement('div');
+          item.className = 'change-item change-resolved';
+          item.textContent = `✅ Resolved: ${ruleId}`;
+          el.appendChild(item);
+        }
+        for (const r of (entry.resources_added || [])) {
+          const item = document.createElement('div');
+          item.className = 'change-item change-added';
+          item.textContent = `➕ Resource added: ${r}`;
+          el.appendChild(item);
+        }
+        for (const r of (entry.resources_removed || [])) {
+          const item = document.createElement('div');
+          item.className = 'change-item change-removed';
+          item.textContent = `➖ Resource removed: ${r}`;
+          el.appendChild(item);
+        }
+        tl.appendChild(el);
+      }
+    }
+
+    diffView.appendChild(tl);
+    viewsEl.appendChild(diffView);
+
+    // Also add individual diagram tabs for "from" scan
+    const allDiags = diagrams_from || [];
+    diagrams = allDiags;
+    for (let i = 0; i < allDiags.length; i++) {
+      const tab = document.createElement('button');
+      tab.className = 'tab-btn';
+      tab.textContent = `${idFrom}: ${allDiags[i].title}`;
+      tab.dataset.idx = i + 1;
+      tab.addEventListener('click', () => switchTab(i + 1));
+      tabsEl.appendChild(tab);
+
+      const view = document.createElement('div');
+      view.className = 'diagram-view';
+      view.dataset.idx = i + 1;
+      const mermaidEl = document.createElement('div');
+      mermaidEl.className = 'mermaid';
+      mermaidEl.textContent = sanitizeMermaid(allDiags[i].code);
+      view.appendChild(mermaidEl);
+      viewsEl.appendChild(view);
+    }
+
+    // Render mermaid in the individual tabs too
+    const remaining = viewsEl.querySelectorAll('.diagram-view .mermaid');
+    if (remaining.length) {
+      await _runMermaid(remaining);
+    }
+  }
+
+  // ── Past scans ───────────────────────────────────────────────────────────────
+  function _scanOptionLabel(scan) {
+    const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 16) : '';
+    const flag = scan.has_diagrams ? ' 🖼' : '';
+    return `Scan ${scan.experiment_id}${dt ? ' — ' + dt : ''}${flag}`;
+  }
+
+  function _populateScanSelects(scans) {
+    if (pastScanSelect) {
+      pastScanSelect.innerHTML = '<option value="" disabled selected>— select —</option>';
+      for (const s of scans) {
+        const opt = document.createElement('option');
+        opt.value = s.experiment_id;
+        opt.textContent = _scanOptionLabel(s);
+        pastScanSelect.appendChild(opt);
+      }
+    }
+  }
+
+  async function loadPastScans(repoName) {
+    if (!repoName) return [];
+    try {
+      const resp = await fetch(`/api/scans/${encodeURIComponent(repoName)}`);
+      const data = await resp.json();
+      const scans = data.scans || [];
+      if (scans.length > 0) {
+        _populateScanSelects(scans);
+        pastScansRow.classList.add('visible');
+      } else {
+        pastScansRow.classList.remove('visible');
+        if (compareRow) compareRow.classList.remove('visible');
+      }
+      return scans;
+    } catch {
+      pastScansRow.classList.remove('visible');
+      return [];
+    }
+  }
+
+  async function _loadDiagrams(expId, { silent = false } = {}) {
+    try {
+      const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
+      const data = await resp.json();
+      if (data.diagrams && data.diagrams.length > 0) {
+        await renderDiagrams(data.diagrams);
+        if (!silent) setStatus(`Loaded scan ${expId}`, 'success');
+        return true;
+      }
+      if (!silent) setStatus(`No diagrams found for scan ${expId}`, 'error');
+      return false;
+    } catch (err) {
+      if (!silent) setStatus('Load failed: ' + err, 'error');
+      return false;
+    }
+  }
+
+  loadScanBtn.addEventListener('click', async () => {
+    const expId = pastScanSelect.value;
+    if (!expId) return;
+    loadScanBtn.disabled = true;
+    setStatus(`Loading scan ${expId}…`);
+    spinner.style.display = '';
+    statusBar.classList.add('visible');
+    try {
+      await _loadDiagrams(expId);
+      // Load section tabs for the selected experiment and switch to Assets
+      if (currentRepoName) {
+        await loadSectionTabs(expId, currentRepoName);
+        try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+      }
+    } finally {
+      spinner.style.display = 'none';
+      loadScanBtn.disabled = false;
+    }
+  });
+
+
   // ── SSE stream parsing ───────────────────────────────────────────────────────
-  // We use fetch() + ReadableStream since we need POST.
   let buffer = '';
 
   function parseSSEChunk(chunk) {
     buffer += chunk;
     const messages = buffer.split('\n\n');
-    buffer = messages.pop(); // keep incomplete last message
-
+    buffer = messages.pop();
     for (const msg of messages) {
       if (!msg.trim()) continue;
       const eventMatch = msg.match(/^event:\s*(.+)$/m);
       const dataMatch  = msg.match(/^data:\s*(.+)$/m);
       if (!dataMatch) continue;
-
       const eventType = eventMatch ? eventMatch[1].trim() : 'message';
       let payload;
       try { payload = JSON.parse(dataMatch[1].trim()); } catch { payload = dataMatch[1].trim(); }
-
       handleEvent(eventType, payload);
     }
   }
@@ -529,10 +859,16 @@
       appendLog('[ERROR] ' + payload);
       setStatus('Error: ' + payload, 'error');
     } else if (type === 'done') {
-      const code = payload.exit_code;
+      const code  = payload.exit_code;
       const expId = payload.experiment_id;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
+        // Refresh past scans list and section tabs
+        if (currentRepoName) {
+          loadPastScans(currentRepoName);
+          loadSectionTabs(expId, currentRepoName);
+          setTimeout(fitDiagram, 500); // fit diagram after render
+        }
       } else {
         setStatus(`⚠ Pipeline exited with code ${code}`, 'error');
       }
@@ -542,6 +878,32 @@
       nameInput.disabled = false;
       resetBtn.style.display = 'inline-block';
     }
+  }
+
+  function showSectionsInLog() {
+    if (!sectionTabBar || !sectionContent || !logOutput) return;
+    // Hide raw log and show sections
+    logOutput.style.display = 'none';
+    sectionTabBar.style.display = '';
+    sectionContent.style.display = '';
+    showingSections = true;
+    if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Show log';
+  }
+
+  function showRawLog() {
+    if (!sectionTabBar || !sectionContent || !logOutput) return;
+    // Show raw log and hide sections
+    logOutput.style.display = '';
+    sectionTabBar.style.display = '';
+    sectionContent.style.display = 'none';
+    showingSections = false;
+    if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Sections';
+  }
+
+  if (toggleSectionsBtn) {
+    toggleSectionsBtn.addEventListener('click', () => {
+      if (showingSections) showRawLog(); else showSectionsInLog();
+    });
   }
 
   function setStatus(text, cls) {
@@ -554,12 +916,14 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
+    // Ensure the raw scan log is visible when a scan starts
+    try { showRawLog(); } catch (err) { /* ignore if not available */ }
+
     const repoPath = repoSelect.value;
     const scanName = (nameInput.value.trim() || 'web_scan');
 
-    // Reset UI
     logOutput.innerHTML = '';
-    viewsEl.querySelectorAll('.diagram-view').forEach(el => el.remove());
+    viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
     tabsEl.innerHTML = '';
     tabsEl.classList.remove('visible');
     placeholder.style.display = '';
@@ -582,9 +946,7 @@
       response = await fetch('/scan', { method: 'POST', body: formData });
     } catch (err) {
       setStatus('Connection failed: ' + err, 'error');
-      scanBtn.disabled = false;
-      repoSelect.disabled = false;
-      nameInput.disabled = false;
+      scanBtn.disabled = false; repoSelect.disabled = false; nameInput.disabled = false;
       spinner.style.display = 'none';
       return;
     }
@@ -592,19 +954,15 @@
     if (!response.ok) {
       const err = await response.text();
       setStatus('Server error: ' + err, 'error');
-      scanBtn.disabled = false;
-      repoSelect.disabled = false;
-      nameInput.disabled = false;
+      scanBtn.disabled = false; repoSelect.disabled = false; nameInput.disabled = false;
       spinner.style.display = 'none';
       return;
     }
 
     setStatus('Scanning…');
-
-    const reader = response.body.getReader();
+    const reader  = response.body.getReader();
     const decoder = new TextDecoder();
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -617,17 +975,65 @@
     repoSelect.disabled = false;
     nameInput.disabled = false;
     repoSelect.value = '';
+    currentRepoName = '';
+    currentExpId = '';
+    activeSection = '';
     resetBtn.style.display = 'none';
     statusBar.classList.remove('visible');
+    pastScansRow.classList.remove('visible');
+    if (compareRow) compareRow.classList.remove('visible');
+    // Clear section tabs
+    sectionTabBar.innerHTML = '';
+    if (tabBarPlaceholder) {
+      tabBarPlaceholder.style.display = '';
+      sectionTabBar.appendChild(tabBarPlaceholder);
+    }
+    sectionContent.innerHTML = `<div class="empty-state" id="section-placeholder">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M3 7h18M3 12h18M3 17h18"/>
+      </svg>
+      <p>Run or load a scan to view<br/>section details.</p>
+    </div>`;
+    // Reset diagram
+    resetZoomPan();
   });
 
-  // Auto-fill scan name from selected repo
-  repoSelect.addEventListener('change', () => {
+  // Auto-fill scan name from selected repo, load past scans, and silently auto-load latest diagram (no visual jump)
+  repoSelect.addEventListener('change', async () => {
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
-      nameInput.value = selected.text.split(' — ')[0].trim();
+      const name = selected.dataset.name || selected.text.split(' — ')[0].trim();
+      nameInput.value = name;
+      currentRepoName = name;
+
+      const scans = await loadPastScans(name);
+
+      // Auto-load the most recent scan that has a diagram (silently, no spinner/status in the scan card)
+      if (scans && scans.length > 0) {
+        let latest = null;
+        for (let i = scans.length - 1; i >= 0; i--) {
+          if (scans[i].has_diagrams) { latest = scans[i]; break; }
+        }
+        if (!latest) latest = scans[scans.length -1];
+        if (latest && latest.experiment_id) {
+          try {
+            await _loadDiagrams(latest.experiment_id, { silent: true });
+            // Also load section tabs (Assets, TLDR, etc.) and auto-activate Assets so sections populate
+            try {
+              await loadSectionTabs(latest.experiment_id, currentRepoName);
+              try { activateSectionKey('assets', latest.experiment_id, currentRepoName); } catch (e) {}
+            } catch (e) {
+              console.warn('Auto-load sections failed:', e);
+            }
+            setTimeout(fitDiagram, 500);
+          } catch (err) {
+            console.warn('Auto-load diagrams failed:', err);
+          }
+        }
+      }
     }
   });
+
   document.getElementById('copy-log-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(logOutput.innerText).catch(() => {});
   });
@@ -636,11 +1042,46 @@
     logOutput.innerHTML = '<span style="color:#484f58">Scan output will appear here…</span>';
   });
 
+  // Annotate repository options with a small icon if a past scan contains diagrams.
+  // Runs in the background so the UI remains responsive.
+  async function annotateRepoOptions() {
+    const opts = Array.from(repoSelect.options || []);
+    for (const opt of opts) {
+      try {
+        const name = opt.dataset.name;
+        if (!name) continue;
+        const resp = await fetch(`/api/scans/${encodeURIComponent(name)}`);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        const scans = data.scans || [];
+        if (scans.length) {
+          let hasDiags = false;
+          for (let i = scans.length - 1; i >= 0; i--) {
+            if (scans[i].has_diagrams) { hasDiags = true; break; }
+          }
+          if (hasDiags) {
+            if (!opt.textContent.includes('🖼')) opt.textContent = opt.textContent + ' 🖼';
+          } else {
+            if (!opt.textContent.includes('⬜')) opt.textContent = opt.textContent + ' ⬜';
+          }
+        }
+      } catch (err) {
+        // Ignore per-repo errors
+      }
+    }
+  }
+
+  // Run annotation in background
+  annotateRepoOptions();
+
   copyDiagramBtn.addEventListener('click', () => {
     if (diagrams[activeTab]) {
       navigator.clipboard.writeText(diagrams[activeTab].code).catch(() => {});
     }
   });
 </script>
+<script src="/static/app.js" defer></script>
+<script src="/static/assets.js" defer></script>
+<script src="/static/roles.js" defer></script>
 </body>
 </html>

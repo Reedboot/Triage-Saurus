@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-aks-node-pool
+    message: |
+      Azure AKS Node Pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster_node_pool" $NAME {
+            ...
+            kubernetes_cluster_id = $CLUSTER_ID
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*aks[_-]?node[_-]?pool.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: aks
+      technology: [terraform, azure, aks]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: AKS Node Pool
+        resource_type: azurerm_kubernetes_cluster_node_pool
+        resource_name: $NAME
+        properties:
+          - name: kubernetes_cluster_id
+            pattern: kubernetes_cluster_id = $CLUSTER_ID
+          - name: vm_size
+            pattern: vm_size = "$VAL"
+          - name: node_count
+            pattern: node_count = "$VAL"
+    description: |
+      Detects Azure AKS Node Pool resources and captures the parent Kubernetes cluster reference via kubernetes_cluster_id.

@@ -1,0 +1,30 @@
+rules:
+  - id: azure-acr-public-access
+    message: |
+      Container Registry has public network access enabled. Images can be pulled
+      from any internet IP. Disable and use Private Endpoints.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_container_registry" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_container_registry "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

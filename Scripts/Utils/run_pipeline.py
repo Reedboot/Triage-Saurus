@@ -216,10 +216,18 @@ def main() -> int:
         ok = skipped = 0
         for fid in finding_ids:
             out_path = findings_dir / f"finding_{fid}.md"
+            # Ensure subprocess has correct PYTHONPATH so internal modules import
+            import os
+            env = os.environ.copy()
+            existing = env.get('PYTHONPATH', '')
+            paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils')]
+            if existing:
+                paths.append(existing)
+            env['PYTHONPATH'] = ':'.join(paths)
             result = subprocess.run(
-                [sys.executable, str(_RENDER),
-                 "--id", str(fid), "--out", str(out_path)],
+                [sys.executable, str(_RENDER), "--id", str(fid), "--out", str(out_path)],
                 cwd=str(REPO_ROOT),
+                env=env,
                 capture_output=True,
                 text=True,
             )
@@ -227,19 +235,22 @@ def main() -> int:
                 print(f"  ✓ [{fid}] → {out_path.relative_to(REPO_ROOT)}")
                 ok += 1
             else:
-                print(f"  ✗ [{fid}] {result.stderr.strip()[:80]}")
+                # Print first stderr line for succinct diagnostics
+                err = result.stderr.strip().splitlines()[0] if result.stderr else ''
+                print(f"  ✗ [{fid}] {err[:200]}")
                 skipped += 1
         print(f"\n  Rendered: {ok}  Failed: {skipped}")
     else:
         print("\n[Pipeline] No findings in DB for this experiment — skipping render.")
 
     # ── Phase 3b: Architecture diagram ───────────────────────────────────────
-    diagram_out = exp_dir / "Summary" / "Cloud" / "Architecture_AWS.md"
-    diagram_out.parent.mkdir(parents=True, exist_ok=True)
+    cloud_dir = exp_dir / "Summary" / "Cloud"
+    cloud_dir.mkdir(parents=True, exist_ok=True)
+    # Generate per-provider architecture files (Architecture_AWS.md, Architecture_Azure.md, ...)
     _run(
         [sys.executable, str(_GEN_DIAGRAM), experiment_id,
-         "--output", str(diagram_out)],
-        "Phase 3b — Generate architecture diagram",
+         "--split-by-provider", "--output", str(cloud_dir)],
+        "Phase 3b — Generate architecture diagrams (per-provider)",
     )
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -249,7 +260,7 @@ def main() -> int:
     print(f"\n  Experiment ID : {experiment_id}")
     print(f"  Findings      : {len(finding_ids)} (see {exp_dir}/Findings/)")
     print(f"  Repo summary  : {exp_dir}/Summary/Repos/{repo_name}.md")
-    print(f"  Architecture  : {exp_dir}/Summary/Cloud/Architecture_AWS.md")
+    print(f"  Architectures : {cloud_dir}/Architecture_<PROVIDER>.md (per-provider files written)")
     print(f"\n  Next steps (require LLM):")
     print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
     print(f"    python3 Scripts/run_skeptics.py --experiment {experiment_id} --reviewer all")

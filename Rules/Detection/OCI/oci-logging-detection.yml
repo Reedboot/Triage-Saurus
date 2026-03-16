@@ -1,0 +1,52 @@
+rules:
+  - id: context-oci-logging
+    message: |
+      Oracle Cloud Infrastructure Logging Log Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "oci_logging_log_group" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "oci_logging_log" $NAME {
+            ...
+            log_group_id = $LOG_GROUP_ID
+            ...
+          }
+      - pattern: |
+          resource "oci_logging_log" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*oci[_-]?logging.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: oracle
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: logging
+      technology: [terraform, oci, logging]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Logging Log Group
+        resource_type: oci_logging_log_group
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$NAME"
+          - name: compartment_id
+            pattern: compartment_id = "$COMPARTMENT_ID"
+          - name: log_group_id
+            pattern: log_group_id = "$LOG_GROUP_ID"
+    description: |
+      Detects Logging Log Group resources in Oracle Cloud Infrastructure Terraform configurations.

@@ -1,0 +1,35 @@
+rules:
+  - id: alicloud-ack-no-private-cluster
+    message: |
+      ACK (Alibaba Container Service for Kubernetes) cluster API server is publicly accessible.
+      A public API server increases the risk of unauthorized access and cluster takeover.
+      Set endpoint_public_access_enabled = false to restrict access to the cluster control plane.
+    severity: HIGH
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_cs_managed_kubernetes" "$NAME" {
+            ...
+            endpoint_public_access_enabled = true
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "alicloud_cs_managed_kubernetes" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "alicloud_cs_managed_kubernetes" "$NAME" {
+                ...
+                endpoint_public_access_enabled = false
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, alicloud]
+      five_pillars: Pillar 1 (Network Security)

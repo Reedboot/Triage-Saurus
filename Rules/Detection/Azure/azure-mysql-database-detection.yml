@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-mysql-database
+    message: |
+      Azure MySQL Database detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_mysql_database" $NAME {
+            ...
+            server_name = $SERVER_NAME
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*mysql[_-]?database.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: mysql
+      technology: [terraform, azure, mysql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: MySQL Database
+        resource_type: azurerm_mysql_database
+        resource_name: $NAME
+        properties:
+          - name: server_name
+            pattern: server_name = $SERVER_NAME
+          - name: charset
+            pattern: charset = "$VAL"
+          - name: collation
+            pattern: collation = "$VAL"
+    description: |
+      Detects Azure MySQL Database resources and captures the parent MySQL server reference via server_name.

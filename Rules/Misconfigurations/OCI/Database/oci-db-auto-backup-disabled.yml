@@ -1,0 +1,27 @@
+rules:
+  - id: oci-db-auto-backup-disabled
+    message: |
+      OCI Autonomous Database does not have automatic backups enabled.
+      Enable automatic backups to ensure data recovery in the event of failure.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_database_autonomous_database" "$NAME" {
+            ...
+          }
+      - pattern-not: |
+          resource "oci_database_autonomous_database" "$NAME" {
+            ...
+            is_auto_backup_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [data-protection, cloud]
+      cwe: CWE-1304
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, oci]
+      five_pillars: Pillar 5 (Data Protection)

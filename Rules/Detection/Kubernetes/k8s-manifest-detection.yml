@@ -1,0 +1,13 @@
+rules:
+  - id: context-kubernetes-manifest
+    message: |
+      Kubernetes manifest kind detected (Deployment/Pod/DaemonSet/StatefulSet/Job/CronJob/Ingress/ClusterRoleBinding/RoleBinding).
+    severity: INFO
+    languages: [yaml]
+    pattern-regex: |
+      (?m)^\s*kind:\s+(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|ClusterRoleBinding|RoleBinding)\b
+    metadata:
+      rule_type: detection
+      category: infrastructure
+      technology: [kubernetes]
+      target_files: ["**/*.yml", "**/*.yaml"]

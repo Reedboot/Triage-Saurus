@@ -1,0 +1,30 @@
+rules:
+  - id: azure-redis-public-access
+    message: |
+      Redis Cache has public network access enabled. This exposes the cache to the
+      internet. Disable and use Private Endpoint.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_redis_cache" "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+      - pattern: |
+          resource azurerm_redis_cache "$NAME" {
+            ...
+            public_network_access_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

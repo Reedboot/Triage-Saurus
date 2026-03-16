@@ -1,0 +1,40 @@
+rules:
+  - id: azure-vm-public-ip
+    message: |
+      Virtual Machine has a public IP address directly attached. Direct internet
+      exposure of VMs increases attack surface. Use Azure Bastion or a jump host
+      for management access. Remove public IP and route through a load balancer or
+      Application Gateway.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_network_interface" "$NAME" {
+            ...
+            ip_configuration {
+              ...
+              public_ip_address_id = "$IP"
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          resource azurerm_network_interface "$NAME" {
+            ...
+            ip_configuration {
+              ...
+              public_ip_address_id = "$IP"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

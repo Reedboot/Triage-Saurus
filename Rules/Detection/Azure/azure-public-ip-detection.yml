@@ -1,0 +1,44 @@
+rules:
+  - id: context-azure-public-ip
+    message: |
+      Azure Public IP detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_public_ip" $NAME {
+            ...
+            allocation_method = "$VAL"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*public[_-]?ip.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Public IP
+        resource_type: azurerm_public_ip
+        resource_name: $NAME
+        properties:
+          - name: allocation_method
+            pattern: allocation_method = "$VAL"
+          - name: sku
+            pattern: sku = "$VAL"
+          - name: domain_name_label
+            pattern: domain_name_label = $DOMAIN
+    description: |
+      Detects Azure Public IP resources and captures allocation method, SKU, and optional domain name label.

@@ -129,7 +129,7 @@ def main() -> int:
     else:
         summary_root = Path.cwd() / "Output" / "Summary"
 
-    generated = generate_reports(context_model, str(summary_root), repo_path=repo_path)
+    generated = generate_reports(context_model, str(summary_root), repo_path=repo_path, experiment_id=args.experiment_id)
     log("== Report generation complete ==")
     for report in generated:
         log(f"Generated: {report}")
