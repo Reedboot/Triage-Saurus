@@ -326,6 +326,41 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
         return
 
+    # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id
+    experiment_id: str | None = None
+    triage_script = SCRIPTS / "Experiments" / "triage_experiment.py"
+    try:
+        if triage_script.exists():
+            res = subprocess.run(
+                [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+            )
+            # If triage_experiment.py succeeded, try to parse the machine-readable marker
+            if res.returncode == 0 and res.stdout:
+                for ln in res.stdout.splitlines():
+                    if ln.startswith("EXPERIMENT_CREATED::"):
+                        full = ln.split("::", 1)[1].strip()
+                        if full:
+                            experiment_id = full.split("_")[0]
+                            break
+                # Fallback to legacy parsing
+                if experiment_id is None:
+                    for ln in res.stdout.splitlines():
+                        if ln.startswith("Created experiment:"):
+                            tag = ln.split(":", 1)[1].strip()
+                            if tag:
+                                experiment_id = tag.split("_")[0]
+                                break
+            else:
+                # If triage_experiment failed, include stderr in logs for diagnostics
+                if res.stderr:
+                    yield _sse("log", f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}")
+    except Exception as exc:
+        yield _sse("log", f"[Web] Experiment creation attempt failed: {exc}")
+
+    # Build pipeline command. If an experiment was created, pass it to the pipeline so all scripts use the same id.
     cmd = [
         sys.executable,
         "-u",
@@ -333,6 +368,11 @@ def _stream_scan(repo_path: str, scan_name: str):
         "--repo", str(repo),
         "--name", scan_name,
     ]
+    if experiment_id:
+        cmd.extend(["--experiment", experiment_id])
+        yield _sse("log", f"[Web] Using experiment id: {experiment_id}")
+        # Inform the UI immediately of the experiment id so it can bind sections/queries
+        yield _sse("experiment", experiment_id)
 
     yield _sse("log", f"▶  Starting scan: {repo}")
     yield _sse("log", f"   Command: {' '.join(cmd)}")

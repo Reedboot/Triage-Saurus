@@ -766,6 +766,20 @@
   }
 
   function handleEvent(type, payload) {
+    if (type === 'experiment') {
+      // Early experiment id emitted by server before pipeline output
+      const expId = String(payload || '').trim();
+      if (expId && currentRepoName) {
+        currentExpId = expId;
+        setStatus(`Experiment ${expId} created`, 'info');
+        // Preload diagrams and sections silently
+        (async () => {
+          await _loadDiagrams(expId, { silent: true });
+          try { await loadSectionTabs(expId, currentRepoName); } catch (e) {}
+        })();
+      }
+      return;
+    }
     if (type === 'log') {
       appendLog(payload);
     } else if (type === 'diagrams') {
