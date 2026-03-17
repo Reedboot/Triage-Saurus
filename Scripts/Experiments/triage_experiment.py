@@ -416,15 +416,21 @@ def cmd_new(args: argparse.Namespace) -> int:
     if exp_dir.exists():
         print(f"ERROR: Experiment directory already exists: {exp_dir}")
         return 1
-    
+
     # Create directory structure
-    exp_dir.mkdir(parents=True)
-    (exp_dir / "Findings" / "Cloud").mkdir(parents=True)
-    (exp_dir / "Findings" / "Code").mkdir(parents=True)
-    (exp_dir / "Knowledge").mkdir()
-    (exp_dir / "Summary").mkdir()
-    (exp_dir / "Agents").mkdir()
-    (exp_dir / "Scripts").mkdir()
+    try:
+        exp_dir.mkdir(parents=True)
+    except FileExistsError:
+        # Another process created it between the exists() check and mkdir()
+        print(f"ERROR: Experiment directory already exists: {exp_dir}")
+        return 1
+
+    (exp_dir / "Findings" / "Cloud").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "Findings" / "Code").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "Knowledge").mkdir(exist_ok=True)
+    (exp_dir / "Summary").mkdir(exist_ok=True)
+    (exp_dir / "Agents").mkdir(exist_ok=True)
+    (exp_dir / "Scripts").mkdir(exist_ok=True)
     
     # Copy agent instructions
     for agent_file in AGENTS_SOURCE.glob("*.md"):
