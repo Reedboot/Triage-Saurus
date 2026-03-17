@@ -747,6 +747,7 @@ def _ensure_schema(conn: sqlite3.Connection):
     CREATE TABLE IF NOT EXISTS cloud_diagrams (
       id INTEGER PRIMARY KEY,
       experiment_id TEXT NOT NULL,
+      repo_name TEXT,
       provider TEXT NOT NULL,
       diagram_title TEXT NOT NULL,
       mermaid_code TEXT NOT NULL,
@@ -755,6 +756,14 @@ def _ensure_schema(conn: sqlite3.Connection):
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(experiment_id, provider, diagram_title)
     );
+
+    # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+        )
+    except Exception:
+        pass
 
     CREATE TABLE IF NOT EXISTS exposure_analysis (
       id INTEGER PRIMARY KEY,
