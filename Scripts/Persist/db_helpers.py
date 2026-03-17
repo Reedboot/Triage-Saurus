@@ -757,14 +757,6 @@ def _ensure_schema(conn: sqlite3.Connection):
       UNIQUE(experiment_id, provider, diagram_title)
     );
 
-    # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
-    try:
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
-        )
-    except Exception:
-        pass
-
     CREATE TABLE IF NOT EXISTS exposure_analysis (
       id INTEGER PRIMARY KEY,
       experiment_id TEXT NOT NULL,
@@ -826,6 +818,16 @@ def _ensure_schema(conn: sqlite3.Connection):
       FOREIGN KEY (experiment_id) REFERENCES experiments(id)
     );
     """)
+
+    # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+        )
+    except Exception:
+        pass
+
+
 
         # Ensure optional columns exist for backward compatibility.
         resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
