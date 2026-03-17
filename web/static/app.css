@@ -67,7 +67,6 @@ header span.badge {
 /* ── Container ── */
 .container {
   flex: 1;
-  max-width: 1800px;
   width: 100%;
   margin: 0 auto;
   padding: 8px 6px;
