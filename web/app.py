@@ -385,7 +385,21 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Stream error: {exc}")
 
     if experiment_id:
-        diagrams = _collect_diagrams(experiment_id)
+        # Prefer DB-backed diagrams to avoid duplicates caused by multiple Architecture_*.md files
+        diagrams = []
+        try:
+            sys.path.insert(0, str(REPO_ROOT))
+            from Scripts.Persist.db_helpers import get_cloud_diagrams
+            db_diags = get_cloud_diagrams(experiment_id)
+            if db_diags:
+                diagrams = [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in db_diags]
+        except Exception:
+            diagrams = []
+
+        # Fall back to file-based collection if DB didn't have any diagrams
+        if not diagrams:
+            diagrams = _collect_diagrams(experiment_id)
+
         if diagrams:
             yield _sse("diagrams", diagrams)
         else:
