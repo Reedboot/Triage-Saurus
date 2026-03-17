@@ -819,13 +819,13 @@ def _ensure_schema(conn: sqlite3.Connection):
     );
     """)
 
-    # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
-    try:
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
-        )
-    except Exception:
-        pass
+        # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+            )
+        except Exception:
+            pass
 
 
 
