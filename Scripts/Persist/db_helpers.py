@@ -2664,53 +2664,77 @@ def upsert_cloud_diagram(
 ) -> None:
     """Insert or update a Mermaid architecture diagram for a provider/experiment.
 
-    To avoid duplicate provider tabs across experiments originating from the same
-    repository (caused by repeated pipeline runs that create new experiment ids),
-    delete older diagrams in other experiments that are for the same repo name(s),
-    provider and diagram title before inserting the current diagram. This keeps
-    one authoritative diagram per repo+provider+title while still preserving
-    experiment-scoped storage for the current run.
+    Uses the repository name associated with the experiment as the canonical
+    owner for the diagram and enforces uniqueness per (repo_name, provider,
+    diagram_title) to prevent duplicate provider tabs across multiple experiment
+    runs. If a repo_name cannot be determined, falls back to the existing
+    experiment-scoped uniqueness.
     """
     with get_db_connection() as conn:
-        # Find repository names associated with this experiment. Use them to locate
-        # other experiments that reference the same repo name (e.g., previous runs).
-        repo_rows = conn.execute(
-            "SELECT DISTINCT repo_name FROM repositories WHERE experiment_id = ?",
+        # Resolve a primary repo name for this experiment (if any)
+        repo_row = conn.execute(
+            "SELECT repo_name FROM repositories WHERE experiment_id = ? LIMIT 1",
             (experiment_id,),
-        ).fetchall()
-        repo_names = [r[0] for r in repo_rows if r[0]]
+        ).fetchone()
+        primary_repo = repo_row[0] if repo_row and repo_row[0] else None
 
-        # For each repo name, delete stale cloud_diagrams in other experiments that
-        # have the same provider and diagram title. This prevents duplicate tabs
-        # when the same repo was scanned multiple times under different
-        # experiment IDs.
-        if repo_names:
-            for repo_name in repo_names:
-                other_exps = conn.execute(
-                    "SELECT DISTINCT experiment_id FROM repositories WHERE repo_name = ? AND experiment_id != ?",
-                    (repo_name, experiment_id),
-                ).fetchall()
-                for oe in other_exps:
-                    oe_id = oe[0]
-                    # Best-effort delete; ignore if row doesn't exist.
-                    conn.execute(
-                        "DELETE FROM cloud_diagrams WHERE experiment_id = ? AND provider = ? AND diagram_title = ?",
-                        (oe_id, provider, diagram_title),
-                    )
+        # Backfill repo_name on existing rows for this experiment so historical
+        # rows become associated with a repo (best-effort); ignore failures.
+        if primary_repo:
+            try:
+                conn.execute(
+                    "UPDATE cloud_diagrams SET repo_name = ? WHERE experiment_id = ? AND (repo_name IS NULL OR repo_name = '')",
+                    (primary_repo, experiment_id),
+                )
+            except Exception:
+                pass
 
-        # Now upsert the diagram for the current experiment
-        conn.execute(
-            """
-            INSERT INTO cloud_diagrams
-                (experiment_id, provider, diagram_title, mermaid_code, display_order, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(experiment_id, provider, diagram_title) DO UPDATE SET
-                mermaid_code  = excluded.mermaid_code,
-                display_order = excluded.display_order,
-                updated_at    = CURRENT_TIMESTAMP
-            """,
-            (experiment_id, provider, diagram_title, mermaid_code, display_order),
-        )
+            # Ensure a unique index exists on (repo_name, provider, diagram_title)
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+                )
+            except Exception:
+                pass
+
+            # Delete stale diagrams in other experiments for the same repo+provider+title
+            try:
+                conn.execute(
+                    "DELETE FROM cloud_diagrams WHERE repo_name = ? AND provider = ? AND diagram_title = ? AND experiment_id != ?",
+                    (primary_repo, provider, diagram_title, experiment_id),
+                )
+            except Exception:
+                pass
+
+            # Now upsert using repo-scoped uniqueness
+            conn.execute(
+                """
+                INSERT INTO cloud_diagrams
+                    (experiment_id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(repo_name, provider, diagram_title) DO UPDATE SET
+                    mermaid_code  = excluded.mermaid_code,
+                    display_order = excluded.display_order,
+                    experiment_id = excluded.experiment_id,
+                    updated_at    = CURRENT_TIMESTAMP
+                """,
+                (experiment_id, primary_repo, provider, diagram_title, mermaid_code, display_order),
+            )
+        else:
+            # Fallback to experiment-scoped uniqueness if no repo_name is available
+            conn.execute(
+                """
+                INSERT INTO cloud_diagrams
+                    (experiment_id, provider, diagram_title, mermaid_code, display_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(experiment_id, provider, diagram_title) DO UPDATE SET
+                    mermaid_code  = excluded.mermaid_code,
+                    display_order = excluded.display_order,
+                    updated_at    = CURRENT_TIMESTAMP
+                """,
+                (experiment_id, provider, diagram_title, mermaid_code, display_order),
+            )
+
         conn.commit()
 
 
