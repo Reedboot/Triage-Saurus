@@ -789,7 +789,7 @@
       setStatus('Error: ' + payload, 'error');
     } else if (type === 'done') {
       const code  = payload.exit_code;
-      const expId = payload.experiment_id;
+      const expId = payload.experiment_id || currentExpId;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
         // Refresh past scans list and section tabs

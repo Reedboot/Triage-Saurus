@@ -326,11 +326,39 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
         return
 
-    # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id
+    # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
+    # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
     experiment_id: str | None = None
     triage_script = SCRIPTS / "Experiments" / "triage_experiment.py"
+
+    LOCK_DIR = REPO_ROOT / "Output" / "Learning" / "running_scans"
     try:
-        if triage_script.exists():
+        LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Best-effort: if lock dir cannot be created, continue without locking
+        pass
+
+    lock_file = LOCK_DIR / f"{repo.name}.lock"
+
+    try:
+        # If a lock file exists and points to a running experiment, reuse it instead of creating a new one.
+        if lock_file.exists():
+            try:
+                existing = lock_file.read_text(encoding="utf-8").strip()
+                if existing:
+                    # Find experiment directory by numeric prefix
+                    candidates = sorted((REPO_ROOT / "Output" / "Learning" / "experiments").glob(f"{existing}_*"))
+                    exp_dir = candidates[0] if candidates else None
+                    if exp_dir and (exp_dir / "experiment.json").exists():
+                        cfg = json.loads((exp_dir / "experiment.json").read_text(encoding="utf-8"))
+                        if cfg.get("status") == "running":
+                            experiment_id = existing
+                            yield _sse("log", f"[Web] Reusing running experiment id from lock: {experiment_id}")
+            except Exception:
+                # If lock read fails or experiment not found, fall through to normal creation
+                experiment_id = None
+
+        if experiment_id is None and triage_script.exists():
             res = subprocess.run(
                 [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
                 cwd=str(REPO_ROOT),
@@ -357,6 +385,13 @@ def _stream_scan(repo_path: str, scan_name: str):
                 # If triage_experiment failed, include stderr in logs for diagnostics
                 if res.stderr:
                     yield _sse("log", f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}")
+
+        # Persist lock for the experiment so concurrent requests reuse it
+        if experiment_id:
+            try:
+                lock_file.write_text(str(experiment_id), encoding="utf-8")
+            except Exception:
+                pass
     except Exception as exc:
         yield _sse("log", f"[Web] Experiment creation attempt failed: {exc}")
 
@@ -395,7 +430,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Failed to start pipeline: {exc}")
         return
 
-    experiment_id: str | None = None
+    # preserve experiment_id set above (do not reset) — allow capture from child output if missing
     start_time = time.time()
     last_hb = start_time
 
@@ -412,7 +447,7 @@ def _stream_scan(repo_path: str, scan_name: str):
 
                 # Capture experiment ID printed by run_pipeline.py
                 if experiment_id is None:
-                    m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                    m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                     if m:
                         experiment_id = m.group(1)
 
@@ -431,7 +466,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                     line = raw_line.rstrip()
                     yield _sse("log", line)
                     if experiment_id is None:
-                        m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                        m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                         if m:
                             experiment_id = m.group(1)
                 break
@@ -458,6 +493,15 @@ def _stream_scan(repo_path: str, scan_name: str):
             yield _sse("diagrams", diagrams)
         else:
             yield _sse("log", "[Web] No architecture diagrams found in experiment output.")
+
+    # Remove lock file if it refers to this experiment so future scans can start.
+    try:
+        if lock_file.exists():
+            existing = lock_file.read_text(encoding="utf-8").strip()
+            if existing and experiment_id and existing == str(experiment_id):
+                lock_file.unlink()
+    except Exception:
+        pass
 
     yield _sse("done", {
         "exit_code": process.returncode if process else -1,
