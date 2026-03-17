@@ -256,6 +256,20 @@ def _collect_diagrams(experiment_id: str) -> list[dict]:
     return diagrams
 
 
+def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
+    """Try DB-backed cloud_diagrams first, fall back to _collect_diagrams."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+        db_diagrams = get_cloud_diagrams(experiment_id)
+        if db_diagrams:
+            return [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in db_diagrams]
+    except Exception:
+        pass
+
+    return _collect_diagrams(experiment_id)
+
+
 def _extract_mermaid_nodes(mermaid_code: str) -> set[str]:
     """Extract meaningful node labels from a Mermaid flowchart definition.
 
@@ -523,8 +537,8 @@ def api_diff():
     if not id_from or not id_to or not repo:
         return jsonify({"error": "from, to and repo are required"}), 400
 
-    diagrams_from = _collect_diagrams(id_from)
-    diagrams_to   = _collect_diagrams(id_to)
+    diagrams_from = _collect_diagrams_dbfirst(id_from)
+    diagrams_to   = _collect_diagrams_dbfirst(id_to)
 
     # Collect all experiment IDs for this repo between id_from and id_to
     conn = _get_db()
@@ -584,7 +598,7 @@ def api_diff():
 
         # Architecture nodes for this experiment (per provider)
         curr_nodes: dict[str, set[str]] = {}
-        diags = _collect_diagrams(exp_id)
+        diags = _collect_diagrams_dbfirst(exp_id)
         for d in diags:
             provider = d["title"].replace(" Architecture", "")
             curr_nodes[provider] = _extract_mermaid_nodes(d["code"])

@@ -831,9 +831,18 @@ def main():
         providers = sorted({(r.get('provider') or 'unknown').lower() for r in all_res})
         for idx, prov in enumerate(providers):
             diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
-            fname = out_dir / f"Architecture_{prov.upper()}.md"
+            canonical = f"Architecture_{prov.title()}.md"
+            fname = out_dir / canonical
             fname.write_text(diag)
             print(f"Wrote {fname}")
+            # Remove legacy case-variant files (case-insensitive duplicates)
+            for p in out_dir.glob("Architecture_*.md"):
+                if p.name != canonical and p.name.lower() == canonical.lower():
+                    try:
+                        p.unlink()
+                        print(f"Removed legacy filename {p}")
+                    except Exception as e:
+                        print(f"Warning: failed to remove legacy file {p}: {e}", file=sys.stderr)
             # Also persist to DB
             if _upsert_diagram:
                 try:
