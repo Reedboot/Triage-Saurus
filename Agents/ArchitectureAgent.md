@@ -32,7 +32,8 @@
 - Shows **ALL discovered services, infrastructure modules, and architecture patterns** for that cloud provider
 - Is **NEVER scoped to a single service, repo, or application**
 - When new services/repos are scanned, **UPDATE the existing file** to add them - do not replace with single-service content
-- Structure: Multiple focused diagrams (Overview, Ingress, Network, Data, Compute, Identity, IaC) rather than one monolithic diagram
+- Structure: Multiple focused diagrams (Overview, Ingress, Network, Data, Compute, Identity) rather than one monolithic diagram
+- Do NOT include a separate Terraform Tab or diagram section for Architecture Diagrams. Terraform/IaC evidence should be referenced in evidence tables or notes, not as a dedicated tab or diagram.
 
 **Scope Examples:**
 - ✅ **CORRECT:** `Architecture_Azure.md` contains diagrams showing AKS, App Services, Storage, SQL, Cosmos DB, Key Vault, networking, firewall, Service Fabric, all terraform modules, etc.

@@ -2437,6 +2437,8 @@ def list_enrichment_assumptions(
     Scope is derived from repositories registered to the experiment and matched
     against node source_repo + aliases.
     """
+    provider_norm = (provider or "unknown").strip().lower()
+
     with get_db_connection() as conn:
         experiment_repos = _list_experiment_repos(conn, experiment_id)
         repo_scope = set(experiment_repos)
@@ -2689,6 +2691,8 @@ def upsert_cloud_diagram(
         ).fetchone()
         primary_repo = repo_row[0] if repo_row and repo_row[0] else None
 
+        provider_norm = (provider or "unknown").strip().lower()
+
         # Backfill repo_name on existing rows for this experiment so historical
         # rows become associated with a repo (best-effort); ignore failures.
         if primary_repo:
@@ -2709,10 +2713,11 @@ def upsert_cloud_diagram(
                 pass
 
             # Delete stale diagrams in other experiments for the same repo+provider+title
+            # Use case-insensitive comparison on provider to catch case-variants.
             try:
                 conn.execute(
-                    "DELETE FROM cloud_diagrams WHERE repo_name = ? AND provider = ? AND diagram_title = ? AND experiment_id != ?",
-                    (primary_repo, provider, diagram_title, experiment_id),
+                    "DELETE FROM cloud_diagrams WHERE repo_name = ? AND lower(provider) = ? AND diagram_title = ? AND experiment_id != ?",
+                    (primary_repo, provider_norm, diagram_title, experiment_id),
                 )
             except Exception:
                 pass
@@ -2729,7 +2734,7 @@ def upsert_cloud_diagram(
                     experiment_id = excluded.experiment_id,
                     updated_at    = CURRENT_TIMESTAMP
                 """,
-                (experiment_id, primary_repo, provider, diagram_title, mermaid_code, display_order),
+                (experiment_id, primary_repo, provider_norm, diagram_title, mermaid_code, display_order),
             )
         else:
             # Fallback to experiment-scoped uniqueness if no repo_name is available
@@ -2743,23 +2748,49 @@ def upsert_cloud_diagram(
                     display_order = excluded.display_order,
                     updated_at    = CURRENT_TIMESTAMP
                 """,
-                (experiment_id, provider, diagram_title, mermaid_code, display_order),
+                (experiment_id, provider_norm, diagram_title, mermaid_code, display_order),
             )
 
         conn.commit()
 
 
 def get_cloud_diagrams(experiment_id: str) -> list[dict]:
-    """Return all cloud diagrams for an experiment, ordered by display_order then provider."""
+    """Return all cloud diagrams for an experiment, deduplicated case-insensitively and ordered by display_order then provider.
+
+    Groups diagrams by lowercase(provider)+lower(diagram_title) and keeps the most
+    recently updated row for each logical diagram. Provider is returned in Title
+    case for display.
+    """
     with get_db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT provider, diagram_title, mermaid_code, display_order
+            SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
             FROM cloud_diagrams
             WHERE experiment_id = ?
-            ORDER BY display_order, provider, diagram_title
             """,
             (experiment_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+
+    # Deduplicate case-insensitively by (provider, diagram_title) keeping the latest updated_at
+    grouped: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        prov = (r["provider"] or "").strip()
+        title = (r["diagram_title"] or "").strip()
+        key = (prov.lower(), title.lower())
+        existing = grouped.get(key)
+        if not existing or (r.get("updated_at") or "") > (existing.get("updated_at") or ""):
+            grouped[key] = dict(r)
+
+    # Sort and return
+    items = sorted(grouped.values(), key=lambda x: (x.get("display_order") or 0, (x.get("provider") or "").lower()))
+    result: list[dict] = []
+    for row in items:
+        provider_display = (row.get("provider") or "").capitalize()
+        result.append({
+            "provider": provider_display,
+            "diagram_title": row.get("diagram_title"),
+            "mermaid_code": row.get("mermaid_code"),
+            "display_order": row.get("display_order") or 0,
+        })
+    return result
 
