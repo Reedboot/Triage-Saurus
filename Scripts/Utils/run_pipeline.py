@@ -163,17 +163,34 @@ def main() -> int:
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return 1
-        # Parse experiment ID from output ("Created experiment: 005_...")
+        # First, look for machine-readable marker from triage_experiment.py
         experiment_id = None
+        experiment_full_name = None
         for line in result.stdout.splitlines():
-            if line.startswith("Created experiment:"):
-                tag = line.split(":", 1)[1].strip()
-                experiment_id = tag.split("_")[0]
+            if line.startswith("EXPERIMENT_CREATED::"):
+                experiment_full_name = line.split("::", 1)[1].strip()
+                if experiment_full_name:
+                    experiment_id = experiment_full_name.split("_")[0]
                 break
+        # Fallback to legacy parsing if marker missing
+        if not experiment_id:
+            for line in result.stdout.splitlines():
+                if line.startswith("Created experiment:"):
+                    tag = line.split(":", 1)[1].strip()
+                    experiment_id = tag.split("_")[0]
+                    experiment_full_name = tag
+                    break
         if not experiment_id:
             print("[ERROR] Could not parse experiment ID from output.", file=sys.stderr)
             return 1
-        exp_dir = _resolve_experiment_dir(experiment_id)
+        # Resolve experiment directory. Prefer full name when available
+        if experiment_full_name:
+            exp_dir = REPO_ROOT / "Output" / "Learning" / "experiments" / experiment_full_name
+            if not exp_dir.exists():
+                # Fallback to scanning by numeric id
+                exp_dir = _resolve_experiment_dir(experiment_id)
+        else:
+            exp_dir = _resolve_experiment_dir(experiment_id)
 
     print(f"\n{'='*60}")
     print(f"  Experiment : {experiment_id}")
