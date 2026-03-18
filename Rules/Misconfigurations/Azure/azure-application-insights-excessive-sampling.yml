@@ -1,0 +1,33 @@
+rules:
+  - id: azure-application-insights-excessive-sampling
+    message: |
+      Application Insights has high sampling rate configured (>50%), meaning
+      more than half of telemetry data is discarded. High sampling rates cause:
+      - Loss of critical error traces
+      - Incomplete security audit trails
+      - Difficulty reproducing production issues
+      - Missing performance anomalies
+      
+      For production environments, keep sampling low (10-20%) or use adaptive
+      sampling that preserves high-severity events.
+      
+      Set `sampling_percentage` to 20 or lower:
+        sampling_percentage = 20
+      
+      Use adaptive sampling (default) which keeps all errors regardless of rate.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-regex: |
+      resource "azurerm_application_insights" "\w+" \{[\s\S]*?sampling_percentage\s*=\s*([5-9]\d|100)[\s\S]*?\}
+    metadata:
+      category: security
+      subcategory: [logging, observability]
+      cwe: CWE-778
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/azure-monitor/app/sampling
+      owasp: A09:2021 - Security Logging and Monitoring Failures
+      technology: [azure, terraform, appinsights]
