@@ -498,7 +498,7 @@ def _ensure_schema(conn: sqlite3.Connection):
       files_scanned INTEGER,
       iac_files_count INTEGER,
       code_files_count INTEGER,
-      scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      scanned_at TIMESTAMP DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       UNIQUE(experiment_id, repo_name)
     );
 
@@ -1156,8 +1156,8 @@ def insert_repository(
     with get_db_connection() as conn:
         cursor = conn.execute("""
             INSERT OR IGNORE INTO repositories
-            (experiment_id, repo_name, repo_url, repo_type)
-            VALUES (?, ?, ?, ?)
+            (experiment_id, repo_name, repo_url, repo_type, scanned_at)
+            VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             RETURNING id
         """, (experiment_id, repo_name, repo_url, repo_type))
         

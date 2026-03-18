@@ -76,6 +76,24 @@
   let currentRepoName = '';
   let currentExpId    = '';
 
+  function resolveSelectedRepoName() {
+    if (currentRepoName) return currentRepoName;
+    if (!repoSelect) return '';
+    const selected = repoSelect.options[repoSelect.selectedIndex];
+    if (!selected || !selected.value || selected.disabled) return '';
+    const dataName = (selected.dataset && selected.dataset.name ? selected.dataset.name.trim() : '');
+    if (dataName) {
+      currentRepoName = dataName;
+      return dataName;
+    }
+    const fallback = (selected.textContent || '').split('—')[0].trim();
+    if (fallback) {
+      currentRepoName = fallback;
+      return fallback;
+    }
+    return '';
+  }
+
   // ── Zoom + Pan (right panel) ──────────────────────────────────────────────────
   function applyTransform() {
     if (diagramInner) {
@@ -185,12 +203,21 @@
   let activeSection = '';
 
   async function loadSectionTabs(expId, repoName) {
-    if (!expId || !repoName) return;
-    currentExpId = expId;
+    const resolvedRepoName = repoName || resolveSelectedRepoName();
+    if (!resolvedRepoName) return;
+    const effectiveExpId = await resolveExperimentId(expId, resolvedRepoName);
+    if (!effectiveExpId) {
+      console.warn('Section tabs cannot load without an experiment id for', resolvedRepoName);
+      sectionTabBar.innerHTML = '';
+      tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
+      return;
+    }
+    currentExpId = effectiveExpId;
+    currentRepoName = resolvedRepoName;
     try {
-      const resp = await fetch(`/api/view/tabs/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
+      const resp = await fetch(`/api/view/tabs/${encodeURIComponent(effectiveExpId)}/${encodeURIComponent(resolvedRepoName)}`);
       const data = await resp.json();
-      renderSectionTabs(data.tabs || [], expId, repoName);
+      renderSectionTabs(data.tabs || [], expId, resolvedRepoName);
       // Intentionally do not auto-switch to a content tab here; renderSectionTabs will
       // show the Log tab by default so live logs remain visible when loading tabs.
     } catch (err) {
@@ -268,11 +295,23 @@
     const structuredKeys = ['assets', 'findings', 'ingress', 'egress', 'roles'];
 
     try {
+      const resolvedRepoName = repoName || currentRepoName || resolveSelectedRepoName();
+      if (!resolvedRepoName) {
+        sectionContent.innerHTML = '<div class="empty-state"><p class="s-inline-e09362">No repository selected yet.</p></div>';
+        showSectionsInLog();
+        return;
+      }
+      const targetExpId = await resolveExperimentId(expId, resolvedRepoName);
+      if (!targetExpId) {
+        sectionContent.innerHTML = '<div class="empty-state"><p class="s-inline-e09362">Experiment metadata is not available yet.</p></div>';
+        showSectionsInLog();
+        return;
+      }
       let url;
       if (structuredKeys.includes(key)) {
-        url = `/api/view/${key}/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`;
+        url = `/api/view/${key}/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}`;
       } else {
-        url = `/api/view/ai/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}/${encodeURIComponent(key)}`;
+        url = `/api/view/ai/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}/${encodeURIComponent(key)}`;
       }
       const resp = await fetch(url);
       const html = await resp.text();
@@ -285,7 +324,7 @@
       // Initialize known section scripts (moved to static JS) so they run when a fragment is inserted.
       try {
         if (key === 'assets' && window.initAssets) {
-          try { window.initAssets(sectionContent, repoName, expId); } catch (e) { console.warn('initAssets error:', e); }
+          try { window.initAssets(sectionContent, repoName, targetExpId); } catch (e) { console.warn('initAssets error:', e); }
         }
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
@@ -295,6 +334,7 @@
       showSectionsInLog();
     } catch (err) {
       sectionContent.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load section: ${err}</p></div>`;
+      showSectionsInLog();
     }
   }
 
@@ -668,7 +708,7 @@
 
   // ── Past scans ───────────────────────────────────────────────────────────────
   function _scanOptionLabel(scan) {
-    const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 16) : '';
+    const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 19) : '';
     const flag = scan.has_diagrams ? ' 🖼' : '';
     return `Scan ${scan.experiment_id}${dt ? ' — ' + dt : ''}${flag}`;
   }
@@ -705,6 +745,39 @@
     }
   }
 
+  let resolvingExperimentId = null;
+
+  async function resolveExperimentId(expId, repoName) {
+    const candidate = (expId || '').trim();
+    if (candidate) {
+      currentExpId = candidate;
+      return candidate;
+    }
+    if (currentExpId) return currentExpId;
+    if (!repoName) return '';
+    if (resolvingExperimentId) return resolvingExperimentId;
+
+    resolvingExperimentId = (async () => {
+      try {
+        const scans = await loadPastScans(repoName);
+        if (scans.length) {
+          const latest = scans[scans.length - 1].experiment_id;
+          if (latest) {
+            currentExpId = latest;
+            return latest;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to resolve experiment id for sections:', err);
+      } finally {
+        resolvingExperimentId = null;
+      }
+      return '';
+    })();
+
+    return resolvingExperimentId;
+  }
+
   async function _loadDiagrams(expId, { silent = false } = {}) {
     try {
       const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
@@ -732,9 +805,11 @@
     try {
       await _loadDiagrams(expId);
       // Load section tabs for the selected experiment and switch to Assets
-      if (currentRepoName) {
-        await loadSectionTabs(expId, currentRepoName);
-        try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+      const targetRepoName = currentRepoName || resolveSelectedRepoName();
+      if (targetRepoName) {
+        currentRepoName = targetRepoName;
+        await loadSectionTabs(expId, targetRepoName);
+        try { activateSectionKey('assets', expId, targetRepoName); } catch (e) {}
       }
     } finally {
       spinner.style.display = 'none';
@@ -769,13 +844,14 @@
     if (type === 'experiment') {
       // Early experiment id emitted by server before pipeline output
       const expId = String(payload || '').trim();
-      if (expId && currentRepoName) {
-        currentExpId = expId;
+      const repoName = resolveSelectedRepoName();
+      if (expId) currentExpId = expId;
+      if (expId && repoName) {
         setStatus(`Experiment ${expId} created`, 'info');
         // Preload diagrams and sections silently
         (async () => {
           await _loadDiagrams(expId, { silent: true });
-          try { await loadSectionTabs(expId, currentRepoName); } catch (e) {}
+          try { await loadSectionTabs(expId, repoName); } catch (e) {}
         })();
       }
       return;
@@ -790,16 +866,21 @@
     } else if (type === 'done') {
       const code  = payload.exit_code;
       const expId = payload.experiment_id || currentExpId;
+      const repoName = resolveSelectedRepoName();
+      const effectiveRepoName = currentRepoName || repoName;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
         // Refresh past scans list and section tabs
-        if (currentRepoName) {
-          loadPastScans(currentRepoName);
+        if (effectiveRepoName) {
+          currentRepoName = effectiveRepoName;
+          loadPastScans(effectiveRepoName);
           (async () => {
-            await loadSectionTabs(expId, currentRepoName);
-            // After scan completes, switch to Assets tab
-            try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
-            setTimeout(fitDiagram, 500); // fit diagram after render
+            if (expId) {
+              await loadSectionTabs(expId, effectiveRepoName);
+              // After scan completes, switch to Assets tab
+              try { activateSectionKey('assets', expId, effectiveRepoName); } catch (e) {}
+              setTimeout(fitDiagram, 500); // fit diagram after render
+            }
           })();
         }
       } else {
@@ -851,6 +932,7 @@
 
     const repoPath = repoSelect.value;
     const scanName = (nameInput.value.trim() || 'web_scan');
+    currentRepoName = resolveSelectedRepoName() || currentRepoName;
 
     logOutput.innerHTML = '';
     viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());

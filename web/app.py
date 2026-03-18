@@ -236,6 +236,8 @@ def _collect_diagrams(experiment_id: str) -> list[dict]:
             continue
         provider = arch_file.stem.replace("Architecture_", "")
         key = provider.lower()
+        if key == "terraform":
+            continue
         blocks = _extract_mermaid_blocks(text)
         if blocks:
             provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].extend(blocks)
@@ -263,7 +265,12 @@ def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
         db_diagrams = get_cloud_diagrams(experiment_id)
         if db_diagrams:
-            return [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in db_diagrams]
+            filtered = [
+                d for d in db_diagrams
+                if (d.get("provider") or "").strip().lower() != "terraform"
+            ]
+            if filtered:
+                return [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in filtered]
     except Exception:
         pass
 
@@ -800,7 +807,7 @@ def api_assets(repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, experiment_target),
         ).fetchall()
 
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
@@ -835,17 +842,25 @@ def _db_render(template_name: str, **ctx):
 
 
 def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> str:
-    """Resolve experiment_id for a repo (provided or latest)."""
-    if not experiment_id:
-        row = conn.execute(
-            """SELECT experiment_id FROM repositories
-               WHERE LOWER(repo_name) = LOWER(?)
-               ORDER BY scanned_at DESC LIMIT 1""",
-            (repo_name,),
+    """Return a valid experiment_id for the repo, preferring the provided id."""
+    if experiment_id:
+        exists = conn.execute(
+            """
+            SELECT 1 FROM repositories
+            WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ?
+            LIMIT 1
+            """,
+            (repo_name, experiment_id),
         ).fetchone()
-        if row:
-            experiment_id = row["experiment_id"]
-    return experiment_id
+        if exists:
+            return experiment_id
+    row = conn.execute(
+        """SELECT experiment_id FROM repositories
+           WHERE LOWER(repo_name) = LOWER(?)
+           ORDER BY scanned_at DESC LIMIT 1""",
+        (repo_name,),
+    ).fetchone()
+    return row["experiment_id"] if row else ""
 
 
 @app.route("/api/view/tabs/<experiment_id>/<repo_name>")
@@ -889,8 +904,22 @@ def api_view_assets(experiment_id: str, repo_name: str):
     include_hidden = str(request.args.get('include_hidden', '')).lower() in ('1', 'true', 'yes')
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_assets.html", assets=[], providers=[], include_hidden=include_hidden, hidden_count=0, total=0, experiment_id=experiment_id)
+        return _db_render("tab_assets.html", assets=[], providers=[], include_hidden=include_hidden, hidden_count=0, total=0, experiment_id=experiment_id, repo_name=repo_name)
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render(
+                "tab_assets.html",
+                assets=[],
+                providers=[],
+                include_hidden=include_hidden,
+                hidden_count=0,
+                total=0,
+                experiment_id="",
+                repo_name=repo_name,
+                error=f"No completed scan found for {repo_name}.",
+            )
+        experiment_target = resolved_exp_id
         rows = conn.execute(
             """
             SELECT res.id, res.resource_type, res.resource_name, res.provider,
@@ -939,7 +968,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
                   AND child.parent_resource_id IS NOT NULL
                 """,
-                (repo_name, experiment_id),
+                (repo_name, experiment_target),
             ).fetchall()
             for hr in hierarchy_rows:
                 parent_id = hr['parent_id']
@@ -1044,7 +1073,17 @@ def api_view_assets(experiment_id: str, repo_name: str):
         if has_unknown:
             providers.add('unknown')
             provider_counts.setdefault('unknown', 0)
-        return _db_render("tab_assets.html", assets=assets, providers=sorted(providers), provider_counts=provider_counts, repo_name=repo_name, hidden_count=hidden_count, total=total_rows, include_hidden=include_hidden, experiment_id=experiment_id)
+        return _db_render(
+            "tab_assets.html",
+            assets=assets,
+            providers=sorted(providers),
+            provider_counts=provider_counts,
+            repo_name=repo_name,
+            hidden_count=hidden_count,
+            total=total_rows,
+            include_hidden=include_hidden,
+            experiment_id=experiment_target,
+        )
     except Exception as exc:
         return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc), hidden_count=0, total=0, include_hidden=include_hidden, experiment_id=experiment_id)
     finally:
@@ -1056,8 +1095,12 @@ def api_view_findings(experiment_id: str, repo_name: str):
     """Render the findings tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_findings.html", findings=[])
+        return _db_render("tab_findings.html", findings=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_findings.html", findings=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT f.id, f.title, f.description, f.base_severity,
@@ -1072,7 +1115,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
                                 WHEN 'INFO' THEN 5 ELSE 6 END,
                 f.severity_score DESC
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         findings = [dict(r) for r in rows]
         return _db_render("tab_findings.html", findings=findings)
@@ -1089,6 +1132,10 @@ def api_view_ingress(experiment_id: str, repo_name: str):
     if conn is None:
         return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[])
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         # Primary: findings with internet_exposure metadata
         res_rows = conn.execute(
             """
@@ -1112,7 +1159,7 @@ def api_view_ingress(experiment_id: str, repo_name: str):
               AND LOWER(fc.context_value) = 'true'
             ORDER BY COALESCE(parent.resource_type, r.resource_type), COALESCE(parent.resource_name, r.resource_name)
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
 
         # Fallback: legacy start_ip_address context
@@ -1135,11 +1182,11 @@ def api_view_ingress(experiment_id: str, repo_name: str):
                 LEFT JOIN resources parent ON r.parent_resource_id = parent.id
                 JOIN finding_context fc ON fc.finding_id = f.id
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
-                  AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
-                  AND fc.context_value = '0.0.0.0'
-                """,
-                (repo_name, experiment_id),
-            ).fetchall()
+                 AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
+                 AND fc.context_value = '0.0.0.0'
+            """,
+            (repo_name, target_exp),
+        ).fetchall()
             # Merge, dedup by id
             existing_ids = {dict(r)['id'] for r in res_rows}
             for r in fw_rows:
@@ -1179,8 +1226,12 @@ def api_view_egress(experiment_id: str, repo_name: str):
     """Render the egress tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_egress.html", egress_connections=[])
+        return _db_render("tab_egress.html", egress_connections=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_egress.html", egress_connections=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT DISTINCT r.id, r.resource_name AS source_name, r.resource_type, r.provider,
@@ -1202,7 +1253,7 @@ def api_view_egress(experiment_id: str, repo_name: str):
               AND fc.context_value != ''
             ORDER BY r.provider, r.resource_type, r.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         return _db_render("tab_egress.html", egress_connections=[dict(r) for r in rows])
     except Exception as exc:
@@ -1216,8 +1267,12 @@ def api_view_roles(experiment_id: str, repo_name: str):
     """Render the roles & permissions tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_roles.html", roles=[])
+        return _db_render("tab_roles.html", roles=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_roles.html", roles=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT res.id, res.resource_name AS identity_name, res.resource_type AS role_type,
@@ -1242,7 +1297,7 @@ def api_view_roles(experiment_id: str, repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         roles = [dict(r) for r in rows]
         # Convert is_excessive to integer if stored as string
@@ -1266,10 +1321,16 @@ def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
     - If not and section_key == 'tldr', attempt to extract the TL;DR markdown table
       from Output/Summary/Repos/<repo_name>.md and convert it to HTML.
     """
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_ai_content.html", section=None, error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_ai_content.html", section=None, error=f"No scan found for {repo_name}.")
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
-        sections = get_ai_sections(experiment_id, repo_name)
+        sections = get_ai_sections(resolved_exp_id, repo_name)
         section = next((s for s in sections if s["section_key"] == section_key), None)
         if section:
             return _db_render("tab_ai_content.html", section=section)
@@ -1313,9 +1374,11 @@ def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
             except Exception:
                 pass
 
-        return _db_render("tab_ai_content.html", section=None)
+        return _db_render("tab_ai_content.html", section=None, error=f"No AI content for {section_key}.")
     except Exception as exc:
         return _db_render("tab_ai_content.html", section=None, error=str(exc))
+    finally:
+        conn.close()
 
 
 # ── Page Routes ───────────────────────────────────────────────────────────────
@@ -1348,5 +1411,3 @@ if __name__ == "__main__":
     debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
     debug = debug_env in ("1", "true", "yes", "on")
     app.run(debug=debug, host="0.0.0.0", port=5000, threaded=True)
-
-
