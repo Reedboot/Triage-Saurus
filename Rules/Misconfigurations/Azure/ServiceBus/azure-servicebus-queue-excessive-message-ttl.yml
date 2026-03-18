@@ -1,0 +1,41 @@
+rules:
+  - id: azure-servicebus-queue-excessive-message-ttl
+    message: |
+      Service Bus queue has excessive message time-to-live (TTL) configured.
+      Messages older than a reasonable retention period (typically 7-14 days)
+      can cause storage bloat, increased costs, and processing of stale data.
+      
+      Set `default_message_ttl` to an appropriate duration based on your 
+      business requirements. For event-driven systems, 1-7 days is typical.
+      
+      Excessive TTL can also be a security risk if messages contain sensitive
+      data that should have a limited lifetime.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      # Pattern 1: TTL > 30 days (P30D or ISO 8601 duration)
+      - pattern-regex: |
+          resource "azurerm_servicebus_queue" "\w+" \{[\s\S]*?default_message_ttl\s*=\s*"P([3-9]\d|[1-9]\d{2,})D"[\s\S]*?\}
+      # Pattern 2: No TTL specified (defaults to max 14 days in Azure)
+      - patterns:
+          - pattern: |
+              resource "azurerm_servicebus_queue" "$NAME" {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_servicebus_queue" "$NAME" {
+                ...
+                default_message_ttl = ...
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [data-retention, compliance]
+      cwe: CWE-404
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: MEDIUM
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-expiration
+      technology: [azure, terraform, servicebus]
