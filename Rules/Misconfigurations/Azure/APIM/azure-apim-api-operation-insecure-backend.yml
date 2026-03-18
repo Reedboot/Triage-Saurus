@@ -1,0 +1,36 @@
+rules:
+  - id: azure-apim-api-operation-insecure-backend
+    message: |
+      API Management API operation uses HTTP (unencrypted) for backend 
+      communication. The `url_template` uses "http://" scheme, exposing
+      backend traffic between APIM and the backend service to:
+      - Internal network sniffing
+      - Man-in-the-middle attacks (if backend is remote)
+      - Credential theft (if auth headers are forwarded)
+      
+      Even within Azure VNets, use HTTPS for backend communication to
+      maintain defense-in-depth. Update url_template to use "https://":
+        url_template = "https://backend-service/api/endpoint"
+      
+      If the backend service doesn't support HTTPS, enable TLS on the
+      backend or use Azure Private Link for encrypted tunnels.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_api_operation" "$NAME" {
+        ...
+        url_template = "http://..."
+        ...
+      }
+    metadata:
+      category: security
+      subcategory: [encryption, api-gateway, internal-network]
+      cwe: CWE-319
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      remediation_effort: MEDIUM
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/api-management-howto-mutual-certificates
+      owasp: A02:2021 - Cryptographic Failures
+      technology: [azure, terraform, apim]

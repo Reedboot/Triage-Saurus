@@ -1,0 +1,38 @@
+rules:
+  - id: azure-apim-api-policy-no-authentication
+    message: |
+      API Management API policy does not enforce authentication. The policy
+      XML lacks authentication mechanisms such as:
+      - validate-jwt (JWT token validation)
+      - check-header (API key validation)
+      - authentication-basic (Basic authentication)
+      - authentication-certificate (mTLS)
+      
+      An API without authentication enforcement allows unauthorized access to
+      backend services. Even if backend services have their own authentication,
+      the APIM layer should validate credentials before forwarding requests.
+      
+      Add <validate-jwt> or <check-header> in the <inbound> section to enforce
+      authentication at the API gateway level.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: resource "azurerm_api_management_api_policy" "$NAME" { ... }
+      - pattern-not-regex: validate-jwt
+      - pattern-not-regex: check-header
+      - pattern-not-regex: authentication-basic
+      - pattern-not-regex: authentication-certificate
+    metadata:
+      category: security
+      subcategory: [authentication, api-gateway]
+      cwe: CWE-306
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      remediation_effort: MEDIUM
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/api-management-howto-protect-backend-with-aad
+        - https://learn.microsoft.com/en-us/azure/api-management/validate-jwt-policy
+      owasp: A07:2021 - Identification and Authentication Failures
+      technology: [azure, terraform, apim]
+      five_pillars: Pillar 5

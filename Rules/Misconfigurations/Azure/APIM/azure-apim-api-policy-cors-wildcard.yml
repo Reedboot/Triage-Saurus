@@ -1,0 +1,48 @@
+rules:
+  - id: azure-apim-api-policy-cors-wildcard
+    message: |
+      API Management API policy has CORS configured with wildcard origin (*).
+      This allows any website to make cross-origin requests to your API,
+      exposing it to CSRF attacks and data theft from malicious sites.
+      
+      Wildcard CORS is especially dangerous when the API:
+      - Uses cookie-based authentication
+      - Returns sensitive data
+      - Allows state-changing operations (POST, PUT, DELETE)
+      
+      Restrict CORS to specific trusted origins:
+        <cors allow-credentials="true">
+          <allowed-origins>
+            <origin>https://trusted-app.example.com</origin>
+          </allowed-origins>
+        </cors>
+      
+      Never use <origin>*</origin> in production APIs.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_api_management_api_policy" "$NAME" {
+            ...
+            xml_content = <<$END
+            $...CONTENT
+            $END
+            ...
+          }
+      - metavariable-pattern:
+          metavariable: $CONTENT
+          patterns:
+            - pattern-regex: <origin>\s*\*\s*</origin>
+    metadata:
+      category: security
+      subcategory: [cors, api-gateway]
+      cwe: CWE-942
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/cors-policy
+        - https://owasp.org/www-community/attacks/csrf
+      owasp: A05:2021 - Security Misconfiguration
+      technology: [azure, terraform, apim]
