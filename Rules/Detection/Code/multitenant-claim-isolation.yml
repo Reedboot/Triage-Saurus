@@ -1,0 +1,93 @@
+rules:
+  - id: multitenant-tenant-id-untrusted-source
+    message: |
+      Detected multi-tenant isolation relying on untrusted tenant identifier.
+      
+      The code extracts a tenant ID (InstitutionId, OrganizationId, CompanyId, etc.) from user claims
+      or request context without cryptographic validation, then uses it for data scoping. If the
+      tenant ID source is not server-side validated, attackers can forge tenant IDs to access
+      other tenants' data.
+      
+      Vulnerable patterns:
+      - Tenant ID from unsigned JWT claims
+      - Tenant ID from request headers without signature validation
+      - User-supplied tenant ID used directly in database queries
+      - ClaimsPrincipal claims without issuer/signature verification
+      
+      REMEDIATION:
+      1. Use server-side session to store verified tenant ID (post-authentication)
+      2. Implement Row-Level Security (RLS) in database with cryptographic session binding
+      3. Validate tenant ID against authenticated user's authorized tenants (server-side list)
+      4. Use JWT with RS256 signature + issuer validation, bind tenant to subject claim
+      5. Never trust client-supplied tenant identifiers for authorization
+      
+      REFERENCES:
+      - OWASP Multi-Tenancy: https://cheatsheetseries.owasp.org/cheatsheets/Multitenant_Security_Cheat_Sheet.html
+      - CWE-639: Authorization Bypass Through User-Controlled Key
+      - CWE-566: Authorization Bypass Through User-Controlled SQL Primary Key
+    severity: ERROR
+    languages: [csharp]
+    metadata:
+      category: security
+      subcategory: authorization-bypass
+      cwe:
+        - "CWE-639"
+        - "CWE-566"
+      technology:
+        - dotnet
+        - aspnet-core
+        - multitenant
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - "https://cwe.mitre.org/data/definitions/639.html"
+        - "https://cwe.mitre.org/data/definitions/566.html"
+    patterns:
+      - pattern-either:
+          # ClaimsPrincipal GetClaim pattern for tenant ID
+          - pattern: |
+              var $TENANT_ID = $USER.GetClaim("InstitutionId")
+          - pattern: |
+              var $TENANT_ID = $USER.GetClaim("OrganizationId")
+          - pattern: |
+              var $TENANT_ID = $USER.GetClaim("TenantId")
+          - pattern: |
+              var $TENANT_ID = $USER.GetClaim("CompanyId")
+          # FindFirst pattern
+          - pattern: |
+              var $TENANT_ID = $USER.FindFirst("InstitutionId")?.Value
+          - pattern: |
+              var $TENANT_ID = $USER.FindFirst("OrganizationId")?.Value
+          - pattern: |
+              var $TENANT_ID = $USER.FindFirst("TenantId")?.Value
+          # Extension method pattern (GetInstitutionId, GetTenantId)
+          - pattern: |
+              var $TENANT_ID = $USER.GetInstitutionId()
+          - pattern: |
+              var $TENANT_ID = $USER.GetOrganizationId()
+          - pattern: |
+              var $TENANT_ID = $USER.GetTenantId()
+      # Used in database query (EF Core / Dapper / raw SQL)
+      - pattern-inside: |
+          ...
+          await $MEDIATOR.Send(new $QUERY($TENANT_ID))
+          ...
+      - pattern-not-inside: |
+          ...
+          ValidateTenantAccess($USER, $TENANT_ID)
+          ...
+
+# TODO: Implement full pattern detection with context flow analysis
+# TODO: Add test cases for:
+#   - InstitutionId from ClaimsPrincipal used in MediatR query (from Experiment 001)
+#   - TenantId from header used in LINQ Where clause
+#   - Row-level security bypass via manipulated tenant claim
+#   - Detect if claim source is unsigned or from custom header
+# TODO: Validate on account-viewing-permissions repository
+# TODO: Cross-reference with dotnet-custom-header-auth rule
+
+# Expected detection: account-viewing-permissions/UsersController.cs:48, AccountsController.cs:49
+# var institutionId = User.GetInstitutionId(); // From unsecured CB-User-Context header
+# return await _mediator.Send(new GetAccountsQuery(institutionId));
+# No server-side validation of institutionId against authenticated user
