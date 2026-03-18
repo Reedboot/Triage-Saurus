@@ -676,29 +676,20 @@ def _ensure_schema(conn: sqlite3.Connection):
     );
 
     CREATE TABLE IF NOT EXISTS findings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id INTEGER PRIMARY KEY,
       experiment_id TEXT,
       repo_id INTEGER,
-      resource_id INTEGER,
-      rule_id TEXT,
-      finding_name TEXT,
       title TEXT,
       description TEXT,
-      reason TEXT,
-      category TEXT,
-      code_snippet TEXT,
+      severity TEXT,
+      severity_score INTEGER,
+      resource_id INTEGER,
+      rule_id TEXT,
       source_file TEXT,
       source_line_start INTEGER,
       source_line_end INTEGER,
-      severity_score INTEGER DEFAULT 4,
-      base_severity TEXT,
-      status TEXT DEFAULT 'raw',
-      finding_path TEXT,
-      evidence_location TEXT,
-      proposed_fix TEXT,
-      llm_enriched_at TIMESTAMP,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      code_snippet TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS resource_equivalences (
