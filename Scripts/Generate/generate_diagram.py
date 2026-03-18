@@ -69,10 +69,15 @@ def _display_label(resource: dict) -> str:
     conn = _get_lookup_db()
     name = resource['resource_name']
     rtype = resource.get('resource_type', '')
+    
+    # Truncate long resource names to prevent diagram overflow
+    MAX_NAME_LENGTH = 28
+    display_name = name if len(name) <= MAX_NAME_LENGTH else f"{name[:MAX_NAME_LENGTH-3]}..."
+    
     if conn and rtype:
         friendly = _rtdb.get_friendly_name(conn, rtype)
-        return f"{name}<br/>{friendly}"
-    return name
+        return f"{display_name}<br/>{friendly}"
+    return display_name
 
 
 def _category(resource: dict) -> str:
