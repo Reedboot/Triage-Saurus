@@ -6,7 +6,17 @@
     startOnLoad: false,
     theme: 'dark',
     securityLevel: 'loose',
-    flowchart: { curve: 'basis', useMaxWidth: false },
+    flowchart: { 
+      curve: 'basis', 
+      useMaxWidth: false,
+      nodeSpacing: 50,
+      rankSpacing: 50,
+      padding: 15
+    },
+    themeVariables: {
+      fontSize: '14px'
+    },
+    maxTextSize: 90000
   };
   try { if (typeof mermaid !== 'undefined') mermaid.initialize(MERMAID_BASE_CONFIG); } catch(e){}
   if (typeof mermaid === 'undefined') {
