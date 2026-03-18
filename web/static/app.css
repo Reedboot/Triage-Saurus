@@ -242,7 +242,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* Ensure panels can shrink/grow inside grid without causing overflow */
 .panel { min-width: 0; }
-@media (max-width: 960px) { .workspace { grid-template-columns: 1fr; } }
+@media (max-width: 960px) {
+  .workspace { grid-template-columns: 1fr; }
+  .workspace > #diagram-panel { order: -1; }
+  .workspace > #log-panel { order: 0; }
+}
 
 .panel {
   background: var(--bg-surface);
