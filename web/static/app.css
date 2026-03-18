@@ -400,6 +400,18 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Mermaid container ── */
 .mermaid { overflow: auto; }
 .mermaid svg { background: transparent !important; }
+/* Override Mermaid's inline constraints to prevent text truncation - keep single line, expand width */
+.mermaid foreignObject { 
+  overflow: visible !important;
+  width: auto !important;
+  min-width: 150px !important;
+}
+.mermaid foreignObject > div {
+  white-space: nowrap !important;
+  max-width: 400px !important;
+  overflow: visible !important;
+  width: auto !important;
+}
 
 .mermaid-container {
   position: relative;
