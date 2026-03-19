@@ -81,6 +81,12 @@
 
     // Initial filter apply
     applyRoleFilters();
+
+    // Column resizing functionality (using shared utility)
+    const table = container.querySelector('#roles-table');
+    if (window.initTableColumnResize && table) {
+      window.initTableColumnResize(table, `roles_col_widths_${repoName}`);
+    }
   }
 
   window.initRoles = initRoles;

@@ -150,6 +150,11 @@
             if (!c) toggle.classList.remove('open');
           }
 
+          // Ensure child rows are hidden by default after filtering
+          if (a.parent_id) {
+            el.style.display = 'none';
+          }
+
           tbody.appendChild(el);
         }
       }
@@ -247,13 +252,18 @@
           childRows.forEach(row => {
             insertAfter.parentNode.insertBefore(row, insertAfter.nextSibling);
             insertAfter = row;
-            row.style.display = '';
+            row.style.display = 'table-row';
           });
         } else {
           // Collapse: hide child rows (keep original order intact)
           childRows.forEach(row => { row.style.display = 'none'; });
         }
       });
+    }
+
+    // Column resizing functionality (using shared utility)
+    if (window.initTableColumnResize) {
+      window.initTableColumnResize(table, `assets_col_widths_${repoName}`);
     }
   }
 

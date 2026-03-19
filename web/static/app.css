@@ -400,17 +400,12 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Mermaid container ── */
 .mermaid { overflow: auto; }
 .mermaid svg { background: transparent !important; }
-/* Override Mermaid's inline constraints to prevent text truncation - keep single line, expand width */
+/* Allow Mermaid to control foreignObject dimensions for proper text rendering */
 .mermaid foreignObject { 
-  overflow: visible !important;
-  width: auto !important;
-  min-width: 150px !important;
+  overflow: visible;
 }
 .mermaid foreignObject > div {
-  white-space: nowrap !important;
-  max-width: 400px !important;
-  overflow: visible !important;
-  width: auto !important;
+  overflow: visible;
 }
 
 .mermaid-container {
@@ -606,6 +601,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.78rem;
+  table-layout: fixed; /* Enable fixed layout for column resizing */
 }
 
 .section-table thead th {
@@ -618,6 +614,35 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  position: relative; /* For resize handle positioning */
+  overflow: hidden;
+}
+
+/* Column resize handle */
+.section-table thead th .resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 1;
+  background: transparent;
+  border-right: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.section-table thead th .resize-handle:hover {
+  border-right-color: var(--accent);
+}
+
+.section-table thead th.resizing {
+  user-select: none;
+}
+
+.section-table.col-resizing {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .section-table tbody tr {

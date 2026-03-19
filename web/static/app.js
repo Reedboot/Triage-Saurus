@@ -368,7 +368,19 @@
       // Initialize known section scripts (moved to static JS) so they run when a fragment is inserted.
       try {
         if (key === 'assets' && window.initAssets) {
-          try { window.initAssets(sectionContent, repoName, targetExpId); } catch (e) { console.warn('initAssets error:', e); }
+          try { window.initAssets(sectionContent, resolvedRepoName, targetExpId); } catch (e) { console.warn('initAssets error:', e); }
+        }
+        if (key === 'roles' && window.initRoles) {
+          try { window.initRoles(sectionContent, resolvedRepoName); } catch (e) { console.warn('initRoles error:', e); }
+        }
+        
+        // Initialize column resizing for all section tables
+        if (window.initTableColumnResize) {
+          const sectionTable = sectionContent.querySelector('.section-table');
+          if (sectionTable && key) {
+            const storageKey = `${key}_col_widths_${resolvedRepoName}`;
+            window.initTableColumnResize(sectionTable, storageKey);
+          }
         }
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
