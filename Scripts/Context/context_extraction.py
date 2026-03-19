@@ -1699,6 +1699,122 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     # Fourth pass: scan config/code files for connection string dependencies
     # -------------------------------------------------------------------------
     extract_connection_string_dependencies(repo_path, context)
+    
+    # -------------------------------------------------------------------------
+    # Detect AKS workloads from Skaffold configuration
+    # -------------------------------------------------------------------------
+    try:
+        from skaffold_parser import extract_skaffold_workloads
+        
+        skaffold_workloads = extract_skaffold_workloads(repo_path)
+        if skaffold_workloads:
+            print(f"[+] Found {len(skaffold_workloads)} Skaffold workloads")
+            
+            # Add workloads as resources
+            for wl in skaffold_workloads:
+                # Create a resource for the AKS workload
+                workload_resource = Resource(
+                    name=wl.name,
+                    resource_type=wl.resource_type,
+                    file_path="skaffold.yaml",
+                    line_number=1,
+                    properties={
+                        "image": wl.image_name,
+                        "dockerfile": wl.dockerfile,
+                        "helm_chart": wl.helm_chart,
+                        "namespace": wl.namespace,
+                        "replicas": wl.replicas,
+                        "health_endpoint": wl.health_check_path,
+                        "health_port": wl.health_check_port,
+                        "workload_type": "aks_workload",
+                        "is_ingress_endpoint": wl.health_check_path is not None,
+                    }
+                )
+                context.resources.append(workload_resource)
+                
+                # Infer connections from API Gateway to API workloads
+                if "api" in wl.name and not "queuelistener" in wl.name and not "worker" in wl.name:
+                    # Find API Gateway resources (Azure, AWS, GCP)
+                    api_gateway_types = [
+                        # Azure
+                        "azurerm_api_management_api",
+                        # AWS
+                        "aws_api_gateway",
+                        "aws_apigatewayv2_api",
+                        "aws_api_gateway_rest_api",
+                        # GCP
+                        "google_api_gateway_api",
+                        "google_api_gateway_gateway",
+                    ]
+                    
+                    for resource in context.resources:
+                        if resource.resource_type in api_gateway_types:
+                            # Create connection: API Gateway → Kubernetes API workload
+                            conn = Connection(
+                                source=f"{resource.resource_type}.{resource.name}",
+                                target=f"{wl.resource_type}.{wl.name}",
+                                connection_type="routes_to_backend"
+                            )
+                            context.connections.append(conn)
+                            
+                            # Also create relationship
+                            rel = Relationship(
+                                source_type=resource.resource_type,
+                                source_name=resource.name,
+                                target_type=wl.resource_type,
+                                target_name=wl.name,
+                                relationship_type=RelationshipType.ROUTES_INGRESS_TO,
+                                notes="Inferred from API Gateway and Skaffold API workload"
+                            )
+                            context.relationships.append(rel)
+                
+                # Infer connections from messaging services to queue listener/worker workloads
+                if any(keyword in wl.name for keyword in ["queuelistener", "worker", "consumer", "subscriber"]) or \
+                   any(keyword in (wl.helm_chart or "") for keyword in ["background-worker", "consumer", "worker"]):
+                    # Find messaging resources (Service Bus, SQS/SNS, Pub/Sub)
+                    messaging_types = [
+                        # Azure Service Bus
+                        "azurerm_servicebus_namespace",
+                        "azurerm_servicebus_queue",
+                        "azurerm_servicebus_topic",
+                        "azurerm_servicebus_subscription",
+                        # AWS SQS/SNS/Kinesis
+                        "aws_sqs_queue",
+                        "aws_sns_topic",
+                        "aws_sns_subscription",
+                        "aws_kinesis_stream",
+                        "aws_mq_broker",
+                        # GCP Pub/Sub
+                        "google_pubsub_topic",
+                        "google_pubsub_subscription",
+                    ]
+                    
+                    for resource in context.resources:
+                        if resource.resource_type in messaging_types:
+                            # Create connection: Messaging → Kubernetes Worker
+                            conn = Connection(
+                                source=f"{resource.resource_type}.{resource.name}",
+                                target=f"{wl.resource_type}.{wl.name}",
+                                connection_type="consumed_by"
+                            )
+                            context.connections.append(conn)
+                            
+                            # Also create relationship
+                            rel = Relationship(
+                                source_type=resource.resource_type,
+                                source_name=resource.name,
+                                target_type=wl.resource_type,
+                                target_name=wl.name,
+                                relationship_type=RelationshipType.DEPENDS_ON,
+                                notes="Inferred from messaging service and Skaffold worker workload"
+                            )
+                            context.relationships.append(rel)
+                
+                print(f"  [+] Added Kubernetes workload: {wl.name} ({wl.resource_type})")
+    except ImportError:
+        pass  # Skaffold parser not available
+    except Exception as e:
+        print(f"[WARN] Failed to parse Skaffold: {e}")
 
     deduped_relationships: list[Relationship] = []
     seen_relationships: set[tuple[str, str, str, str, str, str]] = set()
