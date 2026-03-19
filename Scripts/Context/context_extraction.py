@@ -785,6 +785,47 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     }
     known_resource_keys: set[tuple[str, str]] = {(r.resource_type, r.name) for r in context.resources}
 
+    # Infer provider for terraform_data and other meta-resources from file context
+    # Group resources by file
+    resources_by_file: Dict[str, list[Resource]] = {}
+    for resource, _ in resource_blocks:
+        file_path = resource.file_path or "unknown"
+        if file_path not in resources_by_file:
+            resources_by_file[file_path] = []
+        resources_by_file[file_path].append(resource)
+    
+    # For each file, determine the dominant provider
+    for file_path, file_resources in resources_by_file.items():
+        # Count providers in this file
+        provider_counts: Dict[str, int] = {}
+        for res in file_resources:
+            # Skip meta-resources for counting
+            if res.resource_type in ('terraform_data', 'null_resource', 'random_id', 'random_string', 
+                                      'random_password', 'time_sleep', 'time_rotating'):
+                continue
+            # Detect provider from resource type prefix
+            for prefix, provider in [
+                ("azurerm_", "azure"), ("azuread_", "azure"),
+                ("aws_", "aws"), ("google_", "gcp"),
+                ("alicloud_", "alicloud"), ("oci_", "oracle")
+            ]:
+                if res.resource_type.startswith(prefix):
+                    provider_counts[provider] = provider_counts.get(provider, 0) + 1
+                    break
+        
+        # Determine dominant provider
+        dominant_provider = "unknown"
+        if provider_counts:
+            dominant_provider = max(provider_counts, key=provider_counts.get)
+        
+        # Apply to meta-resources in this file
+        for res in file_resources:
+            if res.resource_type in ('terraform_data', 'null_resource', 'random_id', 'random_string',
+                                      'random_password', 'time_sleep', 'time_rotating'):
+                if not res.properties:
+                    res.properties = {}
+                res.properties["inferred_provider"] = dominant_provider
+
     def _ensure_inferred_resource(resource_type: str, canonical_name: str, source_file: str, line_number: int) -> str:
         inferred_name = f"__inferred__{canonical_name}"
         key = (resource_type, inferred_name)
@@ -1135,6 +1176,20 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             nic_names = _extract_arm_resource_names(attrs.get("network_interface_ids"), "networkInterfaces")
             if nic_names:
                 props["network_interface_names"] = nic_names
+        
+        # Extract parent APIM instance name for API resources (supports shared/external APIM)
+        if resource_type in ("azurerm_api_management_api", "azurerm_api_management_api_operation", 
+                             "azurerm_api_management_product", "azurerm_api_management_subscription"):
+            apim_name_raw = attrs.get("api_management_name")
+            if apim_name_raw:
+                # Extract actual value (could be var.name, data.ref, or literal)
+                apim_name_str = str(apim_name_raw).strip().strip('"').strip("'")
+                props["api_management_instance_name"] = apim_name_str
+                
+                # Track as shared resource if it's a variable/data reference
+                if apim_name_str.startswith("var.") or apim_name_str.startswith("data."):
+                    props["shared_resource_reference"] = "azurerm_api_management"
+                    props["shared_resource_identifier"] = apim_name_str
 
         resource.properties = props
 
@@ -1230,6 +1285,42 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         if resource.resource_type == "aws_security_group_rule" and _is_prop_true(props, "internet_ingress_open"):
             parent_props["internet_ingress_open"] = "true"
             _append_signal(parent_props, "security group ingress rule allows internet")
+
+        # API Gateway operations/methods/routes are ingress points - mark them and their parents
+        api_operation_types = {
+            "azurerm_api_management_api_operation",
+            "aws_api_gateway_method",
+            "aws_api_gateway_resource",
+            "aws_apigatewayv2_route",
+            "google_api_gateway_gateway",
+            "oci_apigateway_deployment",
+            "alicloud_api_gateway_api",
+        }
+        
+        if resource.resource_type in api_operation_types:
+            # Mark the operation itself as an ingress point
+            props["is_ingress_endpoint"] = "true"
+            props["ingress_type"] = "api_operation"
+            _mark_internet_access(props, f"API operation/endpoint exposed via {resource.resource_type}")
+            
+            # Propagate to parent API gateway
+            if parent:
+                _mark_internet_access(parent_props, f"API gateway hosts public operations")
+                parent.properties = parent_props
+        
+        # Load balancer listeners are also ingress points
+        lb_listener_types = {
+            "aws_lb_listener",
+            "aws_alb_listener",
+            "azurerm_lb_rule",
+        }
+        
+        if resource.resource_type in lb_listener_types:
+            props["is_ingress_endpoint"] = "true"
+            props["ingress_type"] = "load_balancer_listener"
+            if parent:
+                _mark_internet_access(parent_props, f"Load balancer has configured listeners")
+                parent.properties = parent_props
 
         parent.properties = parent_props
 
