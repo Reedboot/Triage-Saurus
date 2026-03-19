@@ -20,18 +20,15 @@ rules:
       - pattern: |
           resource "azurerm_api_management_api_policy" "$NAME" {
             ...
-            xml_content = <<$END
-            $...CONTENT
-            $END
+            xml_content = $CONTENT
             ...
           }
-      - metavariable-pattern:
+      - metavariable-regex:
           metavariable: $CONTENT
-          patterns:
-            - pattern-not-regex: rate-limit
-            - pattern-not-regex: quota
-            - pattern-not-regex: rate-limit-by-key
-            - pattern-regex: <inbound>
+          regex: '<inbound>'
+      - metavariable-regex:
+          metavariable: $CONTENT
+          regex: '(?!.*(rate-limit|quota|rate-limit-by-key))'
     metadata:
       category: security
       subcategory: [availability, api-gateway]

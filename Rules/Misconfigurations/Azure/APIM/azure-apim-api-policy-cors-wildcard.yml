@@ -24,15 +24,12 @@ rules:
       - pattern: |
           resource "azurerm_api_management_api_policy" "$NAME" {
             ...
-            xml_content = <<$END
-            $...CONTENT
-            $END
+            xml_content = $CONTENT
             ...
           }
-      - metavariable-pattern:
+      - metavariable-regex:
           metavariable: $CONTENT
-          patterns:
-            - pattern-regex: <origin>\s*\*\s*</origin>
+          regex: '<origin>\s*\*\s*</origin>'
     metadata:
       category: security
       subcategory: [cors, api-gateway]

@@ -26,30 +26,26 @@ rules:
           - pattern: |
               resource "azurerm_api_management_api_policy" "$NAME" {
                 ...
-                xml_content = <<$END
-                $...CONTENT
-                $END
+                xml_content = $CONTENT
                 ...
               }
-          - metavariable-pattern:
+          - metavariable-regex:
               metavariable: $CONTENT
-              patterns:
-                - pattern-not-regex: <on-error>
+              regex: '^(?!.*<on-error>).*$'
       # on-error exists but doesn't sanitize body
       - patterns:
           - pattern: |
               resource "azurerm_api_management_api_policy" "$NAME" {
                 ...
-                xml_content = <<$END
-                $...CONTENT
-                $END
+                xml_content = $CONTENT
                 ...
               }
-          - metavariable-pattern:
+          - metavariable-regex:
               metavariable: $CONTENT
-              patterns:
-                - pattern-regex: <on-error>
-                - pattern-not-regex: set-body
+              regex: '<on-error>'
+          - metavariable-regex:
+              metavariable: $CONTENT
+              regex: '^(?!.*set-body).*$'
     metadata:
       category: security
       subcategory: [information-disclosure, api-gateway]
