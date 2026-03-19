@@ -1,0 +1,17 @@
+{
+  "repo_search_paths": [
+    "~/repos",
+    "~/code",
+    "~/projects",
+    "/mnt/c/Repos",
+    "~"
+  ],
+  "default_repo_root": "~/repos",
+  "notes": [
+    "repo_search_paths: List of directories searched when resolving repo names from Intake/ReposToScan.txt",
+    "default_repo_root: Default location for new repo clones/checkouts",
+    "Paths are searched in order; first match wins",
+    "Use ~ for home directory, will be expanded automatically",
+    "For WSL performance, prefer native Linux paths (~/repos) over Windows mounts (/mnt/c/Repos)"
+  ]
+}
