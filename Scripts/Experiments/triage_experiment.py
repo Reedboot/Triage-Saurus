@@ -42,6 +42,7 @@ sys.path.insert(0, str(_scripts_root / 'Generate'))
 sys.path.insert(0, str(_scripts_root / 'Scan'))
 
 from output_paths import OUTPUT_ROOT, REPO_ROOT
+from repo_resolver import get_default_repos_root, resolve_repo
 try:
     import learning_db as db
 except Exception:
@@ -229,7 +230,16 @@ def discover_repos(repos_root: Path | None = None) -> list[str]:
 
 
 def get_repos_root_from_knowledge() -> Path | None:
-    """Try to read repos root from Knowledge/Repos.md."""
+    """Try to read repos root from Knowledge/Repos.md or Settings/paths.json."""
+    # First try Settings/paths.json (primary source)
+    try:
+        default_root = get_default_repos_root()
+        if default_root and default_root.exists():
+            return default_root
+    except Exception:
+        pass
+    
+    # Fallback to Knowledge/Repos.md
     knowledge_file = OUTPUT_ROOT / "Knowledge" / "Repos.md"
     if not knowledge_file.exists():
         return None
@@ -638,11 +648,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     if auto_phase1:
         print("Running Phase 1 context discovery (writes to experiment folder)...")
         for r in repos:
-            rp = Path(r).expanduser()
-            if not rp.is_absolute():
-                rp = (repos_root / r).resolve()
-            if not rp.is_dir():
-                print(f"ERROR: repo path not found: {rp}")
+            # First try to resolve as repo name using search paths
+            rp = resolve_repo(r)
+            if not rp:
+                # Fallback to manual resolution
+                rp = Path(r).expanduser()
+                if not rp.is_absolute():
+                    rp = (repos_root / r).resolve()
+            
+            if not rp or not rp.is_dir():
+                print(f"ERROR: repo path not found: {r}")
+                print(f"  Searched in configured paths from Settings/paths.json")
                 return 1
 
             # Two-phase targeted scan: Detection → Misconfigurations.
