@@ -108,6 +108,10 @@ _AZURE_MAPPINGS = {
     "azurerm_virtual_machine": (UnifiedRole.COMPUTE, False, False),
     "azurerm_container_group": (UnifiedRole.COMPUTE, False, False),
     "azurerm_kubernetes_cluster": (UnifiedRole.COMPUTE, False, False),
+    # Kubernetes/AKS workloads detected from Skaffold/Helm
+    "kubernetes_service": (UnifiedRole.COMPUTE, False, False),
+    "kubernetes_deployment": (UnifiedRole.COMPUTE, False, False),
+    "kubernetes_pod": (UnifiedRole.COMPUTE, False, False),
     "azurerm_container_registry": (UnifiedRole.COMPUTE, False, False),
     "azurerm_app_service": (UnifiedRole.COMPUTE, False, False),
     "azurerm_function_app": (UnifiedRole.COMPUTE, False, False),
