@@ -19,7 +19,7 @@ jobs:
           python-version: '3.x'
       - name: Install opengrep
         run: |
-          python -m pip install --upgrade pip
-          pip install opengrep
+          sudo curl -sSL https://github.com/opengrep/opengrep/releases/latest/download/opengrep_manylinux_x86 -o /usr/local/bin/opengrep
+          sudo chmod +x /usr/local/bin/opengrep
       - name: Validate rules
         run: opengrep validate Rules/ -v
