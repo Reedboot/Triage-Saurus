@@ -28,14 +28,29 @@ EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
+# Load repo search paths from config
+def _load_search_paths():
+    config_file = REPO_ROOT / "Settings" / "paths.json"
+    if config_file.exists():
+        try:
+            import json
+            config = json.loads(config_file.read_text())
+            paths = config.get("repo_search_paths", [])
+            # Expand ~ and environment variables
+            return [Path(p).expanduser() for p in paths]
+        except Exception:
+            pass
+    # Fallback to defaults
+    return [
+        REPO_ROOT.parent,
+        Path.home() / "repos",
+        Path.home() / "code",
+        Path.home() / "projects",
+        Path.home(),
+    ]
+
 # Directories searched when resolving a bare repo name from Intake
-_SEARCH_ROOTS = [
-    REPO_ROOT.parent,
-    Path.home() / "code",
-    Path.home() / "repos",
-    Path.home() / "projects",
-    Path.home(),
-]
+_SEARCH_ROOTS = _load_search_paths()
 
 
 def _resolve_repos() -> list[dict]:
@@ -1196,19 +1211,80 @@ def api_view_ingress(experiment_id: str, repo_name: str):
         except Exception:
             pass
 
+        # Add API operations and their parent gateways
+        try:
+            api_ops_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.id,
+                    r.resource_name,
+                    r.resource_type,
+                    r.provider,
+                    r.region,
+                    r.source_file,
+                    r.source_line_start,
+                    parent.resource_name AS parent_gateway_name,
+                    parent.resource_type AS parent_gateway_type,
+                    'api_operation' AS exposure_type,
+                    'api_endpoint' AS exposure_value
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN (
+                    'azurerm_api_management_api_operation',
+                    'aws_api_gateway_method',
+                    'aws_api_gateway_resource',
+                    'aws_apigatewayv2_route',
+                    'google_api_gateway_gateway',
+                    'oci_apigateway_deployment',
+                    'alicloud_api_gateway_api'
+                  )
+                ORDER BY parent.resource_name, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            
+            for r in api_ops_rows:
+                r_dict = dict(r)
+                if r_dict['id'] not in {dict(x)['id'] for x in res_rows}:
+                    res_rows = list(res_rows) + [r]
+        except Exception as e:
+            print(f"Warning: Could not fetch API operations: {e}")
+
         ingress_resources = [dict(r) for r in res_rows]
 
-        ingress_connections = [
-            {
-                'source_name': 'Internet',
-                'target_name': r['resource_name'],
-                'protocol': 'any',
-                'port': 'any',
-                'authentication': None,
-                'is_encrypted': None,
-            }
-            for r in [dict(x) for x in res_rows]
-        ]
+        # Build connections showing parent gateway → operation hierarchy
+        ingress_connections = []
+        for r in ingress_resources:
+            if r.get('parent_gateway_name'):
+                # API operation - show gateway → operation
+                ingress_connections.append({
+                    'source_name': 'Internet',
+                    'target_name': r.get('parent_gateway_name'),
+                    'protocol': 'HTTPS',
+                    'port': '443',
+                    'authentication': 'API Key',
+                    'is_encrypted': 1,
+                })
+                ingress_connections.append({
+                    'source_name': r.get('parent_gateway_name'),
+                    'target_name': r['resource_name'],
+                    'protocol': 'HTTP',
+                    'port': 'operation',
+                    'authentication': None,
+                    'is_encrypted': None,
+                })
+            else:
+                # Standard resource
+                ingress_connections.append({
+                    'source_name': 'Internet',
+                    'target_name': r['resource_name'],
+                    'protocol': 'any',
+                    'port': 'any',
+                    'authentication': None,
+                    'is_encrypted': None,
+                })
 
         return _db_render(
             "tab_ingress.html",
@@ -1300,6 +1376,64 @@ def api_view_roles(experiment_id: str, repo_name: str):
             (repo_name, target_exp),
         ).fetchall()
         roles = [dict(r) for r in rows]
+        
+        # Add API subscriptions and keys
+        try:
+            api_keys_rows = conn.execute(
+                """
+                SELECT 
+                    sub.id,
+                    sub.resource_name AS identity_name,
+                    sub.resource_type AS role_type,
+                    sub.provider,
+                    sub.source_file,
+                    NULL AS principal_id,
+                    COALESCE(
+                        parent_api.resource_name,
+                        parent_gw.resource_name,
+                        'API Gateway'
+                    ) AS resource_name,
+                    GROUP_CONCAT(DISTINCT ops.resource_name, ', ') AS permissions,
+                    NULL AS is_excessive
+                FROM resources sub
+                JOIN repositories repo ON sub.repo_id = repo.id
+                LEFT JOIN resources parent_api ON sub.parent_resource_id = parent_api.id
+                LEFT JOIN resources parent_gw ON parent_api.parent_resource_id = parent_gw.id
+                LEFT JOIN resources ops ON ops.parent_resource_id = parent_api.id
+                    AND ops.resource_type IN (
+                        'azurerm_api_management_api_operation',
+                        'aws_api_gateway_method',
+                        'aws_apigatewayv2_route'
+                    )
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND sub.experiment_id = ?
+                  AND sub.resource_type IN (
+                    'azurerm_api_management_subscription',
+                    'aws_api_gateway_api_key',
+                    'aws_api_gateway_usage_plan',
+                    'aws_api_gateway_usage_plan_key',
+                    'oci_identity_api_key',
+                    'oci_identity_auth_token',
+                    'alicloud_api_gateway_app',
+                    'alicloud_ram_access_key'
+                  )
+                GROUP BY sub.id
+                ORDER BY sub.provider, sub.resource_type, sub.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            
+            for r in api_keys_rows:
+                r_dict = dict(r)
+                # Format permissions to show accessible operations
+                ops = r_dict.get('permissions')
+                if ops:
+                    r_dict['permissions'] = f"Access to operations: {ops}"
+                else:
+                    r_dict['permissions'] = f"Access to {r_dict.get('resource_name', 'API')}"
+                roles.append(r_dict)
+        except Exception as e:
+            print(f"Warning: Could not fetch API keys/subscriptions: {e}")
+        
         # Convert is_excessive to integer if stored as string
         for role in roles:
             val = role.get("is_excessive")
