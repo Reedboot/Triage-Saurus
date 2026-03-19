@@ -52,8 +52,11 @@ _AWS_MAPPINGS = {
     "aws_lb": (UnifiedRole.LOAD_BALANCER, False, False),
     "aws_alb": (UnifiedRole.LOAD_BALANCER, False, False),
     "aws_elb": (UnifiedRole.LOAD_BALANCER, False, False),
-    "aws_api_gateway": (UnifiedRole.LOAD_BALANCER, False, False),
-    "aws_apigatewayv2_api": (UnifiedRole.LOAD_BALANCER, False, False),
+    # API Gateway is internet-facing by default, treat as entry point for exposure analysis
+    "aws_api_gateway": (UnifiedRole.ENTRY_POINT, True, False),
+    "aws_apigatewayv2_api": (UnifiedRole.ENTRY_POINT, True, False),
+    "aws_api_gateway_rest_api": (UnifiedRole.ENTRY_POINT, True, False),
+    "aws_api_gateway_stage": (UnifiedRole.ENTRY_POINT, True, False),
     "aws_lb_listener": (UnifiedRole.LOAD_BALANCER, False, False),
     "aws_lb_target_group": (UnifiedRole.LOAD_BALANCER, False, False),
     "aws_instance": (UnifiedRole.COMPUTE, False, False),
@@ -75,6 +78,12 @@ _AWS_MAPPINGS = {
     "aws_efs_file_system": (UnifiedRole.DATA, False, False),
     "aws_efs_access_point": (UnifiedRole.DATA, False, False),
     "aws_ebs_volume": (UnifiedRole.DATA, False, False),
+    # AWS messaging services contain data
+    "aws_sqs_queue": (UnifiedRole.DATA, False, False),
+    "aws_sns_topic": (UnifiedRole.DATA, False, False),
+    "aws_sns_subscription": (UnifiedRole.DATA, False, False),
+    "aws_kinesis_stream": (UnifiedRole.DATA, False, False),
+    "aws_mq_broker": (UnifiedRole.DATA, False, False),
 }
 
 # Azure resource type → (Unified Role, is_public, is_boundary)
@@ -89,8 +98,9 @@ _AZURE_MAPPINGS = {
     "azurerm_firewall_policy": (UnifiedRole.COUNTERMEASURE, False, True),
     "azurerm_firewall_policy_rule_collection_group": (UnifiedRole.COUNTERMEASURE, False, True),
     "azurerm_lb": (UnifiedRole.LOAD_BALANCER, False, False),
-    "azurerm_api_management": (UnifiedRole.LOAD_BALANCER, False, False),
-    "azurerm_api_management_api": (UnifiedRole.LOAD_BALANCER, False, False),
+    # APIM is internet-facing by default (public endpoint), treat as entry point for exposure analysis
+    "azurerm_api_management": (UnifiedRole.ENTRY_POINT, True, False),
+    "azurerm_api_management_api": (UnifiedRole.ENTRY_POINT, True, False),
     "azurerm_lb_rule": (UnifiedRole.LOAD_BALANCER, False, False),
     "azurerm_lb_backend_address_pool": (UnifiedRole.LOAD_BALANCER, False, False),
     "azurerm_linux_virtual_machine": (UnifiedRole.COMPUTE, False, False),
@@ -114,6 +124,11 @@ _AZURE_MAPPINGS = {
     "azurerm_postgresql_server": (UnifiedRole.DATA, False, False),
     "azurerm_postgresql_database": (UnifiedRole.DATA, False, False),
     "azurerm_cosmosdb_account": (UnifiedRole.DATA, False, False),
+    # Service Bus messaging resources contain data
+    "azurerm_servicebus_namespace": (UnifiedRole.DATA, False, False),
+    "azurerm_servicebus_queue": (UnifiedRole.DATA, False, False),
+    "azurerm_servicebus_topic": (UnifiedRole.DATA, False, False),
+    "azurerm_servicebus_subscription": (UnifiedRole.DATA, False, False),
 }
 
 # GCP resource type → (Unified Role, is_public, is_boundary)
@@ -121,6 +136,10 @@ _GCP_MAPPINGS = {
     "google_compute_address": (UnifiedRole.ENTRY_POINT, True, False),
     "google_compute_global_address": (UnifiedRole.ENTRY_POINT, True, False),
     "google_cloud_run_service": (UnifiedRole.ENTRY_POINT, True, False),
+    # GCP API Gateway is internet-facing by default
+    "google_api_gateway_api": (UnifiedRole.ENTRY_POINT, True, False),
+    "google_api_gateway_api_config": (UnifiedRole.ENTRY_POINT, True, False),
+    "google_api_gateway_gateway": (UnifiedRole.ENTRY_POINT, True, False),
     "google_compute_firewall": (UnifiedRole.COUNTERMEASURE, False, True),
     "google_compute_security_policy": (UnifiedRole.COUNTERMEASURE, False, True),
     "google_compute_network": (UnifiedRole.COUNTERMEASURE, False, True),
@@ -147,6 +166,9 @@ _GCP_MAPPINGS = {
     "google_bigtable_table": (UnifiedRole.DATA, False, False),
     "google_firestore_database": (UnifiedRole.DATA, False, False),
     "google_datastore_database": (UnifiedRole.DATA, False, False),
+    # GCP messaging services contain data
+    "google_pubsub_topic": (UnifiedRole.DATA, False, False),
+    "google_pubsub_subscription": (UnifiedRole.DATA, False, False),
 }
 
 
