@@ -33,7 +33,8 @@ rules:
               }
           - metavariable-pattern:
               metavariable: $CONTENT
-              pattern-not-regex: <on-error>
+              patterns:
+                - pattern-not-regex: <on-error>
       # on-error exists but doesn't sanitize body
       - patterns:
           - pattern: |
