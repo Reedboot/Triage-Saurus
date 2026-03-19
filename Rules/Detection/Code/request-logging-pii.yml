@@ -74,13 +74,13 @@ rules:
               $LOGGER.Log$LEVEL($FORMAT, ..., responseBody, ...)
       # Ensure not in sanitization/redaction middleware
       - pattern-not-inside: |
-          var $SANITIZED = RedactSensitiveData(...)
+          var $SANITIZED = RedactSensitiveData(...);
           ...
-          $LOGGER.Log$LEVEL(..., $SANITIZED, ...)
+          $LOGGER.Log$LEVEL(..., $SANITIZED, ...);
       - pattern-not-inside: |
-          var $MASKED = MaskPII(...)
+          var $MASKED = MaskPII(...);
           ...
-          $LOGGER.Log$LEVEL(..., $MASKED, ...)
+          $LOGGER.Log$LEVEL(..., $MASKED, ...);
 
 # TODO: Implement full pattern detection for logging middleware
 # TODO: Add test cases for:

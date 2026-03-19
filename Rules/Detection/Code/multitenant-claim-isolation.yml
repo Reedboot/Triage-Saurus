@@ -46,36 +46,26 @@ rules:
     patterns:
       - pattern-either:
           # ClaimsPrincipal GetClaim pattern for tenant ID
-          - pattern: |
-              var $TENANT_ID = $USER.GetClaim("InstitutionId")
-          - pattern: |
-              var $TENANT_ID = $USER.GetClaim("OrganizationId")
-          - pattern: |
-              var $TENANT_ID = $USER.GetClaim("TenantId")
-          - pattern: |
-              var $TENANT_ID = $USER.GetClaim("CompanyId")
+          - pattern: var $TENANT_ID = $USER.GetClaim("InstitutionId");
+          - pattern: var $TENANT_ID = $USER.GetClaim("OrganizationId");
+          - pattern: var $TENANT_ID = $USER.GetClaim("TenantId");
+          - pattern: var $TENANT_ID = $USER.GetClaim("CompanyId");
           # FindFirst pattern
-          - pattern: |
-              var $TENANT_ID = $USER.FindFirst("InstitutionId")?.Value
-          - pattern: |
-              var $TENANT_ID = $USER.FindFirst("OrganizationId")?.Value
-          - pattern: |
-              var $TENANT_ID = $USER.FindFirst("TenantId")?.Value
+          - pattern: var $TENANT_ID = $USER.FindFirst("InstitutionId").Value;
+          - pattern: var $TENANT_ID = $USER.FindFirst("OrganizationId").Value;
+          - pattern: var $TENANT_ID = $USER.FindFirst("TenantId").Value;
           # Extension method pattern (GetInstitutionId, GetTenantId)
-          - pattern: |
-              var $TENANT_ID = $USER.GetInstitutionId()
-          - pattern: |
-              var $TENANT_ID = $USER.GetOrganizationId()
-          - pattern: |
-              var $TENANT_ID = $USER.GetTenantId()
+          - pattern: var $TENANT_ID = $USER.GetInstitutionId();
+          - pattern: var $TENANT_ID = $USER.GetOrganizationId();
+          - pattern: var $TENANT_ID = $USER.GetTenantId();
       # Used in database query (EF Core / Dapper / raw SQL)
       - pattern-inside: |
           ...
-          await $MEDIATOR.Send(new $QUERY($TENANT_ID))
+          await $MEDIATOR.Send(new $QUERY($TENANT_ID));
           ...
       - pattern-not-inside: |
           ...
-          ValidateTenantAccess($USER, $TENANT_ID)
+          ValidateTenantAccess($USER, $TENANT_ID);
           ...
 
 # TODO: Implement full pattern detection with context flow analysis

@@ -47,14 +47,8 @@ rules:
     patterns:
       - pattern-either:
           # MapWhen that bypasses middleware
-          - pattern: |
-              app.MapWhen($CONDITION, $BUILDER => {
-                ...
-              })
-          - pattern: |
-              app.Map($PATH, $BUILDER => {
-                ...
-              })
+          - pattern: app.MapWhen($CONDITION, $BUILDER => { ... });
+          - pattern: app.Map($PATH, $BUILDER => { ... });
       # Ensure UseAuthentication/UseAuthorization not called in the mapped branch
       - pattern-not-inside: |
           $BUILDER => {
@@ -67,7 +61,7 @@ rules:
           ...
           app.UseAuthentication();
           ...
-          app.MapWhen(...)
+          app.MapWhen(...);
           ...
 
 # TODO: Implement full pattern detection logic
