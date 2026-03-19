@@ -133,21 +133,76 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
         if pattern_types:
             # Determine friendly name based on pattern and resources
             if pattern_name == "api_gateway":
-                friendly = "API Management"
+                # Separate APIM instance from APIs, operations, products for proper nesting
+                instance_types = [rt for rt in pattern_types if rt in (
+                    "azurerm_api_management", "aws_api_gateway_rest_api", "aws_apigatewayv2_api",
+                    "google_api_gateway_gateway", "oci_apigateway_gateway", "alicloud_api_gateway_group"
+                )]
+                child_types = [rt for rt in pattern_types if rt not in instance_types]
+                
+                if instance_types:
+                    grouped["API Management"] = instance_types
+                    pattern_resources.update(instance_types)
+                
+                # Group API children by their specific type
+                for child_rt in child_types:
+                    child_friendly = _rtdb.get_friendly_name(_get_db(), child_rt)
+                    grouped.setdefault(child_friendly, []).append(child_rt)
+                    pattern_resources.add(child_rt)
+                
+                continue
             elif pattern_name == "storage":
                 friendly = "Storage Account" if any(rt.startswith("azurerm_") for rt in pattern_types) else "Storage"
             elif pattern_name == "messaging":
                 # Check which messaging service
                 if any("servicebus" in rt for rt in pattern_types):
-                    friendly = "Service Bus Namespace"
+                    # Separate namespace from topics/queues for proper nesting
+                    namespace_types = [rt for rt in pattern_types if rt in ("azurerm_servicebus_namespace",)]
+                    child_types = [rt for rt in pattern_types if rt in (
+                        "azurerm_servicebus_queue", "azurerm_servicebus_topic", 
+                        "azurerm_servicebus_subscription", "azurerm_servicebus_subscription_rule"
+                    )]
+                    
+                    if namespace_types:
+                        grouped["Service Bus Namespace"] = namespace_types
+                        pattern_resources.update(namespace_types)
+                    
+                    # Group children by their specific type for proper service grouping
+                    for child_rt in child_types:
+                        child_friendly = _rtdb.get_friendly_name(_get_db(), child_rt)
+                        grouped.setdefault(child_friendly, []).append(child_rt)
+                        pattern_resources.add(child_rt)
+                    
+                    # Skip default grouping for servicebus since we handled it above
+                    continue
+                    
                 elif any("eventhub" in rt for rt in pattern_types):
-                    friendly = "Event Hub Namespace"
+                    # Similar logic for Event Hub
+                    namespace_types = [rt for rt in pattern_types if rt == "azurerm_eventhub_namespace"]
+                    child_types = [rt for rt in pattern_types if rt in (
+                        "azurerm_eventhub", "azurerm_eventhub_consumer_group"
+                    )]
+                    
+                    if namespace_types:
+                        grouped["Event Hub Namespace"] = namespace_types
+                        pattern_resources.update(namespace_types)
+                    
+                    for child_rt in child_types:
+                        child_friendly = _rtdb.get_friendly_name(_get_db(), child_rt)
+                        grouped.setdefault(child_friendly, []).append(child_rt)
+                        pattern_resources.add(child_rt)
+                    
+                    continue
+                    
                 elif any("sns" in rt or "sqs" in rt for rt in pattern_types):
                     friendly = "Messaging"
                 elif any("pubsub" in rt for rt in pattern_types):
                     friendly = "Pub/Sub"
                 else:
                     friendly = "Messaging"
+                
+                # Default grouping for non-ServiceBus messaging
+                grouped[friendly] = pattern_types
             elif pattern_name == "serverless":
                 friendly = "Serverless Functions"
             elif pattern_name == "key_vault":
@@ -181,8 +236,7 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                     friendly = "Monitoring"
             else:
                 friendly = pattern_name.replace("_", " ").title()
-            
-            grouped[friendly] = pattern_types
+                grouped[friendly] = pattern_types
     
     # Group remaining resources by friendly name (legacy behavior)
     for rtype in resource_types:
