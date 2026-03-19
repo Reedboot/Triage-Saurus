@@ -213,6 +213,20 @@ class GraphTraversal:
                 )
 
             classifications[resource_id] = classification
+        
+        # Also classify entry points themselves as directly exposed
+        for entry_point_id in self.entry_points:
+            resource = self.resource_map[entry_point_id]
+            classifications[entry_point_id] = ExposureClassification(
+                resource_id=entry_point_id,
+                resource_name=resource["resource_name"],
+                resource_type=resource["resource_type"],
+                normalized_role=resource.get("normalized_role", "unknown"),
+                exposure_level="direct_exposure",
+                has_internet_path=True,
+                traversal_paths=[],  # Entry points are the source, not a destination
+                entry_points_reached=[entry_point_id],  # Self-reference
+            )
 
         return classifications
 
