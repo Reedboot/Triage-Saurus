@@ -1,0 +1,78 @@
+rules:
+  - id: dotnet-custom-header-auth
+    message: |
+      Detected header deserialization without cryptographic validation.
+      
+      The code deserializes authentication data from HTTP headers (e.g., X-User-Context, X-Auth-Data)
+      without verifying a cryptographic signature (JWT, HMAC, digital signature). This allows attackers
+      to forge arbitrary user identities by crafting malicious headers.
+      
+      REMEDIATION:
+      1. Migrate to JWT (JSON Web Tokens) with RS256/ES256 signature validation
+      2. Or implement HMAC-SHA256 header validation:
+         - Server signs header: HMAC-SHA256(header_value, shared_secret)
+         - Client includes signature in separate header
+         - Server validates signature before deserializing
+      3. Use mTLS (mutual TLS) for service-to-service authentication
+      
+      REFERENCES:
+      - OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+      - CWE-290: Authentication Bypass by Spoofing
+      - CWE-807: Reliance on Untrusted Inputs in Security Decision
+    severity: ERROR
+    languages: [csharp]
+    metadata:
+      category: security
+      subcategory: authentication-bypass
+      cwe: 
+        - "CWE-290"
+        - "CWE-807"
+      technology: 
+        - dotnet
+        - aspnet-core
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      references:
+        - "https://cwe.mitre.org/data/definitions/290.html"
+        - "https://cwe.mitre.org/data/definitions/807.html"
+    patterns:
+      - pattern-either:
+          # Newtonsoft.Json deserialization of request headers
+          - pattern: |
+              JsonConvert.DeserializeObject<$TYPE>($REQUEST.Headers[$HEADER])
+          - pattern: |
+              var $VAR = $REQUEST.Headers[$HEADER];
+              ...
+              JsonConvert.DeserializeObject<$TYPE>($VAR)
+          # System.Text.Json deserialization
+          - pattern: |
+              JsonSerializer.Deserialize<$TYPE>($REQUEST.Headers[$HEADER])
+          - pattern: |
+              var $VAR = $REQUEST.Headers[$HEADER];
+              ...
+              JsonSerializer.Deserialize<$TYPE>($VAR)
+      - pattern-not-inside: |
+          ...
+          JwtSecurityTokenHandler().ValidateToken(...)
+          ...
+      - pattern-not-inside: |
+          ...
+          ValidateSignature(...)
+          ...
+      - pattern-not-inside: |
+          ...
+          HMAC.Create(...)
+          ...
+
+# TODO: Implement full pattern matching logic
+# TODO: Add test cases for:
+#   - CB-User-Context header deserialization (from Experiment 001)
+#   - X-Auth-Data JSON parsing without validation
+#   - Custom header schemes in microservices
+# TODO: Validate on account-viewing-permissions repository
+# TODO: Document in Rules/README.md
+
+# Expected detection: account-viewing-permissions/ClearBankUserContextRetriever.cs:23
+# var claims = JsonConvert.DeserializeObject<Dictionary<string, string>>(userContext);
+# where userContext = Request.Headers["CB-User-Context"] (no signature validation)

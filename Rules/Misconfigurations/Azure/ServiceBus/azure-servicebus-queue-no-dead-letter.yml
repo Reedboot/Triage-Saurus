@@ -1,0 +1,51 @@
+rules:
+  - id: azure-servicebus-queue-no-dead-letter
+    message: |
+      Service Bus queue does not have dead-letter queue enabled or has very high 
+      max delivery count. Messages that fail processing repeatedly will be lost 
+      instead of being routed to a dead-letter queue for investigation.
+      
+      Set `enable_batched_operations = true` and `max_delivery_count` to a 
+      reasonable value (typically 10 or less) to ensure failed messages are 
+      captured for debugging.
+      
+      Without this, message loss can occur silently, making incident 
+      investigation impossible.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          # Pattern 1: Dead-lettering explicitly disabled
+          - pattern: |
+              resource "azurerm_servicebus_queue" "$NAME" {
+                ...
+                dead_lettering_on_message_expiration = false
+                ...
+              }
+          # Pattern 2: No dead-lettering config (defaults to disabled)
+          - patterns:
+              - pattern: |
+                  resource "azurerm_servicebus_queue" "$NAME" {
+                    ...
+                  }
+              - pattern-not: |
+                  resource "azurerm_servicebus_queue" "$NAME" {
+                    ...
+                    dead_lettering_on_message_expiration = ...
+                    ...
+                  }
+          # Pattern 3: Max delivery count too high (>20)
+          - pattern-regex: |
+              resource "azurerm_servicebus_queue" "\w+" \{[\s\S]*?max_delivery_count\s*=\s*([2-9]\d{2,}|[2-9]\d|1\d{2,})[\s\S]*?\}
+    metadata:
+      category: security
+      subcategory: [messaging, reliability]
+      cwe: CWE-755
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues
+      owasp: A09:2021 - Security Logging and Monitoring Failures
+      technology: [azure, terraform, servicebus]

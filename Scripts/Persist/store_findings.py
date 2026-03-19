@@ -99,6 +99,11 @@ def main():
             title: str = rule_id.replace("-", " ").title()
             sev_score = _severity_score(severity)
             base_sev = _base_severity(severity)
+            
+            # Generate finding_name: FI_{REPO}_{RULE_ID}
+            repo_abbrev = args.repo.replace("-", "_").upper()[:20]  # Limit length
+            rule_abbrev = rule_id.replace("-", "_").upper()
+            finding_name = f"FI_{repo_abbrev}_{rule_abbrev}"
 
             # Duplicate check
             if _already_exists(conn, args.experiment, rule_id, path, start_line):
@@ -112,6 +117,7 @@ def main():
                 'experiment_id': args.experiment,
                 'repo_id': repo_id,
                 'resource_id': resource_id,
+                'finding_name': finding_name,
                 'title': title,
                 'description': None,
                 'category': category,

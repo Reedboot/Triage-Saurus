@@ -6,7 +6,17 @@
     startOnLoad: false,
     theme: 'dark',
     securityLevel: 'loose',
-    flowchart: { curve: 'basis', useMaxWidth: false },
+    flowchart: { 
+      curve: 'basis', 
+      useMaxWidth: false,
+      nodeSpacing: 50,
+      rankSpacing: 50,
+      padding: 15
+    },
+    themeVariables: {
+      fontSize: '14px'
+    },
+    maxTextSize: 90000
   };
   try { if (typeof mermaid !== 'undefined') mermaid.initialize(MERMAID_BASE_CONFIG); } catch(e){}
   if (typeof mermaid === 'undefined') {
@@ -59,6 +69,8 @@
   let zoomLevel = 1, panX = 0, panY = 0;
   let isPanning = false, panStartX = 0, panStartY = 0, panStartPX = 0, panStartPY = 0;
   const ZOOM_STEP = 0.1, ZOOM_MIN = 0.1, ZOOM_MAX = 20;
+  let pendingFitHandle = null;
+  let pendingFitIsRAF = false;
 
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
@@ -76,6 +88,24 @@
   let currentRepoName = '';
   let currentExpId    = '';
 
+  function resolveSelectedRepoName() {
+    if (currentRepoName) return currentRepoName;
+    if (!repoSelect) return '';
+    const selected = repoSelect.options[repoSelect.selectedIndex];
+    if (!selected || !selected.value || selected.disabled) return '';
+    const dataName = (selected.dataset && selected.dataset.name ? selected.dataset.name.trim() : '');
+    if (dataName) {
+      currentRepoName = dataName;
+      return dataName;
+    }
+    const fallback = (selected.textContent || '').split('—')[0].trim();
+    if (fallback) {
+      currentRepoName = fallback;
+      return fallback;
+    }
+    return '';
+  }
+
   // ── Zoom + Pan (right panel) ──────────────────────────────────────────────────
   function applyTransform() {
     if (diagramInner) {
@@ -88,12 +118,41 @@
     applyTransform();
   }
 
+  function scheduleFitDiagram(delay = 0) {
+    if (pendingFitHandle !== null) {
+      if (pendingFitIsRAF && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(pendingFitHandle);
+      } else {
+        clearTimeout(pendingFitHandle);
+      }
+      pendingFitHandle = null;
+    }
+    const runner = () => {
+      pendingFitHandle = null;
+      fitDiagram();
+    };
+    if (delay > 0) {
+      pendingFitIsRAF = false;
+      pendingFitHandle = setTimeout(runner, delay);
+    } else if (typeof requestAnimationFrame !== 'undefined') {
+      pendingFitIsRAF = true;
+      pendingFitHandle = requestAnimationFrame(runner);
+    } else {
+      pendingFitIsRAF = false;
+      pendingFitHandle = setTimeout(runner, 0);
+    }
+  }
+
   function fitDiagram() {
     if (!diagramWrap || !diagramInner) return;
-    const svg = diagramInner.querySelector('svg');
-    if (!svg) { resetZoomPan(); return; }
     const wrapW = diagramWrap.clientWidth;
     const wrapH = diagramWrap.clientHeight;
+    if (!wrapW || !wrapH) {
+      scheduleFitDiagram();
+      return;
+    }
+    const svg = diagramInner.querySelector('svg');
+    if (!svg) { resetZoomPan(); return; }
     const svgW  = svg.scrollWidth || svg.getBoundingClientRect().width || 400;
     const svgH  = svg.scrollHeight || svg.getBoundingClientRect().height || 300;
     if (!svgW || !svgH) { resetZoomPan(); return; }
@@ -156,15 +215,18 @@
     }
     // Recompute layout immediately and again after a small delay so the Mermaid SVG can be fitted correctly
     try { fitDiagram(); } catch (e) {}
-    setTimeout(fitDiagram, 260);
+    scheduleFitDiagram(260);
   }
 
   // Ensure the diagram refits whenever its container changes size
   if (typeof ResizeObserver !== 'undefined' && diagramWrap) {
     try {
-      const diagramResizeObserver = new ResizeObserver(() => { requestAnimationFrame(fitDiagram); });
+      const diagramResizeObserver = new ResizeObserver(() => { scheduleFitDiagram(); });
       diagramResizeObserver.observe(diagramWrap);
     } catch (e) { console.warn('ResizeObserver error:', e); }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', scheduleFitDiagram);
   }
 
   // Initialize state from localStorage
@@ -185,12 +247,21 @@
   let activeSection = '';
 
   async function loadSectionTabs(expId, repoName) {
-    if (!expId || !repoName) return;
-    currentExpId = expId;
+    const resolvedRepoName = repoName || resolveSelectedRepoName();
+    if (!resolvedRepoName) return;
+    const effectiveExpId = await resolveExperimentId(expId, resolvedRepoName);
+    if (!effectiveExpId) {
+      console.warn('Section tabs cannot load without an experiment id for', resolvedRepoName);
+      sectionTabBar.innerHTML = '';
+      tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
+      return;
+    }
+    currentExpId = effectiveExpId;
+    currentRepoName = resolvedRepoName;
     try {
-      const resp = await fetch(`/api/view/tabs/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
+      const resp = await fetch(`/api/view/tabs/${encodeURIComponent(effectiveExpId)}/${encodeURIComponent(resolvedRepoName)}`);
       const data = await resp.json();
-      renderSectionTabs(data.tabs || [], expId, repoName);
+      renderSectionTabs(data.tabs || [], expId, resolvedRepoName);
       // Intentionally do not auto-switch to a content tab here; renderSectionTabs will
       // show the Log tab by default so live logs remain visible when loading tabs.
     } catch (err) {
@@ -268,11 +339,23 @@
     const structuredKeys = ['assets', 'findings', 'ingress', 'egress', 'roles'];
 
     try {
+      const resolvedRepoName = repoName || currentRepoName || resolveSelectedRepoName();
+      if (!resolvedRepoName) {
+        sectionContent.innerHTML = '<div class="empty-state"><p class="s-inline-e09362">No repository selected yet.</p></div>';
+        showSectionsInLog();
+        return;
+      }
+      const targetExpId = await resolveExperimentId(expId, resolvedRepoName);
+      if (!targetExpId) {
+        sectionContent.innerHTML = '<div class="empty-state"><p class="s-inline-e09362">Experiment metadata is not available yet.</p></div>';
+        showSectionsInLog();
+        return;
+      }
       let url;
       if (structuredKeys.includes(key)) {
-        url = `/api/view/${key}/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`;
+        url = `/api/view/${key}/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}`;
       } else {
-        url = `/api/view/ai/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}/${encodeURIComponent(key)}`;
+        url = `/api/view/ai/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}/${encodeURIComponent(key)}`;
       }
       const resp = await fetch(url);
       const html = await resp.text();
@@ -285,7 +368,19 @@
       // Initialize known section scripts (moved to static JS) so they run when a fragment is inserted.
       try {
         if (key === 'assets' && window.initAssets) {
-          try { window.initAssets(sectionContent, repoName); } catch (e) { console.warn('initAssets error:', e); }
+          try { window.initAssets(sectionContent, resolvedRepoName, targetExpId); } catch (e) { console.warn('initAssets error:', e); }
+        }
+        if (key === 'roles' && window.initRoles) {
+          try { window.initRoles(sectionContent, resolvedRepoName); } catch (e) { console.warn('initRoles error:', e); }
+        }
+        
+        // Initialize column resizing for all section tables
+        if (window.initTableColumnResize) {
+          const sectionTable = sectionContent.querySelector('.section-table');
+          if (sectionTable && key) {
+            const storageKey = `${key}_col_widths_${resolvedRepoName}`;
+            window.initTableColumnResize(sectionTable, storageKey);
+          }
         }
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
@@ -295,6 +390,7 @@
       showSectionsInLog();
     } catch (err) {
       sectionContent.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load section: ${err}</p></div>`;
+      showSectionsInLog();
     }
   }
 
@@ -338,43 +434,57 @@
     }
 
     for (const node of nodes) {
+      if (node.dataset.mermaidRendered === '1') continue;
       const origText = node.textContent || '';
       let lastErr = null;
 
-      // Attempt 1: base config
-      let err = await tryRender(node, MERMAID_BASE_CONFIG);
-      if (!err) continue;
-      lastErr = err;
+      try {
+        let err;
 
-      // Attempt 2: linear curve
-      const cfgLinear = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
-      cfgLinear.flowchart = Object.assign({}, cfgLinear.flowchart, { curve: 'linear' });
-      err = await tryRender(node, cfgLinear);
-      if (!err) continue;
-      lastErr = err;
+        // Attempt 1: base config
+        err = await tryRender(node, MERMAID_BASE_CONFIG);
+        if (!err) continue;
+        lastErr = err;
 
-      // Attempt 3: useMaxWidth true
-      const cfgMax = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
-      cfgMax.flowchart = Object.assign({}, cfgMax.flowchart, { useMaxWidth: true });
-      err = await tryRender(node, cfgMax);
-      if (!err) continue;
-      lastErr = err;
+        // Attempt 2: linear curve
+        const cfgLinear = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
+        cfgLinear.flowchart = Object.assign({}, cfgLinear.flowchart, { curve: 'linear' });
+        err = await tryRender(node, cfgLinear);
+        if (!err) continue;
+        lastErr = err;
 
-      // Attempt 4: remove edge labels and try base config again
-      const stripped = sanitizeMermaid(origText.replace(/\|[^|]*\|/g, ''));
-      node.textContent = stripped;
-      err = await tryRender(node, MERMAID_BASE_CONFIG);
-      if (!err) continue;
-      lastErr = err;
+        // Attempt 3: useMaxWidth true
+        const cfgMax = JSON.parse(JSON.stringify(MERMAID_BASE_CONFIG));
+        cfgMax.flowchart = Object.assign({}, cfgMax.flowchart, { useMaxWidth: true });
+        err = await tryRender(node, cfgMax);
+        if (!err) continue;
+        lastErr = err;
 
-      // Restore original sanitized content and show error
-      node.textContent = sanitizeMermaid(origText);
-      node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${(lastErr && lastErr.message) || lastErr}</div>`;
-      console.error('Mermaid render error:', lastErr);
+        // Attempt 4: remove edge labels and try base config again
+        const stripped = sanitizeMermaid(origText.replace(/\|[^|]*\|/g, ''));
+        node.textContent = stripped;
+        err = await tryRender(node, MERMAID_BASE_CONFIG);
+        if (!err) continue;
+        lastErr = err;
+
+        // Restore original sanitized content and show error
+        node.textContent = sanitizeMermaid(origText);
+        node.innerHTML = `<div style="color:#f85149;font-size:0.78rem;padding:12px;font-family:monospace;white-space:pre-wrap">⚠ Diagram parse error:\n${(lastErr && lastErr.message) || lastErr}</div>`;
+        console.error('Mermaid render error:', lastErr);
+      } finally {
+        node.dataset.mermaidRendered = '1';
+      }
     }
 
     // Restore base config after attempts
     try { mermaid.initialize(MERMAID_BASE_CONFIG); } catch (e) { /* ignore */ }
+  }
+
+  async function renderMermaidInView(view) {
+    if (!view) return;
+    const nodes = Array.from(view.querySelectorAll('.mermaid:not([data-mermaid-rendered])'));
+    if (!nodes.length) return;
+    await _runMermaid(nodes);
   }
 
   // Sanitize Mermaid source to fix common issues emitted by generator
@@ -497,6 +607,7 @@
     for (let i = 0; i < diagrams.length; i++) {
       const { title, code } = diagrams[i];
       const tab = document.createElement('button');
+      tab.type = 'button';
       tab.className = 'tab-btn' + (i === 0 ? ' active' : '');
       tab.textContent = title;
       tab.dataset.idx = i;
@@ -514,9 +625,10 @@
     }
 
     if (diagrams.length > 1) tabsEl.classList.add('visible');
-    await _runMermaid(viewsEl.querySelectorAll('.mermaid'));
+    const initialView = viewsEl.querySelector('.diagram-view.active');
+    if (initialView) await renderMermaidInView(initialView);
     activeTab = 0;
-    setTimeout(fitDiagram, 200);
+    scheduleFitDiagram(200);
   }
 
   function switchTab(idx) {
@@ -526,7 +638,9 @@
       v.classList.toggle('active', +v.dataset.idx === idx);
     });
     // Re-apply transform to the newly active diagram
-    setTimeout(fitDiagram, 100);
+    const activeView = viewsEl.querySelector('.diagram-view.active');
+    if (activeView) void renderMermaidInView(activeView);
+    scheduleFitDiagram(100);
   }
 
   // ── Diff rendering ───────────────────────────────────────────────────────────
@@ -542,6 +656,7 @@
 
     // Build compare tab (index 0)
     const diffTab = document.createElement('button');
+    diffTab.type = 'button';
     diffTab.className = 'tab-btn active';
     diffTab.textContent = `📊 Diff ${idFrom} → ${idTo}`;
     diffTab.dataset.idx = 0;
@@ -643,6 +758,7 @@
     diagrams = allDiags;
     for (let i = 0; i < allDiags.length; i++) {
       const tab = document.createElement('button');
+      tab.type = 'button';
       tab.className = 'tab-btn';
       tab.textContent = `${idFrom}: ${allDiags[i].title}`;
       tab.dataset.idx = i + 1;
@@ -668,7 +784,7 @@
 
   // ── Past scans ───────────────────────────────────────────────────────────────
   function _scanOptionLabel(scan) {
-    const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 16) : '';
+    const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 19) : '';
     const flag = scan.has_diagrams ? ' 🖼' : '';
     return `Scan ${scan.experiment_id}${dt ? ' — ' + dt : ''}${flag}`;
   }
@@ -705,6 +821,39 @@
     }
   }
 
+  let resolvingExperimentId = null;
+
+  async function resolveExperimentId(expId, repoName) {
+    const candidate = (expId || '').trim();
+    if (candidate) {
+      currentExpId = candidate;
+      return candidate;
+    }
+    if (currentExpId) return currentExpId;
+    if (!repoName) return '';
+    if (resolvingExperimentId) return resolvingExperimentId;
+
+    resolvingExperimentId = (async () => {
+      try {
+        const scans = await loadPastScans(repoName);
+        if (scans.length) {
+          const latest = scans[scans.length - 1].experiment_id;
+          if (latest) {
+            currentExpId = latest;
+            return latest;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to resolve experiment id for sections:', err);
+      } finally {
+        resolvingExperimentId = null;
+      }
+      return '';
+    })();
+
+    return resolvingExperimentId;
+  }
+
   async function _loadDiagrams(expId, { silent = false } = {}) {
     try {
       const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
@@ -732,9 +881,11 @@
     try {
       await _loadDiagrams(expId);
       // Load section tabs for the selected experiment and switch to Assets
-      if (currentRepoName) {
-        await loadSectionTabs(expId, currentRepoName);
-        try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
+      const targetRepoName = currentRepoName || resolveSelectedRepoName();
+      if (targetRepoName) {
+        currentRepoName = targetRepoName;
+        await loadSectionTabs(expId, targetRepoName);
+        try { activateSectionKey('assets', expId, targetRepoName); } catch (e) {}
       }
     } finally {
       spinner.style.display = 'none';
@@ -766,6 +917,21 @@
   }
 
   function handleEvent(type, payload) {
+    if (type === 'experiment') {
+      // Early experiment id emitted by server before pipeline output
+      const expId = String(payload || '').trim();
+      const repoName = resolveSelectedRepoName();
+      if (expId) currentExpId = expId;
+      if (expId && repoName) {
+        setStatus(`Experiment ${expId} created`, 'info');
+        // Preload diagrams and sections silently
+        (async () => {
+          await _loadDiagrams(expId, { silent: true });
+          try { await loadSectionTabs(expId, repoName); } catch (e) {}
+        })();
+      }
+      return;
+    }
     if (type === 'log') {
       appendLog(payload);
     } else if (type === 'diagrams') {
@@ -775,17 +941,22 @@
       setStatus('Error: ' + payload, 'error');
     } else if (type === 'done') {
       const code  = payload.exit_code;
-      const expId = payload.experiment_id;
+      const expId = payload.experiment_id || currentExpId;
+      const repoName = resolveSelectedRepoName();
+      const effectiveRepoName = currentRepoName || repoName;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
         // Refresh past scans list and section tabs
-        if (currentRepoName) {
-          loadPastScans(currentRepoName);
+        if (effectiveRepoName) {
+          currentRepoName = effectiveRepoName;
+          loadPastScans(effectiveRepoName);
           (async () => {
-            await loadSectionTabs(expId, currentRepoName);
-            // After scan completes, switch to Assets tab
-            try { activateSectionKey('assets', expId, currentRepoName); } catch (e) {}
-            setTimeout(fitDiagram, 500); // fit diagram after render
+            if (expId) {
+              await loadSectionTabs(expId, effectiveRepoName);
+              // After scan completes, switch to Assets tab
+              try { activateSectionKey('assets', expId, effectiveRepoName); } catch (e) {}
+              scheduleFitDiagram(500); // fit diagram after render
+            }
           })();
         }
       } else {
@@ -837,6 +1008,7 @@
 
     const repoPath = repoSelect.value;
     const scanName = (nameInput.value.trim() || 'web_scan');
+    currentRepoName = resolveSelectedRepoName() || currentRepoName;
 
     logOutput.innerHTML = '';
     viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(el => el.remove());
@@ -941,7 +1113,7 @@
             } catch (e) {
               console.warn('Auto-load sections failed:', e);
             }
-            setTimeout(fitDiagram, 500);
+            scheduleFitDiagram(500);
           } catch (err) {
             console.warn('Auto-load diagrams failed:', err);
           }

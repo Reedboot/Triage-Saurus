@@ -42,6 +42,7 @@ sys.path.insert(0, str(_scripts_root / 'Generate'))
 sys.path.insert(0, str(_scripts_root / 'Scan'))
 
 from output_paths import OUTPUT_ROOT, REPO_ROOT
+from repo_resolver import get_default_repos_root, resolve_repo
 try:
     import learning_db as db
 except Exception:
@@ -229,7 +230,16 @@ def discover_repos(repos_root: Path | None = None) -> list[str]:
 
 
 def get_repos_root_from_knowledge() -> Path | None:
-    """Try to read repos root from Knowledge/Repos.md."""
+    """Try to read repos root from Knowledge/Repos.md or Settings/paths.json."""
+    # First try Settings/paths.json (primary source)
+    try:
+        default_root = get_default_repos_root()
+        if default_root and default_root.exists():
+            return default_root
+    except Exception:
+        pass
+    
+    # Fallback to Knowledge/Repos.md
     knowledge_file = OUTPUT_ROOT / "Knowledge" / "Repos.md"
     if not knowledge_file.exists():
         return None
@@ -414,17 +424,45 @@ def cmd_new(args: argparse.Namespace) -> int:
     exp_dir = exp_dir_resolved
     
     if exp_dir.exists():
-        print(f"ERROR: Experiment directory already exists: {exp_dir}")
-        return 1
-    
+        # If another process created the experiment concurrently, be tolerant
+        existing_config = exp_dir / "experiment.json"
+        if existing_config.exists():
+            print(f"Experiment directory already exists and appears initialized: {exp_dir}")
+            # Load existing full name if available and emit machine-readable marker
+            try:
+                existing = json.loads(existing_config.read_text(encoding="utf-8"))
+                existing_full = existing.get("full_name") or exp_dir.name
+            except Exception:
+                existing_full = exp_dir.name
+            print(f"EXPERIMENT_CREATED::{existing_full}")
+            return 0
+        else:
+            print(f"ERROR: Experiment directory already exists but is missing experiment.json: {exp_dir}")
+            return 1
+
     # Create directory structure
-    exp_dir.mkdir(parents=True)
-    (exp_dir / "Findings" / "Cloud").mkdir(parents=True)
-    (exp_dir / "Findings" / "Code").mkdir(parents=True)
-    (exp_dir / "Knowledge").mkdir()
-    (exp_dir / "Summary").mkdir()
-    (exp_dir / "Agents").mkdir()
-    (exp_dir / "Scripts").mkdir()
+    try:
+        exp_dir.mkdir(parents=True)
+    except FileExistsError:
+        # Race: directory created after the exists() check. Check for experiment.json.
+        existing_config = exp_dir / "experiment.json"
+        if existing_config.exists():
+            try:
+                existing = json.loads(existing_config.read_text(encoding="utf-8"))
+                existing_full = existing.get("full_name") or exp_dir.name
+            except Exception:
+                existing_full = exp_dir.name
+            print(f"Experiment directory was created concurrently: {exp_dir}")
+            print(f"EXPERIMENT_CREATED::{existing_full}")
+            return 0
+        # If experiment.json not present, proceed to initialize the directory we now own
+
+    (exp_dir / "Findings" / "Cloud").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "Findings" / "Code").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "Knowledge").mkdir(exist_ok=True)
+    (exp_dir / "Summary").mkdir(exist_ok=True)
+    (exp_dir / "Agents").mkdir(exist_ok=True)
+    (exp_dir / "Scripts").mkdir(exist_ok=True)
     
     # Copy agent instructions
     for agent_file in AGENTS_SOURCE.glob("*.md"):
@@ -491,6 +529,8 @@ def cmd_new(args: argparse.Namespace) -> int:
     
     print(f"Created experiment: {exp_name}")
     print(f"Directory: {exp_dir}")
+    # Machine-readable marker for callers
+    print(f"EXPERIMENT_CREATED::{exp_name}")
     print()
     print("Next steps:")
     print(f"  1. Review/modify agents in: {exp_dir / 'Agents'}")
@@ -551,13 +591,27 @@ def cmd_run(args: argparse.Namespace) -> int:
     state = load_state()
     
     # Find experiment directory
-    exp_dirs = list(EXPERIMENTS_DIR.glob(f"{args.id}_*"))
-    if not exp_dirs:
-        print(f"ERROR: Experiment {args.id} not found")
-        return 1
-    
-    exp_dir = exp_dirs[0]
+    exp_arg = args.id
+    if "_" in exp_arg:
+        # Full experiment name provided (e.g., 005_baseline)
+        exp_dir = EXPERIMENTS_DIR / exp_arg
+        if not exp_dir.exists():
+            print(f"ERROR: Experiment {exp_arg} not found")
+            return 1
+        # Normalize args.id to numeric prefix for downstream callers
+        args.id = exp_arg.split("_", 1)[0]
+    else:
+        exp_dirs = list(EXPERIMENTS_DIR.glob(f"{exp_arg}_*"))
+        if not exp_dirs:
+            print(f"ERROR: Experiment {exp_arg} not found")
+            return 1
+        exp_dir = exp_dirs[0]
+        args.id = exp_arg
+
     config_file = exp_dir / "experiment.json"
+    if not config_file.exists():
+        print(f"ERROR: experiment.json missing in {exp_dir}")
+        return 1
     config = json.loads(config_file.read_text())
     
     if config.get("status") not in ("pending", "running"):
@@ -594,11 +648,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     if auto_phase1:
         print("Running Phase 1 context discovery (writes to experiment folder)...")
         for r in repos:
-            rp = Path(r).expanduser()
-            if not rp.is_absolute():
-                rp = (repos_root / r).resolve()
-            if not rp.is_dir():
-                print(f"ERROR: repo path not found: {rp}")
+            # First try to resolve as repo name using search paths
+            rp = resolve_repo(r)
+            if not rp:
+                # Fallback to manual resolution
+                rp = Path(r).expanduser()
+                if not rp.is_absolute():
+                    rp = (repos_root / r).resolve()
+            
+            if not rp or not rp.is_dir():
+                print(f"ERROR: repo path not found: {r}")
+                print(f"  Searched in configured paths from Settings/paths.json")
                 return 1
 
             # Two-phase targeted scan: Detection → Misconfigurations.

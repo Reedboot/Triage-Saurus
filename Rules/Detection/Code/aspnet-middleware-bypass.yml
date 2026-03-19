@@ -1,0 +1,87 @@
+rules:
+  - id: aspnet-middleware-bypass-mapwhen
+    message: |
+      Detected middleware bypass using MapWhen/Map routing that skips authentication.
+      
+      The code uses MapWhen() or Map() to route requests to specific paths without passing through
+      the authentication middleware pipeline. This creates unauthenticated endpoints that can expose
+      sensitive information or functionality.
+      
+      Common vulnerable patterns:
+      - Health check endpoints exposing database connectivity status
+      - Root "/" endpoints returning service metadata
+      - Admin/debug endpoints bypassing authorization
+      
+      REMEDIATION:
+      1. Remove MapWhen/Map and handle endpoints after authentication middleware
+      2. Or explicitly require authentication in the mapped branch:
+         app.MapWhen(ctx => ctx.Request.Path == "/health", appBuilder => {
+             appBuilder.UseAuthentication();
+             appBuilder.UseAuthorization();
+             appBuilder.Run(async ctx => { /* health check */ });
+         });
+      3. For health checks, use ASP.NET Core Health Checks middleware with authentication
+      4. For internal-only endpoints, restrict to localhost/private networks via middleware
+      
+      REFERENCES:
+      - ASP.NET Core Middleware: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/
+      - CWE-306: Missing Authentication for Critical Function
+      - CWE-200: Exposure of Sensitive Information
+    severity: WARNING
+    languages: [csharp]
+    metadata:
+      category: security
+      subcategory: authentication-bypass
+      cwe:
+        - "CWE-306"
+        - "CWE-200"
+      technology:
+        - dotnet
+        - aspnet-core
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - "https://cwe.mitre.org/data/definitions/306.html"
+        - "https://cwe.mitre.org/data/definitions/200.html"
+    patterns:
+      - pattern-either:
+          # MapWhen that bypasses middleware
+          - pattern: |
+              app.MapWhen($CONDITION, $BUILDER => {
+                ...
+              })
+          - pattern: |
+              app.Map($PATH, $BUILDER => {
+                ...
+              })
+      # Ensure UseAuthentication/UseAuthorization not called in the mapped branch
+      - pattern-not-inside: |
+          $BUILDER => {
+            ...
+            $BUILDER.UseAuthentication();
+            ...
+          }
+      # Check if MapWhen is after UseAuthentication in main pipeline
+      - pattern-inside: |
+          ...
+          app.UseAuthentication();
+          ...
+          app.MapWhen(...)
+          ...
+
+# TODO: Implement full pattern detection logic
+# TODO: Add test cases for:
+#   - Health endpoint MapWhen bypass (from Experiment 001)
+#   - Root "/" endpoint mapped before authentication
+#   - Admin endpoints with Map() skipping authorization
+#   - Detect if MapWhen appears BEFORE UseAuthentication in Startup.cs Configure()
+# TODO: Validate on account-viewing-permissions repository
+# TODO: Consider middleware ordering analysis (complex)
+
+# Expected detection: account-viewing-permissions/Startup.cs:69-96
+# app.MapWhen(ctx => ctx.Request.Path == "/", appBuilder => {
+#     appBuilder.Run(async ctx => { await ctx.Response.WriteAsync("200 OK"); });
+# });
+# app.MapWhen(ctx => ctx.Request.Path == "/health", appBuilder => { /* health check */ });
+# Both bypass UseAuthentication() middleware

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-run_pipeline.py — Offline Phase 1-3 pipeline runner.
+run_pipeline.py — Offline Phase 1-3c pipeline runner.
 
 Runs the complete AI-free triage pipeline against a repository:
   Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
   Phase 2 — Script-based code context discovery → metadata in DB + repo summary MD
-  Phase 3 — Render finding MDs + architecture diagram from DB
+  Phase 3a — Internet exposure analysis → exposure findings + provider diagrams
+  Phase 3b — Render finding MDs from DB
+  Phase 3c — Render architecture diagram from DB
 
 No LLM or internet access required.
 
@@ -42,6 +44,8 @@ sys.path.insert(0, str(SCRIPTS / "Utils"))
 
 _EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
 _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
+_ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
+_RENDER_EXPOSURE = SCRIPTS / "Generate" / "render_exposure_summary.py"
 _RENDER        = SCRIPTS / "Generate"    / "render_finding.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
@@ -159,17 +163,34 @@ def main() -> int:
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return 1
-        # Parse experiment ID from output ("Created experiment: 005_...")
+        # First, look for machine-readable marker from triage_experiment.py
         experiment_id = None
+        experiment_full_name = None
         for line in result.stdout.splitlines():
-            if line.startswith("Created experiment:"):
-                tag = line.split(":", 1)[1].strip()
-                experiment_id = tag.split("_")[0]
+            if line.startswith("EXPERIMENT_CREATED::"):
+                experiment_full_name = line.split("::", 1)[1].strip()
+                if experiment_full_name:
+                    experiment_id = experiment_full_name.split("_")[0]
                 break
+        # Fallback to legacy parsing if marker missing
+        if not experiment_id:
+            for line in result.stdout.splitlines():
+                if line.startswith("Created experiment:"):
+                    tag = line.split(":", 1)[1].strip()
+                    experiment_id = tag.split("_")[0]
+                    experiment_full_name = tag
+                    break
         if not experiment_id:
             print("[ERROR] Could not parse experiment ID from output.", file=sys.stderr)
             return 1
-        exp_dir = _resolve_experiment_dir(experiment_id)
+        # Resolve experiment directory. Prefer full name when available
+        if experiment_full_name:
+            exp_dir = REPO_ROOT / "Output" / "Learning" / "experiments" / experiment_full_name
+            if not exp_dir.exists():
+                # Fallback to scanning by numeric id
+                exp_dir = _resolve_experiment_dir(experiment_id)
+        else:
+            exp_dir = _resolve_experiment_dir(experiment_id)
 
     print(f"\n{'='*60}")
     print(f"  Experiment : {experiment_id}")
@@ -205,11 +226,45 @@ def main() -> int:
     else:
         print("\n[Pipeline] Skipping Phase 2 (--skip-phase2)")
 
-    # ── Phase 3a: Render finding MDs ─────────────────────────────────────────
+    # ── Phase 3a: Internet Exposure Analysis ─────────────────────────────────────
+    print(f"\n{'─'*60}")
+    print(f"▶  Phase 3a — Internet Exposure Analysis")
+    print('─'*60)
+    
+    # Run exposure analyzer
+    import os
+    env = os.environ.copy()
+    existing = env.get('PYTHONPATH', '')
+    paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils'), str(SCRIPTS / 'Analyze')]
+    if existing:
+        paths.append(existing)
+    env['PYTHONPATH'] = ':'.join(paths)
+    
+    result = subprocess.run(
+        [sys.executable, str(_ANALYZE_EXPOSURE), "--experiment", experiment_id],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        print("[WARN] Phase 3a (exposure analysis) exited non-zero.", file=sys.stderr)
+    
+    # Render exposure summaries
+    exposure_cloud_dir = exp_dir / "Summary" / "Cloud"
+    exposure_cloud_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [sys.executable, str(_RENDER_EXPOSURE), "--experiment", experiment_id,
+         "--output-dir", str(exposure_cloud_dir)],
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        print("[WARN] Phase 3a (exposure rendering) exited non-zero.", file=sys.stderr)
+
+    # ── Phase 3b: Render finding MDs ─────────────────────────────────────────
     finding_ids = _get_experiment_findings(experiment_id)
     if finding_ids:
         print(f"\n{'─'*60}")
-        print(f"▶  Phase 3a — Render {len(finding_ids)} finding MD(s)")
+        print(f"▶  Phase 3b — Render {len(finding_ids)} finding MD(s)")
         print('─'*60)
         findings_dir = exp_dir / "Findings" / repo_name
         findings_dir.mkdir(parents=True, exist_ok=True)
@@ -243,7 +298,7 @@ def main() -> int:
     else:
         print("\n[Pipeline] No findings in DB for this experiment — skipping render.")
 
-    # ── Phase 3b: Architecture diagram ───────────────────────────────────────
+    # ── Phase 3c: Architecture diagram ───────────────────────────────────────
     cloud_dir = exp_dir / "Summary" / "Cloud"
     cloud_dir.mkdir(parents=True, exist_ok=True)
     # Generate per-provider architecture files (Architecture_AWS.md, Architecture_Azure.md, ...)

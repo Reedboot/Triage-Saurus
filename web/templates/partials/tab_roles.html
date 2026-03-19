@@ -1,9 +1,9 @@
 {# partials/tab_roles.html — RBAC, IAM roles, managed identities, permissions #}
 {% if roles %}
-<div class="assets-toolbar" style="padding:0 0 10px 0; border-bottom:1px solid var(--border); margin-bottom:10px; display:flex; gap:8px; align-items:center;">
-  <input type="text" id="roles-search" class="assets-search" style="max-width:320px"
+<div class="assets-toolbar">
+  <input type="text" id="roles-search" class="assets-search"
          placeholder="Filter roles / identities…" autocomplete="off" />
-  <span style="font-size:0.75rem; color:var(--text-muted);">{{ roles | length }} identit{{ 'y' if roles | length == 1 else 'ies' }}</span>
+  <span class="s-inline-3c88b2">{{ roles | length }} identit{{ 'y' if roles | length == 1 else 'ies' }}</span>
 </div>
 <div class="section-table-wrap">
   <table class="section-table" id="roles-table">
@@ -24,7 +24,7 @@
         <td>
           <span class="asset-name">{{ r.identity_name or r.role_name or '—' }}</span>
           {% if r.principal_id %}
-            <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ r.principal_id }}</div>
+            <div class="s-inline-b6d566">{{ r.principal_id }}</div>
           {% endif %}
         </td>
         <td><span class="asset-type-badge">{{ r.role_type or r.identity_type or '—' }}</span></td>
@@ -67,11 +67,9 @@
     </tbody>
   </table>
 </div>
-<div id="roles-empty" class="assets-empty" style="display:none">No roles match the current filter.</div>
+<div id="roles-empty" class="assets-empty s-inline-cb4589">No roles match the current filter.</div>
 <!-- roles JS moved to /static/roles.js; initialized from index.html after fragment load -->
-<style>
-details[open] > summary .details-arrow { transform: rotate(90deg); display:inline-block; }
-</style>
+{# styles moved to /static/app.css #}
 {% else %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">

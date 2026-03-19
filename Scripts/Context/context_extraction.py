@@ -785,6 +785,47 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     }
     known_resource_keys: set[tuple[str, str]] = {(r.resource_type, r.name) for r in context.resources}
 
+    # Infer provider for terraform_data and other meta-resources from file context
+    # Group resources by file
+    resources_by_file: Dict[str, list[Resource]] = {}
+    for resource, _ in resource_blocks:
+        file_path = resource.file_path or "unknown"
+        if file_path not in resources_by_file:
+            resources_by_file[file_path] = []
+        resources_by_file[file_path].append(resource)
+    
+    # For each file, determine the dominant provider
+    for file_path, file_resources in resources_by_file.items():
+        # Count providers in this file
+        provider_counts: Dict[str, int] = {}
+        for res in file_resources:
+            # Skip meta-resources for counting
+            if res.resource_type in ('terraform_data', 'null_resource', 'random_id', 'random_string', 
+                                      'random_password', 'time_sleep', 'time_rotating'):
+                continue
+            # Detect provider from resource type prefix
+            for prefix, provider in [
+                ("azurerm_", "azure"), ("azuread_", "azure"),
+                ("aws_", "aws"), ("google_", "gcp"),
+                ("alicloud_", "alicloud"), ("oci_", "oracle")
+            ]:
+                if res.resource_type.startswith(prefix):
+                    provider_counts[provider] = provider_counts.get(provider, 0) + 1
+                    break
+        
+        # Determine dominant provider
+        dominant_provider = "unknown"
+        if provider_counts:
+            dominant_provider = max(provider_counts, key=provider_counts.get)
+        
+        # Apply to meta-resources in this file
+        for res in file_resources:
+            if res.resource_type in ('terraform_data', 'null_resource', 'random_id', 'random_string',
+                                      'random_password', 'time_sleep', 'time_rotating'):
+                if not res.properties:
+                    res.properties = {}
+                res.properties["inferred_provider"] = dominant_provider
+
     def _ensure_inferred_resource(resource_type: str, canonical_name: str, source_file: str, line_number: int) -> str:
         inferred_name = f"__inferred__{canonical_name}"
         key = (resource_type, inferred_name)
@@ -1135,6 +1176,20 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             nic_names = _extract_arm_resource_names(attrs.get("network_interface_ids"), "networkInterfaces")
             if nic_names:
                 props["network_interface_names"] = nic_names
+        
+        # Extract parent APIM instance name for API resources (supports shared/external APIM)
+        if resource_type in ("azurerm_api_management_api", "azurerm_api_management_api_operation", 
+                             "azurerm_api_management_product", "azurerm_api_management_subscription"):
+            apim_name_raw = attrs.get("api_management_name")
+            if apim_name_raw:
+                # Extract actual value (could be var.name, data.ref, or literal)
+                apim_name_str = str(apim_name_raw).strip().strip('"').strip("'")
+                props["api_management_instance_name"] = apim_name_str
+                
+                # Track as shared resource if it's a variable/data reference
+                if apim_name_str.startswith("var.") or apim_name_str.startswith("data."):
+                    props["shared_resource_reference"] = "azurerm_api_management"
+                    props["shared_resource_identifier"] = apim_name_str
 
         resource.properties = props
 
@@ -1230,6 +1285,42 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         if resource.resource_type == "aws_security_group_rule" and _is_prop_true(props, "internet_ingress_open"):
             parent_props["internet_ingress_open"] = "true"
             _append_signal(parent_props, "security group ingress rule allows internet")
+
+        # API Gateway operations/methods/routes are ingress points - mark them and their parents
+        api_operation_types = {
+            "azurerm_api_management_api_operation",
+            "aws_api_gateway_method",
+            "aws_api_gateway_resource",
+            "aws_apigatewayv2_route",
+            "google_api_gateway_gateway",
+            "oci_apigateway_deployment",
+            "alicloud_api_gateway_api",
+        }
+        
+        if resource.resource_type in api_operation_types:
+            # Mark the operation itself as an ingress point
+            props["is_ingress_endpoint"] = "true"
+            props["ingress_type"] = "api_operation"
+            _mark_internet_access(props, f"API operation/endpoint exposed via {resource.resource_type}")
+            
+            # Propagate to parent API gateway
+            if parent:
+                _mark_internet_access(parent_props, f"API gateway hosts public operations")
+                parent.properties = parent_props
+        
+        # Load balancer listeners are also ingress points
+        lb_listener_types = {
+            "aws_lb_listener",
+            "aws_alb_listener",
+            "azurerm_lb_rule",
+        }
+        
+        if resource.resource_type in lb_listener_types:
+            props["is_ingress_endpoint"] = "true"
+            props["ingress_type"] = "load_balancer_listener"
+            if parent:
+                _mark_internet_access(parent_props, f"Load balancer has configured listeners")
+                parent.properties = parent_props
 
         parent.properties = parent_props
 
@@ -1608,6 +1699,122 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     # Fourth pass: scan config/code files for connection string dependencies
     # -------------------------------------------------------------------------
     extract_connection_string_dependencies(repo_path, context)
+    
+    # -------------------------------------------------------------------------
+    # Detect AKS workloads from Skaffold configuration
+    # -------------------------------------------------------------------------
+    try:
+        from skaffold_parser import extract_skaffold_workloads
+        
+        skaffold_workloads = extract_skaffold_workloads(repo_path)
+        if skaffold_workloads:
+            print(f"[+] Found {len(skaffold_workloads)} Skaffold workloads")
+            
+            # Add workloads as resources
+            for wl in skaffold_workloads:
+                # Create a resource for the AKS workload
+                workload_resource = Resource(
+                    name=wl.name,
+                    resource_type=wl.resource_type,
+                    file_path="skaffold.yaml",
+                    line_number=1,
+                    properties={
+                        "image": wl.image_name,
+                        "dockerfile": wl.dockerfile,
+                        "helm_chart": wl.helm_chart,
+                        "namespace": wl.namespace,
+                        "replicas": wl.replicas,
+                        "health_endpoint": wl.health_check_path,
+                        "health_port": wl.health_check_port,
+                        "workload_type": "aks_workload",
+                        "is_ingress_endpoint": wl.health_check_path is not None,
+                    }
+                )
+                context.resources.append(workload_resource)
+                
+                # Infer connections from API Gateway to API workloads
+                if "api" in wl.name and not "queuelistener" in wl.name and not "worker" in wl.name:
+                    # Find API Gateway resources (Azure, AWS, GCP)
+                    api_gateway_types = [
+                        # Azure
+                        "azurerm_api_management_api",
+                        # AWS
+                        "aws_api_gateway",
+                        "aws_apigatewayv2_api",
+                        "aws_api_gateway_rest_api",
+                        # GCP
+                        "google_api_gateway_api",
+                        "google_api_gateway_gateway",
+                    ]
+                    
+                    for resource in context.resources:
+                        if resource.resource_type in api_gateway_types:
+                            # Create connection: API Gateway → Kubernetes API workload
+                            conn = Connection(
+                                source=f"{resource.resource_type}.{resource.name}",
+                                target=f"{wl.resource_type}.{wl.name}",
+                                connection_type="routes_to_backend"
+                            )
+                            context.connections.append(conn)
+                            
+                            # Also create relationship
+                            rel = Relationship(
+                                source_type=resource.resource_type,
+                                source_name=resource.name,
+                                target_type=wl.resource_type,
+                                target_name=wl.name,
+                                relationship_type=RelationshipType.ROUTES_INGRESS_TO,
+                                notes="Inferred from API Gateway and Skaffold API workload"
+                            )
+                            context.relationships.append(rel)
+                
+                # Infer connections from messaging services to queue listener/worker workloads
+                if any(keyword in wl.name for keyword in ["queuelistener", "worker", "consumer", "subscriber"]) or \
+                   any(keyword in (wl.helm_chart or "") for keyword in ["background-worker", "consumer", "worker"]):
+                    # Find messaging resources (Service Bus, SQS/SNS, Pub/Sub)
+                    messaging_types = [
+                        # Azure Service Bus
+                        "azurerm_servicebus_namespace",
+                        "azurerm_servicebus_queue",
+                        "azurerm_servicebus_topic",
+                        "azurerm_servicebus_subscription",
+                        # AWS SQS/SNS/Kinesis
+                        "aws_sqs_queue",
+                        "aws_sns_topic",
+                        "aws_sns_subscription",
+                        "aws_kinesis_stream",
+                        "aws_mq_broker",
+                        # GCP Pub/Sub
+                        "google_pubsub_topic",
+                        "google_pubsub_subscription",
+                    ]
+                    
+                    for resource in context.resources:
+                        if resource.resource_type in messaging_types:
+                            # Create connection: Messaging → Kubernetes Worker
+                            conn = Connection(
+                                source=f"{resource.resource_type}.{resource.name}",
+                                target=f"{wl.resource_type}.{wl.name}",
+                                connection_type="consumed_by"
+                            )
+                            context.connections.append(conn)
+                            
+                            # Also create relationship
+                            rel = Relationship(
+                                source_type=resource.resource_type,
+                                source_name=resource.name,
+                                target_type=wl.resource_type,
+                                target_name=wl.name,
+                                relationship_type=RelationshipType.DEPENDS_ON,
+                                notes="Inferred from messaging service and Skaffold worker workload"
+                            )
+                            context.relationships.append(rel)
+                
+                print(f"  [+] Added Kubernetes workload: {wl.name} ({wl.resource_type})")
+    except ImportError:
+        pass  # Skaffold parser not available
+    except Exception as e:
+        print(f"[WARN] Failed to parse Skaffold: {e}")
 
     deduped_relationships: list[Relationship] = []
     seen_relationships: set[tuple[str, str, str, str, str, str]] = set()

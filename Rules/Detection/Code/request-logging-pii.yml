@@ -1,0 +1,98 @@
+rules:
+  - id: request-logging-sensitive-data
+    message: |
+      Detected sensitive data logging in request/response middleware.
+      
+      The code logs full request or response bodies at DEBUG/INFO level, which can expose:
+      - Personally Identifiable Information (PII): names, emails, addresses, SSNs
+      - Authentication credentials: passwords, API keys, tokens, session IDs
+      - Financial data: account numbers, credit cards, balances
+      - Protected Health Information (PHI): medical records, diagnoses
+      
+      This creates compliance violations:
+      - GDPR Article 5(1)(c): Data minimization principle
+      - PCI-DSS 3.4: Mask PAN (Primary Account Number) in logs
+      - HIPAA: Protect PHI in all storage (including logs)
+      
+      REMEDIATION:
+      1. Remove request/response body logging entirely (preferred)
+      2. Use structured logging with explicit field allowlists (not full bodies)
+      3. Implement PII redaction/masking middleware:
+         - Redact auth headers (Authorization, X-API-Key, cookies)
+         - Mask sensitive fields (email, SSN, accountNumber, password)
+         - Truncate large payloads
+      4. Set log level to WARNING/ERROR in production (not DEBUG)
+      5. Use correlation IDs for tracing, not full request dumps
+      
+      REFERENCES:
+      - OWASP Logging Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html
+      - CWE-532: Insertion of Sensitive Information into Log File
+      - GDPR Article 5(1)(c): Data Minimization
+    severity: WARNING
+    languages: [csharp]
+    metadata:
+      category: security
+      subcategory: information-disclosure
+      cwe:
+        - "CWE-532"
+      technology:
+        - dotnet
+        - aspnet-core
+        - logging
+      compliance:
+        - GDPR
+        - PCI-DSS
+        - HIPAA
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - "https://cwe.mitre.org/data/definitions/532.html"
+    patterns:
+      - pattern-either:
+          # Log request body
+          - pattern: |
+              $LOGGER.LogDebug("Request: {$VAR}", $REQUEST_BODY)
+          - pattern: |
+              $LOGGER.LogInformation("Request: {$VAR}", $REQUEST_BODY)
+          - pattern: |
+              $LOGGER.LogDebug($MSG, ..., $REQUEST.Body, ...)
+          # Log response body
+          - pattern: |
+              $LOGGER.LogDebug("Response: {$VAR}", $RESPONSE_BODY)
+          - pattern: |
+              $LOGGER.LogInformation("Response: {$VAR}", $RESPONSE_BODY)
+          # Log headers (may contain auth tokens)
+          - pattern: |
+              $LOGGER.LogDebug("Headers: {$VAR}", $REQUEST.Headers)
+          - pattern: |
+              $LOGGER.LogInformation("Headers: {$VAR}", $REQUEST.Headers)
+          # Generic request/response logging
+          - pattern: |
+              $LOGGER.Log$LEVEL($FORMAT, ..., requestBody, ...)
+          - pattern: |
+              $LOGGER.Log$LEVEL($FORMAT, ..., responseBody, ...)
+      # Ensure not in sanitization/redaction middleware
+      - pattern-not-inside: |
+          var $SANITIZED = RedactSensitiveData(...)
+          ...
+          $LOGGER.Log$LEVEL(..., $SANITIZED, ...)
+      - pattern-not-inside: |
+          var $MASKED = MaskPII(...)
+          ...
+          $LOGGER.Log$LEVEL(..., $MASKED, ...)
+
+# TODO: Implement full pattern detection for logging middleware
+# TODO: Add test cases for:
+#   - RequestLoggingMiddleware logging full request/response (from Experiment 001)
+#   - Serilog/NLog/Microsoft.Extensions.Logging patterns
+#   - Detect specific sensitive fields (password, apiKey, ssn, creditCard)
+#   - Authorization header logging
+#   - Cookie logging
+# TODO: Validate on account-viewing-permissions repository
+# TODO: Add detection for log level configuration (should be WARNING+ in prod)
+
+# Expected detection: account-viewing-permissions/RequestLoggingMiddleware.cs:38, 44
+# _logger.LogDebug("Request: {RequestBody}", requestBody);
+# _logger.LogDebug("Response: {ResponseBody}", responseBody);
+# Logs contain: CB-User-Context header (auth data), account numbers, user emails, institution IDs

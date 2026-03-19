@@ -1,0 +1,51 @@
+rules:
+  - id: azure-servicebus-subscription-no-filter
+    message: |
+      Service Bus subscription has no message filter rules defined. Without
+      filters, the subscription receives ALL messages from the topic,
+      regardless of relevance. This can cause:
+      - Unnecessary message processing overhead
+      - Resource waste (compute, storage)
+      - Increased latency from processing irrelevant messages
+      - Potential security issues if services process untrusted message types
+      
+      Add filter rules to subscriptions to ensure they only receive messages
+      they're designed to handle. Use SQL filters or correlation filters:
+      
+        resource "azurerm_servicebus_subscription_rule" "example" {
+          name                = "my-filter"
+          subscription_id     = azurerm_servicebus_subscription.example.id
+          filter_type         = "SqlFilter"
+          sql_filter          = "MessageType = 'UserCreated'"
+        }
+      
+      Note: This is INFO severity as it's more of an efficiency/design issue
+      unless the service processes untrusted message types (then WARNING).
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_servicebus_subscription" "$SUBNAME" {
+            ...
+          }
+      - pattern-not-inside: |
+          resource "azurerm_servicebus_subscription" "$SUBNAME" {
+            ...
+          }
+          ...
+          resource "azurerm_servicebus_subscription_rule" "$RULENAME" {
+            ...
+            subscription_id = azurerm_servicebus_subscription.$SUBNAME.id
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [messaging, efficiency]
+      cwe: CWE-1188
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: LOW
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/service-bus-messaging/topic-filters
+      technology: [azure, terraform, servicebus]

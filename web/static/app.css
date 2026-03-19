@@ -67,7 +67,6 @@ header span.badge {
 /* ── Container ── */
 .container {
   flex: 1;
-  max-width: 1800px;
   width: 100%;
   margin: 0 auto;
   padding: 8px 6px;
@@ -243,7 +242,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* Ensure panels can shrink/grow inside grid without causing overflow */
 .panel { min-width: 0; }
-@media (max-width: 960px) { .workspace { grid-template-columns: 1fr; } }
+@media (max-width: 960px) {
+  .workspace { grid-template-columns: 1fr; }
+  .workspace > #diagram-panel { order: -1; }
+  .workspace > #log-panel { order: 0; }
+}
 
 .panel {
   background: var(--bg-surface);
@@ -257,7 +260,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 
 .panel-header {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -335,8 +338,32 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .panel-section.hidden { display: none; }
 
 /* ── Diagram tabs ── */
+/* Tabs: keep hidden by default, but when visible they should scroll instead of pushing toolbar buttons */
 .diagram-tabs { display: none; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
 .diagram-tabs.visible { display: flex; }
+
+/* Provider tabs inside the header: allow horizontal scroll and let them shrink so buttons stay visible */
+.right-panel-header .diagram-provider-tabs,
+#diagram-tabs,
+.right-panel-header .diagram-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0; /* allow shrinking in flex layout */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure action buttons don't shrink and remain visible */
+.right-panel-header .panel-actions > .btn-small {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Make sure panel-actions aligns items nicely */
+.right-panel-header .panel-actions { align-items: center; flex-wrap: nowrap; min-width: 0; overflow: visible; }
 
 .tab-btn {
   background: transparent;
@@ -373,6 +400,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Mermaid container ── */
 .mermaid { overflow: auto; }
 .mermaid svg { background: transparent !important; }
+/* Allow Mermaid to control foreignObject dimensions for proper text rendering */
+.mermaid foreignObject { 
+  overflow: visible;
+}
+.mermaid foreignObject > div {
+  overflow: visible;
+}
 
 .mermaid-container {
   position: relative;
@@ -567,6 +601,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.78rem;
+  table-layout: fixed; /* Enable fixed layout for column resizing */
 }
 
 .section-table thead th {
@@ -579,6 +614,35 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  position: relative; /* For resize handle positioning */
+  overflow: hidden;
+}
+
+/* Column resize handle */
+.section-table thead th .resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 1;
+  background: transparent;
+  border-right: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.section-table thead th .resize-handle:hover {
+  border-right-color: var(--accent);
+}
+
+.section-table thead th.resizing {
+  user-select: none;
+}
+
+.section-table.col-resizing {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .section-table tbody tr {
@@ -671,6 +735,47 @@ tr.child-row + tr.child-row { border-top: 0; }
   padding: 8px 12px; border-bottom: 1px solid var(--border-subtle);
   flex-wrap: wrap; flex-shrink: 0;
 }
+
+/* Moved from templates/partials/tab_assets.html */
+.child-count-badge {
+  display: inline-block;
+  background: var(--accent, #0969da);
+  color: white;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.expand-toggle {
+  font-size: 0.75rem;
+  transition: transform 0.15s;
+  display: inline-block;
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.expand-toggle.open {
+  transform: rotate(90deg);
+}
+.child-row td:first-child {
+  padding-left: 2rem;
+}
+/* Child rows: visually differentiate and indent */
+.child-row .asset-name {
+  opacity: 0.9;
+  font-weight: 500;
+}
+.child-row td {
+  color: var(--text-faint);
+}
+
+/* Moved from templates/partials/tab_roles.html */
+details[open] > summary .details-arrow { transform: rotate(90deg); display:inline-block; }
+
+/* assets toolbar helpers */
+.assets-toolbar-right { margin-left: auto; display:flex; gap:8px; align-items:center; }
 
 .assets-search {
   flex: 1; min-width: 140px;
@@ -864,3 +969,13 @@ tr.child-row + tr.child-row { border-top: 0; }
 }
 .diagram-provider-tab:hover { color: var(--text); }
 .diagram-provider-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Generated inline style classes */
+.s-inline-cb4589 { display:none; }
+.s-inline-0e3800 { color:#484f58; }
+.s-inline-e09362 { color:var(--red); }
+.s-inline-3c88b2 { font-size:0.75rem; color:var(--text-muted); }
+.s-inline-b6d566 { font-size:0.7rem; color:var(--text-muted); font-family:monospace; }
+.s-inline-157a9c { margin-bottom:14px; }
+.s-inline-f1c952 { margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; }
+.s-inline-4bfd80 { color:var(--green); }

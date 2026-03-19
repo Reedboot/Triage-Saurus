@@ -122,5 +122,48 @@ if [ -x "$VENV_DIR/bin/python" ]; then
 else
   PY_EXEC=$(command -v python3 || command -v python)
 fi
+
+# Check Cozo DB is initialised and seeded (attempt to auto-init if missing)
+COZO_DB="$ROOT/Output/Data/cozo.db"
+
+_check_cozo_db() {
+  if [ ! -f "$COZO_DB" ]; then
+    return 1
+  fi
+  # Ensure required tables exist
+  for t in repositories nodes edges findings providers resource_types; do
+    if ! sqlite3 "$COZO_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='${t}';" | grep -q "${t}"; then
+      return 1
+    fi
+  done
+  # Ensure resource_types has at least one row (seeded)
+  cnt=$(sqlite3 "$COZO_DB" "SELECT COUNT(1) FROM resource_types;" 2>/dev/null || echo "0")
+  if [ "${cnt}" -lt 1 ]; then
+    return 2
+  fi
+  return 0
+}
+
+echo -e "  ${CYAN}Checking Cozo DB at: ${BOLD}${COZO_DB}${RESET}"
+if _check_cozo_db; then
+  echo -e "  ${GREEN}✅ Cozo DB appears initialized and seeded.${RESET}"
+else
+  echo -e "  ${YELLOW}⚠ Cozo DB is missing or incomplete. Attempting to initialize and seed it...${RESET}"
+  if "$PY_EXEC" "$ROOT/Scripts/Utils/init_cozo_learning.py" init "$COZO_DB"; then
+    echo -e "  ${GREEN}Initialization script completed.${RESET}"
+    if _check_cozo_db; then
+      echo -e "  ${GREEN}✅ Cozo DB is now initialized and seeded.${RESET}"
+    else
+      echo -e "  ${RED}❌ Cozo DB still missing required tables or seeds after init.${RESET}"
+      echo -e "    ${YELLOW}You may need to run: python3 Scripts/Utils/init_cozo_learning.py init Output/Data/cozo.db${RESET}"
+      exit 1
+    fi
+  else
+    echo -e "  ${RED}❌ Failed to run init script. Activate the venv and run manually:${RESET}"
+    echo -e "    ${YELLOW}python3 Scripts/Utils/init_cozo_learning.py init Output/Data/cozo.db${RESET}"
+    exit 1
+  fi
+fi
+
 echo -e "  ${CYAN}Launching web app with: ${BOLD}${PY_EXEC}${RESET}"
 exec "$PY_EXEC" "$ROOT/web/app.py"

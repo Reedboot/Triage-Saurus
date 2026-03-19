@@ -98,6 +98,141 @@ All findings MUST reference the rule that detected them:
 6. ❌ NEVER skip rules because "this type of issue seems unlikely"
 7. ❌ NEVER defer detection to LLMs; LLMs only enrich rule hits.
 
+---
+
+## 🔍 Manual Security Review Best Practices
+
+**When Manual Review is Required:**
+
+Manual security review becomes CRITICAL when automated rule-based scanning produces **0 security findings** despite repo complexity. This pattern indicates:
+- Custom authentication/authorization logic not covered by existing rules
+- Business logic vulnerabilities requiring code flow analysis
+- Framework-specific patterns needing deeper inspection
+
+**Trigger Conditions for Phase 4 Manual Review:**
+1. ✅ Rule scan produces 0 MEDIUM+ findings in complex codebases (>5k LOC)
+2. ✅ Custom auth schemes detected (header-based, proprietary tokens)
+3. ✅ Multi-tenant architectures with isolation requirements
+4. ✅ Financial services, healthcare, or other high-security domains
+5. ✅ Novel frameworks or authentication patterns not in rule library
+
+### Multi-Tenant Isolation Review Checklist
+
+**When scanning multi-tenant systems, validate these security boundaries:**
+
+1. **Tenant ID Source Trust**
+   - ✅ Verify tenant identifier comes from cryptographically signed source (JWT, server-side session)
+   - ❌ Flag tenant ID extracted from user-supplied headers without validation
+   - ❌ Flag tenant ID from claims in unsigned tokens
+   - **Example vulnerability:** `InstitutionId` from unsecured `CB-User-Context` header (Experiment 001, FI_AVP_002)
+
+2. **Authorization Boundary Enforcement**
+   - ✅ Check database queries include server-side tenant scoping (Row-Level Security, query filters)
+   - ❌ Flag queries relying solely on client-supplied tenant identifiers
+   - ❌ Flag middleware bypasses (MapWhen, Map) that skip auth checks
+   - **Example vulnerability:** `GetAccountsQuery(institutionId)` where institutionId is user-controlled (Experiment 001)
+
+3. **Cross-Tenant Access Paths**
+   - ✅ Verify APIs reject requests for resources belonging to other tenants
+   - ✅ Check file storage paths include tenant isolation
+   - ✅ Validate background jobs respect tenant boundaries
+   - ❌ Flag admin endpoints without tenant context validation
+
+4. **Tenant Isolation Testing**
+   - Document PoC exploits showing cross-tenant access (curl examples)
+   - Test with forged tokens/headers containing different tenant IDs
+   - Validate database-level isolation (RLS policies, connection strings)
+
+### Custom Authentication Scheme Validation Patterns
+
+**For systems using non-standard auth (not JWT, OAuth, SAML), review:**
+
+1. **Input Validation**
+   - ✅ Cryptographic signature verification (HMAC, RSA, ECDSA)
+   - ✅ Timestamp/nonce checking to prevent replay attacks
+   - ✅ Allowlist validation for claim values
+   - ❌ Flag header deserialization without signature validation
+   - ❌ Flag JSON parsing of auth data without integrity checks
+   - **Example vulnerability:** `JsonConvert.DeserializeObject(userContext)` without HMAC (Experiment 001, FI_AVP_001)
+
+2. **Middleware Execution Order**
+   - Map ASP.NET Core / Express.js / Spring middleware pipeline
+   - Verify auth middleware runs BEFORE routing/business logic
+   - Check for bypass paths (health checks, root endpoints, static files)
+   - ❌ Flag `MapWhen()` branches that skip authentication
+   - **Example vulnerability:** `/health` endpoint bypassing auth via early MapWhen (Experiment 001, FI_AVP_003)
+
+3. **Session Management**
+   - Check for secure session storage (encrypted cookies, server-side)
+   - Validate session timeout and renewal logic
+   - Verify logout clears all session state
+   - ❌ Flag stateless auth relying only on client-supplied data
+
+4. **Credential Storage**
+   - Verify passwords use bcrypt/Argon2 (not SHA256/MD5)
+   - Check API keys stored with hashing/encryption
+   - Validate secret rotation mechanisms
+   - ❌ Flag plaintext credentials in config/logs
+
+### Header-Based Authentication Security Checks
+
+**For systems accepting authentication via HTTP headers, validate:**
+
+1. **Signature Verification**
+   - ✅ JWT with RS256/ES256 signature validation
+   - ✅ HMAC-SHA256 header validation with shared secret
+   - ✅ Mutual TLS (mTLS) certificate validation
+   - ❌ Flag JSON deserialization without signature checks
+   - ❌ Flag base64-decoded headers used directly as identity
+   - **CWE:** CWE-290 (Authentication Bypass), CWE-807 (Untrusted Input)
+
+2. **Header Tampering Prevention**
+   - Check headers come from trusted reverse proxy (X-Forwarded-For filtering)
+   - Verify header overwrite protection (reject duplicate headers)
+   - Validate header allowlists (reject unknown auth headers)
+   - ❌ Flag direct acceptance of `X-User-*` headers without gateway validation
+
+3. **Claim Validation**
+   - Verify required claims present (subject, issuer, audience, expiration)
+   - Check claim value format/range validation
+   - Validate nested claim structures (don't trust user-supplied JSON)
+   - ❌ Flag claims used for authorization without server-side validation
+
+4. **PII in Logs**
+   - Check logging middleware excludes auth headers
+   - Verify request/response body logging redacts sensitive fields
+   - Validate structured logging masks PII (email, SSN, account numbers)
+   - ❌ Flag `LogDebug(requestBody)` with full request dumps
+   - **CWE:** CWE-532 (Information Exposure Through Log Files)
+   - **Compliance:** GDPR Article 5(1)(c), PCI-DSS 3.4
+   - **Example vulnerability:** `RequestLoggingMiddleware` logging `CB-User-Context` header (Experiment 001, FI_AVP_004)
+
+### Manual Finding Documentation Requirements
+
+**When creating findings from Phase 4 manual review:**
+
+1. **Use CodeFinding.md Template**
+   - Location: `Templates/CodeFinding.md`
+   - Include: file:line references, PoC exploit, CWE/MITRE mappings
+   - Remediation: Provide code examples, not just descriptions
+
+2. **Store in Database**
+   - Use: `python3 Scripts/Persist/import_manual_finding.py`
+   - Auto-generates: finding_name, llm_enriched_at, repo_name
+   - Enables: Skeptic validation workflow integration
+
+3. **Finding Naming Convention**
+   - Format: `FI_<REPO_ABBREV>_<NUM>_<Short_Title>`
+   - Example: `FI_AVP_001_Unsecured_Header_Auth`
+   - Consistent: Enables cross-referencing and tracking
+
+4. **Skeptic Validation Required**
+   - Run DevSkeptic + PlatformSkeptic on ALL manual findings
+   - Expect 100% consensus for high-confidence findings
+   - Document skeptic disagreements as learning opportunities
+
+---
+
 ## 🚨 Critical Rule: Production Rigor for ALL Environments
 
 **NEVER reduce assessment rigor based on environment classification (CTF, lab, training, test, dev).**

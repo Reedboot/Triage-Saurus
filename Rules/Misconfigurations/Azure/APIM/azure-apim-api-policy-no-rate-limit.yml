@@ -1,0 +1,47 @@
+rules:
+  - id: azure-apim-api-policy-no-rate-limit
+    message: |
+      API Management API policy does not implement rate limiting. Without
+      rate limiting, the API is vulnerable to:
+      - Denial of Service (DoS) attacks
+      - Resource exhaustion
+      - Cost overruns (per-request billing backends)
+      - Brute force attacks (credential stuffing)
+      
+      Add <rate-limit> or <quota> policies in the <inbound> section to
+      restrict request rates per subscription/IP/user.
+      
+      Example:
+        <rate-limit calls="100" renewal-period="60" />
+        <quota calls="10000" bandwidth="40960" renewal-period="604800" />
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_api_management_api_policy" "$NAME" {
+            ...
+            xml_content = <<$END
+            $...CONTENT
+            $END
+            ...
+          }
+      - metavariable-pattern:
+          metavariable: $CONTENT
+          patterns:
+            - pattern-not-regex: rate-limit
+            - pattern-not-regex: quota
+            - pattern-not-regex: rate-limit-by-key
+            - pattern-regex: <inbound>
+    metadata:
+      category: security
+      subcategory: [availability, api-gateway]
+      cwe: CWE-770
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/rate-limit-policy
+        - https://learn.microsoft.com/en-us/azure/api-management/quota-policy
+      owasp: A04:2021 - Insecure Design
+      technology: [azure, terraform, apim]

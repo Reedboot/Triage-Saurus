@@ -1,13 +1,13 @@
 {# partials/tab_ingress.html — Internet-facing resources and inbound paths #}
 {% if ingress_resources or ingress_connections %}
-<div class="callout info" style="margin-bottom:14px;">
+<div class="callout info s-inline-157a9c">
   <strong>{{ (ingress_resources | length) + (ingress_connections | length) }}</strong>
   internet-facing entry point{{ 's' if (ingress_resources | length) + (ingress_connections | length) != 1 }}
   detected in this experiment.
 </div>
 
 {% if ingress_resources %}
-<h3 style="margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Internet-Facing Resources</h3>
+<h3 class="s-inline-f1c952">Internet-Facing Resources</h3>
 <div class="section-table-wrap" style="margin-bottom:18px;">
   <table class="section-table">
     <thead>
@@ -45,7 +45,7 @@
 {% endif %}
 
 {% if ingress_connections %}
-<h3 style="margin-bottom:8px; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Inbound Connections</h3>
+<h3 class="s-inline-f1c952">Inbound Connections</h3>
 <div class="section-table-wrap">
   <table class="section-table">
     <thead>
@@ -68,9 +68,9 @@
         <td>{{ c.authentication or c.auth_method or '—' }}</td>
         <td>
           {% if c.is_encrypted == 1 %}
-            <span style="color:var(--green)">✓ Yes</span>
+            <span class="s-inline-4bfd80">✓ Yes</span>
           {% elif c.is_encrypted == 0 %}
-            <span style="color:var(--red)">✗ No</span>
+            <span class="s-inline-e09362">✗ No</span>
           {% else %}—{% endif %}
         </td>
       </tr>

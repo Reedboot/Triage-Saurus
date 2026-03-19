@@ -47,10 +47,11 @@ Targeted helpers (stdout-only):
 
 4. **Create audit log:** Create `Output/Audit/Session_YYYY-MM-DD_HHMMSS.md` using the template from `Templates/AuditLog.md`. Log session metadata (date, start time, triage type TBD).
 
-5. **Scan workspace:** Run `python3 Scripts/Scan/scan_workspace.py` to check:
+5. **Scan workspace:** Run `python3 Scripts/Scan/scan_workspace.py --skip-repos` to check:
    - Output/Knowledge/ for refinement questions (## Unknowns / ## ❓ Open Questions)
    - Output/Findings/ for existing findings
    - Intake/ and Intake/Sample/ for available triage items
+   - **Note:** `--skip-repos` flag skips 1000+ repo discovery (~100s), improving kickoff to <1s. Repo discovery happens only when user selects "Scan a specific repo".
 
 6. **Check for refinement questions:**
    - If outstanding questions exist: ask whether to resume answering those now (or proceed to new triage).
@@ -116,6 +117,17 @@ Targeted helpers (stdout-only):
      - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
      - When running in **experiment isolation** mode (i.e., `--output-dir Output/Learning/experiments/<id>_<name>`), the script also generates an experiment-scoped provider architecture summary under `Summary/Cloud/Architecture_<Provider>.md`.
      - Review the generated summary before proceeding
+   - **Phase 2a Enhancement (.NET Projects - Experiment 001 Learning):**
+     - For .NET repositories, parse `.csproj` files to extract:
+       - Target framework version: `<TargetFramework>net8.0</TargetFramework>`
+       - NuGet package references: `<PackageReference Include="MediatR" Version="..." />`
+       - Project type indicators (Web, API, Worker, Test)
+     - Analyze `Startup.cs` / `Program.cs` for:
+       - Middleware pipeline configuration (execution order)
+       - Authentication/authorization scheme registration
+       - Custom auth patterns (header-based, token validation)
+       - Dependency injection patterns
+     - Update repo summary with framework-specific context
    - **Phase 2 - Deeper Context Search (~30-60 seconds per repo):**
      - Launch ONE explore agent to complete Phase 2 TODO markers
      - Agent traces middleware execution order, routing logic, business purpose
@@ -136,6 +148,14 @@ Targeted helpers (stdout-only):
      - Deep dive on complex attack chains and business logic vulnerabilities
      - Validate mitigating controls (network rules, managed identities, RBAC)
      - Update TL;DR and Security Observations sections
+     - **Manual Finding Import (Experiment 001 Learning):**
+       - When Phase 3 rules produce 0 security findings, Phase 4 manual review is CRITICAL
+       - Use `python3 Scripts/Persist/import_manual_finding.py` to store manual findings:
+         - Accepts: --title, --severity, --file, --line, --description, --remediation
+         - Auto-generates: finding_name, llm_enriched_at, repo_name, scan_date
+         - Enables skeptic reviews on manually discovered vulnerabilities
+       - Document findings using `Templates/CodeFinding.md` template
+       - Ensure database schema includes `finding_name TEXT` column (required for skeptics)
    - **Phase 5 - Cloud Architecture Update (if IaC detected):**
      - Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`
      - Shows where this repo/service fits in overall cloud estate

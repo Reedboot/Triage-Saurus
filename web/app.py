@@ -28,14 +28,29 @@ EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
+# Load repo search paths from config
+def _load_search_paths():
+    config_file = REPO_ROOT / "Settings" / "paths.json"
+    if config_file.exists():
+        try:
+            import json
+            config = json.loads(config_file.read_text())
+            paths = config.get("repo_search_paths", [])
+            # Expand ~ and environment variables
+            return [Path(p).expanduser() for p in paths]
+        except Exception:
+            pass
+    # Fallback to defaults
+    return [
+        REPO_ROOT.parent,
+        Path.home() / "repos",
+        Path.home() / "code",
+        Path.home() / "projects",
+        Path.home(),
+    ]
+
 # Directories searched when resolving a bare repo name from Intake
-_SEARCH_ROOTS = [
-    REPO_ROOT.parent,
-    Path.home() / "code",
-    Path.home() / "repos",
-    Path.home() / "projects",
-    Path.home(),
-]
+_SEARCH_ROOTS = _load_search_paths()
 
 
 def _resolve_repos() -> list[dict]:
@@ -236,6 +251,8 @@ def _collect_diagrams(experiment_id: str) -> list[dict]:
             continue
         provider = arch_file.stem.replace("Architecture_", "")
         key = provider.lower()
+        if key == "terraform":
+            continue
         blocks = _extract_mermaid_blocks(text)
         if blocks:
             provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].extend(blocks)
@@ -254,6 +271,25 @@ def _collect_diagrams(experiment_id: str) -> list[dict]:
             diagrams.append({"title": title, "code": block})
 
     return diagrams
+
+
+def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
+    """Try DB-backed cloud_diagrams first, fall back to _collect_diagrams."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+        db_diagrams = get_cloud_diagrams(experiment_id)
+        if db_diagrams:
+            filtered = [
+                d for d in db_diagrams
+                if (d.get("provider") or "").strip().lower() != "terraform"
+            ]
+            if filtered:
+                return [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in filtered]
+    except Exception:
+        pass
+
+    return _collect_diagrams(experiment_id)
 
 
 def _extract_mermaid_nodes(mermaid_code: str) -> set[str]:
@@ -312,6 +348,76 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
         return
 
+    # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
+    # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
+    experiment_id: str | None = None
+    triage_script = SCRIPTS / "Experiments" / "triage_experiment.py"
+
+    LOCK_DIR = REPO_ROOT / "Output" / "Learning" / "running_scans"
+    try:
+        LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Best-effort: if lock dir cannot be created, continue without locking
+        pass
+
+    lock_file = LOCK_DIR / f"{repo.name}.lock"
+
+    try:
+        # If a lock file exists and points to a running experiment, reuse it instead of creating a new one.
+        if lock_file.exists():
+            try:
+                existing = lock_file.read_text(encoding="utf-8").strip()
+                if existing:
+                    # Find experiment directory by numeric prefix
+                    candidates = sorted((REPO_ROOT / "Output" / "Learning" / "experiments").glob(f"{existing}_*"))
+                    exp_dir = candidates[0] if candidates else None
+                    if exp_dir and (exp_dir / "experiment.json").exists():
+                        cfg = json.loads((exp_dir / "experiment.json").read_text(encoding="utf-8"))
+                        if cfg.get("status") == "running":
+                            experiment_id = existing
+                            yield _sse("log", f"[Web] Reusing running experiment id from lock: {experiment_id}")
+            except Exception:
+                # If lock read fails or experiment not found, fall through to normal creation
+                experiment_id = None
+
+        if experiment_id is None and triage_script.exists():
+            res = subprocess.run(
+                [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+            )
+            # If triage_experiment.py succeeded, try to parse the machine-readable marker
+            if res.returncode == 0 and res.stdout:
+                for ln in res.stdout.splitlines():
+                    if ln.startswith("EXPERIMENT_CREATED::"):
+                        full = ln.split("::", 1)[1].strip()
+                        if full:
+                            experiment_id = full.split("_")[0]
+                            break
+                # Fallback to legacy parsing
+                if experiment_id is None:
+                    for ln in res.stdout.splitlines():
+                        if ln.startswith("Created experiment:"):
+                            tag = ln.split(":", 1)[1].strip()
+                            if tag:
+                                experiment_id = tag.split("_")[0]
+                                break
+            else:
+                # If triage_experiment failed, include stderr in logs for diagnostics
+                if res.stderr:
+                    yield _sse("log", f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}")
+
+        # Persist lock for the experiment so concurrent requests reuse it
+        if experiment_id:
+            try:
+                lock_file.write_text(str(experiment_id), encoding="utf-8")
+            except Exception:
+                pass
+    except Exception as exc:
+        yield _sse("log", f"[Web] Experiment creation attempt failed: {exc}")
+
+    # Build pipeline command. If an experiment was created, pass it to the pipeline so all scripts use the same id.
     cmd = [
         sys.executable,
         "-u",
@@ -319,6 +425,11 @@ def _stream_scan(repo_path: str, scan_name: str):
         "--repo", str(repo),
         "--name", scan_name,
     ]
+    if experiment_id:
+        cmd.extend(["--experiment", experiment_id])
+        yield _sse("log", f"[Web] Using experiment id: {experiment_id}")
+        # Inform the UI immediately of the experiment id so it can bind sections/queries
+        yield _sse("experiment", experiment_id)
 
     yield _sse("log", f"▶  Starting scan: {repo}")
     yield _sse("log", f"   Command: {' '.join(cmd)}")
@@ -341,7 +452,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Failed to start pipeline: {exc}")
         return
 
-    experiment_id: str | None = None
+    # preserve experiment_id set above (do not reset) — allow capture from child output if missing
     start_time = time.time()
     last_hb = start_time
 
@@ -358,7 +469,7 @@ def _stream_scan(repo_path: str, scan_name: str):
 
                 # Capture experiment ID printed by run_pipeline.py
                 if experiment_id is None:
-                    m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                    m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                     if m:
                         experiment_id = m.group(1)
 
@@ -377,7 +488,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                     line = raw_line.rstrip()
                     yield _sse("log", line)
                     if experiment_id is None:
-                        m = re.search(r"Experiment\s*[:\s]+(\d+)", line)
+                        m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                         if m:
                             experiment_id = m.group(1)
                 break
@@ -385,11 +496,34 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Stream error: {exc}")
 
     if experiment_id:
-        diagrams = _collect_diagrams(experiment_id)
+        # Prefer DB-backed diagrams to avoid duplicates caused by multiple Architecture_*.md files
+        diagrams = []
+        try:
+            sys.path.insert(0, str(REPO_ROOT))
+            from Scripts.Persist.db_helpers import get_cloud_diagrams
+            db_diags = get_cloud_diagrams(experiment_id)
+            if db_diags:
+                diagrams = [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in db_diags]
+        except Exception:
+            diagrams = []
+
+        # Fall back to file-based collection if DB didn't have any diagrams
+        if not diagrams:
+            diagrams = _collect_diagrams(experiment_id)
+
         if diagrams:
             yield _sse("diagrams", diagrams)
         else:
             yield _sse("log", "[Web] No architecture diagrams found in experiment output.")
+
+    # Remove lock file if it refers to this experiment so future scans can start.
+    try:
+        if lock_file.exists():
+            existing = lock_file.read_text(encoding="utf-8").strip()
+            if existing and experiment_id and existing == str(experiment_id):
+                lock_file.unlink()
+    except Exception:
+        pass
 
     yield _sse("done", {
         "exit_code": process.returncode if process else -1,
@@ -509,8 +643,8 @@ def api_diff():
     if not id_from or not id_to or not repo:
         return jsonify({"error": "from, to and repo are required"}), 400
 
-    diagrams_from = _collect_diagrams(id_from)
-    diagrams_to   = _collect_diagrams(id_to)
+    diagrams_from = _collect_diagrams_dbfirst(id_from)
+    diagrams_to   = _collect_diagrams_dbfirst(id_to)
 
     # Collect all experiment IDs for this repo between id_from and id_to
     conn = _get_db()
@@ -570,7 +704,7 @@ def api_diff():
 
         # Architecture nodes for this experiment (per provider)
         curr_nodes: dict[str, set[str]] = {}
-        diags = _collect_diagrams(exp_id)
+        diags = _collect_diagrams_dbfirst(exp_id)
         for d in diags:
             provider = d["title"].replace(" Architecture", "")
             curr_nodes[provider] = _extract_mermaid_nodes(d["code"])
@@ -688,7 +822,7 @@ def api_assets(repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, experiment_target),
         ).fetchall()
 
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
@@ -723,17 +857,25 @@ def _db_render(template_name: str, **ctx):
 
 
 def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> str:
-    """Resolve experiment_id for a repo (provided or latest)."""
-    if not experiment_id:
-        row = conn.execute(
-            """SELECT experiment_id FROM repositories
-               WHERE LOWER(repo_name) = LOWER(?)
-               ORDER BY scanned_at DESC LIMIT 1""",
-            (repo_name,),
+    """Return a valid experiment_id for the repo, preferring the provided id."""
+    if experiment_id:
+        exists = conn.execute(
+            """
+            SELECT 1 FROM repositories
+            WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ?
+            LIMIT 1
+            """,
+            (repo_name, experiment_id),
         ).fetchone()
-        if row:
-            experiment_id = row["experiment_id"]
-    return experiment_id
+        if exists:
+            return experiment_id
+    row = conn.execute(
+        """SELECT experiment_id FROM repositories
+           WHERE LOWER(repo_name) = LOWER(?)
+           ORDER BY scanned_at DESC LIMIT 1""",
+        (repo_name,),
+    ).fetchone()
+    return row["experiment_id"] if row else ""
 
 
 @app.route("/api/view/tabs/<experiment_id>/<repo_name>")
@@ -767,11 +909,32 @@ def api_view_tabs(experiment_id: str, repo_name: str):
 
 @app.route("/api/view/assets/<experiment_id>/<repo_name>")
 def api_view_assets(experiment_id: str, repo_name: str):
-    """Render the assets tab HTML."""
+    """Render the assets tab HTML.
+
+    Supports an optional query parameter `include_hidden=1` to show resources
+    that are normally hidden from the Assets view (generator/utility tokens and
+    items marked not to be displayed on architecture charts). Identity/RBAC
+    resources remain excluded (they belong in the Roles tab).
+    """
+    include_hidden = str(request.args.get('include_hidden', '')).lower() in ('1', 'true', 'yes')
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_assets.html", assets=[], providers=[])
+        return _db_render("tab_assets.html", assets=[], providers=[], include_hidden=include_hidden, hidden_count=0, total=0, experiment_id=experiment_id, repo_name=repo_name)
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render(
+                "tab_assets.html",
+                assets=[],
+                providers=[],
+                include_hidden=include_hidden,
+                hidden_count=0,
+                total=0,
+                experiment_id="",
+                repo_name=repo_name,
+                error=f"No completed scan found for {repo_name}.",
+            )
+        experiment_target = resolved_exp_id
         rows = conn.execute(
             """
             SELECT res.id, res.resource_type, res.resource_name, res.provider,
@@ -792,6 +955,9 @@ def api_view_assets(experiment_id: str, repo_name: str):
             """,
             (repo_name, experiment_id),
         ).fetchall()
+        total_rows = len(rows)
+        hidden_count = 0
+
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
         assets = []
         providers = set()
@@ -817,7 +983,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
                   AND child.parent_resource_id IS NOT NULL
                 """,
-                (repo_name, experiment_id),
+                (repo_name, experiment_target),
             ).fetchall()
             for hr in hierarchy_rows:
                 parent_id = hr['parent_id']
@@ -859,10 +1025,24 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 'managed_identity', 'user_assigned_identity', 'service_account', 'service_principal'
             }
             rtype_lower = (rtype or '').lower()
-            # Skip generator/utility types (e.g., random_*, time_*, null_resource) — not actual resources
+            # Generator/utility tokens (e.g., random_*, time_*, null_resource) are typically hidden from the Assets view
             hidden_tokens = ("random_", "time_", "null_resource")
-            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types) or any(tok in rtype_lower for tok in hidden_tokens):
-                continue
+
+            # Identity / RBAC resources are hidden by default (they appear in Roles).
+            # When `include_hidden` is true, include them in the Assets view so the
+            # displayed list can match the repository's total resource count.
+            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
+                if not include_hidden:
+                    hidden_count += 1
+                    continue
+                # else: include identity resources when include_hidden is True
+
+            # If include_hidden is false, hide generator/utility types and any resource
+            # explicitly marked as not to be displayed on architecture diagrams.
+            if not include_hidden:
+                if any(tok in rtype_lower for tok in hidden_tokens) or (not a.get('display_on_architecture_chart', True)):
+                    hidden_count += 1
+                    continue
 
             # Normalize provider: use 'unknown' when missing
             prov = (a.get("provider") or "unknown")
@@ -878,6 +1058,15 @@ def api_view_assets(experiment_id: str, repo_name: str):
             a['is_child'] = a.get('id') in child_resource_ids
 
             assets.append(a)
+
+        # Recompute children_count to reflect only assets included in this view
+        included_children_counts: dict = {}
+        for aa in assets:
+            parent_id = aa.get('parent_resource_id')
+            if parent_id:
+                included_children_counts[parent_id] = included_children_counts.get(parent_id, 0) + 1
+        for aa in assets:
+            aa['children_count'] = included_children_counts.get(aa.get('id'), 0)
 
         # Reorder: parents first, children immediately after their parent
         ordered_assets = []
@@ -899,9 +1088,19 @@ def api_view_assets(experiment_id: str, repo_name: str):
         if has_unknown:
             providers.add('unknown')
             provider_counts.setdefault('unknown', 0)
-        return _db_render("tab_assets.html", assets=assets, providers=sorted(providers), provider_counts=provider_counts, repo_name=repo_name)
+        return _db_render(
+            "tab_assets.html",
+            assets=assets,
+            providers=sorted(providers),
+            provider_counts=provider_counts,
+            repo_name=repo_name,
+            hidden_count=hidden_count,
+            total=total_rows,
+            include_hidden=include_hidden,
+            experiment_id=experiment_target,
+        )
     except Exception as exc:
-        return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc))
+        return _db_render("tab_assets.html", assets=[], providers=[], error=str(exc), hidden_count=0, total=0, include_hidden=include_hidden, experiment_id=experiment_id)
     finally:
         conn.close()
 
@@ -911,8 +1110,12 @@ def api_view_findings(experiment_id: str, repo_name: str):
     """Render the findings tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_findings.html", findings=[])
+        return _db_render("tab_findings.html", findings=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_findings.html", findings=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT f.id, f.title, f.description, f.base_severity,
@@ -927,7 +1130,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
                                 WHEN 'INFO' THEN 5 ELSE 6 END,
                 f.severity_score DESC
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         findings = [dict(r) for r in rows]
         return _db_render("tab_findings.html", findings=findings)
@@ -944,6 +1147,10 @@ def api_view_ingress(experiment_id: str, repo_name: str):
     if conn is None:
         return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[])
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         # Primary: findings with internet_exposure metadata
         res_rows = conn.execute(
             """
@@ -967,7 +1174,7 @@ def api_view_ingress(experiment_id: str, repo_name: str):
               AND LOWER(fc.context_value) = 'true'
             ORDER BY COALESCE(parent.resource_type, r.resource_type), COALESCE(parent.resource_name, r.resource_name)
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
 
         # Fallback: legacy start_ip_address context
@@ -990,11 +1197,11 @@ def api_view_ingress(experiment_id: str, repo_name: str):
                 LEFT JOIN resources parent ON r.parent_resource_id = parent.id
                 JOIN finding_context fc ON fc.finding_id = f.id
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
-                  AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
-                  AND fc.context_value = '0.0.0.0'
-                """,
-                (repo_name, experiment_id),
-            ).fetchall()
+                 AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
+                 AND fc.context_value = '0.0.0.0'
+            """,
+            (repo_name, target_exp),
+        ).fetchall()
             # Merge, dedup by id
             existing_ids = {dict(r)['id'] for r in res_rows}
             for r in fw_rows:
@@ -1004,19 +1211,80 @@ def api_view_ingress(experiment_id: str, repo_name: str):
         except Exception:
             pass
 
+        # Add API operations and their parent gateways
+        try:
+            api_ops_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.id,
+                    r.resource_name,
+                    r.resource_type,
+                    r.provider,
+                    r.region,
+                    r.source_file,
+                    r.source_line_start,
+                    parent.resource_name AS parent_gateway_name,
+                    parent.resource_type AS parent_gateway_type,
+                    'api_operation' AS exposure_type,
+                    'api_endpoint' AS exposure_value
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN (
+                    'azurerm_api_management_api_operation',
+                    'aws_api_gateway_method',
+                    'aws_api_gateway_resource',
+                    'aws_apigatewayv2_route',
+                    'google_api_gateway_gateway',
+                    'oci_apigateway_deployment',
+                    'alicloud_api_gateway_api'
+                  )
+                ORDER BY parent.resource_name, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            
+            for r in api_ops_rows:
+                r_dict = dict(r)
+                if r_dict['id'] not in {dict(x)['id'] for x in res_rows}:
+                    res_rows = list(res_rows) + [r]
+        except Exception as e:
+            print(f"Warning: Could not fetch API operations: {e}")
+
         ingress_resources = [dict(r) for r in res_rows]
 
-        ingress_connections = [
-            {
-                'source_name': 'Internet',
-                'target_name': r['resource_name'],
-                'protocol': 'any',
-                'port': 'any',
-                'authentication': None,
-                'is_encrypted': None,
-            }
-            for r in [dict(x) for x in res_rows]
-        ]
+        # Build connections showing parent gateway → operation hierarchy
+        ingress_connections = []
+        for r in ingress_resources:
+            if r.get('parent_gateway_name'):
+                # API operation - show gateway → operation
+                ingress_connections.append({
+                    'source_name': 'Internet',
+                    'target_name': r.get('parent_gateway_name'),
+                    'protocol': 'HTTPS',
+                    'port': '443',
+                    'authentication': 'API Key',
+                    'is_encrypted': 1,
+                })
+                ingress_connections.append({
+                    'source_name': r.get('parent_gateway_name'),
+                    'target_name': r['resource_name'],
+                    'protocol': 'HTTP',
+                    'port': 'operation',
+                    'authentication': None,
+                    'is_encrypted': None,
+                })
+            else:
+                # Standard resource
+                ingress_connections.append({
+                    'source_name': 'Internet',
+                    'target_name': r['resource_name'],
+                    'protocol': 'any',
+                    'port': 'any',
+                    'authentication': None,
+                    'is_encrypted': None,
+                })
 
         return _db_render(
             "tab_ingress.html",
@@ -1034,8 +1302,12 @@ def api_view_egress(experiment_id: str, repo_name: str):
     """Render the egress tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_egress.html", egress_connections=[])
+        return _db_render("tab_egress.html", egress_connections=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_egress.html", egress_connections=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT DISTINCT r.id, r.resource_name AS source_name, r.resource_type, r.provider,
@@ -1057,7 +1329,7 @@ def api_view_egress(experiment_id: str, repo_name: str):
               AND fc.context_value != ''
             ORDER BY r.provider, r.resource_type, r.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         return _db_render("tab_egress.html", egress_connections=[dict(r) for r in rows])
     except Exception as exc:
@@ -1071,8 +1343,12 @@ def api_view_roles(experiment_id: str, repo_name: str):
     """Render the roles & permissions tab HTML."""
     conn = _get_db()
     if conn is None:
-        return _db_render("tab_roles.html", roles=[])
+        return _db_render("tab_roles.html", roles=[], error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_roles.html", roles=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
         rows = conn.execute(
             """
             SELECT res.id, res.resource_name AS identity_name, res.resource_type AS role_type,
@@ -1097,9 +1373,67 @@ def api_view_roles(experiment_id: str, repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, target_exp),
         ).fetchall()
         roles = [dict(r) for r in rows]
+        
+        # Add API subscriptions and keys
+        try:
+            api_keys_rows = conn.execute(
+                """
+                SELECT 
+                    sub.id,
+                    sub.resource_name AS identity_name,
+                    sub.resource_type AS role_type,
+                    sub.provider,
+                    sub.source_file,
+                    NULL AS principal_id,
+                    COALESCE(
+                        parent_api.resource_name,
+                        parent_gw.resource_name,
+                        'API Gateway'
+                    ) AS resource_name,
+                    GROUP_CONCAT(DISTINCT ops.resource_name, ', ') AS permissions,
+                    NULL AS is_excessive
+                FROM resources sub
+                JOIN repositories repo ON sub.repo_id = repo.id
+                LEFT JOIN resources parent_api ON sub.parent_resource_id = parent_api.id
+                LEFT JOIN resources parent_gw ON parent_api.parent_resource_id = parent_gw.id
+                LEFT JOIN resources ops ON ops.parent_resource_id = parent_api.id
+                    AND ops.resource_type IN (
+                        'azurerm_api_management_api_operation',
+                        'aws_api_gateway_method',
+                        'aws_apigatewayv2_route'
+                    )
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND sub.experiment_id = ?
+                  AND sub.resource_type IN (
+                    'azurerm_api_management_subscription',
+                    'aws_api_gateway_api_key',
+                    'aws_api_gateway_usage_plan',
+                    'aws_api_gateway_usage_plan_key',
+                    'oci_identity_api_key',
+                    'oci_identity_auth_token',
+                    'alicloud_api_gateway_app',
+                    'alicloud_ram_access_key'
+                  )
+                GROUP BY sub.id
+                ORDER BY sub.provider, sub.resource_type, sub.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            
+            for r in api_keys_rows:
+                r_dict = dict(r)
+                # Format permissions to show accessible operations
+                ops = r_dict.get('permissions')
+                if ops:
+                    r_dict['permissions'] = f"Access to operations: {ops}"
+                else:
+                    r_dict['permissions'] = f"Access to {r_dict.get('resource_name', 'API')}"
+                roles.append(r_dict)
+        except Exception as e:
+            print(f"Warning: Could not fetch API keys/subscriptions: {e}")
+        
         # Convert is_excessive to integer if stored as string
         for role in roles:
             val = role.get("is_excessive")
@@ -1121,10 +1455,16 @@ def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
     - If not and section_key == 'tldr', attempt to extract the TL;DR markdown table
       from Output/Summary/Repos/<repo_name>.md and convert it to HTML.
     """
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_ai_content.html", section=None, error="DB unavailable")
     try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_ai_content.html", section=None, error=f"No scan found for {repo_name}.")
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
-        sections = get_ai_sections(experiment_id, repo_name)
+        sections = get_ai_sections(resolved_exp_id, repo_name)
         section = next((s for s in sections if s["section_key"] == section_key), None)
         if section:
             return _db_render("tab_ai_content.html", section=section)
@@ -1168,9 +1508,11 @@ def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
             except Exception:
                 pass
 
-        return _db_render("tab_ai_content.html", section=None)
+        return _db_render("tab_ai_content.html", section=None, error=f"No AI content for {section_key}.")
     except Exception as exc:
         return _db_render("tab_ai_content.html", section=None, error=str(exc))
+    finally:
+        conn.close()
 
 
 # ── Page Routes ───────────────────────────────────────────────────────────────

@@ -3,9 +3,10 @@
 (function(){
   function toLower(s){ return (s||'').toString().toLowerCase(); }
 
-  function initAssets(container, repoName){
+  function initAssets(container, repoName, experimentId){
     if (!container) container = document;
     repoName = repoName || (container.querySelector('#assets-meta')?.dataset?.repo) || 'global';
+    experimentId = experimentId || (container.querySelector('#assets-meta')?.dataset?.experiment) || '';
 
     const searchInput = container.querySelector('#section-assets-search');
     const providerSelect = container.querySelector('#section-assets-provider');
@@ -17,15 +18,18 @@
     // Build data array for sorting/filtering
     let assetsData = rows.map(r => ({
       el: r,
+      id: r.dataset.resourceId || r.getAttribute('data-resource-id') || '',
+      parent_id: r.dataset.parentId || r.getAttribute('data-parent-id') || '',
       resource_name: toLower(r.dataset.resource_name || r.querySelector('.asset-name')?.textContent || ''),
       resource_type: toLower(r.dataset.resource_type || ''),
-      render_category: toLower(r.dataset.renderCategory || r.dataset.render-category || ''),
+      render_category: toLower(r.dataset.renderCategory || r.dataset['render-category'] || r.dataset.render_category || ''),
       provider: toLower(r.dataset.provider || ''),
       provider_raw: r.dataset.provider_raw || '',
       region: toLower(r.dataset.region || ''),
       finding_count: parseInt(r.dataset.finding_count || '0', 10) || 0,
+      children_count: parseInt(r.dataset.childrenCount || r.getAttribute('data-children-count') || '0', 10) || 0,
       display_on_diagram: (function(){
-        const v = (r.dataset.displayOnDiagram || r.dataset.displayOnDiagram === '0' ? r.dataset.displayOnDiagram : r.getAttribute('data-display-on-diagram')) || r.dataset.display_on_diagram || '';
+        const v = r.dataset.displayOnDiagram || r.dataset.display_on_diagram || r.getAttribute('data-display-on-diagram') || '';
         if (!v) return false;
         const s = v.toString().toLowerCase();
         return ['1','true','yes','on'].includes(s);
@@ -120,7 +124,39 @@
         if (emptyEl) emptyEl.style.display = '';
       } else {
         if (emptyEl) emptyEl.style.display = 'none';
-        for (const a of filtered) tbody.appendChild(a.el);
+
+        // Compute visible child counts among filtered rows
+        const visibleChildCounts = {};
+        for (const a of filtered) {
+          if (a.parent_id) {
+            visibleChildCounts[a.parent_id] = (visibleChildCounts[a.parent_id] || 0) + 1;
+          }
+        }
+
+        for (const a of filtered) {
+          // Update the visible child-count badge and expand toggle based on currently visible children
+          const el = a.el;
+          const id = a.id || (el.getAttribute('data-resource-id') || el.dataset.resourceId);
+          const badge = el.querySelector('.child-count-badge');
+          const toggle = el.querySelector('.expand-toggle');
+          const c = visibleChildCounts[id] || 0;
+          if (badge) {
+            badge.textContent = c;
+            badge.title = `${c} sub-asset(s)`;
+            badge.style.display = c ? '' : 'none';
+          }
+          if (toggle) {
+            toggle.style.display = c ? '' : 'none';
+            if (!c) toggle.classList.remove('open');
+          }
+
+          // Ensure child rows are hidden by default after filtering
+          if (a.parent_id) {
+            el.style.display = 'none';
+          }
+
+          tbody.appendChild(el);
+        }
       }
     }
 
@@ -134,6 +170,32 @@
     // Hook inputs
     if (searchInput) searchInput.addEventListener('input', scheduleFilter);
     if (providerSelect) providerSelect.addEventListener('change', () => { applyFilterAndSort(); });
+
+    // Show hidden assets toggle: when toggled, re-fetch the assets fragment including hidden items
+    const showHiddenCheckbox = container.querySelector('#assets-show-hidden');
+    if (showHiddenCheckbox) {
+      showHiddenCheckbox.addEventListener('change', async (ev) => {
+        const checked = !!ev.target.checked;
+        if (!experimentId) {
+          console.warn('No experiment id available for reloading assets fragment');
+          return;
+        }
+        try {
+          const url = `/api/view/assets/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}?include_hidden=${checked ? '1' : '0'}`;
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            console.warn('Failed to reload assets fragment:', resp.status, resp.statusText);
+            return;
+          }
+          const html = await resp.text();
+          container.innerHTML = html;
+          // Re-run init on the replaced fragment
+          try { window.initAssets(container, repoName, experimentId); } catch (e) { console.warn('initAssets error after reload:', e); }
+        } catch (e) {
+          console.warn('assets reload error:', e);
+        }
+      });
+    }
 
     // Header click handlers for sorting (Shift+click to multi-sort)
     const headers = table.querySelectorAll('th.sortable');
@@ -190,13 +252,18 @@
           childRows.forEach(row => {
             insertAfter.parentNode.insertBefore(row, insertAfter.nextSibling);
             insertAfter = row;
-            row.style.display = '';
+            row.style.display = 'table-row';
           });
         } else {
           // Collapse: hide child rows (keep original order intact)
           childRows.forEach(row => { row.style.display = 'none'; });
         }
       });
+    }
+
+    // Column resizing functionality (using shared utility)
+    if (window.initTableColumnResize) {
+      window.initTableColumnResize(table, `assets_col_widths_${repoName}`);
     }
   }
 

@@ -1,0 +1,49 @@
+rules:
+  - id: azure-apim-api-http-allowed
+    message: |
+      API Management API allows HTTP (unencrypted) protocol in addition to HTTPS.
+      The `protocols` list includes "http", exposing API traffic to:
+      - Man-in-the-middle (MITM) attacks
+      - Credential theft (API keys, tokens in headers)
+      - Data interception (sensitive request/response bodies)
+      - Session hijacking
+      
+      Remove "http" from the protocols list and enforce HTTPS only:
+        protocols = ["https"]
+      
+      If clients require HTTP for testing, use a separate non-production API
+      and ensure no production credentials or data are used.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_api_management_api" "$NAME" {
+            ...
+            protocols = ["http", ...]
+            ...
+          }
+      - pattern: |
+          resource "azurerm_api_management_api" "$NAME" {
+            ...
+            protocols = [..., "http"]
+            ...
+          }
+      - pattern: |
+          resource "azurerm_api_management_api" "$NAME" {
+            ...
+            protocols = [..., "http", ...]
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, api-gateway]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/api-management-howto-manage-protocols-ciphers
+      owasp: A02:2021 - Cryptographic Failures
+      technology: [azure, terraform, apim]
+      five_pillars: Pillar 5

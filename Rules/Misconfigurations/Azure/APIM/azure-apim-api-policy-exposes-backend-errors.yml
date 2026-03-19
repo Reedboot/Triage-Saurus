@@ -1,0 +1,64 @@
+rules:
+  - id: azure-apim-api-policy-exposes-backend-errors
+    message: |
+      API Management API policy forwards backend error details to clients.
+      The <on-error> section lacks error sanitization, potentially exposing:
+      - Internal IP addresses and hostnames
+      - Stack traces with code paths
+      - Database connection strings
+      - Framework versions and library details
+      - Internal service names and architecture
+      
+      Attackers use this information for reconnaissance to plan targeted attacks.
+      
+      Add <set-body> in the <on-error> section to return sanitized errors:
+        <on-error>
+          <set-status code="500" reason="Internal Server Error" />
+          <set-body>{"error": "An unexpected error occurred"}</set-body>
+        </on-error>
+      
+      Log detailed errors server-side only (Application Insights).
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      # No on-error section at all (default behavior exposes backend errors)
+      - patterns:
+          - pattern: |
+              resource "azurerm_api_management_api_policy" "$NAME" {
+                ...
+                xml_content = <<$END
+                $...CONTENT
+                $END
+                ...
+              }
+          - metavariable-pattern:
+              metavariable: $CONTENT
+              pattern-not-regex: <on-error>
+      # on-error exists but doesn't sanitize body
+      - patterns:
+          - pattern: |
+              resource "azurerm_api_management_api_policy" "$NAME" {
+                ...
+                xml_content = <<$END
+                $...CONTENT
+                $END
+                ...
+              }
+          - metavariable-pattern:
+              metavariable: $CONTENT
+              patterns:
+                - pattern-regex: <on-error>
+                - pattern-not-regex: set-body
+    metadata:
+      category: security
+      subcategory: [information-disclosure, api-gateway]
+      cwe: CWE-209
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: MEDIUM
+      remediation_effort: LOW
+      references:
+        - https://learn.microsoft.com/en-us/azure/api-management/api-management-error-handling-policies
+        - https://owasp.org/www-community/Improper_Error_Handling
+      owasp: A05:2021 - Security Misconfiguration
+      technology: [azure, terraform, apim]
