@@ -817,12 +817,55 @@ def _ensure_schema(conn: sqlite3.Connection):
       UNIQUE(experiment_id, resource_id, opengrep_rule_id),
       FOREIGN KEY (experiment_id) REFERENCES experiments(id)
     );
+
+    CREATE TABLE IF NOT EXISTS shared_resources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      resource_type TEXT NOT NULL,
+      resource_identifier TEXT NOT NULL,
+      friendly_name TEXT,
+      provider TEXT NOT NULL,
+      category TEXT,
+      discovered_from_repo TEXT,
+      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reference_count INTEGER DEFAULT 1,
+      variable_name TEXT,
+      data_source_name TEXT,
+      properties TEXT,
+      UNIQUE(provider, resource_type, resource_identifier)
+    );
+
+    CREATE TABLE IF NOT EXISTS shared_resource_references (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      shared_resource_id INTEGER NOT NULL,
+      repo_name TEXT NOT NULL,
+      experiment_id TEXT,
+      local_resource_id INTEGER,
+      reference_type TEXT,
+      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (shared_resource_id) REFERENCES shared_resources(id),
+      FOREIGN KEY (local_resource_id) REFERENCES resources(id),
+      UNIQUE(shared_resource_id, repo_name, local_resource_id)
+    );
     """)
 
         # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
         try:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+            )
+        except Exception:
+            pass
+
+        # Ensure indexes for shared_resources tables
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_shared_resources_lookup ON shared_resources(provider, resource_type, resource_identifier)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_shared_resource_references_repo ON shared_resource_references(repo_name)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_shared_resource_references_shared ON shared_resource_references(shared_resource_id)"
             )
         except Exception:
             pass
