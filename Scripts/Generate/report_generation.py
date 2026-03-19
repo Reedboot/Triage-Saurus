@@ -114,9 +114,83 @@ def _summarize_service_names(resource_types: list[str]) -> str:
 
 def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
+    
+    # Track which resources belong to known patterns
+    pattern_resources = set()
+    
+    # Group resources by service patterns
+    pattern_names = ["api_gateway", "storage", "messaging", "serverless", "key_vault", 
+                     "database", "cosmos_db", "kubernetes", "app_service", "monitoring"]
+    
+    for pattern_name in pattern_names:
+        pattern_types = []
+        for rtype in resource_types:
+            matched_pattern, _ = _rtdb.get_service_pattern(rtype)
+            if matched_pattern == pattern_name:
+                pattern_types.append(rtype)
+                pattern_resources.add(rtype)
+        
+        if pattern_types:
+            # Determine friendly name based on pattern and resources
+            if pattern_name == "api_gateway":
+                friendly = "API Management"
+            elif pattern_name == "storage":
+                friendly = "Storage Account" if any(rt.startswith("azurerm_") for rt in pattern_types) else "Storage"
+            elif pattern_name == "messaging":
+                # Check which messaging service
+                if any("servicebus" in rt for rt in pattern_types):
+                    friendly = "Service Bus Namespace"
+                elif any("eventhub" in rt for rt in pattern_types):
+                    friendly = "Event Hub Namespace"
+                elif any("sns" in rt or "sqs" in rt for rt in pattern_types):
+                    friendly = "Messaging"
+                elif any("pubsub" in rt for rt in pattern_types):
+                    friendly = "Pub/Sub"
+                else:
+                    friendly = "Messaging"
+            elif pattern_name == "serverless":
+                friendly = "Serverless Functions"
+            elif pattern_name == "key_vault":
+                friendly = "Key Vault"
+            elif pattern_name == "database":
+                # Determine database type
+                if any("mssql" in rt or "sql_server" in rt for rt in pattern_types):
+                    friendly = "SQL Server"
+                elif any("mysql" in rt for rt in pattern_types):
+                    friendly = "MySQL Server"
+                elif any("postgresql" in rt for rt in pattern_types):
+                    friendly = "PostgreSQL Server"
+                elif any("aws_db_instance" in rt for rt in pattern_types):
+                    friendly = "RDS Database"
+                elif any("google_sql" in rt for rt in pattern_types):
+                    friendly = "Cloud SQL"
+                else:
+                    friendly = "Database Server"
+            elif pattern_name == "cosmos_db":
+                friendly = "Cosmos DB Account" if any(rt.startswith("azurerm_") for rt in pattern_types) else "NoSQL Database"
+            elif pattern_name == "kubernetes":
+                friendly = "Kubernetes Cluster"  # Will be overridden by inferred cluster logic
+            elif pattern_name == "app_service":
+                friendly = "App Service Plan"
+            elif pattern_name == "monitoring":
+                if any("application_insights" in rt for rt in pattern_types):
+                    friendly = "Application Insights"
+                elif any("log_analytics" in rt for rt in pattern_types):
+                    friendly = "Log Analytics Workspace"
+                else:
+                    friendly = "Monitoring"
+            else:
+                friendly = pattern_name.replace("_", " ").title()
+            
+            grouped[friendly] = pattern_types
+    
+    # Group remaining resources by friendly name (legacy behavior)
     for rtype in resource_types:
+        if rtype in pattern_resources:
+            continue  # Already grouped by pattern
         parent = _rtdb.get_friendly_name(_get_db(), rtype)
         grouped.setdefault(parent, []).append(rtype)
+    
     return grouped
 
 
@@ -150,8 +224,9 @@ def _filter_mermaid_children(_parent_service: str, raw_types: list[str]) -> list
 
 
 def _is_apim_component(resource_type: str) -> bool:
-    """Check if resource is an API Management component."""
+    """Check if resource is an API Management/Gateway component (all providers)."""
     apim_components = (
+        # Azure API Management
         "azurerm_api_management_api",
         "azurerm_api_management_api_operation",
         "azurerm_api_management_api_policy",
@@ -160,12 +235,37 @@ def _is_apim_component(resource_type: str) -> bool:
         "azurerm_api_management_subscription",
         "azurerm_api_management_backend",
         "azurerm_api_management_named_value",
+        # AWS API Gateway
+        "aws_api_gateway_rest_api",
+        "aws_api_gateway_resource",
+        "aws_api_gateway_method",
+        "aws_api_gateway_integration",
+        "aws_api_gateway_deployment",
+        "aws_api_gateway_stage",
+        "aws_api_gateway_api_key",
+        "aws_api_gateway_usage_plan",
+        "aws_api_gateway_usage_plan_key",
+        "aws_apigatewayv2_api",
+        "aws_apigatewayv2_route",
+        "aws_apigatewayv2_integration",
+        "aws_apigatewayv2_stage",
+        # GCP API Gateway
+        "google_api_gateway_api",
+        "google_api_gateway_api_config",
+        "google_api_gateway_gateway",
+        # Oracle API Gateway
+        "oci_apigateway_gateway",
+        "oci_apigateway_deployment",
+        # Alibaba API Gateway
+        "alicloud_api_gateway_api",
+        "alicloud_api_gateway_group",
+        "alicloud_api_gateway_app",
     )
     return resource_type in apim_components
 
 
 def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Path | None) -> tuple[list[str], dict]:
-    """Separate APIM components from other resources and group them by API.
+    """Separate API Gateway/APIM components from other resources and group them by API (all providers).
     
     Returns:
         (non_apim_resources, apim_structure)
@@ -177,45 +277,93 @@ def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Pa
     if not apim_resources:
         return service_raw, {}
     
-    # Find all APIs
-    api_resources = [r for r in resources if r.resource_type == "azurerm_api_management_api"]
+    # Determine provider
+    provider = None
+    if any(r.startswith("azurerm_") for r in apim_resources):
+        provider = "azure"
+    elif any(r.startswith("aws_") for r in apim_resources):
+        provider = "aws"
+    elif any(r.startswith("google_") for r in apim_resources):
+        provider = "gcp"
+    elif any(r.startswith("oci_") for r in apim_resources):
+        provider = "oracle"
+    elif any(r.startswith("alicloud_") for r in apim_resources):
+        provider = "alibaba"
     
     # Structure: {api_name: {operations: [], policies: [], products: [], subscriptions: []}}
     apim_structure = {}
     
-    # Extract actual operation_id values from Terraform if available
-    operation_ids = {}  # {terraform_label: operation_id}
-    if repo_path:
-        for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api_operation"):
-            op_id_match = re.search(r'operation_id\s*=\s*"([^"]+)"', body)
-            if op_id_match:
-                operation_ids[rlabel] = op_id_match.group(1)
+    if provider == "azure":
+        # Find all APIs
+        api_resources = [r for r in resources if r.resource_type == "azurerm_api_management_api"]
+        
+        # Extract actual operation_id values from Terraform if available
+        operation_ids = {}  # {terraform_label: operation_id}
+        if repo_path:
+            for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api_operation"):
+                op_id_match = re.search(r'operation_id\s*=\s*"([^"]+)"', body)
+                if op_id_match:
+                    operation_ids[rlabel] = op_id_match.group(1)
+        
+        for api in api_resources:
+            api_name = api.name or "unnamed-api"
+            apim_structure[api_name] = {
+                "operations": [],
+                "policies": [],
+                "products": [],
+                "subscriptions": [],
+            }
+            
+            # Find operations for this API
+            for r in resources:
+                if r.resource_type == "azurerm_api_management_api_operation":
+                    # Use actual operation_id from Terraform if available, else fall back to resource label
+                    op_name = operation_ids.get(r.name, r.name)
+                    apim_structure[api_name]["operations"].append(op_name)
+                elif r.resource_type == "azurerm_api_management_api_policy":
+                    apim_structure[api_name]["policies"].append(r.name)
+            
+            # Products and subscriptions are API-agnostic, add to first API for now
+            if api == api_resources[0]:
+                for r in resources:
+                    if r.resource_type == "azurerm_api_management_product":
+                        apim_structure[api_name]["products"].append(r.name)
+                    elif r.resource_type == "azurerm_api_management_subscription":
+                        apim_structure[api_name]["subscriptions"].append(r.name)
     
-    for api in api_resources:
-        api_name = api.name or "unnamed-api"
-        apim_structure[api_name] = {
+    elif provider == "aws":
+        # AWS API Gateway: rest_api → resource → method
+        api_resources = [r for r in resources if r.resource_type in ("aws_api_gateway_rest_api", "aws_apigatewayv2_api")]
+        
+        for api in api_resources:
+            api_name = api.name or "unnamed-api"
+            apim_structure[api_name] = {
+                "operations": [],
+                "policies": [],
+                "products": [],
+                "subscriptions": [],
+            }
+            
+            # Find methods/routes for this API
+            for r in resources:
+                if r.resource_type in ("aws_api_gateway_method", "aws_apigatewayv2_route"):
+                    apim_structure[api_name]["operations"].append(r.name)
+            
+            # API keys and usage plans
+            if api == api_resources[0]:
+                for r in resources:
+                    if r.resource_type in ("aws_api_gateway_api_key", "aws_api_gateway_usage_plan_key"):
+                        apim_structure[api_name]["subscriptions"].append(r.name)
+    
+    elif provider in ("gcp", "oracle", "alibaba"):
+        # Simple structure for other providers (no nested operations extracted yet)
+        # Group all resources under a single API entry
+        apim_structure["api"] = {
             "operations": [],
             "policies": [],
             "products": [],
             "subscriptions": [],
         }
-        
-        # Find operations for this API
-        for r in resources:
-            if r.resource_type == "azurerm_api_management_api_operation":
-                # Use actual operation_id from Terraform if available, else fall back to resource label
-                op_name = operation_ids.get(r.name, r.name)
-                apim_structure[api_name]["operations"].append(op_name)
-            elif r.resource_type == "azurerm_api_management_api_policy":
-                apim_structure[api_name]["policies"].append(r.name)
-        
-        # Products and subscriptions are API-agnostic, add to first API for now
-        if api == api_resources[0]:
-            for r in resources:
-                if r.resource_type == "azurerm_api_management_product":
-                    apim_structure[api_name]["products"].append(r.name)
-                elif r.resource_type == "azurerm_api_management_subscription":
-                    apim_structure[api_name]["subscriptions"].append(r.name)
     
     return non_apim_resources, apim_structure
 
@@ -243,6 +391,76 @@ def _extract_apim_backend_url(repo_path: Path | None, api_name: str) -> str | No
             match = service_url_pattern.search(body)
             if match:
                 return match.group(1)
+    return None
+
+
+def _extract_apim_backends(repo_path: Path | None) -> dict[str, dict]:
+    """Extract all APIM backend resources and their URLs.
+    
+    Returns:
+        dict: {backend_resource_name: {"name": backend_name, "url": backend_url}}
+    """
+    if not repo_path or not repo_path.exists():
+        return {}
+    
+    backends = {}
+    name_pattern = re.compile(r'name\s*=\s*"([^"]+)"')
+    url_pattern = re.compile(r'url\s*=\s*"([^"]+)"')
+    
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_backend"):
+        if rtype == "azurerm_api_management_backend":
+            name_match = name_pattern.search(body)
+            url_match = url_pattern.search(body)
+            
+            if url_match:
+                backends[rlabel] = {
+                    "name": name_match.group(1) if name_match else rlabel,
+                    "url": url_match.group(1),
+                    "terraform_label": rlabel
+                }
+    
+    return backends
+
+
+def _extract_backend_from_policy(repo_path: Path | None, operation_label: str) -> str | None:
+    """Extract backend-id reference from APIM operation policy XML.
+    
+    Args:
+        operation_label: The operation name/label (e.g., "v1getaccount")
+    
+    Returns:
+        Backend terraform resource label (e.g., "accounts_external_backend_aks")
+    """
+    if not repo_path or not repo_path.exists():
+        return None
+    
+    # Pattern to match: <set-backend-service backend-id="${azurerm_api_management_backend.BACKEND_NAME.name}" />
+    backend_pattern = re.compile(r'<set-backend-service\s+backend-id="\$\{azurerm_api_management_backend\.([^.]+)\.name\}')
+    
+    # Look for the operation's Terraform file or inline policy
+    # Operations might be defined with suffix like "v1getaccount" but files/resources might have "_policy" suffix
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api_operation"):
+        # Match if the operation label is contained in the resource label (handles both with/without _policy suffix)
+        if operation_label in rlabel or rlabel in operation_label:
+            # Check for inline policy or policy file
+            match = backend_pattern.search(body)
+            if match:
+                return match.group(1)
+    
+    # Also check policy resources
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management_api_policy"):
+        if operation_label in rlabel or rlabel in operation_label:
+            match = backend_pattern.search(body)
+            if match:
+                return match.group(1)
+    
+    # Also check the base API management file for global backend policies
+    for rtype, rlabel, body in _terraform_resource_blocks(repo_path, prefix="azurerm_api_management"):
+        if "api_management_api" not in rtype:  # Skip API resources, focus on the base APIM resource
+            match = backend_pattern.search(body)
+            if match:
+                return match.group(1)
+    
     return None
 
 
@@ -763,6 +981,61 @@ def _is_edge_gateway_service(service_name: str) -> bool:
     return any(tok in service_name_lower for tok in tokens)
 
 
+def _detect_api_auth_mechanism(service_name: str, service_raw_types: list[str], assets: list[object]) -> str:
+    """
+    Detect authentication mechanism for API Gateway/APIM from related resources.
+    Returns label like "API Key", "OAuth", "Anonymous", etc.
+    
+    Uses service patterns to identify auth resources across all cloud providers.
+    """
+    # Get pattern components
+    auth_resources = []
+    for rt in service_raw_types:
+        if _rtdb.is_auth_resource(rt):
+            auth_resources.append(rt)
+    
+    # Also check service assets for auth-related resources
+    service_assets = [a for a in assets if getattr(a, 'service_name', '') == service_name]
+    for asset in service_assets:
+        rtype = getattr(asset, 'resource_type', '')
+        if _rtdb.is_auth_resource(rtype):
+            auth_resources.append(rtype)
+    
+    # Determine label based on found auth resources
+    auth_types = set()
+    for rtype in auth_resources:
+        lower = rtype.lower()
+        if 'oauth' in lower or 'identity_provider' in lower or 'authorizer' in lower:
+            auth_types.add('oauth')
+        elif 'jwt' in lower or 'token' in lower:
+            auth_types.add('jwt')
+        elif 'certificate' in lower or 'cert' in lower or 'mtls' in lower:
+            auth_types.add('cert')
+        elif 'subscription' in lower or 'api_key' in lower or '_key' in lower:
+            auth_types.add('key')
+        elif 'sas' in lower:
+            auth_types.add('sas')
+        elif 'iam' in lower or 'policy' in lower:
+            auth_types.add('iam')
+    
+    # Priority order for label
+    if 'oauth' in auth_types:
+        return "OAuth"
+    elif 'jwt' in auth_types:
+        return "JWT"
+    elif 'cert' in auth_types:
+        return "mTLS"
+    elif 'key' in auth_types:
+        return "API Key"
+    elif 'sas' in auth_types:
+        return "SAS Token"
+    elif 'iam' in auth_types:
+        return "IAM"
+    
+    # Default to "HTTPS" if no specific auth detected
+    return "HTTPS"
+
+
 def _compute_exposure_signals(
     service_name: str,
     raw_types: list[str],
@@ -997,6 +1270,7 @@ def _resource_has_explicit_public_signal(resource: object) -> bool:
         "sql_firewall_public",
         "has_public_ip",
         "public_fqdn_enabled",
+        "is_ingress_endpoint",  # Added for API operations and LB listeners
     ):
         if _boolish(props.get(key)) is True:
             return True
@@ -1194,6 +1468,10 @@ def _build_simple_architecture_diagram(
         "Network":  "security",
         "Compute":  "app",
         "Container": "app",
+        "Messaging": "app",
+        "Cache": "data",
+        "Serverless": "app",
+        "API": "app",
     }
 
     def category_for_raw_types(raw_types: list[str]) -> str:
@@ -1231,6 +1509,7 @@ def _build_simple_architecture_diagram(
         link_index += 1
 
     lines.append('  Internet[Internet Users]')
+    lines.append('  Client[Client / Unknown Source]')
     if not provider_resources:
         lines.append('  Internet -->|No cloud provider evidence| Unknown[No cloud provider resources detected]')
         style_id("Unknown", "security")
@@ -1313,6 +1592,9 @@ def _build_simple_architecture_diagram(
             )
             for rt in raw_types:
                 lower = rt.lower()
+                # Exclude API Gateway components from policy/role filtering
+                if any(tok in lower for tok in ('api_management', 'api_gateway', 'apigateway')):
+                    continue
                 if _is_iam_policy_role_type(lower) or any(token in lower for token in control_tokens):
                     return True
             return False
@@ -1374,14 +1656,27 @@ def _build_simple_architecture_diagram(
             raw_for_cat = sorted(set(non_boundary_parents.get(service, [])))
             cat = category_for_raw_types(raw_for_cat)
             services_by_layer.setdefault(cat, []).append(service)
+            # Debug API Management
+            if service == "API Management":
+                try:
+                    with open('Output/Summary/apim_layer_debug.log','w') as _dbg:
+                        _dbg.write(f"Service: {service}\n")
+                        _dbg.write(f"Raw types: {raw_for_cat}\n")
+                        _dbg.write(f"Category/Layer: {cat}\n")
+                except:
+                    pass
 
         # Ensure identity resources (e.g., Key Vault, Managed Identity) appear in the Identity layer
+        # BUT: Skip API Gateway child components that are already grouped under "API Management"
         try:
             db = _get_db()
             identity_raw_types = [rt for rt in resource_types if _rtdb.get_resource_type(db, rt).get('category') == 'Identity']
             # Build mapping friendly_name -> raw types so filtering later can check display flags
             identity_map: dict[str, list[str]] = {}
             for rt in identity_raw_types:
+                # Skip APIM child components - they're already grouped
+                if _is_apim_component(rt):
+                    continue
                 fn = _rtdb.get_friendly_name(db, rt)
                 if not fn:
                     continue
@@ -1412,17 +1707,51 @@ def _build_simple_architecture_diagram(
         # Filter out service entries that should not appear on the architecture chart
         try:
             db = _get_db()
+            # Debug: Log services BEFORE filtering
+            try:
+                with open('Output/Summary/before_filter.log','w') as _dbg:
+                    _dbg.write(f"Services before filtering:\n")
+                    for layer_key, svc_list in services_by_layer.items():
+                        _dbg.write(f"  {layer_key}: {svc_list}\n")
+            except:
+                pass
+            
             for layer_key, svc_list in list(services_by_layer.items()):
                 filtered = []
+                # Debug: Log what we're filtering
+                if layer_key == 'security':
+                    try:
+                        with open('Output/Summary/security_filtering.log','w') as _dbg:
+                            _dbg.write(f"Filtering security layer, input services: {svc_list}\n")
+                    except:
+                        pass
+                
                 for svc in svc_list:
                     raw_types = non_boundary_parents.get(svc, [])
+                    
+                    # Debug security layer processing
+                    if layer_key == 'security' and svc == 'API Management':
+                        try:
+                            with open('Output/Summary/api_mgmt_debug.log','w') as _dbg:
+                                _dbg.write(f"Processing: {svc}\n")
+                                _dbg.write(f"Raw types: {raw_types}\n")
+                        except:
+                            pass
+                    
                     if _is_non_visual_control_service(raw_types):
+                        if layer_key == 'security' and svc == 'API Management':
+                            try:
+                                with open('Output/Summary/api_mgmt_debug.log','a') as _dbg:
+                                    _dbg.write(f"FILTERED by _is_non_visual_control_service\n")
+                            except:
+                                pass
                         continue
                     # If any raw_type is allowed to display, keep the service
                     keep = False
                     for rt in raw_types:
                         rt_meta = _rtdb.get_resource_type(db, rt)
-                        if rt_meta.get('display_on_architecture_chart', False):
+                        display_flag = rt_meta.get('display_on_architecture_chart', False)
+                        if display_flag:
                             keep = True
                             break
                     # Hidden child components can still be rendered when vulnerable and parented.
@@ -1432,15 +1761,44 @@ def _build_simple_architecture_diagram(
                         and _is_vulnerable_child_candidate(raw_types)
                     ):
                         keep = True
+                    
+                    # Always keep API Gateway/Management services (critical for architecture)
+                    if not keep and any(tok in svc.lower() for tok in ('api management', 'api gateway')):
+                        keep = True
+                    
                     if keep:
                         filtered.append(svc)
+                
+                # Debug: Log what was kept
+                if layer_key == 'security':
+                    try:
+                        with open('Output/Summary/security_filtering.log','a') as _dbg:
+                            _dbg.write(f"After filtering, kept services: {filtered}\n")
+                    except:
+                        pass
+                
                 services_by_layer[layer_key] = filtered
-        except Exception:
+        except Exception as e:
+            # Log any exceptions
+            try:
+                with open('Output/Summary/filter_exception.log','w') as _dbg:
+                    _dbg.write(f"Exception during filtering: {e}\n")
+                    import traceback
+                    _dbg.write(traceback.format_exc())
+            except:
+                pass
             pass
 
         svc_global_idx = 0
         for layer_key in layer_order:
             layer_services = services_by_layer.get(layer_key, [])
+            # Debug: Log layer services
+            if layer_key == 'security':
+                try:
+                    with open('Output/Summary/security_layer.log','w') as _dbg:
+                        _dbg.write(f"Security layer services: {layer_services}\n")
+                except:
+                    pass
             if not layer_services:
                 # Still render the Monitoring layer if has_alerting_signal and no services were bucketed here
                 if layer_key == "monitoring" and has_alerting_signal:
@@ -1584,6 +1942,26 @@ def _build_simple_architecture_diagram(
                     svc_types = set(non_boundary_parents.get(s, []))
                     if svc_types and svc_types.issubset(_LB_CHILD_TYPES):
                         lb_nested_services.add(s)
+
+            # Identify Service Bus hierarchy: topics/queues/subscriptions nested inside namespace
+            _SB_PARENT_TYPES = frozenset({"azurerm_servicebus_namespace", "azurerm_eventhub_namespace"})
+            _SB_CHILD_TYPES = frozenset({
+                "azurerm_servicebus_queue", "azurerm_servicebus_topic", "azurerm_servicebus_subscription",
+                "azurerm_eventhub", "azurerm_eventhub_consumer_group",
+            })
+            sb_parent_service = next(
+                (s for s in layer_services
+                 if set(non_boundary_parents.get(s, [])) & _SB_PARENT_TYPES),
+                None,
+            )
+            sb_nested_services: set[str] = set()
+            if sb_parent_service:
+                for s in layer_services:
+                    if s == sb_parent_service:
+                        continue
+                    svc_types = set(non_boundary_parents.get(s, []))
+                    if svc_types and svc_types.issubset(_SB_CHILD_TYPES):
+                        sb_nested_services.add(s)
 
             # Identify ECS clustering: nest EC2 instances inside ECS Cluster when EC2-backed
             _ECS_PARENT_TYPES = frozenset({"aws_ecs_cluster"})
@@ -1828,6 +2206,26 @@ def _build_simple_architecture_diagram(
                             add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     continue
 
+                # Service Bus with nested topics/queues/subscriptions
+                is_sb_with_children = service == sb_parent_service and bool(sb_nested_services)
+                if is_sb_with_children:
+                    sb_names = service_instances.get(service, [])
+                    sb_label = f"📨 {service} ({sb_names[0]})" if len(sb_names) == 1 else f"📨 {service}"
+                    svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {svc_subgraph}["{sb_label}"]')
+                    style_id(svc_subgraph, 'messaging')
+                    for sb_child in sorted(sb_nested_services):
+                        child_names = service_instances.get(sb_child, [])
+                        child_label = f"{sb_child} ({child_names[0]})" if len(child_names) == 1 else sb_child
+                        child_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', sb_child)}"
+                        lines.append(f'        {child_node}["{child_label}"]')
+                        style_id(child_node, 'messaging')
+                    lines.append("      end")
+                    exposure_target = svc_subgraph
+                    service_anchor_nodes[service] = exposure_target
+                    # Service Bus is not directly internet-facing, no Internet link
+                    continue
+
                 # ECS Cluster with EC2-backed instances nested
                 is_ecs_with_instances = service == ecs_parent_service and bool(ecs_nested_instances)
                 if is_ecs_with_instances:
@@ -1866,13 +2264,39 @@ def _build_simple_architecture_diagram(
                     exposure_target = node_id
                 elif apim_structure:
                     # Special handling for API Management: create nested structure by API
+                    # Extract actual APIM instance name from resources
+                    apim_instance_name = None
+                    for r in resources:
+                        if r.resource_type in ("azurerm_api_management_api", "aws_api_gateway_rest_api", 
+                                               "google_api_gateway_api", "oci_apigateway_gateway"):
+                            props = getattr(r, 'properties', {}) or {}
+                            apim_instance_name = props.get("api_management_instance_name")
+                            if apim_instance_name:
+                                # Clean up var. or data. prefixes
+                                apim_instance_name = apim_instance_name.replace("var.", "").replace("data.", "")
+                                break
+                    
+                    # Use instance name if found, mark as shared if variable reference
+                    if apim_instance_name:
+                        # If it's still a variable name, indicate it's a shared instance
+                        if "_name" in apim_instance_name or apim_instance_name.startswith("api_management"):
+                            apim_label = f"🔌 API Management (shared: {apim_instance_name})"
+                        else:
+                            apim_label = f"🔌 {apim_instance_name}"
+                    else:
+                        apim_label = f"🔌 {service}"
+                    
                     svc_subgraph = f"{layer_id}_Svc_{p_idx}"
-                    lines.append(f'      subgraph {svc_subgraph}["🔌 {service}"]')
+                    lines.append(f'      subgraph {svc_subgraph}["{apim_label}"]')
                     style_id(svc_subgraph, layer_cat)
                     operation_nodes = []  # Collect all operation nodes for ingress connections
                     operation_start_idx = 0  # Default start index for operation nodes (safe fallback)
                     apim_requires_auth = False  # Track if any API requires auth
                     backend_services = []  # Track backend services to render outside APIM
+                    
+                    # Extract all APIM backend resources
+                    apim_backends = _extract_apim_backends(repo_path) if repo_path else {}
+                    backend_nodes_created = {}  # Track backend nodes: {backend_label: node_id}
                     
                     # Render each API as a nested subgraph
                     api_idx = 0
@@ -1895,6 +2319,10 @@ def _build_simple_architecture_diagram(
                         lines.append(f'          {api_subgraph}_Node["API: {api_name}"]')
                         style_id(f'{api_subgraph}_Node', 'app')
                         operation_nodes.append(f'{api_subgraph}_Node')
+                        
+                        # Track operation -> backend mappings for routing arrows
+                        operation_backend_mappings = []
+                        
                         # Render operations as separate nodes beneath the API (if present)
                         for op in api_components.get('operations', []):
                             # Sanitize: replace hyphens with underscores
@@ -1907,10 +2335,45 @@ def _build_simple_architecture_diagram(
                             lines.append(f'          {op_node}["{op}"]')
                             style_id(op_node, 'app')
                             operation_nodes.append(op_node)
+                            
+                            # Check if this operation references a backend
+                            backend_ref = _extract_backend_from_policy(repo_path, op) if repo_path else None
+                            if backend_ref and backend_ref in apim_backends:
+                                operation_backend_mappings.append({
+                                    "operation_node": op_node,
+                                    "backend_label": backend_ref,
+                                    "backend_info": apim_backends[backend_ref]
+                                })
                         
                         # Note: Policies are documented in markdown, not shown in diagram
                         
                         lines.append("        end")
+                        
+                        # Create backend nodes and connections if any operations use backends
+                        if operation_backend_mappings:
+                            for mapping in operation_backend_mappings:
+                                backend_label = mapping["backend_label"]
+                                backend_info = mapping["backend_info"]
+                                
+                                # Create backend node if not already created
+                                if backend_label not in backend_nodes_created:
+                                    backend_node_id = f"{svc_subgraph}_Backend_{backend_label}"
+                                    backend_display_name = backend_info["name"]
+                                    backend_url = backend_info["url"]
+                                    
+                                    # Clean up variable references in URL for display
+                                    display_url = backend_url
+                                    if "${var." in display_url:
+                                        # Simplify: https://${var.env}-api.${var.domain} → https://{env}-api.{domain}
+                                        display_url = re.sub(r'\$\{var\.([^}]+)\}', r'{\1}', display_url)
+                                    
+                                    lines.append(f'        {backend_node_id}["🎯 Backend: {backend_display_name}<br/>{display_url}"]')
+                                    style_id(backend_node_id, 'app')
+                                    backend_nodes_created[backend_label] = backend_node_id
+                                
+                                # Add arrow from operation to backend
+                                backend_node_id = backend_nodes_created[backend_label]
+                                add_link(mapping["operation_node"], backend_node_id, label="routes to")
                         
                         # Extract backend routing info (render later outside APIM)
                         backend_url = _extract_apim_backend_url(repo_path, api_name)
@@ -2116,10 +2579,12 @@ def _build_simple_architecture_diagram(
                         operation_nodes, requires_auth = exposure_target
                         service_anchor_nodes[service] = operation_nodes[0] if operation_nodes else None
                         is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
-                        if not _is_edge_gateway_service(service) and is_public:
-                            label = f"{ingress_label} (auth)" if requires_auth else ingress_label
-                            for op_node in operation_nodes:
-                                add_link("Internet", op_node, label=label, red=insecure_http)
+                        
+                        # API Gateways always show ingress to operations (Internet if public, Client otherwise)
+                        auth_label = _detect_api_auth_mechanism(service, service_raw_all, resources)
+                        source = "Internet" if is_public else "Client"
+                        for op_node in operation_nodes:
+                            add_link(source, op_node, label=auth_label, red=insecure_http)
                     else:
                         # Standard case: single exposure point
                         service_anchor_nodes[service] = exposure_target
@@ -2230,20 +2695,33 @@ def _build_simple_architecture_diagram(
                 if src_node and dst_node:
                     add_link(src_node, dst_node, label=rel_label, dashed=is_dashed)
 
-        # Explicitly show ingress to gateway-like edge services.
+        # Explicitly show ingress to non-API gateway edge services (Load Balancers, App Gateway, etc.)
+        # API Gateways are handled above with direct operation connections
         for service_name, node_id in service_anchor_nodes.items():
             if not node_id or not _is_edge_gateway_service(service_name):
                 continue
+            
+            # Skip API Gateways - they're handled with operation-level connections above
+            is_api_gateway = any(tok in service_name.lower() for tok in ('api management', 'api gateway', 'apim'))
+            if is_api_gateway:
+                continue
+            
             service_raw_all = sorted(set(non_boundary_parents.get(service_name, [])))
             is_public, ingress_label, insecure_http = _service_internet_posture(service_name, service_raw_all)
+            
             if is_public:
                 add_link("Internet", node_id, label=ingress_label, red=insecure_http)
 
         lines.append("  end")
 
+    # Remove unused ingress nodes (Internet/Client)
     has_internet_edges = any(line.strip().startswith("Internet -->") for line in edge_lines)
+    has_client_edges = any(line.strip().startswith("Client -->") for line in edge_lines)
+    
     if not has_internet_edges:
         lines = [line for line in lines if line.strip() != "Internet[Internet Users]"]
+    if not has_client_edges:
+        lines = [line for line in lines if line.strip() != "Client[Client / Unknown Source]"]
 
     lines.extend(edge_lines)
     # Append link and node style directives directly so Mermaid renders colored borders.
@@ -3496,6 +3974,10 @@ def write_experiment_cloud_architecture_summary(
     resource_types = [r.resource_type for r in context.resources]
 
     for provider in providers:
+        # Skip meta-providers that shouldn't have architecture diagrams
+        if provider.lower() in ('terraform', 'kubernetes', 'unknown', ''):
+            continue
+        
         # Record module dependencies discovered in Terraform into DB if available
         try:
             from analyze_terraform_modules import extract_modules, classify_module_source
@@ -3741,6 +4223,49 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
                         "UPDATE resources SET parent_resource_id=? WHERE id=?",
                         (parent_db_id, child_db_id),
                     )
+    
+    # Third pass: detect and register shared/external resources
+    try:
+        from shared_resource_helpers import register_shared_resource, link_repo_to_shared_resource
+        
+        shared_count = 0
+        for resource in context.resources:
+            props = getattr(resource, 'properties', {}) or {}
+            shared_ref_type = props.get("shared_resource_reference")
+            shared_ref_id = props.get("shared_resource_identifier")
+            
+            if shared_ref_type and shared_ref_id:
+                shared_count += 1
+                provider = _rtdb.get_provider_key(_get_db(), resource.resource_type)
+                category = _rtdb.get_resource_type(_get_db(), shared_ref_type).get("category", "Unknown")
+                
+                # Register the shared resource
+                shared_id = register_shared_resource(
+                    resource_type=shared_ref_type,
+                    resource_identifier=shared_ref_id,
+                    provider=provider,
+                    friendly_name=_rtdb.get_friendly_name(_get_db(), shared_ref_type),
+                    category=category,
+                    discovered_from_repo=context.repository_name,
+                    variable_name=shared_ref_id.replace("var.", "").replace("data.", ""),
+                )
+                
+                # Link this repo to the shared resource
+                local_id = res_db_ids.get(f"{resource.resource_type}.{resource.name}")
+                if local_id:
+                    link_repo_to_shared_resource(
+                        shared_id, 
+                        context.repository_name, 
+                        experiment_id, 
+                        local_id,
+                        "uses_parent"
+                    )
+        if shared_count > 0:
+            print(f"✓ Registered {shared_count} shared resource references")
+    except ImportError as ie:
+        print(f"⚠️  Import failed: {ie}")  # shared_resource_helpers not available
+    except Exception as e:
+        print(f"⚠️  Shared resource registration failed: {e}")  # Non-fatal, continue with scan
 
     for connection in context.connections:
         insert_connection(
