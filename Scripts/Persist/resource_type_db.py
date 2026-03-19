@@ -95,18 +95,19 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_container_group":                    {"friendly_name": "Container Instance",       "category": "Container",   "icon": "📦"},
     # Azure — Network & Gateways
     "azurerm_application_gateway":                {"friendly_name": "Application Gateway",      "category": "Network",     "icon": "🌐"},
+    "azurerm_application_gateway_backend_pool":   {"friendly_name": "App Gateway Backend Pool", "category": "Network",     "icon": "🎯", "display_on_architecture_chart": False, "parent_type": "azurerm_application_gateway"},
     "azurerm_lb":                                 {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
     "azurerm_lb_rule":                            {"friendly_name": "Load Balancer Rule",       "category": "Network",     "icon": "⚖️", "display_on_architecture_chart": False, "parent_type": "azurerm_lb"},
     "azurerm_lb_probe":                           {"friendly_name": "Load Balancer Probe",      "category": "Network",     "icon": "🔍", "display_on_architecture_chart": False, "parent_type": "azurerm_lb"},
-    "azurerm_api_management":                     {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_api":                 {"friendly_name": "APIM API",                 "category": "API",         "icon": "🔗", "display_on_architecture_chart": False, "parent_type": "azurerm_api_management"},
-    "azurerm_api_management_api_operation":       {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_api_policy":          {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_product":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_product_api":         {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_subscription":        {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_backend":             {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
-    "azurerm_api_management_named_value":         {"friendly_name": "API Management",           "category": "Network",     "icon": "🔌"},
+    "azurerm_api_management":                     {"friendly_name": "API Management",           "category": "API",         "icon": "🔌"},
+    "azurerm_api_management_api":                 {"friendly_name": "APIM API",                 "category": "API",         "icon": "🔗", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
+    "azurerm_api_management_api_operation":       {"friendly_name": "API Operation",            "category": "API",         "icon": "🔌", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management_api"},
+    "azurerm_api_management_api_policy":          {"friendly_name": "API Policy",               "category": "API",         "icon": "📜", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management_api"},
+    "azurerm_api_management_product":             {"friendly_name": "APIM Product",             "category": "API",         "icon": "📦", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
+    "azurerm_api_management_product_api":         {"friendly_name": "Product API Link",         "category": "API",         "icon": "🔗", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management_product"},
+    "azurerm_api_management_subscription":        {"friendly_name": "API Management Subscription", "category": "API",     "icon": "🔑", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
+    "azurerm_api_management_backend":             {"friendly_name": "APIM Backend",             "category": "API",         "icon": "🎯", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
+    "azurerm_api_management_named_value":         {"friendly_name": "APIM Named Value",         "category": "API",         "icon": "🔐", "display_on_architecture_chart": True,  "parent_type": "azurerm_api_management"},
     "azurerm_virtual_network":                    {"friendly_name": "Virtual Network",          "category": "Network",     "icon": "🔷"},
     "azurerm_subnet":                             {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🕸️", "display_on_architecture_chart": False, "parent_type": "azurerm_virtual_network"},
     "azurerm_network_interface":                  {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "azurerm_linux_virtual_machine"},
@@ -118,6 +119,13 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_network_watcher_flow_log":           {"friendly_name": "Network Watcher Flow Log", "category": "Monitoring",  "icon": "📡", "display_on_architecture_chart": False},
     "azurerm_resource_group":                     {"friendly_name": "Resource Group",           "category": "Group",     "icon": "📦", "display_on_architecture_chart": False},
     "azurerm_resources":                          {"friendly_name": "Resources",                "category": "Other",       "icon": "📦", "display_on_architecture_chart": False},
+    # Terraform meta-resources (lifecycle helpers, not actual infrastructure)
+    "terraform_data":                             {"friendly_name": "Terraform Data",           "category": "Other",       "icon": "⚙️", "display_on_architecture_chart": False},
+    "null_resource":                              {"friendly_name": "Null Resource",            "category": "Other",       "icon": "⚙️", "display_on_architecture_chart": False},
+    "random_id":                                  {"friendly_name": "Random ID",                "category": "Other",       "icon": "🎲", "display_on_architecture_chart": False},
+    "random_string":                              {"friendly_name": "Random String",            "category": "Other",       "icon": "🎲", "display_on_architecture_chart": False},
+    "random_password":                            {"friendly_name": "Random Password",          "category": "Other",       "icon": "🎲", "display_on_architecture_chart": False},
+    "time_sleep":                                 {"friendly_name": "Time Sleep",               "category": "Other",       "icon": "⏱️", "display_on_architecture_chart": False},
     # Azure — Security
     "azurerm_network_security_group":             {"friendly_name": "Network Security Group",   "category": "Security",    "icon": "🛡️"},
     "azurerm_firewall":                           {"friendly_name": "Azure Firewall",           "category": "Security",    "icon": "🛡️"},
@@ -133,11 +141,15 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_monitor_metric_alert":               {"friendly_name": "Metric Alert",             "category": "Monitoring",  "icon": "🔔"},
     "azurerm_monitor_scheduled_query_rules_alert":{"friendly_name": "Query Alert",              "category": "Monitoring",  "icon": "🔔"},
     # Azure — Messaging
+    "azurerm_servicebus_namespace":               {"friendly_name": "Service Bus Namespace",    "category": "Messaging",   "icon": "📦"},
     "azurerm_servicebus_queue":                   {"friendly_name": "Service Bus Queue",        "category": "Messaging",   "icon": "📨", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_namespace"},
     "azurerm_servicebus_topic":                   {"friendly_name": "Service Bus Topic",        "category": "Messaging",   "icon": "📢", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_namespace"},
     "azurerm_servicebus_subscription":            {"friendly_name": "Service Bus Subscription", "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "azurerm_servicebus_topic"},
+    "azurerm_eventhub_namespace":                 {"friendly_name": "Event Hub Namespace",      "category": "Messaging",   "icon": "📦"},
     "azurerm_eventhub":                           {"friendly_name": "Event Hub",                "category": "Messaging",   "icon": "📡", "display_on_architecture_chart": False, "parent_type": "azurerm_eventhub_namespace"},
     "azurerm_eventhub_consumer_group":            {"friendly_name": "Event Hub Consumer Group", "category": "Messaging",   "icon": "👥", "display_on_architecture_chart": False, "parent_type": "azurerm_eventhub"},
+    "azurerm_eventgrid_topic":                    {"friendly_name": "Event Grid Topic",         "category": "Messaging",   "icon": "🌐"},
+    "azurerm_eventgrid_event_subscription":       {"friendly_name": "Event Grid Subscription",  "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "azurerm_eventgrid_topic"},
     # Alibaba Cloud
     "alicloud_actiontrail_trail":                 {"friendly_name": "Actiontrail Trail",        "category": "Monitoring",  "icon": "📜"},
     "alicloud_instance":                          {"friendly_name": "ECS Instance",             "category": "Compute",     "icon": "🖥️",  "display_on_architecture_chart": True,  "parent_type": None},
@@ -153,6 +165,10 @@ _FALLBACK: dict[str, dict] = {
     "alicloud_security_group_rule":               {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "📋",  "display_on_architecture_chart": False, "parent_type": "alicloud_security_group"},
     "alicloud_ram_role":                          {"friendly_name": "RAM Role",                 "category": "Identity",    "icon": "👤",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_ram_policy":                        {"friendly_name": "RAM Policy",               "category": "Identity",    "icon": "📜",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_ram_access_key":                    {"friendly_name": "RAM Access Key",           "category": "Identity",    "icon": "🔑",  "display_on_architecture_chart": False, "parent_type": None},
+    "alicloud_api_gateway_api":                   {"friendly_name": "API Gateway",              "category": "API",         "icon": "🔌",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_api_gateway_app":                   {"friendly_name": "API Gateway App Key",      "category": "API",         "icon": "🔑",  "display_on_architecture_chart": False, "parent_type": "alicloud_api_gateway_api"},
+    "alicloud_api_gateway_group":                 {"friendly_name": "API Gateway Group",        "category": "API",         "icon": "📦",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_log_project":                       {"friendly_name": "Log Service Project",      "category": "Logging",     "icon": "📊",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_log_store":                         {"friendly_name": "Log Store",                "category": "Logging",     "icon": "📝",  "display_on_architecture_chart": False, "parent_type": "alicloud_log_project"},
     "alicloud_slb_load_balancer":                 {"friendly_name": "SLB Load Balancer",        "category": "Network",     "icon": "⚖️",  "display_on_architecture_chart": True,  "parent_type": None},
@@ -179,6 +195,8 @@ _FALLBACK: dict[str, dict] = {
     "oci_functions_function":                     {"friendly_name": "OCI Function",             "category": "Serverless",  "icon": "⚡",  "display_on_architecture_chart": False, "parent_type": "oci_functions_application"},
     "oci_apigateway_gateway":                     {"friendly_name": "OCI API Gateway",          "category": "API",         "icon": "🔗",  "display_on_architecture_chart": True,  "parent_type": None},
     "oci_apigateway_deployment":                  {"friendly_name": "OCI API Deployment",       "category": "API",         "icon": "🚀",  "display_on_architecture_chart": False, "parent_type": "oci_apigateway_gateway"},
+    "oci_identity_api_key":                       {"friendly_name": "OCI API Key",              "category": "Identity",    "icon": "🔑",  "display_on_architecture_chart": False, "parent_type": None},
+    "oci_identity_auth_token":                    {"friendly_name": "OCI Auth Token",           "category": "Identity",    "icon": "🔑",  "display_on_architecture_chart": False, "parent_type": None},
     "oci_logging_log_group":                      {"friendly_name": "OCI Log Group",            "category": "Logging",     "icon": "📊",  "display_on_architecture_chart": True,  "parent_type": None},
     "oci_logging_log":                            {"friendly_name": "OCI Log",                  "category": "Logging",     "icon": "📝",  "display_on_architecture_chart": False, "parent_type": "oci_logging_log_group"},
     "oci_identity_policy":                        {"friendly_name": "OCI IAM Policy",           "category": "Identity",    "icon": "📜",  "display_on_architecture_chart": True,  "parent_type": None},
@@ -210,16 +228,19 @@ _FALLBACK: dict[str, dict] = {
     "aws_ecs_service":                            {"friendly_name": "ECS Service",              "category": "Container",   "icon": "☸️"},
     "helm_release":                               {"friendly_name": "Helm Release",             "category": "Container",   "icon": "⎈"},
     # AWS — Network & API Gateway
-    "aws_api_gateway_rest_api":                   {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_api_gateway_resource":                   {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_api_gateway_method":                     {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_api_gateway_integration":                {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_api_gateway_deployment":                 {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_api_gateway_stage":                      {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "aws_apigatewayv2_api":                       {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
-    "aws_apigatewayv2_integration":               {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
-    "aws_apigatewayv2_route":                     {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
-    "aws_apigatewayv2_stage":                     {"friendly_name": "API Gateway v2",           "category": "Network",     "icon": "🔌"},
+    "aws_api_gateway_rest_api":                   {"friendly_name": "API Gateway",              "category": "API",         "icon": "🔌", "display_on_architecture_chart": True},
+    "aws_api_gateway_resource":                   {"friendly_name": "API Resource",             "category": "API",         "icon": "🔗", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_rest_api"},
+    "aws_api_gateway_method":                     {"friendly_name": "API Method",               "category": "API",         "icon": "🔌", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_resource"},
+    "aws_api_gateway_integration":                {"friendly_name": "API Integration",          "category": "API",         "icon": "🎯", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_method"},
+    "aws_api_gateway_deployment":                 {"friendly_name": "API Deployment",           "category": "API",         "icon": "🚀", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_rest_api"},
+    "aws_api_gateway_stage":                      {"friendly_name": "API Stage",                "category": "API",         "icon": "🎭", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_deployment"},
+    "aws_api_gateway_api_key":                    {"friendly_name": "API Gateway Key",          "category": "API",         "icon": "🔑", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_rest_api"},
+    "aws_api_gateway_usage_plan":                 {"friendly_name": "API Gateway Usage Plan",   "category": "API",         "icon": "🔑", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_rest_api"},
+    "aws_api_gateway_usage_plan_key":             {"friendly_name": "API Gateway Usage Plan Key", "category": "API",       "icon": "🔑", "display_on_architecture_chart": True,  "parent_type": "aws_api_gateway_usage_plan"},
+    "aws_apigatewayv2_api":                       {"friendly_name": "API Gateway v2",           "category": "API",         "icon": "🔌"},
+    "aws_apigatewayv2_integration":               {"friendly_name": "API v2 Integration",       "category": "API",         "icon": "🎯", "display_on_architecture_chart": False, "parent_type": "aws_apigatewayv2_api"},
+    "aws_apigatewayv2_route":                     {"friendly_name": "API v2 Route",             "category": "API",         "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "aws_apigatewayv2_api"},
+    "aws_apigatewayv2_stage":                     {"friendly_name": "API v2 Stage",             "category": "API",         "icon": "🎭", "display_on_architecture_chart": False, "parent_type": "aws_apigatewayv2_api"},
     "aws_elb":                                    {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "🌐"},
     "aws_alb":                                    {"friendly_name": "App Load Balancer",        "category": "Network",     "icon": "🌐"},
     "aws_lb":                                     {"friendly_name": "Network Load Balancer",    "category": "Network",     "icon": "🌐"},
@@ -249,6 +270,12 @@ _FALLBACK: dict[str, dict] = {
     "aws_kms_alias":                              {"friendly_name": "KMS Key Alias",            "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
     "aws_key_pair":                               {"friendly_name": "Key Pair",                 "category": "Identity",    "icon": "🔑", "display_on_architecture_chart": False},
     "aws_ssm_parameter":                          {"friendly_name": "SSM Parameter",            "category": "Identity",    "icon": "🔐", "display_on_architecture_chart": False},
+    # AWS — Messaging
+    "aws_sqs_queue":                              {"friendly_name": "SQS Queue",                "category": "Messaging",   "icon": "📨"},
+    "aws_sns_topic":                              {"friendly_name": "SNS Topic",                "category": "Messaging",   "icon": "📢"},
+    "aws_sns_topic_subscription":                 {"friendly_name": "SNS Subscription",         "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "aws_sns_topic"},
+    "aws_kinesis_stream":                         {"friendly_name": "Kinesis Stream",           "category": "Messaging",   "icon": "📡"},
+    "aws_kinesis_firehose_delivery_stream":       {"friendly_name": "Kinesis Firehose",         "category": "Messaging",   "icon": "🔥"},
     # GCP — Storage
     "google_storage_bucket":                      {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},
     "google_storage_bucket_iam_binding":          {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️", "display_on_architecture_chart": False, "parent_type": "google_storage_bucket"},
@@ -262,10 +289,11 @@ _FALLBACK: dict[str, dict] = {
     # GCP — Container
     "google_container_cluster":                   {"friendly_name": "GKE Cluster",              "category": "Container",   "icon": "☸️"},
     "google_container_node_pool":                 {"friendly_name": "GKE Node Pool",            "category": "Container",   "icon": "☸️"},
-    # GCP — Network & API Gateway
-    "google_api_gateway_api":                     {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "google_api_gateway_api_config":              {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
-    "google_api_gateway_gateway":                 {"friendly_name": "API Gateway",              "category": "Network",     "icon": "🔌"},
+    # GCP — API Gateway
+    "google_api_gateway_api":                     {"friendly_name": "API Gateway API",          "category": "API",         "icon": "🔌"},
+    "google_api_gateway_api_config":              {"friendly_name": "API Config",               "category": "API",         "icon": "⚙️", "display_on_architecture_chart": False, "parent_type": "google_api_gateway_api"},
+    "google_api_gateway_gateway":                 {"friendly_name": "API Gateway",              "category": "API",         "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "google_api_gateway_api_config"},
+    # GCP — Network
     "google_cloud_run_service":                   {"friendly_name": "Cloud Run Service",        "category": "Compute",     "icon": "🌐"},
     "google_compute_url_map":                     {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "⚖️"},
     "google_compute_network":                     {"friendly_name": "VPC Network",              "category": "Network",     "icon": "🔷"},
@@ -275,6 +303,300 @@ _FALLBACK: dict[str, dict] = {
     "google_project_iam_binding":                 {"friendly_name": "IAM Binding",              "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
     "google_kms_crypto_key":                      {"friendly_name": "KMS Crypto Key",           "category": "Identity",    "icon": "🔑"},
     "google_service_account":                     {"friendly_name": "Service Account",          "category": "Identity",    "icon": "👤"},
+    # GCP — Messaging
+    "google_pubsub_topic":                        {"friendly_name": "Pub/Sub Topic",            "category": "Messaging",   "icon": "📢"},
+    "google_pubsub_subscription":                 {"friendly_name": "Pub/Sub Subscription",     "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "google_pubsub_topic"},
+}
+
+# ---------------------------------------------------------------------------
+# Service Patterns — Generalized hierarchical service patterns across providers
+# ---------------------------------------------------------------------------
+# Defines common patterns for services with:
+# - Parent/child hierarchies
+# - Ingress endpoints (operations, methods, endpoints)
+# - Authorization mechanisms (keys, subscriptions, policies)
+# - Egress patterns (backends, databases, logging)
+
+_SERVICE_PATTERNS = {
+    "api_gateway": {
+        "description": "API Gateway pattern: parent → API → operations with auth",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_api_management",
+                "api_resource": "azurerm_api_management_api",
+                "operation": "azurerm_api_management_api_operation",
+                "auth_resources": ["azurerm_api_management_subscription", "azurerm_api_management_api_key"],
+                "policy": "azurerm_api_management_api_policy",
+                "backend": "azurerm_api_management_backend",
+            },
+            "aws": {
+                "parent": "aws_api_gateway_rest_api",
+                "api_resource": "aws_api_gateway_resource",
+                "operation": "aws_api_gateway_method",
+                "auth_resources": ["aws_api_gateway_api_key", "aws_api_gateway_usage_plan_key"],
+                "policy": "aws_api_gateway_method_settings",
+                "backend": "aws_api_gateway_integration",
+            },
+            "aws_v2": {
+                "parent": "aws_apigatewayv2_api",
+                "operation": "aws_apigatewayv2_route",
+                "auth_resources": ["aws_apigatewayv2_authorizer"],
+                "backend": "aws_apigatewayv2_integration",
+            },
+            "gcp": {
+                "parent": "google_api_gateway_api",
+                "api_resource": "google_api_gateway_api_config",
+                "operation": "google_api_gateway_gateway",
+            },
+            "oracle": {
+                "parent": "oci_apigateway_gateway",
+                "operation": "oci_apigateway_deployment",
+            },
+            "alibaba": {
+                "parent": "alicloud_api_gateway_api",
+                "auth_resources": ["alicloud_api_gateway_app"],
+            },
+        },
+        "ingress_pattern": "internet_to_operations",
+        "auth_detection": ["subscription", "api_key", "oauth", "jwt"],
+    },
+    
+    "storage": {
+        "description": "Storage pattern: account → containers/buckets → blobs/objects",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_storage_account",
+                "container": "azurerm_storage_container",
+                "object": "azurerm_storage_blob",
+                "auth_resources": ["azurerm_storage_account_sas", "azurerm_storage_container_sas"],
+                "queue": "azurerm_storage_queue",
+                "table": "azurerm_storage_table",
+            },
+            "aws": {
+                "parent": "aws_s3_bucket",
+                "object": "aws_s3_bucket_object",
+                "auth_resources": ["aws_s3_bucket_policy", "aws_iam_policy"],
+            },
+            "gcp": {
+                "parent": "google_storage_bucket",
+                "object": "google_storage_bucket_object",
+                "auth_resources": ["google_storage_bucket_iam_binding"],
+            },
+        },
+        "ingress_pattern": "client_to_containers",
+        "auth_detection": ["sas_token", "iam_policy", "access_key"],
+    },
+    
+    "messaging": {
+        "description": "Messaging pattern: namespace → topics/queues → subscriptions",
+        "providers": {
+            "azure_servicebus": {
+                "parent": "azurerm_servicebus_namespace",
+                "topic": "azurerm_servicebus_topic",
+                "queue": "azurerm_servicebus_queue",
+                "subscription": "azurerm_servicebus_subscription",
+                "rule": "azurerm_servicebus_subscription_rule",
+            },
+            "azure_eventhub": {
+                "parent": "azurerm_eventhub_namespace",
+                "topic": "azurerm_eventhub",
+                "subscription": "azurerm_eventhub_consumer_group",
+            },
+            "aws": {
+                "topic": "aws_sns_topic",
+                "queue": "aws_sqs_queue",
+                "subscription": "aws_sns_topic_subscription",
+            },
+            "gcp": {
+                "topic": "google_pubsub_topic",
+                "subscription": "google_pubsub_subscription",
+            },
+        },
+        "ingress_pattern": "app_to_topics",
+        "egress_pattern": "subscriptions_to_apps",
+    },
+    
+    "serverless": {
+        "description": "Serverless pattern: function with triggers and outputs",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_function_app",
+                "trigger": "azurerm_function_app_function",
+                "binding": "azurerm_function_app_host_keys",
+            },
+            "aws": {
+                "parent": "aws_lambda_function",
+                "trigger": "aws_lambda_event_source_mapping",
+                "permission": "aws_lambda_permission",
+            },
+            "gcp": {
+                "parent": "google_cloudfunctions_function",
+                "trigger": "google_cloudfunctions_function_iam_binding",
+            },
+        },
+        "ingress_pattern": "event_driven",
+        "auth_detection": ["function_key", "iam_role"],
+    },
+    
+    "key_vault": {
+        "description": "Key Vault pattern: vault → secrets/keys/certificates",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_key_vault",
+                "secret": "azurerm_key_vault_secret",
+                "key": "azurerm_key_vault_key",
+                "certificate": "azurerm_key_vault_certificate",
+                "access_policy": "azurerm_key_vault_access_policy",
+            },
+            "aws": {
+                "parent": "aws_kms_key",
+                "secret": "aws_secretsmanager_secret",
+            },
+            "gcp": {
+                "parent": "google_kms_key_ring",
+                "key": "google_kms_crypto_key",
+                "secret": "google_secret_manager_secret",
+            },
+        },
+        "ingress_pattern": "client_with_auth",
+        "auth_detection": ["access_policy", "iam_binding", "rbac"],
+    },
+    
+    "database": {
+        "description": "Database pattern: server → databases → users/logins with auth",
+        "providers": {
+            "azure_sql": {
+                "parent": "azurerm_mssql_server",
+                "database": "azurerm_mssql_database",
+                "auth_resources": ["azurerm_sql_active_directory_administrator", "azurerm_mssql_server_microsoft_support_auditing_policy"],
+                "firewall": "azurerm_mssql_firewall_rule",
+                "user": "azurerm_sql_database_user",
+            },
+            "azure_mysql": {
+                "parent": "azurerm_mysql_server",
+                "database": "azurerm_mysql_database",
+                "firewall": "azurerm_mysql_firewall_rule",
+                "config": "azurerm_mysql_configuration",
+            },
+            "azure_postgres": {
+                "parent": "azurerm_postgresql_server",
+                "database": "azurerm_postgresql_database",
+                "firewall": "azurerm_postgresql_firewall_rule",
+                "config": "azurerm_postgresql_configuration",
+            },
+            "aws_rds": {
+                "parent": "aws_db_instance",
+                "subnet_group": "aws_db_subnet_group",
+                "parameter_group": "aws_db_parameter_group",
+                "option_group": "aws_db_option_group",
+            },
+            "gcp_sql": {
+                "parent": "google_sql_database_instance",
+                "database": "google_sql_database",
+                "user": "google_sql_user",
+            },
+        },
+        "ingress_pattern": "app_to_database",
+        "auth_detection": ["sql_auth", "aad_auth", "iam_auth", "ssl_cert"],
+        "egress_pattern": "logs_to_monitoring",
+    },
+    
+    "cosmos_db": {
+        "description": "Cosmos DB pattern: account → databases → containers/collections (auth required)",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_cosmosdb_account",
+                "database": ["azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_mongo_database", "azurerm_cosmosdb_cassandra_keyspace"],
+                "container": ["azurerm_cosmosdb_sql_container", "azurerm_cosmosdb_mongo_collection", "azurerm_cosmosdb_cassandra_table"],
+                "auth_resources": ["azurerm_cosmosdb_sql_role_assignment", "azurerm_cosmosdb_sql_role_definition"],
+            },
+            "aws": {
+                "parent": "aws_dynamodb_table",
+                "auth_resources": ["aws_dynamodb_table_item"],
+            },
+            "gcp": {
+                "parent": "google_firestore_database",
+                "document": "google_firestore_document",
+            },
+        },
+        "ingress_pattern": "app_with_connection_string",
+        "auth_detection": ["connection_string", "rbac", "resource_token"],
+        "egress_pattern": "replication_change_feed",
+    },
+    
+    "kubernetes": {
+        "description": "Kubernetes pattern: cluster → namespaces → workloads (ingress/egress)",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_kubernetes_cluster",
+                "node_pool": "azurerm_kubernetes_cluster_node_pool",
+                "workload": ["kubernetes_deployment", "kubernetes_stateful_set", "kubernetes_daemon_set"],
+                "service": "kubernetes_service",
+                "ingress": "kubernetes_ingress",
+                "config": ["kubernetes_config_map", "kubernetes_secret"],
+            },
+            "aws": {
+                "parent": "aws_eks_cluster",
+                "node_group": "aws_eks_node_group",
+                "addon": "aws_eks_addon",
+            },
+            "gcp": {
+                "parent": "google_container_cluster",
+                "node_pool": "google_container_node_pool",
+            },
+        },
+        "ingress_pattern": "ingress_controller_to_services",
+        "egress_pattern": "services_to_external",
+        "auth_detection": ["rbac", "service_account", "api_token"],
+    },
+    
+    "app_service": {
+        "description": "App Service pattern: plan → app service (hosted on VM)",
+        "providers": {
+            "azure": {
+                "parent": "azurerm_service_plan",
+                "app": ["azurerm_linux_web_app", "azurerm_windows_web_app", "azurerm_linux_function_app", "azurerm_windows_function_app"],
+                "slot": "azurerm_web_app_deployment_slot",
+                "config": ["azurerm_app_service_virtual_network_swift_connection", "azurerm_app_service_custom_hostname_binding"],
+            },
+            "aws": {
+                "parent": "aws_elastic_beanstalk_environment",
+                "app": "aws_elastic_beanstalk_application",
+                "version": "aws_elastic_beanstalk_application_version",
+            },
+            "gcp": {
+                "parent": "google_app_engine_application",
+                "service": "google_app_engine_standard_app_version",
+            },
+        },
+        "ingress_pattern": "https_to_app",
+        "egress_pattern": "app_to_database_storage",
+        "auth_detection": ["managed_identity", "connection_string", "app_settings"],
+    },
+    
+    "monitoring": {
+        "description": "Monitoring pattern: workspace/insights → logs/metrics → alerts",
+        "providers": {
+            "azure": {
+                "parent": ["azurerm_application_insights", "azurerm_log_analytics_workspace"],
+                "metric": "azurerm_monitor_metric_alert",
+                "log_alert": "azurerm_monitor_scheduled_query_rules_alert",
+                "action_group": "azurerm_monitor_action_group",
+                "diagnostic": "azurerm_monitor_diagnostic_setting",
+            },
+            "aws": {
+                "parent": "aws_cloudwatch_log_group",
+                "metric_alarm": "aws_cloudwatch_metric_alarm",
+                "dashboard": "aws_cloudwatch_dashboard",
+            },
+            "gcp": {
+                "parent": "google_logging_project_sink",
+                "alert": "google_monitoring_alert_policy",
+            },
+        },
+        "ingress_pattern": "telemetry_from_resources",
+        "egress_pattern": "alerts_to_action_groups",
+    },
 }
 
 _PROVIDER_PREFIXES: list[tuple[str, str]] = [
@@ -284,6 +606,7 @@ _PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("random_", "terraform"),
     ("time_", "terraform"),
     ("null_resource", "terraform"),
+    ("terraform_data", "terraform"),  # Will be inferred from context
     ("aws_",     "aws"),
     ("google_",  "gcp"),
     ("alicloud_","alicloud"),
@@ -467,7 +790,12 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
             'Identity': 'Identity',
             'Security': 'Security',
             'Network': 'Network',
+            'Messaging': 'Messaging',
             'Monitoring': 'Monitoring',
+            'Logging': 'Logging',
+            'Cache': 'Cache',
+            'Serverless': 'Serverless',
+            'API': 'API',
             'Other': 'Other',
         }
         if cat in mapping:
@@ -490,6 +818,8 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
         return 'Identity'
     if any(k in lower for k in ['monitor', 'insights', 'log', 'alert', 'diagnostic']):
         return 'Monitoring'
+    if any(k in lower for k in ['servicebus', 'eventhub', 'eventgrid', 'sqs', 'sns', 'kinesis', 'pubsub', 'queue', 'topic']):
+        return 'Messaging'
     # Default
     return 'Other'
 
@@ -517,6 +847,89 @@ def is_physical_network_device(conn: sqlite3.Connection | None, terraform_type: 
 
     physical_tokens = ('firewall', 'application_gateway', 'load_balancer', 'lb', 'nat_gateway', 'gateway', 'appliance', 'virtual_appliance', 'edge', 'vpn_gateway')
     return any(tok in lower for tok in physical_tokens)
+
+
+# ---------------------------------------------------------------------------
+# Service Pattern Helpers — Use _SERVICE_PATTERNS for consistent cross-provider behavior
+# ---------------------------------------------------------------------------
+
+def get_service_pattern(resource_type: str) -> tuple[str | None, dict | None]:
+    """Return (pattern_name, pattern_config) for a resource type if it matches a known pattern.
+    
+    Returns (None, None) if no pattern matches.
+    
+    Examples:
+        azurerm_api_management_api -> ("api_gateway", {...})
+        aws_s3_bucket -> ("storage", {...})
+        azurerm_servicebus_topic -> ("messaging", {...})
+    """
+    for pattern_name, pattern in _SERVICE_PATTERNS.items():
+        for provider_key, provider_config in pattern.get("providers", {}).items():
+            for component_key, component_type in provider_config.items():
+                if isinstance(component_type, list):
+                    if resource_type in component_type:
+                        return (pattern_name, pattern)
+                elif resource_type == component_type:
+                    return (pattern_name, pattern)
+    return (None, None)
+
+
+def get_pattern_components(pattern_name: str, resource_types: list[str]) -> dict[str, list[str]]:
+    """Given a pattern name and list of resource types, return components grouped by role.
+    
+    Returns dict like:
+        {
+            "parent": ["azurerm_api_management"],
+            "operation": ["azurerm_api_management_api_operation", ...],
+            "auth_resources": ["azurerm_api_management_subscription", ...],
+        }
+    """
+    pattern = _SERVICE_PATTERNS.get(pattern_name)
+    if not pattern:
+        return {}
+    
+    components = {}
+    for provider_key, provider_config in pattern.get("providers", {}).items():
+        for component_key, expected_types in provider_config.items():
+            if isinstance(expected_types, str):
+                expected_types = [expected_types]
+            
+            matches = [rt for rt in resource_types if rt in expected_types]
+            if matches:
+                components.setdefault(component_key, []).extend(matches)
+    
+    return components
+
+
+def is_ingress_resource(resource_type: str) -> bool:
+    """Return True if this resource type is an ingress endpoint (operations, methods, routes)."""
+    pattern_name, pattern = get_service_pattern(resource_type)
+    if not pattern:
+        return False
+    
+    # Check if this is an "operation" component in any pattern
+    for provider_config in pattern.get("providers", {}).values():
+        operation_types = provider_config.get("operation")
+        if operation_types:
+            if isinstance(operation_types, str):
+                operation_types = [operation_types]
+            if resource_type in operation_types:
+                return True
+    return False
+
+
+def is_auth_resource(resource_type: str) -> bool:
+    """Return True if this resource type is an authorization mechanism (keys, subscriptions, policies)."""
+    pattern_name, pattern = get_service_pattern(resource_type)
+    if not pattern:
+        return False
+    
+    # Check if this is an "auth_resources" component in any pattern
+    for provider_config in pattern.get("providers", {}).values():
+        auth_types = provider_config.get("auth_resources", [])
+        if resource_type in auth_types:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------

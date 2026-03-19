@@ -2683,6 +2683,11 @@ def upsert_cloud_diagram(
     runs. If a repo_name cannot be determined, falls back to the existing
     experiment-scoped uniqueness.
     """
+    # Skip meta-providers that shouldn't have architecture diagrams
+    provider_norm = (provider or "unknown").strip().lower()
+    if provider_norm in ('terraform', 'kubernetes', 'unknown', ''):
+        return  # Don't create architecture diagrams for these
+    
     with get_db_connection() as conn:
         # Resolve a primary repo name for this experiment (if any)
         repo_row = conn.execute(
