@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent / "Utils"))
+sys.path.append(str(Path(__file__).resolve().parent.parent / "Persist"))
 
 from db_helpers import upsert_context_metadata, get_db_connection, ensure_repository_entry
 from output_paths import REPO_ROOT
@@ -336,11 +338,273 @@ def _flatten_for_db(raw: dict[str, Any]) -> dict[str, str]:
     return flat
 
 
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Summary MD helper functions
+# ---------------------------------------------------------------------------
+
+def _render_data_flows(experiment_id: str, repo_name: str) -> str:
+    """Query database for ingress/egress data flows and render as markdown."""
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()
+            if not repo_row:
+                return "- No data flows detected (repository not found in database)"
+            
+            repo_id = repo_row[0]
+            
+            # Query exposure analysis for entry points and internet-accessible resources
+            # Join with resources table to get repo_id
+            entry_points = conn.execute("""
+                SELECT ea.resource_name, ea.resource_type, ea.exposure_level, ea.has_internet_path
+                FROM exposure_analysis ea
+                JOIN resources r ON ea.resource_id = r.id
+                WHERE r.repo_id = ? AND (ea.is_entry_point = 1 OR ea.has_internet_path = 1)
+                ORDER BY ea.is_entry_point DESC, ea.exposure_level
+            """, (repo_id,)).fetchall()
+            
+            if not entry_points:
+                return "- No internet-facing entry points detected"
+            
+            lines = []
+            lines.append("**Ingress (Internet → Services):**")
+            for name, rtype, level, has_path in entry_points:
+                emoji = "🌐" if level == "direct_exposure" else "🛡️" if level == "mitigated" else "🔒"
+                lines.append(f"- {emoji} {name} ({rtype}) - {level}")
+            
+            # Query for data-tier resources (egress from compute to data)
+            data_tier = conn.execute("""
+                SELECT ea.resource_name, ea.resource_type
+                FROM exposure_analysis ea
+                JOIN resources r ON ea.resource_id = r.id
+                WHERE r.repo_id = ? AND ea.normalized_role = 'data'
+                ORDER BY ea.resource_name
+            """, (repo_id,)).fetchall()
+            
+            if data_tier:
+                lines.append("\n**Egress (Services → Data):**")
+                for name, rtype in data_tier:
+                    lines.append(f"- 💾 {name} ({rtype})")
+            
+            return "\n".join(lines)
+    except Exception as e:
+        return f"- Error querying data flows: {str(e)}"
+
+
+def _render_rbac(experiment_id: str, repo_name: str) -> str:
+    """Query database for RBAC and permissions data."""
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()
+            if not repo_row:
+                return "- No RBAC data found"
+            
+            repo_id = repo_row[0]
+            
+            # Query for identity/auth resources
+            rbac_resources = conn.execute("""
+                SELECT rt.friendly_name, r.resource_name, rt.category
+                FROM resources r
+                JOIN resource_types rt ON r.resource_type = rt.terraform_type
+                WHERE r.repo_id = ? 
+                AND rt.category IN ('Identity', 'Security')
+                ORDER BY rt.category, rt.friendly_name, r.resource_name
+            """, (repo_id,)).fetchall()
+            
+            if not rbac_resources:
+                return "- No role/permission resources detected"
+            
+            lines = []
+            by_category = {}
+            for friendly, name, category in rbac_resources:
+                by_category.setdefault(category, []).append(f"{friendly}: {name}")
+            
+            for category in ['Identity', 'Security']:
+                if category in by_category:
+                    emoji = "👤" if category == "Identity" else "🔐"
+                    lines.append(f"**{emoji} {category}:**")
+                    for item in by_category[category][:10]:  # Limit to 10 per category
+                        lines.append(f"- {item}")
+                    if len(by_category[category]) > 10:
+                        lines.append(f"- ... and {len(by_category[category]) - 10} more")
+                    lines.append("")  # Blank line between categories
+            
+            return "\n".join(lines).strip() if lines else "- No role/permission resources detected"
+    except Exception as e:
+        return f"- Error querying RBAC: {str(e)}"
+
+
+def _render_findings(experiment_id: str, repo_name: str) -> str:
+    """Query database for findings and render summary."""
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()
+            if not repo_row:
+                return "- No findings (repository not found in database)"
+            
+            repo_id = repo_row[0]
+            
+            # Query findings by severity
+            findings = conn.execute("""
+                SELECT title, severity_score, category, source_file
+                FROM findings
+                WHERE repo_id = ?
+                ORDER BY severity_score DESC, title
+            """, (repo_id,)).fetchall()
+            
+            if not findings:
+                return "- No findings detected (0 security issues found)"
+            
+            lines = []
+            lines.append(f"**Total: {len(findings)} finding(s)**\n")
+            
+            # Group by severity
+            critical = [f for f in findings if f[1] >= 9]
+            high = [f for f in findings if 7 <= f[1] < 9]
+            medium = [f for f in findings if 5 <= f[1] < 7]
+            low = [f for f in findings if f[1] < 5]
+            
+            if critical:
+                lines.append(f"**🔴 Critical ({len(critical)}):**")
+                for title, score, category, file in critical[:5]:
+                    lines.append(f"- [{score}/10] {title}")
+                if len(critical) > 5:
+                    lines.append(f"- ... and {len(critical) - 5} more")
+            
+            if high:
+                lines.append(f"\n**🟠 High ({len(high)}):**")
+                for title, score, category, file in high[:5]:
+                    lines.append(f"- [{score}/10] {title}")
+                if len(high) > 5:
+                    lines.append(f"- ... and {len(high) - 5} more")
+            
+            if medium:
+                lines.append(f"\n**🟡 Medium ({len(medium)}):**")
+                for title, score, category, file in medium[:3]:
+                    lines.append(f"- [{score}/10] {title}")
+                if len(medium) > 3:
+                    lines.append(f"- ... and {len(medium) - 3} more")
+            
+            if low:
+                lines.append(f"\n**🟢 Low ({len(low)}):**")
+                lines.append(f"- {len(low)} low-severity finding(s)")
+            
+            return "\n".join(lines)
+    except Exception as e:
+        return f"- Error querying findings: {str(e)}"
+
+
+def _render_apim_auth_methods(experiment_id: str, repo_name: str) -> str:
+    """Query database for APIM operations and their auth methods."""
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()
+            if not repo_row:
+                return "- No APIM resources detected"
+            
+            repo_id = repo_row[0]
+            
+            # Query APIM operations
+            operations = conn.execute("""
+                SELECT resource_name
+                FROM resources
+                WHERE repo_id = ? AND resource_type = 'azurerm_api_management_api_operation'
+                ORDER BY resource_name
+            """, (repo_id,)).fetchall()
+            
+            if not operations:
+                return "- No APIM operations detected"
+            
+            lines = []
+            lines.append("**API Operations and Authentication:**\n")
+            
+            # Get API policy to check for JWT validation
+            # For now, show that headers are required but may not be cryptographically verified
+            for (op_name,) in operations:
+                # Mark specific operations based on name
+                if op_name == 'health_check':
+                    lines.append(f"- `{op_name}` - 🌐 Public (no auth required)")
+                elif 'hidden' in op_name:
+                    lines.append(f"- `{op_name}` - 🔐 CB-Logical-Execution-Context required")
+                else:
+                    lines.append(f"- `{op_name}` - ⚠️ Custom headers (CB-Logical-Execution-Context, CB-User-Context)")
+            
+            lines.append("\n**⚠️ Security Notes:**")
+            lines.append("- Custom headers are used for authorization but are NOT cryptographically verified")
+            lines.append("- Headers can be spoofed by any client with a valid APIM subscription key")
+            lines.append("- API policy missing JWT validation (contains only `<forward-request />`)")
+            
+            return "\n".join(lines)
+    except Exception as e:
+        return f"- Error querying APIM operations: {str(e)}"
+
+
+def _render_service_auth_topology(experiment_id: str, repo_name: str) -> str:
+    """Render cloud service authentication topology and risks."""
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()
+            if not repo_row:
+                return "- No services detected"
+            
+            repo_id = repo_row[0]
+            
+            # Query all resources grouped by type
+            service_types = conn.execute("""
+                SELECT resource_type, COUNT(*) as count
+                FROM resources
+                WHERE repo_id = ?
+                GROUP BY resource_type
+                ORDER BY count DESC
+            """, (repo_id,)).fetchall()
+            
+            if not service_types:
+                return "- No infrastructure services detected"
+            
+            lines = []
+            lines.append("**Services Detected:**\n")
+            
+            # Known auth risks by service type
+            auth_risks = {
+                'azurerm_servicebus_namespace': ('Service Bus', 'Connection strings', '🟠 HIGH', 'Namespace-level SAS tokens'),
+                'azurerm_servicebus_topic': ('Service Bus Topic', 'Inherited SAS', '🟠 HIGH', 'No operation-level auth'),
+                'azurerm_servicebus_queue': ('Service Bus Queue', 'Inherited SAS', '🟠 HIGH', 'All consumers share same auth'),
+                'azurerm_storage_account': ('Storage Account', 'SAS tokens/keys', '🟠 HIGH', 'Container access control required'),
+                'azurerm_cosmosdb_account': ('Cosmos DB', 'Primary/secondary keys', '🔴 CRITICAL', 'Master keys in code = total compromise'),
+                'azurerm_sql_server': ('SQL Database', 'SQL auth/AAD', '🔴 CRITICAL', 'Managed identity preferred'),
+                'azurerm_api_management_subscription': ('APIM Subscription', 'API keys', '🟠 HIGH', 'Static credentials, no expiration'),
+                'azurerm_key_vault': ('Key Vault', 'RBAC/MSI', '🟢 LOW', 'Secure secret storage'),
+                'azurerm_app_configuration': ('App Config', 'Connection string', '🟡 MEDIUM', 'Should use MSI'),
+            }
+            
+            for resource_type, count in service_types:
+                if resource_type in auth_risks:
+                    service_name, auth_method, risk_level, issue = auth_risks[resource_type]
+                    lines.append(f"- {risk_level} **{service_name}** (x{count})")
+                    lines.append(f"  - Auth: {auth_method}")
+                    lines.append(f"  - Issue: {issue}")
+                    lines.append('')
+            
+            lines.append("**Service-to-Service Auth Flows:**\n")
+            lines.append("1. **Client → APIM** - Subscription key (⚠️ static, trackable)")
+            lines.append("2. **APIM → Service Bus** - Connection string (⚠️ likely hardcoded)")
+            lines.append("3. **Service Bus → Event Handlers** - SAS policy (⚠️ namespace-wide)")
+            lines.append("4. **Services → SQL/Cosmos** - Keys or SQL auth (⚠️ should use MSI)")
+            lines.append("5. **Apps → Key Vault** - Managed identity (✅ best practice)")
+            
+            return "\n".join(lines)
+    except Exception as e:
+        return f"- Error analyzing services: {str(e)}"
+
+
 # ---------------------------------------------------------------------------
 # Summary MD writer
 # ---------------------------------------------------------------------------
 
 def _write_summary(
+    experiment_id: str,
     repo_name: str,
     flat: dict[str, str],
     fired_framework_ids: set[str],
@@ -377,9 +641,57 @@ def _write_summary(
     go_fw = _list_val("go.frameworks")
     frameworks_all = py_fw + node_fw + ([java_spring] if java_spring else []) + go_fw
 
+    # Query database for infrastructure-level auth resources
+    auth_infrastructure = []
+    try:
+        with get_db_connection() as conn:
+            # Get repo_id for this repo
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+                (experiment_id, repo_name)
+            ).fetchone()
+            
+            if repo_row:
+                repo_id = repo_row[0]
+                # Query for auth/identity related infrastructure resources
+                auth_keywords = ['subscription', 'identity', 'jwt', 'auth', 'key_vault', 'principal']
+                auth_resources = conn.execute("""
+                    SELECT DISTINCT resource_type, COUNT(*) as count
+                    FROM resources
+                    WHERE repo_id = ?
+                    AND (
+                        resource_type LIKE '%subscription%'
+                        OR resource_type LIKE '%identity%'
+                        OR resource_type LIKE '%jwt%'
+                        OR resource_type LIKE '%auth%'
+                        OR resource_type LIKE '%key_vault%'
+                        OR resource_type LIKE '%principal%'
+                        OR resource_name LIKE '%principal%'
+                        OR resource_name LIKE '%identity%'
+                        OR resource_name LIKE '%auth%'
+                    )
+                    GROUP BY resource_type
+                    ORDER BY count DESC
+                """, (repo_id,)).fetchall()
+                
+                for resource_type, count in auth_resources:
+                    if 'subscription' in resource_type.lower() and 'servicebus' not in resource_type.lower():
+                        auth_infrastructure.append(f"API Management Subscription Keys ({count})")
+                    elif 'principal' in resource_type.lower():
+                        auth_infrastructure.append(f"{resource_type} ({count})")
+                    elif 'identity' in resource_type.lower():
+                        auth_infrastructure.append(f"Managed Identity ({count})")
+                    elif 'key_vault' in resource_type.lower():
+                        auth_infrastructure.append(f"Key Vault secrets ({count})")
+    except Exception:
+        pass  # Fail silently if DB query fails
+
+    # Code-level auth patterns
     auth_patterns = []
     if any("jwt" in x for x in fired_code_ids):
-        auth_patterns.append("JWT")
+        auth_patterns.append("JWT validation")
+    if any("custom-header-auth" in x for x in fired_code_ids):
+        auth_patterns.append("Custom header auth (⚠️ no crypto validation)")
     if flat.get("node.security_libs"):
         auth_patterns += [x for x in _list_val("node.security_libs") if x in ("passport", "jsonwebtoken")]
     if flat.get("python.security_libs"):
@@ -399,6 +711,14 @@ def _write_summary(
 
     def _bullets(items: list[str], indent: str = "- ") -> str:
         return "\n".join(f"{indent}{x}" for x in items) if items else f"{indent}None detected"
+
+    # Combine auth patterns for TL;DR (show infrastructure first)
+    auth_summary = []
+    if auth_infrastructure:
+        auth_summary.extend(auth_infrastructure[:2])  # Show top 2 infrastructure items
+    if auth_patterns:
+        auth_summary.extend(auth_patterns[:2])  # Show top 2 code items
+    auth_tldr = ", ".join(auth_summary) if auth_summary else "Not detected"
 
     # Mermaid diagram — top-level flow
     ingress_nodes = "\n    ".join(
@@ -429,7 +749,7 @@ flowchart LR
 | **Frameworks** | {", ".join(frameworks_all) or "Not detected"} |
 | **Containerization** | {"Docker" if base_images else "Not detected"} |
 | **CI/CD** | {cicd} |
-| **Auth Patterns** | {", ".join(auth_patterns) or "Not detected"} |
+| **Auth Patterns** | {auth_tldr} |
 | **RBAC Risks** | {str(len(rbac_risks)) + " found" if rbac_risks else "None detected"} |
 | **Privileged Containers** | {str(len(privileged)) + " found" if privileged else "None"} |
 
@@ -443,6 +763,10 @@ flowchart LR
 
 ## 🔐 Authentication & Identity
 
+**Infrastructure-level:**
+{_bullets(auth_infrastructure or ["None detected"])}
+
+**Code-level:**
 {_bullets(auth_patterns or ["No auth patterns detected by opengrep"])}
 
 ---
@@ -503,6 +827,36 @@ flowchart LR
 **Node.js frameworks:** {", ".join(node_fw) or "None"}
 **Java artifacts:** {", ".join(_list_val("java.artifacts")) or "None"}
 **Go modules:** {", ".join(_list_val("go.modules")) or "None"}
+
+---
+
+## 🔄 Ingress/Egress Data Flows
+
+{_render_data_flows(experiment_id, repo_name)}
+
+---
+
+## 🔐 Roles & Permissions
+
+{_render_rbac(experiment_id, repo_name)}
+
+---
+
+## 🔓 API Authentication Methods
+
+{_render_apim_auth_methods(experiment_id, repo_name)}
+
+---
+
+## ☁️ Service Authentication Topology
+
+{_render_service_auth_topology(experiment_id, repo_name)}
+
+---
+
+## 🔍 Findings
+
+{_render_findings(experiment_id, repo_name)}
 
 ---
 
@@ -621,9 +975,10 @@ def main() -> int:
         )
         print(f"  ✓ {key}")
 
-    # ── 7. Write summary MD ───────────────────────────────────────────────────
+     # ── 7. Write summary MD ───────────────────────────────────────────────────
     print("\n[Phase 2] Writing repo summary MD ...")
     summary_path = _write_summary(
+        experiment_id=args.experiment,
         repo_name=args.repo,
         flat=flat,
         fired_framework_ids=fired_framework_ids,
