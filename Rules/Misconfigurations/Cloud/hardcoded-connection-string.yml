@@ -1,0 +1,117 @@
+rules:
+  - id: hardcoded-connection-string
+    patterns:
+      - pattern-either:
+          - pattern: connection_string = "$CS"
+          - pattern: ConnectionString = "$CS"
+    pattern-not-regex:
+      - pattern: |
+          connection_string = "\$\{.*\}"
+      - pattern: |
+          connection_string = var\..*
+    message: |
+      Hardcoded connection string detected. This exposes all service credentials.
+      Connection strings contain account names, access keys, and SAS tokens.
+      
+      CRITICAL: If committed to git, all connected services are compromised.
+      
+      Affected services:
+      - Service Bus (queues, topics)
+      - Storage Account (containers, blobs)
+      - SQL Database
+      - Cosmos DB
+      - Event Hubs
+      - Any service with connection strings
+      
+      Fix: Store in Key Vault or use managed identities.
+    languages:
+      - terraform
+      - hcl
+    severity: ERROR
+    metadata:
+      category: credential-exposure
+      cwe: "CWE-798: Use of Hard-Coded Credentials"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: servicebus-no-managed-identity
+    patterns:
+      - pattern: |
+          resource "azurerm_servicebus_namespace" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_servicebus_namespace" $NAME {
+            ...
+            identity {
+              type = "SystemAssigned"
+            }
+            ...
+          }
+    message: |
+      Service Bus namespace not configured with managed identity.
+      Clients accessing Service Bus will need connection strings or keys.
+      
+      Risk: Connection strings become shared secrets that must be rotated manually.
+      
+      Fix: Enable SystemAssigned or UserAssigned managed identity:
+      
+      identity {
+        type = "SystemAssigned"
+      }
+      
+      Then clients can authenticate using their managed identity instead of keys.
+    languages:
+      - terraform
+    severity: ERROR
+    metadata:
+      category: access-control
+      cwe: "CWE-287: Improper Authentication"
+
+  - id: storage-account-public-blob-access
+    patterns:
+      - pattern: |
+          resource "azurerm_storage_account" $NAME {
+            ...
+            public_nested_items_allowed = true
+            ...
+          }
+    message: |
+      Storage account configured to allow public access to blobs and containers.
+      This exposes all data in the storage account to the internet.
+      
+      Risk: Data breach, unauthorized access, data exfiltration
+      
+      Fix: Set to false:
+      public_nested_items_allowed = false
+      
+      Use Shared Access Signatures (SAS) or managed identities for controlled access.
+    languages:
+      - terraform
+    severity: ERROR
+    metadata:
+      category: access-control
+      cwe: "CWE-732: Incorrect Permission Assignment"
+
+  - id: sql-auth-weak-password
+    patterns:
+      - pattern: |
+          resource "azurerm_sql_server" $NAME {
+            ...
+            administrator_login_password = "$PASS"
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $PASS
+          regex: '.{0,11}'
+    message: |
+      SQL Server password too short (less than 12 characters).
+      Azure SQL requires strong passwords to prevent brute-force attacks.
+      
+      Fix: Use 12+ characters with mixed case, numbers, and symbols.
+      Better yet: Use Azure AD authentication or managed identities instead.
+    languages:
+      - terraform
+    severity: WARNING
+    metadata:
+      category: weak-credentials
+      cwe: "CWE-521: Weak Password Requirements"
