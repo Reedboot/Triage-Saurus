@@ -374,12 +374,15 @@
           try { window.initRoles(sectionContent, resolvedRepoName); } catch (e) { console.warn('initRoles error:', e); }
         }
         
-        // Initialize column resizing for all section tables
+        // Initialize column resizing for all section tables (including multiple tables per section)
         if (window.initTableColumnResize) {
-          const sectionTable = sectionContent.querySelector('.section-table');
-          if (sectionTable && key) {
-            const storageKey = `${key}_col_widths_${resolvedRepoName}`;
-            window.initTableColumnResize(sectionTable, storageKey);
+          const sectionTables = sectionContent.querySelectorAll('.section-table');
+          if (sectionTables.length > 0 && key) {
+            sectionTables.forEach((sectionTable, idx) => {
+              const tableId = sectionTables.length > 1 ? `${key}_table${idx}` : key;
+              const storageKey = `${tableId}_col_widths_${resolvedRepoName}`;
+              window.initTableColumnResize(sectionTable, storageKey);
+            });
           }
         }
       } catch (e) {
