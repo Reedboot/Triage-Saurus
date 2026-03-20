@@ -434,6 +434,15 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   transform-origin: 0 0;
 }
 
+/* Fix text overflow - add word-break for long labels */
+.mermaid svg .nodeLabel,
+.mermaid svg .label,
+.mermaid svg text {
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  max-width: 200px;
+}
+
 /* Ensure the diagram zoom inner and views fill available space so Mermaid doesn't leave gaps */
 .diagram-zoom-inner, .diagram-zoom-inner .diagram-view {
   width: 100%;
