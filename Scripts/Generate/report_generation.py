@@ -10,6 +10,7 @@ from markdown_validator import validate_markdown_file
 import resource_type_db as _rtdb
 import db_helpers as _db
 from shared_utils import now_uk, _normalize_optional_bool
+from service_auth_topology import render_service_auth_topology
 
 
 def _get_db():
@@ -3742,6 +3743,8 @@ def write_repo_summary(
         if subnet_resources:
             network_summary += f"  - Subnets: {', '.join([r.name for r in subnet_resources])}\n"
 
+    service_auth_topology_md = render_service_auth_topology(experiment_id, repo_name)
+
     # Roles & Permission Assignments
     roles_permissions = ""
     role_assignments = [r for r in context.resources if r.resource_type == "azurerm_role_assignment"]
@@ -3996,6 +3999,8 @@ def write_repo_summary(
         overview_md = (
             "## Authentication & Identity\n\n"
             f"{auth_summary}\n\n"
+            "## Service Authentication Topology\n\n"
+            f"{service_auth_topology_md}\n\n"
             "## Network Topology\n\n"
             f"{network_summary}\n\n"
             "## External Dependencies\n\n"

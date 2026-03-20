@@ -620,7 +620,7 @@ class HierarchicalDiagramBuilder:
         
         # Add CSS animation for arrows
         lines.append("")
-        lines.append("%%{init: {'theme':'base'} }%%")
+      #  lines.append("%%{init: {'theme':'dark'} }%%")
         
         return "\n".join(lines)
     
