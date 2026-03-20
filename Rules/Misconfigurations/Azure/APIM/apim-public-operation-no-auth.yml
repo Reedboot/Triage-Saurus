@@ -1,0 +1,30 @@
+rules:
+  - id: apim-public-operation-no-auth
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_api_management_api_operation" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_api_management_api_operation" $NAME {
+            ...
+            header { ... }
+            ...
+          }
+    message: |
+      APIM API operation has NO required headers and is publicly accessible.
+      Any user with the subscription key can invoke this operation.
+      
+      If this is intentional (like a health check), ensure it:
+      1. Does NOT expose sensitive data
+      2. Has proper rate limiting configured
+      3. Is logged and monitored
+      
+      For sensitive operations, add required authentication headers or JWT validation.
+    languages:
+      - hcl
+    severity: WARNING
+    metadata:
+      category: authorization
+      cwe: "CWE-284: Improper Access Control"
+      owasp: "A01:2021 - Broken Access Control"

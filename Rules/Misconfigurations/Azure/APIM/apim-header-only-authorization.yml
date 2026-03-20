@@ -1,0 +1,35 @@
+rules:
+  - id: apim-header-only-authorization
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_api_management_api_operation" $NAME {
+            ...
+            header {
+              name = $HEADER_NAME
+              ...
+              required = true
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $HEADER_NAME
+          regex: '.*"(CB-|X-Custom-|X-User-)".*'
+    message: |
+      APIM operation uses custom headers for authorization without cryptographic verification.
+      Headers like '$HEADER_NAME' can be easily spoofed by attackers and provide NO security.
+      
+      VULNERABILITY: An attacker can craft requests with arbitrary header values to bypass
+      authorization checks by simply adding the header to their request.
+      
+      Recommended fixes:
+      1. Sign headers using HMAC or digital signatures
+      2. Add JWT token validation in APIM policy
+      3. Implement server-side authorization checks (don't trust headers)
+      4. Use OAuth 2.0 or OpenID Connect flows instead
+    languages:
+      - hcl
+    severity: ERROR
+    metadata:
+      category: authorization
+      cwe: "CWE-345: Insufficient Verification of Data Authenticity"
+      owasp: "A06:2021 - Vulnerable and Outdated Components"
