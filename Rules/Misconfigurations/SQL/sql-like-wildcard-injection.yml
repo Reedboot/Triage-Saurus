@@ -1,0 +1,51 @@
+rules:
+  - id: sql-like-wildcard-injection
+    message: |
+      SQL LIKE clause concatenates user input without escaping wildcard characters.
+      While parameterized queries prevent classic SQL injection, wildcard characters
+      (%, _, [, ]) in LIKE clauses can be exploited for:
+      
+      1. Search filter bypass: '%' returns all records regardless of intended filter
+      2. Brute-force enumeration: Wildcard patterns reveal data incrementally
+      3. Performance degradation: Complex patterns cause CPU-intensive regex matching
+      
+      Example vulnerable pattern:
+        LIKE '%' + @searchTerm + '%'
+      
+      If @searchTerm = '%', the query returns ALL records, bypassing institution or
+      tenant boundaries enforced by WHERE clauses.
+      
+      Remediation:
+        -- Escape wildcards before concatenation
+        LIKE '%' + REPLACE(REPLACE(REPLACE(@searchTerm, '[', '[[]'), '%', '[%]'), '_', '[_]') + '%'
+      
+      Or use full-text search (CONTAINS) instead of LIKE for better performance.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include:
+        - "*.sql"
+    patterns:
+      - pattern-either:
+          - pattern: LIKE '%' + @$PARAM + '%'
+          - pattern: LIKE '%' + $VAR + '%'
+          - pattern: LIKE @$PARAM
+      - pattern-not-regex: REPLACE.*\[%\]
+      - pattern-not-regex: REPLACE.*\[_\]
+      - metavariable-regex:
+          metavariable: $PARAM
+          regex: .*[Ss]earch.*|.*[Qq]uery.*|.*[Ii]nput.*|.*[Ff]ilter.*|.*[Tt]erm.*
+    metadata:
+      category: security
+      subcategory: [injection, sqli]
+      cwe: CWE-89
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      remediation_effort: LOW
+      references:
+        - https://owasp.org/www-community/attacks/SQL_Injection
+        - https://learn.microsoft.com/en-us/sql/t-sql/language-elements/like-transact-sql
+      owasp: A03:2021 - Injection
+      technology: [sql, tsql, mssql, postgresql, mysql]
+      five_pillars: Pillar 5
