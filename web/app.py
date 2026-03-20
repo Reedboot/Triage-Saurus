@@ -955,7 +955,6 @@ def api_view_assets(experiment_id: str, repo_name: str):
             """,
             (repo_name, experiment_id),
         ).fetchall()
-        total_rows = len(rows)
         hidden_count = 0
 
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
@@ -1095,7 +1094,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
             provider_counts=provider_counts,
             repo_name=repo_name,
             hidden_count=hidden_count,
-            total=total_rows,
+            total=len(assets),
             include_hidden=include_hidden,
             experiment_id=experiment_target,
         )
@@ -1151,33 +1150,74 @@ def api_view_ingress(experiment_id: str, repo_name: str):
         if not resolved_exp_id:
             return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=f"No scan found for {repo_name}.")
         target_exp = resolved_exp_id
-        # Primary: findings with internet_exposure metadata
-        res_rows = conn.execute(
-            """
-            SELECT DISTINCT
-                COALESCE(parent.id, r.id) AS id,
-                COALESCE(parent.resource_name, r.resource_name) AS resource_name,
-                COALESCE(parent.resource_type, r.resource_type) AS resource_type,
-                COALESCE(parent.provider, r.provider) AS provider,
-                COALESCE(parent.region, r.region) AS region,
-                COALESCE(parent.source_file, r.source_file) AS source_file,
-                COALESCE(parent.source_line_start, r.source_line_start) AS source_line_start,
-                f.rule_id AS exposure_type,
-                'internet_exposure' AS exposure_value
-            FROM findings f
-            JOIN resources r ON f.resource_id = r.id
-            JOIN repositories repo ON r.repo_id = repo.id
-            LEFT JOIN resources parent ON r.parent_resource_id = parent.id
-            JOIN finding_context fc ON fc.finding_id = f.id
-            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
-              AND fc.context_key = 'metadata.internet_exposure'
-              AND LOWER(fc.context_value) = 'true'
-            ORDER BY COALESCE(parent.resource_type, r.resource_type), COALESCE(parent.resource_name, r.resource_name)
-            """,
-            (repo_name, target_exp),
-        ).fetchall()
+        
+        # Primary: exposure_analysis table (entry points and internet-facing resources)
+        res_rows = []
+        try:
+            ea_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.id,
+                    r.resource_name,
+                    r.resource_type,
+                    r.provider,
+                    r.region,
+                    r.source_file,
+                    r.source_line_start,
+                    ea.exposure_level AS exposure_type,
+                    CASE 
+                        WHEN ea.is_entry_point = 1 THEN 'entry_point'
+                        WHEN ea.has_internet_path = 1 THEN 'internet_path'
+                        ELSE 'internet_facing'
+                    END AS exposure_value
+                FROM exposure_analysis ea
+                JOIN resources r ON ea.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND (ea.is_entry_point = 1 OR ea.has_internet_path = 1)
+                ORDER BY r.resource_type, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            res_rows = list(ea_rows)
+        except Exception as e:
+            print(f"Warning: Could not fetch from exposure_analysis: {e}")
+        
+        # Secondary: findings with internet_exposure metadata
+        existing_ids = {dict(r)['id'] for r in res_rows}
+        try:
+            findings_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    COALESCE(parent.id, r.id) AS id,
+                    COALESCE(parent.resource_name, r.resource_name) AS resource_name,
+                    COALESCE(parent.resource_type, r.resource_type) AS resource_type,
+                    COALESCE(parent.provider, r.provider) AS provider,
+                    COALESCE(parent.region, r.region) AS region,
+                    COALESCE(parent.source_file, r.source_file) AS source_file,
+                    COALESCE(parent.source_line_start, r.source_line_start) AS source_line_start,
+                    f.rule_id AS exposure_type,
+                    'internet_exposure' AS exposure_value
+                FROM findings f
+                JOIN resources r ON f.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND fc.context_key = 'metadata.internet_exposure'
+                  AND LOWER(fc.context_value) = 'true'
+                ORDER BY COALESCE(parent.resource_type, r.resource_type), COALESCE(parent.resource_name, r.resource_name)
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for r in findings_rows:
+                if dict(r)['id'] not in existing_ids:
+                    res_rows.append(r)
+                    existing_ids.add(dict(r)['id'])
+        except Exception as e:
+            print(f"Warning: Could not fetch findings: {e}")
 
-        # Fallback: legacy start_ip_address context
+        # Fallback: legacy start_ip_address context (firewall rules)
         try:
             fw_rows = conn.execute(
                 """
@@ -1203,10 +1243,9 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             (repo_name, target_exp),
         ).fetchall()
             # Merge, dedup by id
-            existing_ids = {dict(r)['id'] for r in res_rows}
             for r in fw_rows:
                 if dict(r)['id'] not in existing_ids:
-                    res_rows = list(res_rows) + [r]
+                    res_rows.append(r)
                     existing_ids.add(dict(r)['id'])
         except Exception:
             pass
@@ -1247,44 +1286,72 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             
             for r in api_ops_rows:
                 r_dict = dict(r)
-                if r_dict['id'] not in {dict(x)['id'] for x in res_rows}:
-                    res_rows = list(res_rows) + [r]
+                if r_dict['id'] not in existing_ids:
+                    res_rows.append(r)
+                    existing_ids.add(r_dict['id'])
         except Exception as e:
             print(f"Warning: Could not fetch API operations: {e}")
 
         ingress_resources = [dict(r) for r in res_rows]
 
-        # Build connections showing parent gateway → operation hierarchy
+        # Build inbound connections showing the data flow path from Internet into the system
+        # Try to build the full chain: Internet → APIM → API → K8s → Service
         ingress_connections = []
-        for r in ingress_resources:
-            if r.get('parent_gateway_name'):
-                # API operation - show gateway → operation
+        try:
+            # Get entry points first
+            entry_points = conn.execute(
+                """
+                SELECT DISTINCT ea.resource_name, ea.resource_type, r.id as resource_id
+                FROM exposure_analysis ea
+                JOIN resources r ON ea.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND (ea.is_entry_point = 1 OR ea.has_internet_path = 1)
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            
+            # For each entry point, trace the connection chain
+            for ep_row in entry_points:
+                ep_dict = dict(ep_row)
+                ep_name = ep_dict['resource_name']
+                ep_id = ep_dict['resource_id']
+                
+                # Add Internet → Entry Point connection
                 ingress_connections.append({
                     'source_name': 'Internet',
-                    'target_name': r.get('parent_gateway_name'),
+                    'target_name': ep_name,
                     'protocol': 'HTTPS',
                     'port': '443',
-                    'authentication': 'API Key',
+                    'authentication': 'Subscription Key' if 'api' in ep_dict['resource_type'].lower() else None,
                     'is_encrypted': 1,
                 })
-                ingress_connections.append({
-                    'source_name': r.get('parent_gateway_name'),
-                    'target_name': r['resource_name'],
-                    'protocol': 'HTTP',
-                    'port': 'operation',
-                    'authentication': None,
-                    'is_encrypted': None,
-                })
-            else:
-                # Standard resource
-                ingress_connections.append({
-                    'source_name': 'Internet',
-                    'target_name': r['resource_name'],
-                    'protocol': 'any',
-                    'port': 'any',
-                    'authentication': None,
-                    'is_encrypted': None,
-                })
+                
+                # Find what this entry point routes to
+                downstream = conn.execute(
+                    """
+                    SELECT tgt.resource_name, tgt.resource_type, rc.protocol, rc.port, rc.auth_method, rc.is_encrypted
+                    FROM resource_connections rc
+                    JOIN resources tgt ON rc.target_resource_id = tgt.id
+                    WHERE rc.source_resource_id = ? 
+                      AND rc.connection_type IN ('routes_ingress_to', 'depends_on')
+                    LIMIT 5
+                    """,
+                    (ep_id,),
+                ).fetchall()
+                
+                for ds_row in downstream:
+                    ds_dict = dict(ds_row)
+                    ingress_connections.append({
+                        'source_name': ep_name,
+                        'target_name': ds_dict['resource_name'],
+                        'protocol': ds_dict['protocol'] or 'HTTP',
+                        'port': ds_dict['port'] or '80',
+                        'authentication': ds_dict['auth_method'],
+                        'is_encrypted': ds_dict['is_encrypted'],
+                    })
+        except Exception as e:
+            print(f"Warning: Could not build connection chain: {e}")
 
         return _db_render(
             "tab_ingress.html",
@@ -1308,30 +1375,79 @@ def api_view_egress(experiment_id: str, repo_name: str):
         if not resolved_exp_id:
             return _db_render("tab_egress.html", egress_connections=[], error=f"No scan found for {repo_name}.")
         target_exp = resolved_exp_id
-        rows = conn.execute(
-            """
-            SELECT DISTINCT r.id, r.resource_name AS source_name, r.resource_type, r.provider,
-                   r.source_file, r.source_line_start,
-                   fc.context_key AS connection_purpose,
-                   fc.context_value AS target_domain
-            FROM resources r
-            JOIN repositories repo ON r.repo_id = repo.id
-            JOIN findings f ON f.resource_id = r.id
-            JOIN finding_context fc ON fc.finding_id = f.id
-            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
-              AND LOWER(fc.context_key) IN (
-                'server_id', 'server_name', 'namespace_id', 'namespace_name',
-                'key_vault_id', 'account_name', 'storage_account_name',
-                'kubernetes_cluster_id', 'cluster_id', 'virtual_machine_id',
-                'virtual_network_name', 'connection_string', 'endpoint', 'host'
-              )
-              AND fc.context_value IS NOT NULL
-              AND fc.context_value != ''
-            ORDER BY r.provider, r.resource_type, r.resource_name
-            """,
-            (repo_name, target_exp),
-        ).fetchall()
-        return _db_render("tab_egress.html", egress_connections=[dict(r) for r in rows])
+        
+        # Primary: resource_connections table for EXTERNAL/OUTBOUND connections only
+        # Filter to exclude internal relationships like 'contains'
+        egress_connections = []
+        try:
+            rc_rows = conn.execute(
+                """
+                SELECT DISTINCT 
+                    src.resource_name AS source_name,
+                    src.resource_type AS source_type,
+                    tgt.resource_name AS target_name,
+                    tgt.resource_type AS target_type,
+                    rc.protocol,
+                    rc.port,
+                    rc.auth_method,
+                    rc.is_encrypted,
+                    CASE 
+                        WHEN tgt.resource_type LIKE '%topic%' OR tgt.resource_type LIKE '%queue%' THEN 'messaging'
+                        WHEN tgt.resource_type LIKE '%database%' OR tgt.resource_type LIKE '%sql%' THEN 'data storage'
+                        WHEN tgt.resource_type LIKE '%storage%' THEN 'blob storage'
+                        WHEN tgt.resource_type LIKE '%vault%' THEN 'secrets'
+                        WHEN tgt.resource_type LIKE '%insight%' OR tgt.resource_type LIKE '%monitor%' THEN 'telemetry'
+                        ELSE rc.connection_type
+                    END AS connection_purpose
+                FROM resource_connections rc
+                JOIN resources src ON rc.source_resource_id = src.id
+                LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
+                JOIN repositories repo ON src.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND rc.connection_type NOT IN ('contains', 'orchestrates', 'composed_of', 'parent_child')
+                ORDER BY src.resource_name, tgt.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            egress_connections.extend([dict(r) for r in rc_rows])
+        except Exception as e:
+            print(f"Warning: Could not fetch resource_connections: {e}")
+        
+        # Tertiary: finding_context for legacy outbound connections (keep for compatibility)
+            fc_rows = conn.execute(
+                """
+                SELECT DISTINCT r.id, r.resource_name AS source_name, r.resource_type AS source_type, r.provider,
+                       r.source_file, r.source_line_start,
+                       fc.context_key AS connection_purpose,
+                       fc.context_value AS target_domain,
+                       NULL AS target_name,
+                       NULL AS target_type,
+                       NULL AS protocol,
+                       NULL AS port,
+                       NULL AS auth_method,
+                       NULL AS is_encrypted
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                JOIN findings f ON f.resource_id = r.id
+                JOIN finding_context fc ON fc.finding_id = f.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND LOWER(fc.context_key) IN (
+                    'server_id', 'server_name', 'namespace_id', 'namespace_name',
+                    'key_vault_id', 'account_name', 'storage_account_name',
+                    'kubernetes_cluster_id', 'cluster_id', 'virtual_machine_id',
+                    'virtual_network_name', 'connection_string', 'endpoint', 'host'
+                  )
+                  AND fc.context_value IS NOT NULL
+                  AND fc.context_value != ''
+                ORDER BY r.provider, r.resource_type, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            egress_connections.extend([dict(r) for r in fc_rows])
+        except Exception as e:
+            print(f"Warning: Could not fetch finding_context: {e}")
+        
+        return _db_render("tab_egress.html", egress_connections=egress_connections)
     except Exception as exc:
         return _db_render("tab_egress.html", egress_connections=[], error=str(exc))
     finally:
@@ -1363,10 +1479,12 @@ def api_view_roles(experiment_id: str, repo_name: str):
             WHERE LOWER(repo.repo_name) = LOWER(?) AND res.experiment_id = ?
               AND LOWER(res.resource_type) IN (
                     'azurerm_role_assignment', 'azurerm_role_definition',
+                    'azurerm_user_assigned_identity', 'azurerm_managed_identity',
                     'aws_iam_role', 'aws_iam_policy', 'aws_iam_user_policy',
                     'google_project_iam_member', 'google_project_iam_binding',
+                    'google_service_account', 'google_service_account_key',
                     'kubernetes_cluster_role', 'kubernetes_role_binding',
-                    'kubernetes_cluster_role_binding',
+                    'kubernetes_cluster_role_binding', 'kubernetes_service_account',
                     'managed_identity', 'user_assigned_identity',
                     'service_account', 'service_principal'
                   )
@@ -1408,9 +1526,12 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND sub.experiment_id = ?
                   AND sub.resource_type IN (
                     'azurerm_api_management_subscription',
+                    'azurerm_api_management_api',
                     'aws_api_gateway_api_key',
                     'aws_api_gateway_usage_plan',
                     'aws_api_gateway_usage_plan_key',
+                    'google_api_gateway_api_config',
+                    'google_api_gateway_api',
                     'oci_identity_api_key',
                     'oci_identity_auth_token',
                     'alicloud_api_gateway_app',
