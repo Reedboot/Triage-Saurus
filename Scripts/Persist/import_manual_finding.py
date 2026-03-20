@@ -80,6 +80,7 @@ def main():
     parser.add_argument("--severity", type=int, help="Severity score 1-10 (parsed from file if not provided)")
     parser.add_argument("--repo", help="Repository name (for repo_id lookup)")
     parser.add_argument("--category", default="Code", help="Finding category (default: Code)")
+    parser.add_argument("--resource-id", type=int, help="Resource ID to link finding to (optional)")
     args = parser.parse_args()
 
     finding_file = Path(args.file)
@@ -144,19 +145,34 @@ def main():
             print(f"Finding already exists with ID {existing[0]}: {title}")
             sys.exit(0)
     
+    # Try to find resource_id if not provided
+    resource_id = args.resource_id
+    if resource_id is None and source_file:
+        # Try to match resource by source file + line (same logic as store_findings.py)
+        with db_helpers.get_db_connection() as conn:
+            row = conn.execute("""
+                SELECT id FROM resources
+                WHERE experiment_id = ?
+                  AND source_file = ?
+                  AND source_line_start <= ?
+                  AND source_line_end >= ?
+                LIMIT 1
+            """, (args.experiment, source_file, source_line_start or 0, source_line_start or 0)).fetchone()
+            resource_id = row[0] if row else None
+    
     # Insert finding
     now = datetime.utcnow().isoformat()
     
     with db_helpers.get_db_connection() as conn:
         cursor = conn.execute("""
             INSERT INTO findings (
-                experiment_id, repo_id, rule_id, finding_name, title, 
+                experiment_id, repo_id, resource_id, rule_id, finding_name, title, 
                 category, source_file, source_line_start, 
                 severity_score, base_severity, finding_path, 
                 status, llm_enriched_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            args.experiment, repo_id, rule_id, finding_name, title,
+            args.experiment, repo_id, resource_id, rule_id, finding_name, title,
             args.category, source_file, source_line_start,
             severity_score, base_severity, str(finding_file),
             'enriched', now, now, now
@@ -171,6 +187,7 @@ def main():
         print(f"✓ Imported finding ID {finding_id}: {title} ({base_severity} - {severity_score}/10)")
         print(f"  Rule ID: {rule_id}")
         print(f"  Finding Name: {finding_name}")
+        print(f"  Resource ID: {resource_id or 'None (code-level finding)'}")
         print(f"  File: {finding_file}")
 
 
