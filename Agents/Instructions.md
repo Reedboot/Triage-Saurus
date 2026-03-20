@@ -30,6 +30,12 @@ This repository supports consistent security triage. The expected workflow is:
 - When opengrep is installed (default repo state), every IaC/code scan MUST start with `opengrep scan --config Rules/ <target>` to apply the entire ruleset.
 - Treat opengrep as the primary enforcement mechanism; manual grep fallbacks are not permitted. If a resource type is missing detection, add a Detection rule under Rules/Detection and map it in DETECTION_TO_MISCONFIG so scans include the appropriate misconfig checks.
 - Record the opengrep command, target path, and timestamp in the audit log under **Actions Log**.
+
+### Rule Creation & Verification
+
+- **When creating new rules** (regardless of experiment or not), create them in the relevant subfolder of `Rules/` (e.g., `Rules/Detection/`, `Rules/Misconfigurations/`, `Rules/Misconfigurations/Secrets/`).
+- **After creating a rule**, run opengrep verification against the rule: `opengrep scan --config <rule-file.yml> <target>` to validate syntax and test detection behavior.
+- If the rule is intended for a specific pattern, create a minimal test case to confirm the rule triggers correctly.
 - **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/Scan/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
 - **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` and the Cozo knowledge graph, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the Cozo graph rather than keeping prior repo transcripts in memory.
 
