@@ -48,6 +48,7 @@ _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
 _RENDER_EXPOSURE = SCRIPTS / "Generate" / "render_exposure_summary.py"
 _RENDER        = SCRIPTS / "Generate"    / "render_finding.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
+_GEN_HIERARCHICAL = SCRIPTS / "Generate" / "generate_hierarchical_diagram.py"
 
 from db_helpers import get_db_connection
 
@@ -301,11 +302,14 @@ def main() -> int:
     # ── Phase 3c: Architecture diagram ───────────────────────────────────────
     cloud_dir = exp_dir / "Summary" / "Cloud"
     cloud_dir.mkdir(parents=True, exist_ok=True)
-    # Generate per-provider architecture files (Architecture_AWS.md, Architecture_Azure.md, ...)
-    _run(
-        [sys.executable, str(_GEN_DIAGRAM), experiment_id,
-         "--split-by-provider", "--output", str(cloud_dir)],
-        "Phase 3b — Generate architecture diagrams (per-provider)",
+    
+    # Generate hierarchical diagram (works with Phase 1+2 data, infers connections)
+    # This replaces the old per-provider diagrams
+    hierarchical_output = cloud_dir / "Architecture_Hierarchical.md"
+    rc_hierarchical = _run(
+        [sys.executable, str(_GEN_HIERARCHICAL), "--experiment-id", experiment_id,
+         "--output", str(hierarchical_output), "--persist-db"],
+        "Phase 3c — Generate hierarchical architecture diagram",
     )
 
     # ── Summary ───────────────────────────────────────────────────────────────
