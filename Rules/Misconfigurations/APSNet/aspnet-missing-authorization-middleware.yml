@@ -2,68 +2,31 @@ rules:
   - id: aspnet-missing-authorization-middleware
     message: |
       ASP.NET Core application has custom authentication middleware but is missing
-      the UseAuthorization() call. While UseAuthentication() or custom authentication
-      middleware may populate the user identity (ClaimsPrincipal), authorization
-      enforcement requires UseAuthorization() to be called.
+      the UseAuthorization() call. This means [Authorize] attributes are ignored
+      and all requests bypass authorization checks - a CRITICAL authentication bypass.
       
-      Without UseAuthorization(), [Authorize] attributes on controllers/actions will
-      be ignored, and all requests will bypass authorization checks. This creates a
-      critical authentication bypass vulnerability.
+      Detected authentication middleware without UseAuthorization():
+      - UseClearBankPrincipalMiddleware
+      - UseAuthentication
+      - Other custom auth middleware
       
-      Common patterns indicating this vulnerability:
-      - UseAuthentication() present but NO UseAuthorization()
-      - Custom auth middleware (e.g., app.UseMiddleware<CustomAuthMiddleware>())
-        without UseAuthorization()
-      - Controllers have NO [Authorize] attributes (all endpoints publicly accessible)
-      
-      Add app.UseAuthorization() after authentication middleware and apply [Authorize]
-      attributes to controllers/actions that require authentication.
+      Add app.UseAuthorization() after authentication middleware.
     severity: ERROR
     languages: [csharp]
     patterns:
-      - pattern-either:
-          # Pattern 1: Has UseAuthentication but missing UseAuthorization
-          - patterns:
-              - pattern-inside: |
-                  public void Configure(...)
-                  {
-                    ...
-                  }
-              - pattern: app.UseAuthentication();
-              - pattern-not-inside: |
-                  ...
-                  app.UseAuthorization();
-                  ...
-          # Pattern 2: Has custom auth middleware (extension method) but missing UseAuthorization
-          - patterns:
-              - pattern-inside: |
-                  public void Configure(...)
-                  {
-                    ...
-                  }
-              - pattern: app.Use$MIDDLEWARE();
-              - metavariable-regex:
-                  metavariable: $MIDDLEWARE
-                  regex: .*(Auth|Principal|Identity).*
-              - pattern-not-inside: |
-                  ...
-                  app.UseAuthorization();
-                  ...
-          # Pattern 3: Has UseMiddleware<T> but missing UseAuthorization
-          - patterns:
-              - pattern-inside: |
-                  public void Configure(...)
-                  {
-                    ...
-                  }
-              - pattern: app.UseMiddleware<$T>();
-              - metavariable-regex:
-                  metavariable: $T
-                  regex: .*(Auth|Principal|Identity).*
-              - pattern-not-inside: |
-                  ...
-                  app.UseAuthorization();
-                  ...
+      - pattern-inside: |
+          public void Configure($APP, ...)
+          {
+            ...
+          }
+      - pattern: $APP.Use$AUTHMW(...);
+      - metavariable-regex:
+          metavariable: $AUTHMW
+          regex: .*(Auth|Principal).*
+      - pattern-not-inside: |
+          ...
+          $APP.UseAuthorization(...);
+          ...
     metadata:
       category: security
       subcategory: [authentication, authorization]
@@ -74,7 +37,6 @@ rules:
       remediation_effort: LOW
       references:
         - https://learn.microsoft.com/en-us/aspnet/core/security/authorization/introduction
-        - https://learn.microsoft.com/en-us/aspnet/core/security/authentication/
       owasp: A07:2021 - Identification and Authentication Failures
       technology: [aspnet-core, dotnet, csharp]
       five_pillars: Pillar 5
