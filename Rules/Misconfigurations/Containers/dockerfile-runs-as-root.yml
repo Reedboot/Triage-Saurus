@@ -1,0 +1,48 @@
+rules:
+  - id: dockerfile-runs-as-root
+    message: |
+      Dockerfile does not specify a non-root USER directive. Container will run as
+      root (UID 0) by default, violating the principle of least privilege.
+      
+      Running containers as root amplifies the impact of vulnerabilities:
+      - Remote Code Execution (RCE) grants root shell inside container
+      - Container escape vulnerabilities gain host root access
+      - File system writes have unrestricted permissions
+      - Process capabilities are not limited
+      
+      Even with "chiseled" or minimal base images (no shell/tools), running as root
+      increases blast radius if combined with other vulnerabilities.
+      
+      Best practices:
+      1. Add a USER directive with a non-root UID (e.g., USER 1000)
+      2. Ensure application doesn't require root privileges
+      3. Enforce runAsNonRoot in Kubernetes Pod Security Standards
+      4. Use read-only root filesystem where possible
+      
+      Example fix:
+        RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+        USER appuser
+    severity: WARNING
+    languages: [dockerfile]
+    patterns:
+      - pattern-not-regex: ^USER\s+(?!root|0)\S+
+      - pattern: FROM $IMAGE
+      - pattern-not-inside: |
+          ...
+          USER $USER
+          ...
+    metadata:
+      category: security
+      subcategory: [container-security, privilege-escalation]
+      cwe: CWE-250
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      remediation_effort: LOW
+      references:
+        - https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#user
+        - https://kubernetes.io/docs/concepts/security/pod-security-standards/
+        - https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html
+      owasp: A04:2021 - Insecure Design
+      technology: [docker, containers, kubernetes]
+      five_pillars: Pillar 5
