@@ -6,9 +6,12 @@
   <title>Triage-Saurus — Repo Scanner</title>
   <script>
   (function(){
+    var mermaidLoaded = false;
     function loadScript(src, onload, onerror){
       var s = document.createElement('script');
-      s.src = src; s.defer = true; s.onload = onload; s.onerror = onerror;
+      s.src = src; s.defer = true;
+      s.onload = function(){ mermaidLoaded = true; if(onload) onload(); };
+      s.onerror = function(){ if(onerror) onerror(); };
       document.head.appendChild(s);
     }
     // Try local vendor first (works offline/intranet), then fall back to CDN
@@ -18,8 +21,8 @@
         try{
           var b = document.createElement('div');
           b.className = 'mermaid-error';
-          b.textContent = 'Mermaid library unavailable — diagrams may not render. Place mermaid.min.js at /static/vendor/';
-          b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px';
+          b.textContent = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access or place mermaid.min.js at /static/vendor/mermaid.min.js';
+          b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px;max-width:400px';
           document.body.appendChild(b);
         } catch(e){}
       });
@@ -189,5 +192,7 @@
 <script src="/static/app.js" defer></script>
 <script src="/static/assets.js" defer></script>
 <script src="/static/roles.js" defer></script>
+<!-- Direct fallback for mermaid if async loading fails -->
+<script src="/static/vendor/mermaid.min.js" defer></script>
 </body>
 </html>
