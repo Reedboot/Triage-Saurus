@@ -936,9 +936,29 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
         top_level_name_match = re.search(r'^\s*name\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
         if top_level_name_match:
-            props["actual_name"] = top_level_name_match.group(1)
+            name_value = top_level_name_match.group(1)
+            # Only use the name if it's not a variable/local reference
+            if not name_value.startswith("${var.") and not name_value.startswith("${local."):
+                props["actual_name"] = name_value
         elif "name" in attrs and attrs["name"]:
-            props["actual_name"] = attrs["name"]
+            name_value = attrs["name"].strip('"').strip("'")
+            # Only use the name if it's not a variable/local reference
+            if not name_value.startswith("${var.") and not name_value.startswith("${local."):
+                props["actual_name"] = name_value
+
+        # For API operations, also extract operation_id
+        if resource_type == "azurerm_api_management_api_operation":
+            op_id_match = re.search(r'^\s*operation_id\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
+            if op_id_match:
+                op_id_value = op_id_match.group(1)
+                # Only use the operation_id if it's not a variable/local reference
+                if not op_id_value.startswith("${var.") and not op_id_value.startswith("${local."):
+                    props["actual_name"] = op_id_value
+            elif "operation_id" in attrs and attrs["operation_id"]:
+                op_id_value = attrs["operation_id"].strip('"').strip("'")
+                # Only use the operation_id if it's not a variable/local reference
+                if not op_id_value.startswith("${var.") and not op_id_value.startswith("${local."):
+                    props["actual_name"] = op_id_value
 
         # Normalize common explicit public-access toggles used across providers.
         for bool_key in (
