@@ -4256,10 +4256,17 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
     # First pass: insert all resources, collect type.name → db_id map
     res_db_ids: dict[str, int] = {}
     for resource in context.resources:
+        # Use actual_name from properties if available (from Terraform attributes), 
+        # otherwise fall back to resource.name (Terraform block label)
+        display_name = resource.name
+        
+        if resource.properties and resource.properties.get("actual_name"):
+            display_name = resource.properties["actual_name"]
+        
         db_id = insert_resource(
             experiment_id=experiment_id,
             repo_name=context.repository_name,
-            resource_name=resource.name,
+            resource_name=display_name,
             resource_type=resource.resource_type,
             provider=_rtdb.get_provider_key(_get_db(), resource.resource_type),
             source_file=resource.file_path,
