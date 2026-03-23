@@ -177,13 +177,11 @@ class HierarchicalDiagramBuilder:
         """Render a single node."""
         node_id = sanitize_id(resource['resource_name'])
         name = resource['resource_name']
-        rtype = get_friendly_type(resource.get('resource_type', ''))
+        # Truncate long names to fit in box
+        if len(name) > 50:
+            name = name[:47] + "..."
         
-        # Truncate long names
-        if len(name) > 30:
-            name = name[:27] + "..."
-        
-        label = f"{name}<br/>{rtype}"
+        label = name
         self.emitted_nodes.add(resource['resource_name'])
         return f"{indent}{node_id}[\"{label}\"]"
     
@@ -268,14 +266,13 @@ class HierarchicalDiagramBuilder:
             # Enhance label with image info
             node_id = sanitize_id(res['resource_name'])
             name = res['resource_name']
-            rtype = get_friendly_type(res.get('resource_type', ''))
             
             if image:
-                label = f"{name}<br/>{rtype}<br/>📦 {image}"
+                label = f"{name}<br/>📦 {image}"
             elif dockerfile:
-                label = f"{name}<br/>{rtype}<br/>🐳 {Path(dockerfile).name}"
+                label = f"{name}<br/>🐳 {Path(dockerfile).name}"
             else:
-                label = f"{name}<br/>{rtype}"
+                label = name
             
             lines.append(f"    {node_id}[\"{label}\"]")
             self.emitted_nodes.add(res['resource_name'])
@@ -370,12 +367,19 @@ class HierarchicalDiagramBuilder:
             # Build label
             label_parts = []
             
+            # Authentication: prefer explicit key names (SharedAccessKeyName/Key) over protocol labels.
             auth = self.get_auth_method(conn)
-            if auth:
+            # Some connections store SAS key name under 'key_name' or 'shared_access_key_name' — normalize
+            key_name = conn.get('key_name') or conn.get('shared_access_key_name') or conn.get('SharedAccessKeyName') or conn.get('sharedAccessKeyName')
+            if key_name:
+                label_parts.append(f"🔐 Key: {key_name}")
+            elif auth:
+                # Only show raw auth string if it definitively represents a method (e.g., 'SAS', 'ManagedIdentity')
                 label_parts.append(f"🔐 {auth}")
             
             protocol = conn.get('protocol', '')
             if protocol:
+                # Only include protocol if it was actually detected on the connection record
                 label_parts.append(protocol)
             
             port = conn.get('port')
@@ -510,8 +514,7 @@ class HierarchicalDiagramBuilder:
                         self.connections.append({
                             'source': queue['resource_name'],
                             'target': deployment['resource_name'],
-                            'connection_type': 'consumed_by',
-                            'protocol': 'amqp'
+                            'connection_type': 'consumed_by'
                         })
                         connected_pairs.add(pair_key)
                 for topic in sb_topics:
@@ -520,8 +523,7 @@ class HierarchicalDiagramBuilder:
                         self.connections.append({
                             'source': topic['resource_name'],
                             'target': deployment['resource_name'],
-                            'connection_type': 'consumed_by',
-                            'protocol': 'amqp'
+                            'connection_type': 'consumed_by'
                         })
                         connected_pairs.add(pair_key)
         
@@ -546,11 +548,15 @@ class HierarchicalDiagramBuilder:
             all_children.update(c['id'] for c in children)
         
         # Categorize resources  
-        apim_apis = [r for r in self.resources if self.is_api_gateway(r) and r['id'] not in all_children]
-        apim_products = [r for r in self.resources if self.is_api_product(r) and r['id'] not in all_children]
-        k8s_resources = [r for r in self.resources if self.is_kubernetes(r) and r['id'] not in all_children]
+        apim_apis = [r for r in self.resources if self.is_api_gateway(r) and r['id'] not in all_children
+                    and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+        apim_products = [r for r in self.resources if self.is_api_product(r) and r['id'] not in all_children
+                        and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+        k8s_resources = [r for r in self.resources if self.is_kubernetes(r) and r['id'] not in all_children
+                        and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
         # Don't filter SB by all_children - we'll handle parent-child internally
-        sb_resources = [r for r in self.resources if self.is_service_bus(r)]
+        sb_resources = [r for r in self.resources if self.is_service_bus(r)
+                       and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
         
         # Collect IDs that will be rendered in subgraphs
         apim_related_ids = set()
@@ -600,6 +606,8 @@ class HierarchicalDiagramBuilder:
             and 'subscription' not in r.get('resource_type', '').lower()  # Exclude subscriptions - they're metadata
             and 'resource_group' not in r.get('resource_type', '').lower()  # Exclude resource groups
             and 'terraform_data' not in r.get('resource_type', '').lower()  # Exclude terraform data
+            and not r.get('resource_name', '').startswith('${var.')  # Exclude unresolved variables
+            and not r.get('resource_name', '').startswith('${local.')  # Exclude unresolved locals
         ]
         
         for res in other_resources:
