@@ -215,6 +215,9 @@ def _sanitize_mermaid(code: str) -> str:
 
     code = "\n".join(out_lines)
 
+    # 9. Replace underscores inside bracketed/parenthesized labels (visible text) with spaces so long identifiers can wrap
+    code = re.sub(r'([\[\(\{])([^\]\)\}]*?)([\]\)\}])', lambda m: m.group(1) + m.group(2).replace('_', ' ') + m.group(3), code, flags=re.M|re.S)
+
     return code
 
 
