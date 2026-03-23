@@ -9,12 +9,15 @@
     flowchart: { 
       curve: 'basis', 
       useMaxWidth: false,
-      nodeSpacing: 50,
-      rankSpacing: 50,
-      padding: 15
+      nodeSpacing: 80,
+      rankSpacing: 60,
+      padding: 30,
+      htmlLabels: true
     },
     themeVariables: {
-      fontSize: '14px'
+      fontSize: '14px',
+      primaryTextColor: '#eee',
+      lineColor: '#666'
     },
     maxTextSize: 90000
   };
