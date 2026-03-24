@@ -248,7 +248,7 @@ def analyze_service_auth(conn: sqlite3.Connection, repo_id: int) -> Dict:
     }
 
 def generate_mermaid_topology(analysis: Dict, repo_name: str) -> str:
-    """Generate Mermaid diagram of service authentication topology."""
+    """Generate Mermaid diagram of service authentication topology (combined)."""
     
     services = analysis['services']
     relationships = analysis['relationships']
@@ -309,6 +309,104 @@ def generate_mermaid_topology(analysis: Dict, repo_name: str) -> str:
             lines.append(f'  {service_map[from_id]} -->|{auth_label}| {service_map[to_id]}')
     
     return '\n'.join(lines)
+
+
+def _matches_flow(auth_list: List[str], flow_keywords: List[str]) -> bool:
+    """Case-insensitive check if any auth in auth_list matches any keyword in flow_keywords."""
+    auth_lower = [a.lower() for a in auth_list]
+    for kw in flow_keywords:
+        for a in auth_lower:
+            if kw in a or a in kw:
+                return True
+    return False
+
+
+def generate_mermaid_topology_for_flow(analysis: Dict, flow_name: str, flow_keywords: List[str]) -> str:
+    """Generate a Mermaid diagram filtered to only show nodes/edges relevant to a specific auth flow."""
+    services = analysis['services']
+    relationships = analysis['relationships']
+
+    if not services:
+        return "# No authenticated services found"
+
+    lines = [
+        'graph TD',
+        f'  internet["🌐 External Clients/Services - {flow_name}"]',
+        '',
+    ]
+
+    # Include only services that support the flow keywords
+    selected_services = {sid: svc for sid, svc in services.items() if _matches_flow(svc.get('auth_types', []), flow_keywords)}
+
+    # If no services explicitly match, include services that appear in matching relationships
+    for rel in relationships:
+        if _matches_flow(rel.get('auth', []), flow_keywords):
+            # add source and target services by name
+            for sid, svc in services.items():
+                if svc['name'] == rel['from'] or svc['name'] == rel['to']:
+                    selected_services.setdefault(sid, svc)
+
+    if not selected_services:
+        return f"# No services using {flow_name} authentication found"
+
+    # Group selected services by category and render
+    by_category = defaultdict(list)
+    for service_id, service in selected_services.items():
+        category = service['type'].split('_')[0]
+        by_category[category].append((service_id, service))
+
+    service_map = {}
+    for category in sorted(by_category.keys()):
+        lines.append(f'  subgraph {category}["🔷 {category.upper()} Services"]')
+        for service_id, service in by_category[category]:
+            node_id = f"svc_{service_id}"
+            service_map[service_id] = node_id
+            auth_str = '; '.join(service['auth_types'][:2])
+            if len(service['auth_types']) > 2:
+                auth_str += f" +{len(service['auth_types'])-2}"
+            risk_emoji = '🔴' if service['risk'] == 'critical' else '🟠' if service['risk'] == 'high' else '🟡'
+            lines.append(f'    {node_id}["{service["icon"]} {service["name"]}<br/>{risk_emoji}<br/><small>{auth_str}</small>"]')
+        lines.append('  end')
+        lines.append('')
+
+    # Connect internet to selected services
+    for service_id in selected_services.keys():
+        if service_id in service_map:
+            lines.append(f'  internet -->|API/Client SDK| {service_map[service_id]}')
+
+    # Add inter-service edges only when the relationship indicates the flow
+    for rel in relationships:
+        if not _matches_flow(rel.get('auth', []), flow_keywords):
+            continue
+        from_id = None
+        to_id = None
+        for sid, svc in services.items():
+            if svc['name'] == rel['from']:
+                from_id = sid
+            if svc['name'] == rel['to']:
+                to_id = sid
+        if from_id and to_id and from_id in service_map and to_id in service_map:
+            auth_label = ','.join(rel.get('auth', []))[:40]
+            lines.append(f'  {service_map[from_id]} -->|{auth_label}| {service_map[to_id]}')
+
+    return '\n'.join(lines)
+
+
+def generate_mermaid_topologies_per_flow(analysis: Dict) -> Dict[str, str]:
+    """Create mermaid diagrams for predefined auth flows.
+    Returns a dict flow_name -> mermaid string.
+    """
+    flows = {
+        'client_credentials': ['client_credentials', 'managed_identity', 'service_account', 'connection_string', 'client_secret', 'oauth2'],
+        'mtls': ['certificate', 'mtls', 'mutual_tls', 'mutual-tls'],
+        'jwt_bearer': ['jwt', 'jwt_bearer', 'bearer'],
+        'api_key': ['api_key', 'subscription_key', 'subscription', 'api-key', 'api key'],
+    }
+
+    results = {}
+    for name, keywords in flows.items():
+        results[name] = generate_mermaid_topology_for_flow(analysis, name, keywords)
+    return results
 
 def generate_auth_report(analysis: Dict) -> str:
     """Generate detailed authentication analysis report."""
