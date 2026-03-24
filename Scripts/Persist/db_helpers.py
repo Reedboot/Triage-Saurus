@@ -2147,6 +2147,217 @@ def get_connections_for_diagram(experiment_id: str, repo_name: Optional[str] = N
         return [dict(row) for row in cursor.fetchall()]
 
 
+def get_resources_by_architectural_concern(
+    experiment_id: str,
+    concern: str,  # 'ingress', 'routing', 'backend', 'network'
+    provider: Optional[str] = None,
+    repo_name: Optional[str] = None,
+) -> List[Dict]:
+    """Get resources filtered by architectural concern (ingress, routing, backend, network).
+    
+    Returns only root resources (parent_resource_id IS NULL) for use as diagram nodes.
+    Child resources are shown via hierarchies, not as root nodes.
+    """
+    with get_db_connection() as conn:
+        concern_lower = (concern or "").lower().strip()
+        
+        if concern_lower == "ingress":
+            # Internet-facing gateways, load balancers, WAF, public IPs
+            query = """
+                SELECT DISTINCT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                       COALESCE(MAX(f.severity_score), 0) as max_finding_score
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN findings f ON r.id = f.resource_id
+                WHERE r.experiment_id = ?
+                  AND r.parent_resource_id IS NULL
+                  AND (
+                    r.resource_type LIKE '%application_gateway%'
+                    OR r.resource_type LIKE '%load_balancer%'
+                    OR r.resource_type LIKE '%lb%'
+                    OR r.resource_type LIKE '%firewall%'
+                    OR r.resource_type LIKE '%waf%'
+                    OR r.resource_type LIKE '%nat_gateway%'
+                    OR r.resource_type LIKE '%public_ip%'
+                  )
+            """
+            params = [experiment_id]
+            
+        elif concern_lower == "routing":
+            # APIM, Service Bus, Event Hub, API operations
+            query = """
+                SELECT DISTINCT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                       COALESCE(MAX(f.severity_score), 0) as max_finding_score
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN findings f ON r.id = f.resource_id
+                WHERE r.experiment_id = ?
+                  AND r.parent_resource_id IS NULL
+                  AND (
+                    r.resource_type LIKE '%api_management%'
+                    OR r.resource_type LIKE '%servicebus_namespace%'
+                    OR r.resource_type LIKE '%eventhub_namespace%'
+                    OR r.resource_type LIKE '%eventgrid%'
+                    OR r.resource_type LIKE '%api_gateway%'
+                  )
+            """
+            params = [experiment_id]
+            
+        elif concern_lower == "backend":
+            # Compute, databases, storage, app services
+            query = """
+                SELECT DISTINCT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                       COALESCE(MAX(f.severity_score), 0) as max_finding_score
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN findings f ON r.id = f.resource_id
+                WHERE r.experiment_id = ?
+                  AND r.parent_resource_id IS NULL
+                  AND (
+                    r.resource_type LIKE '%virtual_machine%'
+                    OR r.resource_type LIKE '%kubernetes%'
+                    OR r.resource_type LIKE '%aks%'
+                    OR r.resource_type LIKE '%app_service%'
+                    OR r.resource_type LIKE '%function_app%'
+                    OR r.resource_type LIKE '%sql_server%'
+                    OR r.resource_type LIKE '%mysql%'
+                    OR r.resource_type LIKE '%postgresql%'
+                    OR r.resource_type LIKE '%cosmos%'
+                    OR r.resource_type LIKE '%storage_account%'
+                    OR r.resource_type LIKE '%container_registry%'
+                    OR r.resource_type LIKE '%container_instance%'
+                    OR r.resource_type LIKE '%redis%'
+                    OR r.resource_type LIKE '%cache%'
+                  )
+                  AND r.id NOT IN (
+                    SELECT r2.id FROM resources r2
+                    WHERE r2.experiment_id = ?
+                      AND r2.parent_resource_id IS NULL
+                      AND (
+                        r2.resource_type LIKE '%application_gateway%'
+                        OR r2.resource_type LIKE '%load_balancer%'
+                        OR r2.resource_type LIKE '%api_management%'
+                        OR r2.resource_type LIKE '%servicebus_namespace%'
+                      )
+                  )
+            """
+            params = [experiment_id, experiment_id]
+            
+        elif concern_lower == "network":
+            # VNets, subnets, NSGs, private endpoints
+            query = """
+                SELECT DISTINCT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                       COALESCE(MAX(f.severity_score), 0) as max_finding_score
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN findings f ON r.id = f.resource_id
+                WHERE r.experiment_id = ?
+                  AND r.parent_resource_id IS NULL
+                  AND (
+                    r.resource_type LIKE '%virtual_network%'
+                    OR r.resource_type LIKE '%vnet%'
+                    OR r.resource_type LIKE '%network_security_group%'
+                    OR r.resource_type LIKE '%nsg%'
+                    OR r.resource_type LIKE '%vpn_gateway%'
+                    OR r.resource_type LIKE '%private_endpoint%'
+                    OR r.resource_type LIKE '%expressroute%'
+                  )
+            """
+            params = [experiment_id]
+        else:
+            return []
+        
+        # Apply optional filters
+        if provider:
+            query += " AND LOWER(r.provider) = LOWER(?)"
+            params.append(provider)
+        
+        if repo_name:
+            query += " AND repo.repo_name = ?"
+            params.append(repo_name)
+        
+        query += " GROUP BY r.id ORDER BY r.resource_type, r.resource_name"
+        
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+        
+        # Enrich with properties like the main get_resources_for_diagram does
+        resources = []
+        for row in rows:
+            r = dict(row)
+            props = conn.execute("SELECT property_key, property_value FROM resource_properties WHERE resource_id = ?", [r['id']]).fetchall()
+            prop_dict = {p['property_key']: _maybe_parse_json(p['property_value']) for p in props}
+            r['properties'] = prop_dict
+            r['public'] = _prop_bool(prop_dict.get('public') or prop_dict.get('public_access') or False)
+            resources.append(r)
+        
+        return resources
+
+
+def get_hierarchy_for_resource(resource_id: int) -> List[Dict]:
+    """Get all descendants of a resource (children, grandchildren, etc.) recursively."""
+    with get_db_connection() as conn:
+        cursor = conn.execute("""
+            WITH RECURSIVE hierarchy AS (
+              SELECT id, resource_name, resource_type, parent_resource_id, 0 as depth
+              FROM resources
+              WHERE id = ?
+              
+              UNION ALL
+              
+              SELECT r.id, r.resource_name, r.resource_type, r.parent_resource_id, h.depth + 1
+              FROM resources r
+              JOIN hierarchy h ON r.parent_resource_id = h.id
+              WHERE h.depth < 5
+            )
+            SELECT id, resource_name, resource_type, parent_resource_id, depth
+            FROM hierarchy
+            WHERE depth > 0
+            ORDER BY depth, resource_name
+        """, [resource_id])
+        
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_internet_exposed_resources(
+    experiment_id: str,
+    min_severity: int = 7,
+    provider: Optional[str] = None,
+) -> List[Dict]:
+    """Get resources with internet exposure findings.
+    
+    Useful for identifying entry points in the ingress diagram.
+    """
+    with get_db_connection() as conn:
+        query = """
+            SELECT DISTINCT r.id, r.resource_name, r.resource_type, r.provider,
+                   MAX(f.severity_score) as max_severity,
+                   GROUP_CONCAT(DISTINCT f.rule_id) as rule_ids
+            FROM resources r
+            JOIN findings f ON r.id = f.resource_id
+            WHERE r.experiment_id = ?
+              AND f.severity_score >= ?
+              AND (
+                f.title LIKE '%internet%'
+                OR f.title LIKE '%public%'
+                OR f.title LIKE '%external%'
+                OR f.description LIKE '%internet%'
+                OR f.description LIKE '%public%'
+                OR f.description LIKE '%exposed%'
+              )
+        """
+        params = [experiment_id, min_severity]
+        
+        if provider:
+            query += " AND LOWER(r.provider) = LOWER(?)"
+            params.append(provider)
+        
+        query += " GROUP BY r.id ORDER BY max_severity DESC, r.resource_name"
+        
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_resource_query_view(
     experiment_id: str,
     resource_name: str,

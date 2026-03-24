@@ -66,12 +66,23 @@ def main():
     resource_updates = []  # Track resource_id updates to batch later
 
     with db_helpers.get_db_connection() as conn:
-        # Get repo_id once at the start
+        # Get or create repo_id once at the start
         repo_row = conn.execute(
             "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
             (args.experiment, args.repo),
         ).fetchone()
-        repo_id = repo_row[0] if repo_row else None
+        if repo_row:
+            repo_id = repo_row[0]
+        else:
+            # Ensure repository row exists so findings can be joined correctly in the UI
+            conn.execute(
+                "INSERT INTO repositories (experiment_id, repo_name) VALUES (?, ?)",
+                (args.experiment, args.repo),
+            )
+            repo_id = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+                (args.experiment, args.repo),
+            ).fetchone()[0]
 
         # Prepare all findings for batch insert
         findings_to_insert = []
@@ -79,17 +90,21 @@ def main():
         for result in results:
             check_id: str = result.get("check_id", "")
             severity: str = result.get("extra", {}).get("severity", "WARNING")
+            extra = result.get("extra", {})
 
-            # Skip INFO and Context rules
+            # Skip only INFO rules; keep Context detection results that may indicate misconfigs
             if severity.upper() == "INFO":
                 continue
-            if "Context" in check_id:
+            # Historically some check_ids include 'context' lowercase; skip only detection-only rules that are explicitly marked
+            # as 'rule_type': 'context_discovery' *and* have severity INFO. This keeps actionable misconfiguration hits
+            # that may be emitted with non-INFO severity.
+            if severity.upper() == 'INFO' and (extra.get('metadata') or {}).get('rule_type') == 'context_discovery':
+                # Pure asset-detection; do not store as findings
                 continue
 
             path: str = result.get("path", "")
             start_line: int = result.get("start", {}).get("line", 0)
             end_line: int = result.get("end", {}).get("line", start_line)
-            extra = result.get("extra", {})
             message: str = extra.get("message", "")
             reason: str = message.split("\n")[0]
             code_snippet: str = extra.get("lines", "")
