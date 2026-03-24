@@ -34,7 +34,7 @@
         try {
           const warn = document.createElement('div');
           warn.className = 'mermaid-error';
-          warn.textContent = 'Mermaid library unavailable — diagrams may not render. To fix, place mermaid.min.js at /static/vendor/mermaid.min.js or enable CDN access.';
+          warn.textContent = 'Mermaid library unavailable - diagrams may not render. To fix, place mermaid.min.js at /static/vendor/mermaid.min.js or enable CDN access.';
           warn.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#ffcc00;color:#000;padding:8px;border-radius:6px;z-index:9999;font-size:12px';
           document.body.appendChild(warn);
         } catch (e) {}
@@ -44,7 +44,7 @@
 
   const form            = document.getElementById('scan-form');
   const repoSelect      = document.getElementById('repo-select');
-  const nameInput       = document.getElementById('scan-name');
+  const nameInput       = null; // scan name removed - server will assign a scan id
   const scanBtn         = document.getElementById('scan-btn');
   const resetBtn        = document.getElementById('reset-btn');
   const statusBar       = document.getElementById('status-bar');
@@ -55,6 +55,26 @@
   const viewsEl         = document.getElementById('diagram-views');
   const placeholder     = document.getElementById('diagram-placeholder');
   const copyDiagramBtn  = document.getElementById('copy-diagram-btn');
+
+  if (copyDiagramBtn) {
+    copyDiagramBtn.addEventListener('click', async () => {
+      // Copy the currently active mermaid source if available
+      const activeView = viewsEl && viewsEl.querySelector('.diagram-view.active');
+      if (!activeView) return;
+      const mer = activeView.querySelector('.mermaid');
+      if (!mer) return;
+      const src = mer.textContent || mer.innerText || '';
+      try {
+        await navigator.clipboard.writeText(src);
+        // small transient feedback
+        const old = copyDiagramBtn.textContent;
+        copyDiagramBtn.textContent = 'Copied';
+        setTimeout(() => { copyDiagramBtn.textContent = old; }, 1200);
+      } catch (e) {
+        console.warn('Copy failed:', e);
+      }
+    });
+  }
   const zoomInBtn       = document.getElementById('zoom-in-btn');
   const zoomOutBtn      = document.getElementById('zoom-out-btn');
   const zoomResetBtn    = document.getElementById('zoom-reset-btn');
@@ -65,6 +85,15 @@
   const sectionContent  = document.getElementById('section-panel-content');
   const tabBarPlaceholder = document.getElementById('tab-bar-placeholder');
   const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
+  const toggleDiagramBtnPrimary = document.getElementById('toggle-diagram-btn');
+  const toggleDiagramBtnPersistent = document.getElementById('toggle-diagram-btn-persistent');
+  const toggleDiagramBtns = [toggleDiagramBtnPrimary, toggleDiagramBtnPersistent].filter(Boolean);
+  const diagramPanel = document.getElementById('diagram-panel');
+
+  // Ensure diagramPanel exists before attempting to read/set styles
+  if (diagramPanel && getComputedStyle(diagramPanel).display === 'none') {
+    try { localStorage.setItem('diagramHidden', '1'); } catch (e) {}
+  }
 
   let showingSections = false; // whether sections are currently shown in the log panel
 
@@ -77,7 +106,7 @@
 
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
-  const loadScanBtn     = document.getElementById('load-scan-btn');
+  const loadScanBtn     = null; // load button removed - dropdown auto-loads
   // Compare UI temporarily removed
   const compareToggle   = null;
   const compareRow      = null;
@@ -109,7 +138,7 @@
     return '';
   }
 
-  // ── Zoom + Pan (right panel) ──────────────────────────────────────────────────
+  // -- Zoom + Pan (right panel) --
   function applyTransform() {
     if (diagramInner) {
       diagramInner.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
@@ -246,7 +275,37 @@
     });
   }
 
-  // ── Section tabs (left panel) ─────────────────────────────────────────────────
+  // Initialize diagram visibility from localStorage (collapsed => hidden)
+  function setDiagramHidden(hidden) {
+    if (!diagramPanel || !workspaceEl) return;
+    try { localStorage.setItem('diagramHidden', hidden ? '1' : '0'); } catch (e) {}
+    diagramPanel.style.display = hidden ? 'none' : '';
+    if (hidden) workspaceEl.classList.add('diagram-hidden'); else workspaceEl.classList.remove('diagram-hidden');
+    // Update all toggle buttons (persistent + status-bar) if present
+    toggleDiagramBtns.forEach(b => {
+      try { b.textContent = hidden ? 'Show diagram' : 'Hide diagram'; b.title = hidden ? 'Show architecture diagram' : 'Hide architecture diagram'; } catch (e) {}
+    });
+    // Recompute layout after toggling so Mermaid can fit correctly
+    scheduleFitDiagram(200);
+  }
+
+  try {
+    const savedDiag = localStorage.getItem('diagramHidden');
+    if (savedDiag === '1') setDiagramHidden(true);
+    else { toggleDiagramBtns.forEach(b => { try { b.textContent = 'Hide diagram'; b.title = 'Hide architecture diagram'; } catch (e) {} }); }
+  } catch (e) {}
+
+  // Attach click handler to all toggle buttons (persistent + status-bar)
+  toggleDiagramBtns.forEach(b => {
+    try {
+      b.addEventListener('click', () => {
+        const currentlyHidden = diagramPanel && diagramPanel.style.display === 'none';
+        setDiagramHidden(!currentlyHidden);
+      });
+    } catch (e) {}
+  });
+
+  // -- Section tabs (left panel) --
   let activeSection = '';
 
   async function loadSectionTabs(expId, repoName) {
@@ -263,8 +322,21 @@
     currentRepoName = resolvedRepoName;
     try {
       const resp = await fetch(`/api/view/tabs/${encodeURIComponent(effectiveExpId)}/${encodeURIComponent(resolvedRepoName)}`);
-      const data = await resp.json();
-      renderSectionTabs(data.tabs || [], expId, resolvedRepoName);
+      const text = await resp.text();
+      try {
+        const data = JSON.parse(text);
+        if (data && data.error) {
+          console.warn('Tabs endpoint returned error:', data.error);
+          sectionTabBar.innerHTML = '';
+          tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
+          return;
+        }
+        renderSectionTabs((data && data.tabs) || [], expId, resolvedRepoName);
+      } catch (e) {
+        console.warn('Failed to parse tabs response as JSON:', e, text.slice(0,200));
+        sectionTabBar.innerHTML = '';
+        tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
+      }
       // Intentionally do not auto-switch to a content tab here; renderSectionTabs will
       // show the Log tab by default so live logs remain visible when loading tabs.
     } catch (err) {
@@ -280,7 +352,12 @@
     // Toggle active class
     sectionTabBar.querySelectorAll('.section-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
     if (key === '__log__') {
-      showRawLog();
+      // Show raw log but keep tab bar visible
+      if (logOutput) logOutput.style.display = '';
+      if (sectionContent) sectionContent.style.display = 'none';
+      sectionTabBar.style.display = 'flex';
+      showingSections = false;
+      if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Sections';
       activeSection = '__log__';
     } else {
       // Load content for the requested key
@@ -308,7 +385,7 @@
       if (key === '__log__') {
         const logBtn = document.createElement('button');
         logBtn.className = 'section-tab-btn';
-        logBtn.textContent = 'Log';
+        logBtn.textContent = '📜 Log';
         logBtn.dataset.key = '__log__';
         logBtn.addEventListener('click', () => { activateSectionKey('__log__'); });
         sectionTabBar.appendChild(logBtn);
@@ -400,9 +477,9 @@
     }
   }
 
-  // ── Log helpers ─────────────────────────────────────────────────────────────
+  // -- Log helpers --
   function classifyLine(line) {
-    if (/^─+$/.test(line) || /^={3,}/.test(line)) return 'line-sep';
+    if (/^-+$/.test(line) || /^={3,}/.test(line)) return 'line-sep';
     if (/\[ERROR\]|✗|error/i.test(line))           return 'line-error';
     if (/\[WARN\]|WARNING/i.test(line))             return 'line-warn';
     if (/^▶|Phase \d|Pipeline|Rendering|Experiment/i.test(line)) return 'line-phase';
@@ -424,7 +501,7 @@
     logOutput.scrollTop = logOutput.scrollHeight;
   }
 
-  // ── Diagram rendering ────────────────────────────────────────────────────────
+  // -- Diagram rendering --
   async function _runMermaid(nodes) {
     // Render each node individually so one bad diagram can't block the others.
     async function tryRender(node, config) {
@@ -649,7 +726,7 @@
     scheduleFitDiagram(100);
   }
 
-  // ── Diff rendering ───────────────────────────────────────────────────────────
+  // -- Diff rendering --
   async function renderDiff(data) {
     const { from: idFrom, to: idTo, diagrams_from, diagrams_to, timeline } = data;
 
@@ -788,11 +865,11 @@
     }
   }
 
-  // ── Past scans ───────────────────────────────────────────────────────────────
+  // -- Past scans --
   function _scanOptionLabel(scan) {
     const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 19) : '';
     const flag = scan.has_diagrams ? ' 🖼' : '';
-    return `Scan ${scan.experiment_id}${dt ? ' — ' + dt : ''}${flag}`;
+    return `Scan ${scan.experiment_id}${dt ? ' - ' + dt : ''}${flag}`;
   }
 
   function _populateScanSelects(scans) {
@@ -815,6 +892,11 @@
       const scans = data.scans || [];
       if (scans.length > 0) {
         _populateScanSelects(scans);
+        // Select the most recent scan by default
+        const last = scans[scans.length - 1];
+        if (pastScanSelect && last && last.experiment_id) {
+          pastScanSelect.value = last.experiment_id;
+        }
         pastScansRow.classList.add('visible');
       } else {
         pastScansRow.classList.remove('visible');
@@ -899,11 +981,34 @@
     }
   });
 
+  // Auto-load sections and diagrams when a past-scan is selected (improves UX)
+  if (pastScanSelect) pastScanSelect.addEventListener('change', async () => {
+    const expId = pastScanSelect.value;
+    if (!expId) return;
+    // Mirror the Load button behavior
+    if (loadScanBtn) loadScanBtn.disabled = true;
+    setStatus(`Loading scan ${expId}…`);
+    spinner.style.display = '';
+    statusBar.classList.add('visible');
+    try {
+      await _loadDiagrams(expId);
+      const targetRepoName = currentRepoName || resolveSelectedRepoName();
+      if (targetRepoName) {
+        currentRepoName = targetRepoName;
+        await loadSectionTabs(expId, targetRepoName);
+        try { activateSectionKey('assets', expId, targetRepoName); } catch (e) {}
+      }
+    } finally {
+      spinner.style.display = 'none';
+      if (loadScanBtn) loadScanBtn.disabled = false;
+    }
+  });
+
   // Compare UI removed
   // compareToggle event and runCompareBtn handler removed while the feature is hidden
 
 
-  // ── SSE stream parsing ───────────────────────────────────────────────────────
+  // -- SSE stream parsing --
   let buffer = '';
 
   function parseSSEChunk(chunk) {
@@ -971,7 +1076,7 @@
       spinner.style.display = 'none';
       scanBtn.disabled = false;
       repoSelect.disabled = false;
-      nameInput.disabled = false;
+      if (nameInput) nameInput.disabled = false;
       resetBtn.style.display = 'inline-block';
     }
   }
@@ -980,8 +1085,8 @@
     if (!sectionTabBar || !sectionContent || !logOutput) return;
     // Hide raw log and show sections
     logOutput.style.display = 'none';
-    sectionTabBar.style.display = '';
-    sectionContent.style.display = '';
+    sectionTabBar.style.display = 'flex';
+    sectionContent.style.display = 'flex';
     showingSections = true;
     if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Show log';
   }
@@ -990,7 +1095,7 @@
     if (!sectionTabBar || !sectionContent || !logOutput) return;
     // Show raw log and hide sections
     logOutput.style.display = '';
-    sectionTabBar.style.display = '';
+    sectionTabBar.style.display = 'none';
     sectionContent.style.display = 'none';
     showingSections = false;
     if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Sections';
@@ -1008,12 +1113,12 @@
     statusBar.classList.add('visible');
   }
 
-  // ── Form submit ──────────────────────────────────────────────────────────────
+  // -- Form submit --
   if (form) form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const repoPath = repoSelect.value;
-    const scanName = (nameInput.value.trim() || 'web_scan');
+    const scanName = ''; // scan name removed; server will generate experiment id
     currentRepoName = resolveSelectedRepoName() || currentRepoName;
 
     logOutput.innerHTML = '';
@@ -1026,14 +1131,13 @@
 
     scanBtn.disabled = true;
     repoSelect.disabled = true;
-    nameInput.disabled = true;
+    if (nameInput) nameInput.disabled = true;
     resetBtn.style.display = 'none';
     spinner.style.display = '';
     setStatus('Connecting…');
 
     const formData = new FormData();
     formData.append('repo_path', repoPath);
-    formData.append('scan_name', scanName);
 
     let response;
     try {
@@ -1064,7 +1168,7 @@
     }
   });
 
-  // ── Reset button ─────────────────────────────────────────────────────────────
+  // -- Reset button --
   if (resetBtn) resetBtn.addEventListener('click', () => {
     repoSelect.disabled = false;
     nameInput.disabled = false;
@@ -1097,7 +1201,7 @@
     const selected = repoSelect.options[repoSelect.selectedIndex];
     if (selected && selected.value) {
       const name = selected.dataset.name || selected.text.split(' — ')[0].trim();
-      nameInput.value = name;
+      if (nameInput) nameInput.value = name;
       currentRepoName = name;
 
       const scans = await loadPastScans(name);

@@ -127,6 +127,13 @@ header span.badge {
 .scan-card .form-row .field.grow textarea {
   flex: 1;
   width: auto;
+  max-width: 520px; /* limit repo select width so it doesn't dominate the row */
+}
+/* On small screens let the control be full width */
+@media (max-width: 760px) {
+  .scan-card .form-row .field.grow select,
+  .scan-card .form-row .field.grow input,
+  .scan-card .form-row .field.grow textarea { max-width: 100%; }
 }
 
 /* Buttons in the scan row align without extra left margin */
@@ -292,6 +299,21 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .btn-small:hover { color: var(--text); background: var(--border); }
 
+/* Diagram toggle button: match Run Scan sizing and give distinct style */
+.btn-diagram {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 7px 18px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-diagram:hover { background: var(--bg-hover); }
+
+
 /* ── Log output ── */
 #log-output {
   flex: 1;
@@ -406,7 +428,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .mermaid foreignObject > div {
   overflow: visible;
-  white-space: normal !important; /* override inline nowrap from Mermaid so labels can wrap */
+ /* white-space: normal !important; /* override inline nowrap from Mermaid so labels can wrap */
   word-break: break-word !important;
 }
 
@@ -447,7 +469,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* Increase width for edge labels (foreignObject) to prevent unnecessary wrapping */
 .mermaid svg foreignObject {
-  min-width: 120px;
+  min-width: 140px;
 }
 
 /* Ensure the diagram zoom inner and views fill available space so Mermaid doesn't leave gaps */
@@ -510,6 +532,16 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   grid-column: 1 / -1; /* span entire split-layout when left column is absent */
 }
 
+/* When the diagram panel is hidden via the new toggle, keep layout sane */
+.panel#diagram-panel[style*="display: none"] {
+  display: none !important;
+}
+
+/* When diagram-panel is hidden, make the workspace use a single full-width column so the log fills the page */
+.workspace.diagram-hidden {
+  grid-template-columns: 1fr !important;
+}
+
 /* Ensure header stays natural size and diagram area fills remaining space */
 .split-right .right-panel-header {
   flex: 0 0 auto;
@@ -527,7 +559,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .split-left { min-width: 0; }
 /* ── Section tabs (left panel) ── */
 .section-tab-bar {
-  display: flex;
+  display: none;
   flex-wrap: nowrap;
   overflow-x: auto;
   gap: 0;
@@ -555,7 +587,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .section-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
 .section-panel-content {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 100%;
+  width: 100%;
+  box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 14px;
@@ -608,13 +644,20 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* ── Section table (findings, assets, ingress, egress, roles) ── */
 .section-table-wrap {
+  width: 100%;
+  display: block;
   overflow-x: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
+  padding: 0 12px 12px;
+  box-sizing: border-box;
+  clear: both;
 }
 
 .section-table {
-  width: 100%;
+  /* Allow tables to expand horizontally and enable horizontal scrolling in the wrapper */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.78rem;
   table-layout: fixed; /* Enable fixed layout for column resizing */
@@ -743,6 +786,21 @@ tr.child-row + tr.child-row { border-top: 0; }
   background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border);
 }
 
+.how-badge[data-source="ContextDiscoveryAgent"],
+.how-badge[data-source="Terraform"] {
+  background: #4caf50; color: white; border-color: #45a049;
+}
+
+.how-badge[data-source*="opengrep"],
+.how-badge[data-source*="scan"] {
+  background: #ff9800; color: white; border-color: #e68900;
+}
+
+.how-badge[data-source*="manual"],
+.how-badge[data-source*="user"] {
+  background: #2196f3; color: white; border-color: #0b7dda;
+}
+
 /* ── Assets panel (existing, preserved) ── */
 #assets-section { flex: 1; display: flex; flex-direction: column; overflow: auto; min-height: 0; }
 
@@ -824,7 +882,7 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .provider-badge.active .prov-count { background: #1f6feb44; color: #79c0ff; }
 
 .assets-table-wrap {
-  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 12px 12px; max-height: 72vh;
+  flex: 1; overflow: auto; padding: 0 12px 12px; max-height: 72vh;
   scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-base);
 }
 .assets-table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
