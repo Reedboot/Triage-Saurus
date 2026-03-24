@@ -21,7 +21,8 @@ Border colors indicate resource categories:
 |--------|-------|
 | **Languages** | ${languages} |
 | **Hosting** | ${hosting} |
-| **CI/CD** | ${ci_cd} |
+| **CI/CD** | ${ci_cd} |  
+| **Findings tab** | Findings only (risks captured per-finding) |
 | **Cloud Providers** | ${providers} |
 | **Security Status** | 🔍 Phase 1 discovery - security review pending |
 
