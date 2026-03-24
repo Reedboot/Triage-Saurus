@@ -218,6 +218,24 @@ def _sanitize_mermaid(code: str) -> str:
     # 9. Replace underscores inside bracketed/parenthesized labels (visible text) with spaces so long identifiers can wrap
     code = re.sub(r'([\[\(\{])([^\]\)\}]*?)([\]\)\}])', lambda m: m.group(1) + m.group(2).replace('_', ' ') + m.group(3), code, flags=re.M|re.S)
 
+    # 10. Insert soft break opportunities after '.' and '_' inside visible labels longer than 8 characters
+    def _insert_soft_breaks(m):
+        s = m.group(0)
+        if len(s) <= 2:
+            return s
+        opening = s[0]
+        closing = s[-1]
+        inner = s[1:-1]
+        # Strip surrounding quotes for length check when quoted
+        check_len = len(inner)
+        if check_len <= 8:
+            return s
+        # Insert zero-width space after dots and underscores to allow line breaks there
+        inner2 = inner.replace('.', '.' + '\u200B').replace('_', '_' + '\u200B')
+        return opening + inner2 + closing
+
+    code = re.sub(r'("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\([^\)]*\))', _insert_soft_breaks, code)
+
     return code
 
 
@@ -884,30 +902,58 @@ def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> s
 @app.route("/api/view/tabs/<experiment_id>/<repo_name>")
 def api_view_tabs(experiment_id: str, repo_name: str):
     """Return the list of available tabs for this experiment/repo."""
-    tabs = [
-        {"key": "tldr",     "label": "TL;DR"},
-        {"key": "assets",   "label": "Assets"},
-        {"key": "findings", "label": "Findings"},
-        {"key": "risks",    "label": "Risks"},
-        {"key": "roles",    "label": "Roles & Permissions"},
-        {"key": "ingress",  "label": "Ingress"},
-        {"key": "egress",   "label": "Egress"},
-    ]
-    # Append any extra AI section keys stored for this repo
     try:
-        sys.path.insert(0, str(REPO_ROOT))
-        from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
-        sections = get_ai_sections(experiment_id, repo_name)
-        known_keys = {"tldr", "risks"}
-        extras = [
-            {"key": s["section_key"], "label": s["title"]}
-            for s in sections
-            if s["section_key"] not in known_keys
+        tabs = [
+            {"key": "tldr",       "label": "📊 TL;DR"},
+            {"key": "assets",     "label": "🗂️ Assets"},
+            {"key": "findings",   "label": "🔎 Findings"},
+
+            {"key": "containers", "label": "🐳 Containers"},
+            {"key": "ports",      "label": "🔌 Ports & Protocols"},
+            {"key": "api_details","label": "📡 API Details"},
+            {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
+            {"key": "ingress",    "label": "⬅️ Ingress"},
+            {"key": "egress",     "label": "➡️ Egress"},
         ]
-        tabs.extend(extras)
-    except Exception:
-        pass
-    return jsonify({"tabs": tabs})
+        # Append any extra AI section keys stored for this repo
+        try:
+            sys.path.insert(0, str(REPO_ROOT))
+            from Scripts.Persist.db_helpers import get_ai_sections  # type: ignore
+            sections = get_ai_sections(experiment_id, repo_name)
+            known_keys = {"tldr"}
+            extras = [
+                {"key": s["section_key"], "label": s["title"]}
+                for s in sections
+                if s["section_key"] not in known_keys
+            ]
+            tabs.extend(extras)
+        except Exception:
+            pass
+
+        # Normalize ingress display: convert Terraform/local references like local.app_name or ${local.app_name}
+        # into a friendlier 'local.app name' for the Ingress listing.
+        def _normalize_display_name(n: str) -> str:
+            if not n:
+                return n
+            # Replace ${...} wrappers
+            n = re.sub(r"\$\{([^}]+)\}", r"\1", n)
+            # Replace dots with spaces when the token looks like a local/var reference
+            if n.startswith('local.') or n.startswith('var.'):
+                n = n.replace('.', ' ')
+            return n
+
+        return jsonify({"tabs": tabs})
+    except Exception as e:
+        # Return a JSON error so the UI can parse and show a message instead of failing silently
+        return jsonify({"tabs": [], "error": str(e)}), 500
+
+
+# Attach a normalizer hook for templates by exposing a simple mapping endpoint
+# (templates call /api/view/normalize?name=... via JS when rendering ingress rows)
+@app.route("/api/view/normalize")
+def api_view_normalize():
+    q = request.args.get('name', '')
+    return jsonify({'name': _normalize_display_name(q)})
 
 
 @app.route("/api/view/assets/<experiment_id>/<repo_name>")
@@ -1569,6 +1615,160 @@ def api_view_roles(experiment_id: str, repo_name: str):
     finally:
         conn.close()
 
+
+
+
+@app.route("/api/view/containers/<experiment_id>/<repo_name>")
+def api_view_containers(experiment_id: str, repo_name: str):
+    """Render the containers tab with base images and deployment info."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_containers.html", containers=[], container_providers=[], experiment_id=experiment_id, repo_name=repo_name)
+    
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_containers.html", containers=[], container_providers=[], experiment_id="", repo_name=repo_name)
+        
+        # Query for Dockerfile resources and get their properties (base images)
+        rows = conn.execute("""
+            SELECT DISTINCT 
+                r.resource_name,
+                r.resource_type,
+                r.provider,
+                r.source_file,
+                rp.property_value as image,
+                rp2.property_value as registry
+            FROM resources r
+            JOIN repositories repo ON r.repo_id = repo.id
+            LEFT JOIN resource_properties rp ON r.id = rp.resource_id AND rp.property_key = 'image'
+            LEFT JOIN resource_properties rp2 ON r.id = rp2.resource_id AND rp2.property_key = 'registry'
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+              AND (
+                   r.resource_type LIKE '%docker%' 
+                   OR r.resource_type LIKE '%container%'
+                   OR r.resource_type LIKE '%image%'
+                   OR r.resource_type LIKE '%helm%'
+                   OR r.resource_type LIKE '%kubernetes%'
+                   OR r.resource_type LIKE '%deployment%'
+                   OR r.resource_type LIKE '%pod%'
+                   OR r.resource_name LIKE '%dockerfile%'
+              )
+            ORDER BY r.provider, r.resource_name
+        """, (repo_name, resolved_exp_id)).fetchall()
+        
+        containers = []
+        providers = set()
+        for row in rows:
+            container = dict(row)
+            container_type = "Dockerfile" if "dockerfile" in container.get("resource_type", "").lower() else "Container"
+            container["container_type"] = container_type
+            providers.add(container.get("provider", "unknown") or "unknown")
+            containers.append(container)
+        
+        return _db_render("tab_containers.html", containers=containers, container_providers=sorted(providers), experiment_id=resolved_exp_id, repo_name=repo_name)
+    except Exception as exc:
+        return _db_render("tab_containers.html", containers=[], container_providers=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+
+@app.route("/api/view/ports/<experiment_id>/<repo_name>")
+def api_view_ports(experiment_id: str, repo_name: str):
+    """Render the ports tab with port/protocol inventory."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_ports.html", ports=[], experiment_id=experiment_id, repo_name=repo_name)
+    
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_ports.html", ports=[], experiment_id="", repo_name=repo_name)
+        
+        # Query resource connections for port information with enhanced context
+        rows = conn.execute("""
+            SELECT DISTINCT
+                r_src.resource_name as source_name,
+                r_src.resource_type as source_type,
+                r_tgt.resource_name as target_name,
+                rc.port,
+                rc.protocol,
+                rc.auth_method,
+                CASE 
+                    WHEN rp.property_value LIKE '%internet%' OR rp.property_value LIKE '%0.0.0.0%' THEN 1
+                    ELSE 0
+                END as is_internet_exposed,
+                CASE
+                    WHEN rc.protocol IN ('HTTPS', 'HTTP', 'TCP', 'UDP', 'TLS') THEN 'verified'
+                    WHEN rc.protocol IN ('amqp', 'AMQP') THEN 'assumed'
+                    ELSE 'inferred'
+                END as protocol_confidence
+            FROM resource_connections rc
+            JOIN resources r_src ON rc.source_resource_id = r_src.id
+            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
+            JOIN repositories repo ON r_src.repo_id = repo.id
+            LEFT JOIN resource_properties rp ON r_src.id = rp.resource_id AND rp.property_key = 'internet_access'
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+              AND (rc.port IS NOT NULL OR rc.protocol IS NOT NULL)
+            ORDER BY COALESCE(rc.port, 0), r_src.resource_name
+        """, (repo_name, resolved_exp_id)).fetchall()
+        
+        ports = [dict(row) for row in rows]
+        
+        return _db_render("tab_ports.html", ports=ports, experiment_id=resolved_exp_id, repo_name=repo_name)
+    except Exception as exc:
+        return _db_render("tab_ports.html", ports=[], error=str(exc))
+    finally:
+        conn.close()
+
+@app.route("/api/view/api_details/<experiment_id>/<repo_name>")
+def api_view_api_details(experiment_id: str, repo_name: str):
+    """Render the API details tab with operations and their properties."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_api_details.html", operations=[], experiment_id=experiment_id, repo_name=repo_name)
+    
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_api_details.html", operations=[], experiment_id="", repo_name=repo_name)
+        
+        # Query API operations and their properties
+        rows = conn.execute("""
+            SELECT DISTINCT
+                r.resource_name as operation_name,
+                r.resource_type,
+                r.id,
+                COALESCE(
+                    (SELECT property_value FROM resource_properties 
+                     WHERE resource_id = r.id AND property_key = 'custom_headers' LIMIT 1),
+                    NULL
+                ) as custom_headers_json,
+                COALESCE(
+                    (SELECT property_value FROM resource_properties 
+                     WHERE resource_id = r.id AND property_key = 'is_ingress_endpoint' LIMIT 1),
+                    'false'
+                ) as is_public,
+                COALESCE(
+                    (SELECT property_value FROM resource_properties 
+                     WHERE resource_id = r.id AND property_key = 'internet_access' LIMIT 1),
+                    '—'
+                ) as internet_access
+            FROM resources r
+            JOIN repositories repo ON r.repo_id = repo.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+              AND r.resource_type IN ('azurerm_api_management_api', 'azurerm_api_management_api_operation')
+            ORDER BY r.resource_type DESC, r.resource_name ASC
+        """, (repo_name, resolved_exp_id)).fetchall()
+        
+        operations = [dict(row) for row in rows]
+        
+        return _db_render("tab_api_details.html", operations=operations, experiment_id=resolved_exp_id, repo_name=repo_name)
+    except Exception as exc:
+        return _db_render("tab_api_details.html", operations=[], error=str(exc))
+    finally:
+        conn.close()
 
 @app.route("/api/view/ai/<experiment_id>/<repo_name>/<section_key>")
 def api_view_ai_section(experiment_id: str, repo_name: str, section_key: str):
