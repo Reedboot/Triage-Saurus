@@ -700,7 +700,7 @@
       if (styleMatch) idCandidates.add(styleMatch[1]);
     }
 
-    const reserved = new Set(['flowchart', 'graph', 'subgraph', 'end', 'style', 'classDef', 'class', 'linkStyle']);
+    const reserved = new Set(['flowchart', 'graph', 'subgraph', 'end', 'style', 'classdef', 'class', 'linkstyle', 'default']);
     const usedSafe = new Set();
     const idMap = new Map();
 

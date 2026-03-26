@@ -421,9 +421,10 @@ def _sanitize_mermaid(code: str) -> str:
         "subgraph",
         "end",
         "style",
-        "classDef",
+        "classdef",
         "class",
-        "linkStyle",
+        "linkstyle",
+        "default",
     }
 
     def _safe_id(raw: str, used: set[str]) -> str:
