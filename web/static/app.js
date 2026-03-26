@@ -719,7 +719,7 @@
     };
 
     for (const original of Array.from(idCandidates).sort()) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(original)) continue;
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(original) && !reserved.has(original.toLowerCase())) continue;
       idMap.set(original, makeSafeId(original));
     }
 

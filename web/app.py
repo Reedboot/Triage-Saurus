@@ -444,7 +444,7 @@ def _sanitize_mermaid(code: str) -> str:
     id_map: dict[str, str] = {}
     used_ids: set[str] = set()
     for original in sorted(id_candidates):
-        if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', original):
+        if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', original) and original.lower() not in reserved:
             continue
         id_map[original] = _safe_id(original, used_ids)
 
