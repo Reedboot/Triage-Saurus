@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Generate Mermaid diagrams from database queries."""
 
+import re
+import sqlite3
 import sys
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -11,7 +13,6 @@ import resource_type_db as _rtdb
 from shared_utils import _normalize_optional_bool
 
 # Lazy DB connection for resource type lookups
-import sqlite3
 _lookup_conn: sqlite3.Connection | None = None
 
 def _get_lookup_db() -> sqlite3.Connection | None:
@@ -87,9 +88,22 @@ def _category(resource: dict) -> str:
     return 'Other'
 
 
+_INVALID_NODE_ID_CHARS = re.compile(r'[^A-Za-z0-9_]')
+
+
 def sanitize_id(name: str) -> str:
     """Convert resource name to valid Mermaid node ID."""
-    return name.replace('-', '_').replace('.', '_').replace(' ', '_')
+    raw = str(name or "")
+    sanitized = _INVALID_NODE_ID_CHARS.sub("_", raw)
+    sanitized = re.sub(r"_+", "_", sanitized)
+    sanitized = sanitized.strip("_")
+
+    if not sanitized:
+        sanitized = "node"
+    if sanitized[0].isdigit():
+        sanitized = f"n{sanitized}"
+
+    return sanitized
 
 
 def _render_resource_subgraph(
