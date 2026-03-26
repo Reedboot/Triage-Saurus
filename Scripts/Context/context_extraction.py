@@ -7,57 +7,13 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, List, Dict, Set, Tuple, Optional
 
-from models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
+from ..Utils.models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
 
 
 # ---------------------------------------------------------------------------
-# Endpoint → (resource_type, name_group_index) patterns
-# name_group_index: which regex capture group holds the resource canonical name
+# Endpoint/resource detection is now handled by opengrep rules in Rules/Detection.
+# Custom regex patterns for endpoints have been removed in favor of opengrep-first approach.
 # ---------------------------------------------------------------------------
-_ENDPOINT_PATTERNS: list[tuple[re.Pattern, str, int]] = [
-    # Azure SQL / MSSQL  "Server=tycho-sql.database.windows.net"
-    (re.compile(r'(?:Server|Data Source)\s*=\s*([\w\-]+)\.database\.windows\.net', re.I),
-     "azurerm_mssql_server", 1),
-    # Azure Blob Storage  "https://labpallas.blob.core.windows.net"
-    (re.compile(r'https?://([\w\-]+)\.blob\.core\.windows\.net', re.I),
-     "azurerm_storage_account", 1),
-    # Azure Storage connection string  "AccountName=labpallas"
-    (re.compile(r'AccountName=([\w\-]+)', re.I),
-     "azurerm_storage_account", 1),
-    # Azure Key Vault  "https://ganymede-kv.vault.azure.net"
-    (re.compile(r'https?://([\w\-]+)\.vault\.azure\.net', re.I),
-     "azurerm_key_vault", 1),
-    # Azure Service Bus  "Endpoint=sb://mybus.servicebus.windows.net"
-    (re.compile(r'(?:Endpoint=sb|amqps)://([\w\-]+)\.servicebus\.windows\.net', re.I),
-     "azurerm_servicebus_namespace", 1),
-    # Azure Redis Cache  "myredis.redis.cache.windows.net"
-    (re.compile(r'([\w\-]+)\.redis\.cache\.windows\.net', re.I),
-     "azurerm_redis_cache", 1),
-    # Azure APIM  "https://myapim.azure-api.net"
-    (re.compile(r'https?://([\w\-]+)\.azure\-api\.net', re.I),
-     "azurerm_api_management", 1),
-    # Azure App Service / Function  "https://myapp.azurewebsites.net"
-    (re.compile(r'https?://([\w\-]+)\.azurewebsites\.net', re.I),
-     "azurerm_linux_web_app", 1),
-    # Azure Cosmos DB  "AccountEndpoint=https://mycosmos.documents.azure.com"
-    (re.compile(r'https?://([\w\-]+)\.documents\.azure\.com', re.I),
-     "azurerm_cosmosdb_account", 1),
-    # Azure Event Hub (shares servicebus namespace)
-    (re.compile(r'([\w\-]+)\.servicebus\.windows\.net', re.I),
-     "azurerm_eventhub_namespace", 1),
-    # AWS RDS  "mydb.abcdef.us-east-1.rds.amazonaws.com"
-    (re.compile(r'([\w\-]+)\.\w+\.[\w\-]+\.rds\.amazonaws\.com', re.I),
-     "aws_db_instance", 1),
-    # AWS S3 path-style  "s3.amazonaws.com/mybucket"
-    (re.compile(r's3\.amazonaws\.com/([\w\-\.]+)', re.I),
-     "aws_s3_bucket", 1),
-    # AWS S3 virtual-hosted  "mybucket.s3.amazonaws.com" / "mybucket.s3.us-east-1.amazonaws.com"
-    (re.compile(r'([\w\-]+)\.s3(?:\.[\w\-]+)?\.amazonaws\.com', re.I),
-     "aws_s3_bucket", 1),
-    # GCP Cloud SQL  "/<project>:<region>:<instance>"  (socket path pattern)
-    (re.compile(r'(?:/cloudsql/|socketPath.*?)([\w\-]+:[\w\-]+:[\w\-]+)', re.I),
-     "google_sql_database_instance", 1),
-]
 
 # Files worth scanning for connection strings (cheapest signal, checked first)
 _CONN_STRING_GLOBS = [
@@ -127,88 +83,52 @@ def extract_connection_string_dependencies(
     """
     repo_name = context.repository_name
 
-    # Collect candidate files
-    def _walk(globs: list[str]) -> Iterable[Path]:
-        seen: set[Path] = set()
-        for pattern in globs:
-            for p in repo_path.glob(f"**/{pattern}"):
-                if not any(part in _SKIP_DIRS for part in p.parts):
-                    if p not in seen:
-                        seen.add(p)
-                        yield p
 
+    # Now handled entirely by opengrep rule results
     already_found: set[tuple[str, str]] = set()  # (resource_type, canonical_name)
     for existing in context.resources:
         canonical = (existing.properties or {}).get("canonical_name")
         if canonical:
             already_found.add((existing.resource_type, str(canonical).lower().rstrip("/")))
 
-    def _scan_text(text: str, source_file: str, line_offset: int = 0) -> None:
-        for pattern, rtype, grp in _ENDPOINT_PATTERNS:
-            for m in pattern.finditer(text):
-                canonical_name = m.group(grp).lower().rstrip("/")
-                key = (rtype, canonical_name)
-                if key in already_found:
-                    continue
-                already_found.add(key)
-
-                # Add a synthetic inferred resource so it gets a node in the graph
-                synth = Resource(
-                    name=f"__inferred__{canonical_name}",
-                    resource_type=rtype,
-                    file_path=source_file,
-                    line_number=line_offset + text[:m.start()].count("\n") + 1,
-                    properties={"inferred": "true", "canonical_name": canonical_name},
-                )
-                context.resources.append(synth)
-
-                # Emit a depends_on from the repo itself (represented as a
-                # placeholder resource) to the inferred external resource
-                context.relationships.append(Relationship(
-                    source_type="repository",
-                    source_name=repo_name,
-                    target_type=rtype,
-                    target_name=f"__inferred__{canonical_name}",
-                    relationship_type=RelationshipType.DEPENDS_ON,
-                    source_repo=repo_name,
-                    confidence="inferred",
-                    notes=(
-                        f"Connection string in {source_file} references "
-                        f"{canonical_name} ({rtype.replace('azurerm_','').replace('aws_','').replace('_',' ').title()})"
-                    ),
-                ))
-
     repo_root = Path(__file__).resolve().parents[2]
     endpoint_rule_path = repo_root / "Rules" / "Detection" / "AppConfig" / "cloud-endpoint-dependency-detection.yml"
     endpoint_rule_hits = _run_opengrep_scan(endpoint_rule_path, repo_path)
-    endpoint_rule_seeded = False
     for result in endpoint_rule_hits:
+        rtype = result.get("resource_type") or result.get("type")
+        canonical_name = result.get("canonical_name")
+        if not rtype or not canonical_name:
+            continue
+        key = (rtype, canonical_name.lower().rstrip("/"))
+        if key in already_found:
+            continue
+        already_found.add(key)
         source_path = Path(str(result.get("path", "")))
         source_file = _relative_repo_path(repo_path, source_path)
         start_line = int((result.get("start") or {}).get("line", 1) or 1)
-        snippet = str((result.get("extra") or {}).get("lines", "") or "")
-        if not snippet:
-            continue
-        _scan_text(snippet, source_file, line_offset=max(0, start_line - 1))
-        endpoint_rule_seeded = True
-
-    # Priority 1 — dedicated config files
-    for f in _walk(_CONN_STRING_GLOBS):
-        try:
-            _scan_text(f.read_text(errors="ignore"),
-                       str(f.relative_to(repo_path)))
-        except Exception:
-            continue
-
-    # Priority 2 — source code (only if not already a pure IaC repo and no rule-seeded endpoint hits)
-    has_tf = any(repo_path.rglob("*.tf"))
-    if not has_tf and not endpoint_rule_seeded:
-        for f in _walk(_CODE_GLOBS):
-            try:
-                _scan_text(f.read_text(errors="ignore"),
-                           str(f.relative_to(repo_path)))
-            except Exception:
-                continue
+        # Add a synthetic inferred resource so it gets a node in the graph
+        synth = Resource(
+            name=f"__inferred__{canonical_name}",
+            resource_type=rtype,
+            file_path=source_file,
+            line_number=start_line,
+            properties={"inferred": "true", "canonical_name": canonical_name},
+        )
+        context.resources.append(synth)
+        # Emit a depends_on from the repo itself to the inferred external resource
+        context.relationships.append(Relationship(
+            source_type="repository",
+            source_name=repo_name,
+            target_type=rtype,
+            target_name=f"__inferred__{canonical_name}",
+            relationship_type=RelationshipType.DEPENDS_ON,
+            source_repo=repo_name,
+            confidence="inferred",
+            notes=(
+                f"Connection string in {source_file} references "
+                f"{canonical_name} ({rtype.replace('azurerm_','').replace('aws_','').replace('_',' ').title()})"
+            ),
+        ))
 
 
 def iter_files(repo_path: Path) -> List[Path]:
@@ -943,7 +863,7 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_key_vault_secret": "azurerm_key_vault",
     }
     try:
-        import resource_type_db as _rtdb
+        from ..Persist import resource_type_db as _rtdb
         db_path = _rtdb.DB_PATH
         conn = sqlite3.connect(str(db_path))
         rows = conn.execute(
@@ -1810,6 +1730,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
         # --- URL-based routing heuristics (captures backend URLs without direct TF refs) ---
         is_edge_source = any(token in rtype.lower() for token in _edge_source_tokens)
+
         url_rel_type = RelationshipType.ROUTES_INGRESS_TO if is_edge_source else RelationshipType.DEPENDS_ON
         for url_match in _routing_url_attr_re.finditer(block_text):
             attr_name = url_match.group(1)
@@ -1821,45 +1742,19 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 continue
             host = host_match.group(1).lower()
 
-            endpoint_resolved = False
-            for endpoint_pattern, endpoint_type, name_group_idx in _ENDPOINT_PATTERNS:
-                endpoint_match = endpoint_pattern.search(url_value)
-                if not endpoint_match:
-                    continue
-                canonical_name = endpoint_match.group(name_group_idx).lower().rstrip("/")
-                local_key = f"{endpoint_type}.{canonical_name}"
-                if local_key in res_lookup:
-                    context.relationships.append(Relationship(
-                        source_type=rtype,
-                        source_name=rname,
-                        target_type=endpoint_type,
-                        target_name=canonical_name,
-                        relationship_type=url_rel_type,
-                        source_repo=repo_name,
-                        confidence="extracted",
-                        notes=f"Routing URL attribute '{attr_name}' references {canonical_name}",
-                    ))
-                else:
-                    inferred_target_name = _ensure_inferred_resource(
-                        endpoint_type, canonical_name, resource.file_path, resource.line_number
-                    )
-                    context.relationships.append(Relationship(
-                        source_type=rtype,
-                        source_name=rname,
-                        target_type=endpoint_type,
-                        target_name=inferred_target_name,
-                        relationship_type=url_rel_type,
-                        source_repo=repo_name,
-                        confidence="inferred",
-                        notes=(
-                            f"Routing URL attribute '{attr_name}' references external endpoint "
-                            f"{canonical_name} ({endpoint_type})"
-                        ),
-                    ))
-                endpoint_resolved = True
-                break
-            if endpoint_resolved:
-                continue
+            # opengrep-first: endpoint/resource detection should be handled by opengrep rules.
+            # If opengrep did not extract a relationship, fallback to generic unresolved host.
+
+            context.relationships.append(Relationship(
+                source_type=rtype,
+                source_name=rname,
+                target_type="unknown",
+                target_name=f"url:{host}",
+                relationship_type=url_rel_type,
+                source_repo=repo_name,
+                confidence="inferred",
+                notes=f"Routing URL attribute '{attr_name}' points to unresolved host '{host}'",
+            ))
 
             if ".svc" in host:
                 service_name = host.split(".")[0]
