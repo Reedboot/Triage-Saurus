@@ -3,7 +3,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Optional
+from typing import Iterable, List, Dict, Set, Tuple, Optional
 
 from models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
 
@@ -77,6 +77,7 @@ _CONN_STRING_GLOBS = [
 _CODE_GLOBS = ["*.cs", "*.py", "*.js", "*.ts", "*.go", "*.java"]
 # Directories to skip
 _SKIP_DIRS = {".git", "node_modules", ".terraform", "__pycache__", "bin", "obj", "dist", "build"}
+_DOCKER_FROM_RE = re.compile(r'^\s*FROM\s+([^\s]+)(?:\s+AS\s+([A-Za-z0-9_\-\.]+))?', re.I)
 
 
 def extract_connection_string_dependencies(
@@ -167,6 +168,25 @@ def iter_files(repo_path: Path) -> List[Path]:
     # This is a simplified version of the original iter_files.
     # In a real implementation, you'd want to handle .gitignore, etc.
     return list(repo_path.glob("**/*"))
+
+
+def iter_dockerfiles(repo_path: Path) -> Iterable[Path]:
+    """Yield Dockerfile-style manifests (Dockerfile, Dockerfile.*, */Dockerfile)."""
+    patterns = ("Dockerfile", "Dockerfile.*", "**/Dockerfile", "**/Dockerfile.*")
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for candidate in repo_path.glob(pattern):
+            if candidate.is_file() and candidate not in seen:
+                seen.add(candidate)
+                yield candidate
+
+
+def _relative_repo_path(repo_path: Path, target: Path) -> str:
+    try:
+        rel = str(target.relative_to(repo_path))
+    except ValueError:
+        rel = str(target)
+    return rel.replace("\\", "/")
 
 def extract_resource_names(files: List[Path], repo_path: Path, resource_type: str) -> List[str]:
     """Extract resource names of a given type from Terraform files."""
@@ -728,6 +748,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     """
     repo_path = Path(repo_path_str)
     files = iter_files(repo_path)
+    dockerfiles = list(iter_dockerfiles(repo_path))
     repo_name = repo_path.name
     context = RepositoryContext(repository_name=repo_name)
     k8s_topology = extract_kubernetes_topology_signals(files, repo_path)

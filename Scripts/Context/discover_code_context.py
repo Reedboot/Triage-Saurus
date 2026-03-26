@@ -9,7 +9,7 @@ Analyses a repository WITHOUT any LLM calls by:
   4. Parsing Kubernetes/Docker manifests           → services, ingress, RBAC
   5. Detecting CI/CD pipeline files                → pipeline tooling
   6. Writing all findings to context_metadata DB   → feeds Phase 3 targeting
-  7. Generating/updating the repo summary MD       → human-readable output
+    7. Using DB-backed UI rendering (no summary blob storage)
 
 Usage:
     python3 Scripts/Context/discover_code_context.py \\
@@ -544,7 +544,7 @@ def _render_apim_auth_methods(experiment_id: str, repo_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Summary MD writer
+# Summary helper (legacy; no persisted summary blobs)
 # ---------------------------------------------------------------------------
 
 def _write_summary(
@@ -554,10 +554,8 @@ def _write_summary(
     fired_framework_ids: set[str],
     fired_code_ids: set[str],
     output_dir: Path,
-) -> Path:
-    """Write/overwrite the repo summary MD with structured Phase 2 findings."""
-    summary_path = output_dir / "Summary" / "Repos" / f"{repo_name}.md"
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
+) -> str:
+    """Return marker for dynamic DB-backed overview rendering."""
 
     def _val(key: str, default: str = "Not detected") -> str:
         return flat.get(key, default)
@@ -813,8 +811,7 @@ flowchart LR
 {_bullets(sorted(fired_code_ids) or ["None"])}
 """
 
-    summary_path.write_text(md, encoding="utf-8")
-    return summary_path
+    return "dynamic_overview_from_db"
 
 
 # ---------------------------------------------------------------------------
@@ -919,9 +916,9 @@ def main() -> int:
         )
         print(f"  ✓ {key}")
 
-     # ── 7. Write summary MD ───────────────────────────────────────────────────
-    print("\n[Phase 2] Writing repo summary MD ...")
-    summary_path = _write_summary(
+     # ── 7. Dynamic summary rendering (no HTML persisted) ────────────────────
+    print("\n[Phase 2] Summary rendering is dynamic from DB entities/findings/relationships ...")
+    summary_key = _write_summary(
         experiment_id=args.experiment,
         repo_name=args.repo,
         flat=flat,
@@ -929,9 +926,9 @@ def main() -> int:
         fired_code_ids=fired_code_ids,
         output_dir=output_dir,
     )
-    print(f"  ✓ {summary_path}")
+    print(f"  ✓ {summary_key}")
 
-    print(f"\n[Phase 2] Complete — {len(flat)} metadata entries, summary at {summary_path}")
+    print(f"\n[Phase 2] Complete — {len(flat)} metadata entries, summary mode: {summary_key}")
     return 0
 
 
