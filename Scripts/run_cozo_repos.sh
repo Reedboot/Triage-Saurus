@@ -19,8 +19,6 @@ RULES_DIR="$REPO_ROOT/Rules"
 OUTPUT_DIR="$REPO_ROOT/Output/Data/opengrep"
 PYTHON_SCRIPT="$REPO_ROOT/Scripts/Scan/store_opengrep_for_cozo.py"
 COZO_DB_PATH="$REPO_ROOT/Output/Data/cozo.db"
-SUMMARY_SCRIPT="$REPO_ROOT/Scripts/Generate/generate_repo_summary_from_cozo.py"
-SUMMARY_OUTPUT_DIR="$REPO_ROOT/Output/Summary/Repos"
 PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
 ANALYTICS_DB_DIR="$REPO_ROOT/Output/Data"
 ANALYTICS_DB="$COZO_DB_PATH"
@@ -140,7 +138,6 @@ fi
 echo -e "${GREEN}✅ All requirements satisfied${RESET}"
 
 mkdir -p "$OUTPUT_DIR"
-mkdir -p "$SUMMARY_OUTPUT_DIR"
 mkdir -p "$(dirname "$AUDIT_LOG")"
 mkdir -p "$ANALYTICS_DB_DIR"
 
@@ -443,10 +440,6 @@ else:
     if parts:
         print(f"  {'  '.join(parts)}")
 PY
-
-  if ! "$PYTHON_BIN" "$SUMMARY_SCRIPT" --repo "$repo_name" --scan-id "$scan_id" --output-dir "$SUMMARY_OUTPUT_DIR"; then
-    log_warn "Failed to render repo summary for $repo_name" >&2
-  fi
 
   log_ok "  ✅ Scan + Cozo import complete for $repo_name"
   SUCCESS=$((SUCCESS + 1))
