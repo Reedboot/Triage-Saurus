@@ -18,9 +18,10 @@ from llm_resource_interpreter import _call_llm
 
 def _build_prompt(row: dict) -> str:
     snippet = (row.get("code_snippet") or "").strip()
+    rule_or_title = row.get("rule_id") or row.get("title") or "Finding"
     return (
         "You are a security analyst. Enrich this finding with concise, accurate output.\n\n"
-        f"Rule: {row.get('rule_id') or row.get('finding_name')}\n"
+        f"Rule: {rule_or_title}\n"
         f"File: {row.get('source_file')}:{row.get('source_line_start')}\n"
         f"Severity: {row.get('base_severity')} ({row.get('severity_score')}/10)\n"
         f"Scanner message: {row.get('reason') or ''}\n"
@@ -44,7 +45,7 @@ def main():
     args = parser.parse_args()
 
     query = """
-        SELECT id, finding_name, rule_id, source_file, source_line_start,
+        SELECT id, title, rule_id, source_file, source_line_start,
                base_severity, severity_score, reason, code_snippet
         FROM findings
         WHERE experiment_id = ? AND llm_enriched_at IS NULL
@@ -92,7 +93,7 @@ def main():
             warnings.warn(f"Finding {fid}: could not parse LLM JSON response, skipping enrichment.")
             continue
 
-        title = enriched.get("title", row.get("finding_name"))
+        title = enriched.get("title", row.get("title") or row.get("rule_id") or "Finding")
         description = enriched.get("description")
         proposed_fix = enriched.get("proposed_fix")
         new_score = enriched.get("severity_score", row.get("severity_score"))
