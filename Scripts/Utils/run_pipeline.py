@@ -3,11 +3,10 @@
 run_pipeline.py — Offline Phase 1-3c pipeline runner.
 
 Runs the complete AI-free triage pipeline against a repository:
-  Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
-  Phase 2 — Script-based code context discovery → metadata in DB + repo summary MD
+    Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
+    Phase 2 — Script-based code context discovery → metadata in DB
   Phase 3a — Internet exposure analysis → exposure findings + provider diagrams
-  Phase 3b — Render finding MDs from DB
-  Phase 3c — Render architecture diagram from DB
+    Phase 3b — Render architecture diagram from DB
 
 No LLM or internet access required.
 
@@ -24,9 +23,6 @@ Output:
     ├── Summary/
     │   ├── Cloud/Architecture_AWS.md     ← layered architecture diagram
     │   └── Repos/<repo-name>.md          ← languages, frameworks, K8s context
-    ├── Findings/
-    │   └── <repo-name>/
-    │       └── <finding-title>.md        ← one MD per finding
     └── scan_<repo-name>.json             ← raw opengrep results
 """
 
@@ -45,8 +41,6 @@ sys.path.insert(0, str(SCRIPTS / "Utils"))
 _EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
 _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
 _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
-_RENDER_EXPOSURE = SCRIPTS / "Generate" / "render_exposure_summary.py"
-_RENDER        = SCRIPTS / "Generate"    / "render_finding.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 _GEN_HIERARCHICAL = SCRIPTS / "Generate" / "generate_hierarchical_diagram.py"
 
@@ -100,7 +94,7 @@ def _resolve_experiment_dir(experiment_id: str) -> Path | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Offline Phase 1-3 pipeline: detection → code context → render MDs.",
+        description="Offline Phase 1-3 pipeline: detection → code context → DB-backed summaries/diagrams.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -249,55 +243,11 @@ def main() -> int:
     if result.returncode != 0:
         print("[WARN] Phase 3a (exposure analysis) exited non-zero.", file=sys.stderr)
     
-    # Render exposure summaries
-    exposure_cloud_dir = exp_dir / "Summary" / "Cloud"
-    exposure_cloud_dir.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [sys.executable, str(_RENDER_EXPOSURE), "--experiment", experiment_id,
-         "--output-dir", str(exposure_cloud_dir)],
-        cwd=str(REPO_ROOT),
-        env=env,
-    )
-    if result.returncode != 0:
-        print("[WARN] Phase 3a (exposure rendering) exited non-zero.", file=sys.stderr)
+    print("[Pipeline] Phase 3a summary rendering is dynamic from DB (no Internet_Exposure_*.md files).")
 
-    # ── Phase 3b: Render finding MDs ─────────────────────────────────────────
+    # ── Phase 3b: Findings remain DB-only (no markdown emission) ─────────────
     finding_ids = _get_experiment_findings(experiment_id)
-    if finding_ids:
-        print(f"\n{'─'*60}")
-        print(f"▶  Phase 3b — Render {len(finding_ids)} finding MD(s)")
-        print('─'*60)
-        findings_dir = exp_dir / "Findings" / repo_name
-        findings_dir.mkdir(parents=True, exist_ok=True)
-        ok = skipped = 0
-        for fid in finding_ids:
-            out_path = findings_dir / f"finding_{fid}.md"
-            # Ensure subprocess has correct PYTHONPATH so internal modules import
-            import os
-            env = os.environ.copy()
-            existing = env.get('PYTHONPATH', '')
-            paths = [str(SCRIPTS), str(SCRIPTS / 'Persist'), str(SCRIPTS / 'Utils')]
-            if existing:
-                paths.append(existing)
-            env['PYTHONPATH'] = ':'.join(paths)
-            result = subprocess.run(
-                [sys.executable, str(_RENDER), "--id", str(fid), "--out", str(out_path)],
-                cwd=str(REPO_ROOT),
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                print(f"  ✓ [{fid}] → {out_path.relative_to(REPO_ROOT)}")
-                ok += 1
-            else:
-                # Print first stderr line for succinct diagnostics
-                err = result.stderr.strip().splitlines()[0] if result.stderr else ''
-                print(f"  ✗ [{fid}] {err[:200]}")
-                skipped += 1
-        print(f"\n  Rendered: {ok}  Failed: {skipped}")
-    else:
-        print("\n[Pipeline] No findings in DB for this experiment — skipping render.")
+    print(f"\n[Pipeline] Phase 3b keeps findings in DB only ({len(finding_ids)} finding(s)); no finding .md files are written.")
 
     # ── Phase 3c: Architecture diagram ───────────────────────────────────────
     cloud_dir = exp_dir / "Summary" / "Cloud"
@@ -317,8 +267,8 @@ def main() -> int:
     print(f"  ✅ Pipeline complete (no LLM used)")
     print(f"{'='*60}")
     print(f"\n  Experiment ID : {experiment_id}")
-    print(f"  Findings      : {len(finding_ids)} (see {exp_dir}/Findings/)")
-    print(f"  Repo summary  : {exp_dir}/Summary/Repos/{repo_name}.md")
+    print(f"  Findings      : {len(finding_ids)} (stored in DB; rendered dynamically in portal)")
+    print(f"  Repo summary  : dynamically rendered from DB (Overview tab)")
     print(f"  Architectures : {cloud_dir}/Architecture_<PROVIDER>.md (per-provider files written)")
     print(f"\n  Next steps (require LLM):")
     print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
