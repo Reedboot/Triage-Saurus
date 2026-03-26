@@ -1,11 +1,116 @@
 rules:
   - id: context-kubernetes-manifest
     message: |
-      Kubernetes manifest kind detected (Deployment/Pod/DaemonSet/StatefulSet/Job/CronJob/Ingress/ClusterRoleBinding/RoleBinding).
+      Kubernetes manifest kind detected (Deployment/Pod/DaemonSet/StatefulSet/Job/CronJob/Ingress/Service/Secret/ConfigMap/ClusterRole/ClusterRoleBinding/Role/RoleBinding/ServiceAccount/NetworkPolicy).
     severity: INFO
     languages: [yaml]
-    pattern-regex: |
-      (?m)^\s*kind:\s+(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|ClusterRoleBinding|RoleBinding)\b
+    patterns:
+      - pattern-either:
+          - pattern: |
+              kind: Deployment
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Pod
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: DaemonSet
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: StatefulSet
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Job
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: CronJob
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Ingress
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Service
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Secret
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: ConfigMap
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: ClusterRole
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: ClusterRoleBinding
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: Role
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: RoleBinding
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: ServiceAccount
+              ...
+              metadata:
+                ...
+                name: $NAME
+          - pattern: |
+              kind: NetworkPolicy
+              ...
+              metadata:
+                ...
+                name: $NAME
+      - pattern-inside: |
+          kind: $KIND
+          ...
+          metadata:
+            ...
+            name: $NAME
+      - metavariable-regex:
+          metavariable: $KIND
+          regex: ^(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|Service|Secret|ConfigMap|ClusterRole|ClusterRoleBinding|Role|RoleBinding|ServiceAccount|NetworkPolicy)$
     metadata:
       rule_type: detection
       category: infrastructure

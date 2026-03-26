@@ -2,6 +2,8 @@
 import json
 import re
 import sqlite3
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterable, List, Dict, Set, Tuple, Optional
 
@@ -80,6 +82,38 @@ _SKIP_DIRS = {".git", "node_modules", ".terraform", "__pycache__", "bin", "obj",
 _DOCKER_FROM_RE = re.compile(r'^\s*FROM\s+([^\s]+)(?:\s+AS\s+([A-Za-z0-9_\-\.]+))?', re.I)
 
 
+def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
+    if not config_path.exists():
+        return []
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    cmd = [
+        "opengrep", "scan",
+        "--config", str(config_path),
+        str(target_path),
+        "--json",
+        "--output", str(tmp_path),
+        "--quiet",
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return []
+
+    if not tmp_path.exists() or tmp_path.stat().st_size == 0:
+        return []
+    try:
+        payload = json.loads(tmp_path.read_text())
+    except Exception:
+        return []
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return payload.get("results", []) if isinstance(payload, dict) else []
+
+
 def extract_connection_string_dependencies(
     repo_path: Path,
     context: RepositoryContext,
@@ -94,7 +128,7 @@ def extract_connection_string_dependencies(
     repo_name = context.repository_name
 
     # Collect candidate files
-    def _walk(globs: list[str]) -> list[Path]:
+    def _walk(globs: list[str]) -> Iterable[Path]:
         seen: set[Path] = set()
         for pattern in globs:
             for p in repo_path.glob(f"**/{pattern}"):
@@ -109,7 +143,7 @@ def extract_connection_string_dependencies(
         if canonical:
             already_found.add((existing.resource_type, str(canonical).lower().rstrip("/")))
 
-    def _scan_text(text: str, source_file: str) -> None:
+    def _scan_text(text: str, source_file: str, line_offset: int = 0) -> None:
         for pattern, rtype, grp in _ENDPOINT_PATTERNS:
             for m in pattern.finditer(text):
                 canonical_name = m.group(grp).lower().rstrip("/")
@@ -123,7 +157,7 @@ def extract_connection_string_dependencies(
                     name=f"__inferred__{canonical_name}",
                     resource_type=rtype,
                     file_path=source_file,
-                    line_number=text[:m.start()].count("\n") + 1,
+                    line_number=line_offset + text[:m.start()].count("\n") + 1,
                     properties={"inferred": "true", "canonical_name": canonical_name},
                 )
                 context.resources.append(synth)
@@ -144,6 +178,20 @@ def extract_connection_string_dependencies(
                     ),
                 ))
 
+    repo_root = Path(__file__).resolve().parents[2]
+    endpoint_rule_path = repo_root / "Rules" / "Detection" / "AppConfig" / "cloud-endpoint-dependency-detection.yml"
+    endpoint_rule_hits = _run_opengrep_scan(endpoint_rule_path, repo_path)
+    endpoint_rule_seeded = False
+    for result in endpoint_rule_hits:
+        source_path = Path(str(result.get("path", "")))
+        source_file = _relative_repo_path(repo_path, source_path)
+        start_line = int((result.get("start") or {}).get("line", 1) or 1)
+        snippet = str((result.get("extra") or {}).get("lines", "") or "")
+        if not snippet:
+            continue
+        _scan_text(snippet, source_file, line_offset=max(0, start_line - 1))
+        endpoint_rule_seeded = True
+
     # Priority 1 — dedicated config files
     for f in _walk(_CONN_STRING_GLOBS):
         try:
@@ -152,9 +200,9 @@ def extract_connection_string_dependencies(
         except Exception:
             continue
 
-    # Priority 2 — source code (only if not already a pure IaC repo)
+    # Priority 2 — source code (only if not already a pure IaC repo and no rule-seeded endpoint hits)
     has_tf = any(repo_path.rglob("*.tf"))
-    if not has_tf:
+    if not has_tf and not endpoint_rule_seeded:
         for f in _walk(_CODE_GLOBS):
             try:
                 _scan_text(f.read_text(errors="ignore"),
@@ -332,18 +380,36 @@ def detect_ingress_from_code(files: List[Path], repo_path: Path) -> Dict:
         "cloudfront",
         "gateway",
     )
+    repo_root = Path(__file__).resolve().parents[2]
+    ingress_rule_path = repo_root / "Rules" / "Detection" / "Code" / "ingress-wildcard-bind-detection.yml"
+    ingress_rule_hits = _run_opengrep_scan(ingress_rule_path, repo_path)
+
     ingress_code_patterns: list[tuple[re.Pattern, str]] = [
-        (re.compile(r'app\.run\([^)]*host\s*=\s*["\']0\.0\.0\.0["\']', re.I), "Flask host=0.0.0.0"),
-        (re.compile(r'listen\s*\([^)]*(?:0\.0\.0\.0|\*)', re.I), "Server listens on wildcard/public interface"),
-        (re.compile(r'UseUrls\([^)]*(?:http://\*|https://\*|0\.0\.0\.0)', re.I), ".NET UseUrls wildcard binding"),
-        (re.compile(r'ASPNETCORE_URLS\s*=\s*["\'][^"\']*(?:http://\+|http://0\.0\.0\.0)', re.I), "ASPNETCORE_URLS wildcard binding"),
         (re.compile(r'kind:\s*Ingress\b', re.I), "Kubernetes Ingress manifest"),
     ]
+    if not ingress_rule_hits:
+        ingress_code_patterns = [
+            (re.compile(r'app\.run\([^)]*host\s*=\s*["\']0\.0\.0\.0["\']', re.I), "Flask host=0.0.0.0"),
+            (re.compile(r'listen\s*\([^)]*(?:0\.0\.0\.0|\*)', re.I), "Server listens on wildcard/public interface"),
+            (re.compile(r'UseUrls\([^)]*(?:http://\*|https://\*|0\.0\.0\.0)', re.I), ".NET UseUrls wildcard binding"),
+            (re.compile(r'ASPNETCORE_URLS\s*=\s*["\'][^"\']*(?:http://\+|http://0\.0\.0\.0)', re.I), "ASPNETCORE_URLS wildcard binding"),
+            (re.compile(r'kind:\s*Ingress\b', re.I), "Kubernetes Ingress manifest"),
+        ]
 
     seen_resources: set[str] = set()
     seen_hosts: set[str] = set()
     seen_evidence: set[str] = set()
     candidate_suffixes = {".tf", ".py", ".js", ".ts", ".cs", ".go", ".java", ".yaml", ".yml", ".json", ".xml", ".config"}
+
+    for result in ingress_rule_hits:
+        source_path = Path(str(result.get("path", "")))
+        rel = _relative_repo_path(repo_path, source_path)
+        line_no = int((result.get("start") or {}).get("line", 1) or 1)
+        check_id = str(result.get("check_id", "ingress-wildcard-bind"))
+        evidence = f"{rel}:{line_no} (opengrep {check_id})"
+        if evidence not in seen_evidence:
+            seen_evidence.add(evidence)
+            ingress_signals["evidence"].append(evidence)
 
     for file in files:
         if not file.is_file():
@@ -658,6 +724,154 @@ def extract_kubernetes_topology_signals(files: List[Path], repo_path: Path, pref
     signals["ingress_to_service"] = deduped_routes
     return signals
 
+
+def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) -> List[Resource]:
+    """Extract concrete Kubernetes resources from manifests (opengrep-first)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    rules_dir = repo_root / "Rules" / "Detection" / "Kubernetes"
+
+    def _run_opengrep_k8s_detection() -> List[dict]:
+        if not rules_dir.exists():
+            return []
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        cmd = [
+            "opengrep", "scan",
+            "--config", str(rules_dir),
+            str(repo_path),
+            "--json",
+            "--output", str(tmp_path),
+            "--quiet",
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            return []
+
+        if not tmp_path.exists() or tmp_path.stat().st_size == 0:
+            return []
+        try:
+            payload = json.loads(tmp_path.read_text())
+        except Exception:
+            return []
+        return payload.get("results", [])
+
+    def _metavar_text(metavars: dict, key: str) -> str:
+        entry = metavars.get(key)
+        if not isinstance(entry, dict):
+            return ""
+        for attr in ("abstract_content", "value", "content"):
+            value = entry.get(attr)
+            if value:
+                return str(value).strip().strip('"').strip("'")
+        return ""
+
+    detected_rows = _run_opengrep_k8s_detection()
+    if detected_rows:
+        resources: List[Resource] = []
+        seen: set[tuple[str, str, str, int]] = set()
+        for result in detected_rows:
+            check_id = str(result.get("check_id", ""))
+            if not check_id.endswith("context-kubernetes-manifest"):
+                continue
+
+            extra = result.get("extra", {}) or {}
+            metavars = extra.get("metavars", {}) or {}
+            kind = _metavar_text(metavars, "$KIND")
+            name = _metavar_text(metavars, "$NAME")
+
+            if not kind:
+                snippet = str(extra.get("lines", ""))
+                kind_match = re.search(r'\bkind:\s*([A-Za-z0-9]+)', snippet)
+                if kind_match:
+                    kind = kind_match.group(1)
+            if not name or "{{" in name:
+                continue
+
+            source_path = Path(str(result.get("path", "")))
+            try:
+                rel = str(source_path.relative_to(repo_path))
+            except Exception:
+                rel = str(source_path)
+            line_number = int((result.get("start") or {}).get("line", 1) or 1)
+            resource_type = f"kubernetes_{kind.lower()}"
+
+            identity = (resource_type, name, rel, line_number)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            resources.append(
+                Resource(
+                    name=name,
+                    resource_type=resource_type,
+                    file_path=rel,
+                    line_number=line_number,
+                    properties={"manifest_kind": kind, "source": "opengrep_detection"},
+                )
+            )
+        if resources:
+            return resources
+
+    resources: List[Resource] = []
+
+    def _clean_value(value: str) -> str:
+        cleaned = value.strip().strip('"').strip("'")
+        if "{{" in cleaned and "}}" in cleaned:
+            return "<templated>"
+        return cleaned
+
+    for file in files:
+        if not file.is_file():
+            continue
+        if any(part in _SKIP_DIRS for part in file.parts):
+            continue
+        if file.suffix.lower() not in (".yaml", ".yml"):
+            continue
+
+        try:
+            rel = str(file.relative_to(repo_path))
+        except ValueError:
+            rel = str(file)
+
+        try:
+            text = file.read_text(errors="ignore")
+        except Exception:
+            continue
+
+        offset = 0
+        for doc in re.split(r'^\s*---\s*$', text, flags=re.MULTILINE):
+            kind_m = re.search(r'^\s*kind:\s*([A-Za-z0-9]+)\s*$', doc, re.MULTILINE)
+            if not kind_m:
+                offset += len(doc) + 1
+                continue
+
+            name_m = re.search(r'(?ms)^\s*metadata:\s*(?:\n\s+[^\n]+)*?\n\s*name:\s*([^\s#]+)', doc)
+            if not name_m:
+                name_m = re.search(r'^\s*name:\s*([^\s#]+)', doc, re.MULTILINE)
+
+            raw_name = name_m.group(1) if name_m else ""
+            name = _clean_value(raw_name) if raw_name else ""
+            if not name or name == "<templated>":
+                offset += len(doc) + 1
+                continue
+
+            kind = kind_m.group(1)
+            resource_type = f"kubernetes_{kind.lower()}"
+            line_number = text[:offset + kind_m.start()].count("\n") + 1
+
+            resources.append(
+                Resource(
+                    name=name,
+                    resource_type=resource_type,
+                    file_path=rel,
+                    line_number=line_number,
+                    properties={"manifest_kind": kind, "source": "kubernetes_manifest"},
+                )
+            )
+            offset += len(doc) + 1
+
+    return resources
+
 def extract_vm_names_with_os(files: List[Path], repo_path: Path, provider: str) -> List[Tuple[str, str, str]]:
     """Extract VM names with OS and role."""
     # Simplified for brevity
@@ -805,6 +1019,13 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         f"{r.resource_type}.{r.name}": r for r, _ in resource_blocks
     }
     known_resource_keys: set[tuple[str, str]] = {(r.resource_type, r.name) for r in context.resources}
+
+    for manifest_resource in extract_kubernetes_manifest_resources(files, repo_path):
+        key = (manifest_resource.resource_type, manifest_resource.name)
+        if key in known_resource_keys:
+            continue
+        context.resources.append(manifest_resource)
+        known_resource_keys.add(key)
 
     # Infer provider for terraform_data and other meta-resources from file context
     # Group resources by file

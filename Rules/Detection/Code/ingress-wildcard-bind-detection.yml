@@ -1,0 +1,18 @@
+rules:
+  - id: context-code-ingress-wildcard-bind
+    message: |
+      Application runtime bind/listen appears publicly reachable (wildcard host binding).
+      Use as context-discovery signal for ingress posture.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      (?im)(app\.run\([^\n\)]*host\s*=\s*["']0\.0\.0\.0["']|listen\s*\([^\n\)]*(?:0\.0\.0\.0|\*)|UseUrls\([^\n\)]*(?:http://\*|https://\*|0\.0\.0\.0)|ASPNETCORE_URLS\s*=\s*["'][^"']*(?:http://\+|http://0\.0\.0\.0))
+    metadata:
+      finding_kind: Asset
+      asset_provider: unknown
+      rule_type: context_discovery
+      category: application
+      subcategory: ingress
+      technology: [code, ingress]
+      target_files: ["**/*.py", "**/*.js", "**/*.ts", "**/*.cs", "**/*.go", "**/*.java", "**/*.json", "**/*.yaml", "**/*.yml"]
+      signal: wildcard_ingress_bind

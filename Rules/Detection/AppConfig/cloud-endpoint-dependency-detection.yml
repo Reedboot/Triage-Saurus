@@ -1,0 +1,51 @@
+rules:
+  - id: context-aws-rds-endpoint-reference
+    message: |
+      AWS RDS endpoint reference detected.
+      Captures application dependency on an RDS instance endpoint.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      (?i)\b[A-Za-z0-9\-]+\.[A-Za-z0-9]+\.[a-z0-9\-]+\.rds\.amazonaws\.com\b
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [aws, rds, endpoint]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.py", "**/*.js", "**/*.ts", "**/*.yml", "**/*.yaml", "**/*.env"]
+
+  - id: context-aws-s3-endpoint-reference
+    message: |
+      AWS S3 endpoint reference detected (virtual-hosted or path-style).
+      Captures likely dependency on an S3 bucket endpoint.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      (?i)(\b[A-Za-z0-9\-\.]+\.s3(?:\.[a-z0-9\-]+)?\.amazonaws\.com\b|\bs3\.amazonaws\.com/[A-Za-z0-9\-\.]+\b)
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: application
+      subcategory: storage
+      technology: [aws, s3, endpoint]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.py", "**/*.js", "**/*.ts", "**/*.yml", "**/*.yaml", "**/*.env"]
+
+  - id: context-gcp-cloudsql-endpoint-reference
+    message: |
+      GCP Cloud SQL instance reference detected.
+      Captures project:region:instance-style socket references.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      (?i)(?:/cloudsql/|socketPath[^\n=:\"]*[=:\"]\s*)([A-Za-z0-9\-]+:[A-Za-z0-9\-]+:[A-Za-z0-9\-]+)
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [gcp, cloudsql, endpoint]
+      target_files: ["**/*.config", "**/*.json", "**/*.tf", "**/*.tfvars", "**/*.cs", "**/*.py", "**/*.js", "**/*.ts", "**/*.yml", "**/*.yaml", "**/*.env"]
