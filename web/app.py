@@ -403,6 +403,60 @@ def _sanitize_mermaid(code: str) -> str:
 
     code = re.sub(r'("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\([^\)]*\))', _insert_soft_breaks, code)
 
+    # 11. Normalize invalid Mermaid IDs (e.g. Terraform interpolations like ${var.environment})
+    # Mermaid node/style identifiers must be simple tokens; normalize anything outside [A-Za-z0-9_].
+    id_candidates: set[str] = set()
+    for ln in code.splitlines():
+        trimmed = ln.strip()
+        node_m = re.match(r'^([^\s\[\(\{]+)\s*(?:\[\[|\[\(|\[|\(\[|\("|\(\(|\{)', trimmed)
+        if node_m:
+            id_candidates.add(node_m.group(1))
+        style_m = re.match(r'^style\s+([^\s]+)', trimmed, flags=re.I)
+        if style_m:
+            id_candidates.add(style_m.group(1))
+
+    reserved = {
+        "flowchart",
+        "graph",
+        "subgraph",
+        "end",
+        "style",
+        "classDef",
+        "class",
+        "linkStyle",
+    }
+
+    def _safe_id(raw: str, used: set[str]) -> str:
+        candidate = re.sub(r'[^A-Za-z0-9_]', '_', raw)
+        candidate = re.sub(r'_+', '_', candidate).strip('_')
+        if not candidate:
+            candidate = "node"
+        if candidate[0].isdigit() or candidate.lower() in reserved:
+            candidate = f"n_{candidate}"
+        base = candidate
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        return candidate
+
+    id_map: dict[str, str] = {}
+    used_ids: set[str] = set()
+    for original in sorted(id_candidates):
+        if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', original):
+            continue
+        id_map[original] = _safe_id(original, used_ids)
+
+    if id_map:
+        for original in sorted(id_map.keys(), key=len, reverse=True):
+            safe = id_map[original]
+            code = re.sub(
+                rf'(?<![A-Za-z0-9_]){re.escape(original)}(?![A-Za-z0-9_])',
+                safe,
+                code,
+            )
+
     return code
 
 

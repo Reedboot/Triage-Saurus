@@ -688,6 +688,50 @@
 
     s = out.join('\n');
 
+    // Normalize invalid Mermaid IDs (e.g. ${var.environment}, hyphens, dots)
+    // to safe identifiers and rewrite all references consistently.
+    const linesForIds = s.split('\n');
+    const idCandidates = new Set();
+    for (const line of linesForIds) {
+      const trimmed = line.trim();
+      const nodeMatch = trimmed.match(/^([^\s\[\(\{]+)\s*(?:\[\[|\[\(|\[|\(\[|\("|\(\(|\{)/);
+      if (nodeMatch) idCandidates.add(nodeMatch[1]);
+      const styleMatch = trimmed.match(/^style\s+([^\s]+)/i);
+      if (styleMatch) idCandidates.add(styleMatch[1]);
+    }
+
+    const reserved = new Set(['flowchart', 'graph', 'subgraph', 'end', 'style', 'classDef', 'class', 'linkStyle']);
+    const usedSafe = new Set();
+    const idMap = new Map();
+
+    const makeSafeId = (raw) => {
+      let candidate = raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+      if (!candidate) candidate = 'node';
+      if (/^\d/.test(candidate) || reserved.has(candidate.toLowerCase())) candidate = `n_${candidate}`;
+      const base = candidate;
+      let idx = 2;
+      while (usedSafe.has(candidate)) {
+        candidate = `${base}_${idx}`;
+        idx += 1;
+      }
+      usedSafe.add(candidate);
+      return candidate;
+    };
+
+    for (const original of Array.from(idCandidates).sort()) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(original)) continue;
+      idMap.set(original, makeSafeId(original));
+    }
+
+    if (idMap.size) {
+      const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      for (const original of Array.from(idMap.keys()).sort((a, b) => b.length - a.length)) {
+        const safe = idMap.get(original);
+        const pattern = new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(original)}(?=[^A-Za-z0-9_]|$)`, 'g');
+        s = s.replace(pattern, `$1${safe}`);
+      }
+    }
+
     return s;
   }
 
