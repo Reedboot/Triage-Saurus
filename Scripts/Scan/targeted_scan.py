@@ -129,11 +129,11 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-network-interface":             ["Azure/NSG"],
     "context-azure-public-ip":                     ["Azure/NSG"],
 
-    # Azure Service Bus (Rules/Misconfigurations/Azure/ServiceBus does not exist yet)
-    "context-azure-servicebus-namespace":          [],
-    "context-azure-servicebus-queue":              [],
-    "context-azure-servicebus-topic":              [],
-    "context-azure-servicebus-subscription":       [],
+    # Azure Service Bus
+    "context-azure-servicebus-namespace":          ["Azure/ServiceBus", "Secrets"],
+    "context-azure-servicebus-queue":              ["Azure/ServiceBus", "Secrets"],
+    "context-azure-servicebus-topic":              ["Azure/ServiceBus", "Secrets"],
+    "context-azure-servicebus-subscription":       ["Azure/ServiceBus", "Secrets"],
 
     # Azure EventHub (Rules/Misconfigurations/Azure/EventHub does not exist yet)
     "context-azure-eventhub":                      [],
@@ -141,6 +141,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
 
     # Azure AKS node pool
     "context-azure-aks-node-pool":                 ["Azure/AKS"],
+    "context-azure-kubernetes-backend-deployment": ["Kubernetes/Workload", "Kubernetes/RBAC", "Azure/AKS"],
 
     # Azure Storage children
     "context-azure-storage-blob":                  ["Azure/Storage"],
@@ -159,8 +160,9 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     # Azure NSG rule
     "context-azure-nsg-rule":                      ["Azure/NSG"],
 
-    # Azure APIM (Rules/Misconfigurations/Azure/APIM does not exist yet)
-    "context-azure-api-management-api":            [],
+    # Azure APIM
+    "context-azure-api-management-api":            ["Azure/APIM", "Secrets"],
+    "context-azure-apim-backend-routing":          ["Azure/APIM", "Secrets"],
 
     # Alicloud detection rules
     "context-alicloud-ecs-instance":               ["Alicloud/SecurityGroup"],
@@ -254,7 +256,9 @@ def resolve_misconfig_paths(fired_ids: set[str], target: Path) -> list[Path]:
 
     # Map from fired detection rule IDs
     for rule_id in fired_ids:
-        for folder in DETECTION_TO_MISCONFIG.get(rule_id, []):
+        # Extract just the context part (e.g., "context-azure-aks-cluster" from "Rules.Detection.Azure.context-azure-aks-cluster")
+        context_id = rule_id.split('.')[-1] if '.' in rule_id else rule_id
+        for folder in DETECTION_TO_MISCONFIG.get(context_id, []):
             folders.add(folder)
 
     # No file-pattern fallback scanning is performed. Rely on opengrep detection rule hits.
@@ -278,9 +282,11 @@ def print_detection_summary(fired_ids: set[str], misconfig_paths: list[Path]) ->
     print(f"Detection: {len(fired_ids)} rule(s) fired")
     if fired_ids:
         for rule_id in sorted(fired_ids):
-            mapped = DETECTION_TO_MISCONFIG.get(rule_id, [])
+            # Extract context part for display
+            context_id = rule_id.split('.')[-1] if '.' in rule_id else rule_id
+            mapped = DETECTION_TO_MISCONFIG.get(context_id, [])
             tag = f"→ {', '.join(mapped)}" if mapped else "(no misconfig mapping)"
-            print(f"  {rule_id}  {tag}")
+            print(f"  {context_id}  {tag}")
     print(f"\nTargeted misconfig folders ({len(misconfig_paths)}):")
     for p in misconfig_paths:
         print(f"  {p.relative_to(REPO_ROOT)}")
