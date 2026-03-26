@@ -1051,7 +1051,7 @@ def api_assets(repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_target),
+            (repo_name, experiment_id),
         ).fetchall()
 
         sev_labels = {5: "CRITICAL", 4: "HIGH", 3: "MEDIUM", 2: "LOW", 1: "INFO"}
@@ -1085,26 +1085,60 @@ def _db_render(template_name: str, **ctx):
     return _rt(f"partials/{template_name}", **ctx)
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Return True when a table exists in the connected SQLite database."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """Return the set of column names for a SQLite table, or empty set."""
+    if not _table_exists(conn, table_name):
+        return set()
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(r[1]) for r in rows}
+    except Exception:
+        return set()
+
+
 def _get_experiment_for_repo(conn, repo_name: str, experiment_id: str = "") -> str:
     """Return a valid experiment_id for the repo, preferring the provided id."""
-    if experiment_id:
-        exists = conn.execute(
-            """
-            SELECT 1 FROM repositories
-            WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ?
-            LIMIT 1
-            """,
-            (repo_name, experiment_id),
+    if not _table_exists(conn, "repositories"):
+        return ""
+    repo_cols = _table_columns(conn, "repositories")
+    if "experiment_id" not in repo_cols or "repo_name" not in repo_cols:
+        return ""
+
+    try:
+        if experiment_id:
+            exists = conn.execute(
+                """
+                SELECT 1 FROM repositories
+                WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ?
+                LIMIT 1
+                """,
+                (repo_name, experiment_id),
+            ).fetchone()
+            if exists:
+                return experiment_id
+
+        order_clause = "ORDER BY scanned_at DESC" if "scanned_at" in repo_cols else "ORDER BY experiment_id DESC"
+        row = conn.execute(
+            f"""SELECT experiment_id FROM repositories
+               WHERE LOWER(repo_name) = LOWER(?)
+               {order_clause} LIMIT 1""",
+            (repo_name,),
         ).fetchone()
-        if exists:
-            return experiment_id
-    row = conn.execute(
-        """SELECT experiment_id FROM repositories
-           WHERE LOWER(repo_name) = LOWER(?)
-           ORDER BY scanned_at DESC LIMIT 1""",
-        (repo_name,),
-    ).fetchone()
-    return row["experiment_id"] if row else ""
+        return row["experiment_id"] if row else ""
+    except Exception:
+        return ""
 
 
 @app.route("/api/view/tabs/<experiment_id>/<repo_name>")
@@ -1123,22 +1157,20 @@ def api_view_tabs(experiment_id: str, repo_name: str):
             {"key": "egress",     "label": "⬅️ Egress"},
         ]
 
-        # Normalize ingress display: convert Terraform/local references like local.app_name or ${local.app_name}
-        # into a friendlier 'local.app name' for the Ingress listing.
-        def _normalize_display_name(n: str) -> str:
-            if not n:
-                return n
-            # Replace ${...} wrappers
-            n = re.sub(r"\$\{([^}]+)\}", r"\1", n)
-            # Replace dots with spaces when the token looks like a local/var reference
-            if n.startswith('local.') or n.startswith('var.'):
-                n = n.replace('.', ' ')
-            return n
-
         return jsonify({"tabs": tabs})
     except Exception as e:
         # Return a JSON error so the UI can parse and show a message instead of failing silently
         return jsonify({"tabs": [], "error": str(e)}), 500
+
+
+def _normalize_display_name(name: str) -> str:
+    """Normalize Terraform/local references for friendlier UI labels."""
+    if not name:
+        return name
+    value = re.sub(r"\$\{([^}]+)\}", r"\1", name)
+    if value.startswith("local.") or value.startswith("var."):
+        value = value.replace(".", " ")
+    return value
 
 
 # Attach a normalizer hook for templates by exposing a simple mapping endpoint
@@ -1157,14 +1189,20 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         return _db_render("tab_tldr.html", tldr_html="", error="DB unavailable")
 
     try:
+        if not _table_exists(conn, "repositories"):
+            return _db_render("tab_tldr.html", tldr_html="", error="No repository table found in DB.")
+
         resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
         if not resolved_exp_id:
             return _db_render("tab_tldr.html", tldr_html="", error=f"No completed scan found for {repo_name}.")
 
         # Build DB-driven TL;DR stats table
+        repo_cols = _table_columns(conn, "repositories")
+        repo_type_sel = "repo_type" if "repo_type" in repo_cols else "'' AS repo_type"
+        primary_lang_sel = "primary_language" if "primary_language" in repo_cols else "'' AS primary_language"
         repo_row = conn.execute(
-            """
-            SELECT repo_type, primary_language
+            f"""
+            SELECT {repo_type_sel}, {primary_lang_sel}
             FROM repositories
             WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
             LIMIT 1
@@ -1176,6 +1214,8 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         primary_language = repo_row["primary_language"] if repo_row else ""
 
         def _guess_hosting() -> str:
+            if not _table_exists(conn, "resources"):
+                return ""
             rows = conn.execute(
                 """
                 SELECT DISTINCT provider
@@ -1195,6 +1235,8 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             return ""
 
         def _guess_providers() -> str:
+            if not _table_exists(conn, "resources"):
+                return ""
             rows = conn.execute(
                 """
                 SELECT provider, COUNT(*) AS cnt
@@ -1218,25 +1260,27 @@ def api_view_tldr(experiment_id: str, repo_name: str):
 
 
         # Resource counts
-        counts = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total_resources,
-                SUM(CASE WHEN category = 'Identity' THEN 1 ELSE 0 END) AS identity_count,
-                SUM(CASE WHEN category = 'Network' THEN 1 ELSE 0 END) AS network_count,
-                SUM(CASE WHEN category = 'Storage' THEN 1 ELSE 0 END) AS storage_count,
-                SUM(CASE WHEN category = 'Database' THEN 1 ELSE 0 END) AS database_count
-            FROM (
-                SELECT r.id,
-                       COALESCE(rt.category, 'Other') AS category
-                FROM resources r
-                JOIN repositories repo ON r.repo_id = repo.id
-                LEFT JOIN resource_types rt ON r.resource_type = rt.terraform_type
-                WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
-            ) sub
-            """,
-            (resolved_exp_id, repo_name),
-        ).fetchone()
+        counts = None
+        if _table_exists(conn, "resources"):
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_resources,
+                    SUM(CASE WHEN category = 'Identity' THEN 1 ELSE 0 END) AS identity_count,
+                    SUM(CASE WHEN category = 'Network' THEN 1 ELSE 0 END) AS network_count,
+                    SUM(CASE WHEN category = 'Storage' THEN 1 ELSE 0 END) AS storage_count,
+                    SUM(CASE WHEN category = 'Database' THEN 1 ELSE 0 END) AS database_count
+                FROM (
+                    SELECT r.id,
+                           COALESCE(rt.category, 'Other') AS category
+                    FROM resources r
+                    JOIN repositories repo ON r.repo_id = repo.id
+                    LEFT JOIN resource_types rt ON r.resource_type = rt.terraform_type
+                    WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
+                ) sub
+                """,
+                (resolved_exp_id, repo_name),
+            ).fetchone()
 
         total_resources = counts["total_resources"] if counts else 0
         identity_count = counts["identity_count"] if counts else 0
@@ -1245,25 +1289,30 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         database_count = counts["database_count"] if counts else 0
 
         # Findings summary
-        findings_summary = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total_findings,
-                SUM(CASE WHEN severity_score >= 7 THEN 1 ELSE 0 END) AS high_or_above,
-                SUM(CASE WHEN base_severity IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high
-            FROM findings f
-            JOIN repositories repo ON f.repo_id = repo.id
-            WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
-            """,
-            (resolved_exp_id, repo_name),
-        ).fetchone()
+        findings_summary = None
+        findings_cols = _table_columns(conn, "findings")
+        if findings_cols:
+            sev_score_expr = "severity_score" if "severity_score" in findings_cols else "0"
+            base_sev_expr = "base_severity" if "base_severity" in findings_cols else "''"
+            findings_summary = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total_findings,
+                    SUM(CASE WHEN {sev_score_expr} >= 7 THEN 1 ELSE 0 END) AS high_or_above,
+                    SUM(CASE WHEN {base_sev_expr} IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high
+                FROM findings f
+                JOIN repositories repo ON f.repo_id = repo.id
+                WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
+                """,
+                (resolved_exp_id, repo_name),
+            ).fetchone()
 
         total_findings = findings_summary["total_findings"] if findings_summary else 0
         high_or_above = findings_summary["high_or_above"] if findings_summary else 0
         critical_high = findings_summary["critical_high"] if findings_summary else 0
 
         # CI/CD enrichment via context metadata
-        if not cicd_tool:
+        if not cicd_tool and _table_exists(conn, "context_metadata"):
             cm_row = conn.execute(
                 """
                 SELECT value FROM context_metadata
@@ -1459,6 +1508,8 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         )
 
         return _db_render("tab_tldr.html", tldr_html=table_html)
+    except Exception as exc:
+        return _db_render("tab_tldr.html", tldr_html="", error=str(exc))
     finally:
         conn.close()
 
@@ -1471,21 +1522,38 @@ def api_view_risks(experiment_id: str, repo_name: str):
         return _db_render("tab_risks.html", risks_html="", error="DB unavailable")
 
     try:
+        if not _table_exists(conn, "repositories"):
+            return _db_render("tab_risks.html", risks_html="", error="No repository table found in DB.")
+
         resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
         if not resolved_exp_id:
             return _db_render("tab_risks.html", risks_html="", error=f"No completed scan found for {repo_name}.")
 
         # Build DB-driven risks summary from findings
+        findings_cols = _table_columns(conn, "findings")
+        if not findings_cols:
+            return _db_render("tab_risks.html", risks_html="")
+
+        title_sel = "f.title" if "title" in findings_cols else "f.rule_id AS title"
+        desc_sel = "f.description" if "description" in findings_cols else "'' AS description"
+        base_sev_sel = "f.base_severity" if "base_severity" in findings_cols else "'INFO' AS base_severity"
+        sev_score_sel = "f.severity_score" if "severity_score" in findings_cols else "0 AS severity_score"
+        rule_sel = "f.rule_id" if "rule_id" in findings_cols else "'' AS rule_id"
+        has_resource_join = _table_exists(conn, "resources") and ("resource_id" in findings_cols)
+        resource_name_sel = "r.resource_name" if has_resource_join else "NULL AS resource_name"
+        resource_type_sel = "r.resource_type" if has_resource_join else "NULL AS resource_type"
+        resource_join_sql = "LEFT JOIN resources r ON f.resource_id = r.id" if has_resource_join else ""
+
         rows = conn.execute(
-            """
-            SELECT f.title, f.description, f.base_severity, f.severity_score,
-                   f.rule_id, r.resource_name, r.resource_type
+            f"""
+            SELECT {title_sel}, {desc_sel}, {base_sev_sel}, {sev_score_sel},
+                   {rule_sel}, {resource_name_sel}, {resource_type_sel}
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
-            LEFT JOIN resources r ON f.resource_id = r.id
+            {resource_join_sql}
             WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
             ORDER BY
-                CASE f.base_severity
+                CASE {base_sev_sel.split(' AS ')[0] if ' AS ' in base_sev_sel else base_sev_sel}
                     WHEN 'CRITICAL' THEN 1
                     WHEN 'HIGH' THEN 2
                     WHEN 'MEDIUM' THEN 3
@@ -1493,7 +1561,7 @@ def api_view_risks(experiment_id: str, repo_name: str):
                     WHEN 'INFO' THEN 5
                     ELSE 6
                 END,
-                f.severity_score DESC
+                {sev_score_sel.split(' AS ')[0] if ' AS ' in sev_score_sel else sev_score_sel} DESC
             """,
             (resolved_exp_id, repo_name),
         ).fetchall()
@@ -1527,6 +1595,8 @@ def api_view_risks(experiment_id: str, repo_name: str):
 
         risks_html = "<div class='risk-cards'>" + "".join(sections) + "</div>"
         return _db_render("tab_risks.html", risks_html=risks_html)
+    except Exception as exc:
+        return _db_render("tab_risks.html", risks_html="", error=str(exc))
     finally:
         conn.close()
 
@@ -1550,23 +1620,74 @@ def api_view_overview(experiment_id: str, repo_name: str):
     esc = html.escape
     overview_sections: list[str] = []
 
+    table_exists_cache: dict[str, bool] = {}
+    table_columns_cache: dict[str, set[str]] = {}
+
+    def _table_exists(table_name: str) -> bool:
+        if table_name in table_exists_cache:
+            return table_exists_cache[table_name]
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                (table_name,),
+            ).fetchone()
+            exists = bool(row)
+        except Exception:
+            exists = False
+        table_exists_cache[table_name] = exists
+        return exists
+
+    def _table_columns(table_name: str) -> set[str]:
+        if table_name in table_columns_cache:
+            return table_columns_cache[table_name]
+        if not _table_exists(table_name):
+            table_columns_cache[table_name] = set()
+            return set()
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            cols = {str(r[1]) for r in rows}
+        except Exception:
+            cols = set()
+        table_columns_cache[table_name] = cols
+        return cols
+
+    def _safe_fetchall(sql: str, params: tuple = ()):
+        try:
+            return conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    def _safe_fetchone(sql: str, params: tuple = ()):
+        try:
+            return conn.execute(sql, params).fetchone()
+        except sqlite3.OperationalError:
+            return None
+
     try:
-        repo_row = conn.execute(
-            """
-            SELECT id, primary_language, files_scanned, iac_files_count, code_files_count
+        repo_cols = _table_columns("repositories")
+        if not repo_cols:
+            return _db_render('tab_overview.html', overview_html='', experiment_id=resolved_exp_id, repo_name=repo_name)
+        repo_select = ["id"]
+        repo_select.append("primary_language" if "primary_language" in repo_cols else "'' AS primary_language")
+        repo_select.append("files_scanned" if "files_scanned" in repo_cols else "0 AS files_scanned")
+        repo_select.append("iac_files_count" if "iac_files_count" in repo_cols else "0 AS iac_files_count")
+        repo_select.append("code_files_count" if "code_files_count" in repo_cols else "0 AS code_files_count")
+        repo_row = _safe_fetchone(
+            f"""
+            SELECT {', '.join(repo_select)}
             FROM repositories
             WHERE LOWER(repo_name)=LOWER(?) AND experiment_id = ?
             LIMIT 1
             """,
             (repo_name, resolved_exp_id),
-        ).fetchone()
+        )
         if not repo_row:
             return _db_render('tab_overview.html', overview_html='', experiment_id=resolved_exp_id, repo_name=repo_name)
 
         repo_id = repo_row['id']
 
         # 0) AI-generated overview (if available)
-        ai_overview_rows = conn.execute(
+        ai_overview_rows = _safe_fetchall(
             """
             SELECT key, value
             FROM context_metadata
@@ -1574,7 +1695,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             ORDER BY key
             """,
             (resolved_exp_id, repo_id),
-        ).fetchall()
+        ) if _table_exists("context_metadata") else []
         if ai_overview_rows:
             label_map = {
                 "ai_project_summary": "Project",
@@ -1596,7 +1717,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 overview_sections.append("<h2>🤖 AI Project Overview</h2><ul>" + ''.join(ai_points) + "</ul>")
 
         # 1) What the repo does
-        purpose_rows = conn.execute(
+        purpose_rows = _safe_fetchall(
             """
             SELECT key, value
             FROM context_metadata
@@ -1611,10 +1732,10 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 3
             """,
             (resolved_exp_id, repo_id),
-        ).fetchall()
+        ) if _table_exists("context_metadata") else []
         purpose_points = [f"<li><strong>{esc(r['key'])}</strong>: {esc((r['value'] or '').strip())}</li>" for r in purpose_rows if (r['value'] or '').strip()]
         if not purpose_points:
-            module_rows = conn.execute(
+            module_rows = _safe_fetchall(
                 """
                 SELECT key
                 FROM context_metadata
@@ -1623,7 +1744,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 LIMIT 6
                 """,
                 (resolved_exp_id, repo_id),
-            ).fetchall()
+            ) if _table_exists("context_metadata") else []
             module_names = [r['key'].split(':', 1)[1] for r in module_rows]
             language = repo_row['primary_language'] or 'unknown'
             purpose_points.append(
@@ -1634,7 +1755,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
         overview_sections.append("<h2>📝 What This Repo Does</h2><ul>" + ''.join(purpose_points) + "</ul>")
 
         # 2) Where it is deployed
-        provider_rows = conn.execute(
+        provider_rows = _safe_fetchall(
             """
             SELECT COALESCE(provider, 'unknown') AS provider, COUNT(*) AS cnt
             FROM resources
@@ -1643,8 +1764,8 @@ def api_view_overview(experiment_id: str, repo_name: str):
             ORDER BY cnt DESC
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
-        region_rows = conn.execute(
+        ) if _table_exists("resources") else []
+        region_rows = _safe_fetchall(
             """
             SELECT region, COUNT(*) AS cnt
             FROM resources
@@ -1655,13 +1776,13 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 6
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
+        ) if _table_exists("resources") else []
         deploy_points = []
         if provider_rows:
             deploy_points.append("<li>Providers: " + esc(', '.join(f"{r['provider']} ({r['cnt']})" for r in provider_rows)) + "</li>")
         if region_rows:
             deploy_points.append("<li>Regions: " + esc(', '.join(f"{r['region']} ({r['cnt']})" for r in region_rows)) + "</li>")
-        footprint_rows = conn.execute(
+        footprint_rows = _safe_fetchall(
             """
             SELECT resource_type, COUNT(*) AS cnt
             FROM resources
@@ -1671,14 +1792,14 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 8
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
+        ) if _table_exists("resources") else []
         if footprint_rows:
             deploy_points.append("<li>Deployment footprint: " + esc(', '.join(f"{r['resource_type']} x{r['cnt']}" for r in footprint_rows)) + "</li>")
         if deploy_points:
             overview_sections.append("<h2>🌍 Where It Is Deployed</h2><ul>" + ''.join(deploy_points) + "</ul>")
 
         # 3) What talks to it
-        talk_rows = conn.execute(
+        talk_rows = _safe_fetchall(
             """
             SELECT connection_type, COUNT(*) AS cnt
             FROM resource_connections
@@ -1691,13 +1812,13 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 10
             """,
             (resolved_exp_id, repo_id),
-        ).fetchall()
+        ) if _table_exists("resource_connections") else []
         if talk_rows:
             talk_points = [f"<li>{esc(r['connection_type'])}: {r['cnt']}</li>" for r in talk_rows]
             overview_sections.append("<h2>🔁 What Talks To It</h2><ul>" + ''.join(talk_points) + "</ul>")
 
         # 4) Authentication / authorization
-        id_rows = conn.execute(
+        id_rows = _safe_fetchall(
             """
             SELECT resource_name, resource_type, provider
             FROM resources
@@ -1710,26 +1831,32 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 12
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
-        auth_rows = conn.execute(
-            """
-            SELECT connection_type, authentication, authorization, auth_method, COUNT(*) AS cnt
-            FROM resource_connections
-            WHERE experiment_id = ?
-              AND (source_repo_id = ? OR target_repo_id = ?)
-              AND (
-                (authentication IS NOT NULL AND TRIM(authentication) != '') OR
-                (authorization IS NOT NULL AND TRIM(authorization) != '') OR
-                (auth_method IS NOT NULL AND TRIM(auth_method) != '') OR
-                LOWER(connection_type) LIKE '%auth%' OR
-                LOWER(connection_type) LIKE '%grant%'
-              )
-            GROUP BY connection_type, authentication, authorization, auth_method
-            ORDER BY cnt DESC
-            LIMIT 12
-            """,
-            (resolved_exp_id, repo_id, repo_id),
-        ).fetchall()
+        ) if _table_exists("resources") else []
+        rc_cols = _table_columns("resource_connections")
+        if rc_cols:
+            auth_method_select = "auth_method" if "auth_method" in rc_cols else "NULL AS auth_method"
+            auth_method_predicate = "(auth_method IS NOT NULL AND TRIM(auth_method) != '') OR" if "auth_method" in rc_cols else ""
+            auth_rows = _safe_fetchall(
+                f"""
+                SELECT connection_type, authentication, authorization, {auth_method_select}, COUNT(*) AS cnt
+                FROM resource_connections
+                WHERE experiment_id = ?
+                  AND (source_repo_id = ? OR target_repo_id = ?)
+                  AND (
+                    (authentication IS NOT NULL AND TRIM(authentication) != '') OR
+                    (authorization IS NOT NULL AND TRIM(authorization) != '') OR
+                    {auth_method_predicate}
+                    LOWER(connection_type) LIKE '%auth%' OR
+                    LOWER(connection_type) LIKE '%grant%'
+                  )
+                GROUP BY connection_type, authentication, authorization, {auth_method_select}
+                ORDER BY cnt DESC
+                LIMIT 12
+                """,
+                (resolved_exp_id, repo_id, repo_id),
+            )
+        else:
+            auth_rows = []
         auth_points = []
         if id_rows:
             auth_points.extend([
@@ -1750,7 +1877,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             overview_sections.append("<h2>🔐 How Access Is Controlled</h2><ul>" + ''.join(auth_points) + "</ul>")
 
         # 5) Dependencies
-        dep_rows = conn.execute(
+        dep_rows = _safe_fetchall(
             """
             SELECT connection_type, COUNT(*) AS cnt
             FROM resource_connections
@@ -1763,8 +1890,8 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 10
             """,
             (resolved_exp_id, repo_id),
-        ).fetchall()
-        module_rows = conn.execute(
+        ) if _table_exists("resource_connections") else []
+        module_rows = _safe_fetchall(
             """
             SELECT key, value
             FROM context_metadata
@@ -1773,7 +1900,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 10
             """,
             (resolved_exp_id, repo_id),
-        ).fetchall()
+        ) if _table_exists("context_metadata") else []
         dep_points = [f"<li>Connection dependency: {esc(r['connection_type'])} ({r['cnt']})</li>" for r in dep_rows]
         for r in module_rows:
             name = r['key'].split(':', 1)[1]
@@ -1783,27 +1910,38 @@ def api_view_overview(experiment_id: str, repo_name: str):
             overview_sections.append("<h2>🧩 Dependencies</h2><ul>" + ''.join(dep_points) + "</ul>")
 
         # 6) Issues (condensed)
-        sev_rows = conn.execute(
+        findings_cols = _table_columns("findings")
+        severity_expr = "'INFO'"
+        if "base_severity" in findings_cols and "severity" in findings_cols:
+            severity_expr = "COALESCE(base_severity, severity, 'INFO')"
+        elif "base_severity" in findings_cols:
+            severity_expr = "COALESCE(base_severity, 'INFO')"
+        elif "severity" in findings_cols:
+            severity_expr = "COALESCE(severity, 'INFO')"
+
+        sev_rows = _safe_fetchall(
             """
-            SELECT UPPER(COALESCE(base_severity, severity, 'INFO')) AS sev, COUNT(*) AS cnt
+            SELECT UPPER({severity_expr}) AS sev, COUNT(*) AS cnt
             FROM findings
             WHERE repo_id = ? AND experiment_id = ?
-            GROUP BY UPPER(COALESCE(base_severity, severity, 'INFO'))
-            ORDER BY CASE UPPER(COALESCE(base_severity, severity, 'INFO'))
+            GROUP BY UPPER({severity_expr})
+            ORDER BY CASE UPPER({severity_expr})
               WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4 ELSE 5 END
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
-        top_issue_rows = conn.execute(
-            """
-            SELECT title, rule_id, severity_score
+        ) if findings_cols else []
+        severity_score_select = "severity_score" if "severity_score" in findings_cols else "0 AS severity_score"
+        order_by_clause = "severity_score DESC, id ASC" if "severity_score" in findings_cols else "id ASC"
+        top_issue_rows = _safe_fetchall(
+            f"""
+            SELECT title, rule_id, {severity_score_select}
             FROM findings
             WHERE repo_id = ? AND experiment_id = ?
-            ORDER BY severity_score DESC, id ASC
+            ORDER BY {order_by_clause}
             LIMIT 8
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
+        ) if findings_cols else []
         issue_points = []
         if sev_rows:
             issue_points.append("<li>Severity mix: " + esc(', '.join(f"{r['sev']}={r['cnt']}" for r in sev_rows)) + "</li>")
@@ -1815,7 +1953,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             overview_sections.append("<h2>⚠️ Key Issues</h2><ul>" + ''.join(issue_points) + "</ul>")
 
         # 7) Skeptic outputs
-        skeptic_rows = conn.execute(
+        skeptic_rows = _safe_fetchall(
             """
             SELECT sr.reviewer_type,
                    COUNT(*) AS reviews,
@@ -1830,12 +1968,12 @@ def api_view_overview(experiment_id: str, repo_name: str):
             ORDER BY sr.reviewer_type
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
+        ) if _table_exists("skeptic_reviews") and findings_cols else []
         skeptic_points = [
             f"<li><strong>{esc(r['reviewer_type'])}</strong>: reviews={r['reviews']}, avg score={r['avg_adjusted']}, escalations={r['escalations']}, downgrades={r['downgrades']}, dismissals={r['dismissals']}</li>"
             for r in skeptic_rows
         ]
-        concern_rows = conn.execute(
+        concern_rows = _safe_fetchall(
             """
             SELECT sr.reviewer_type, COALESCE(NULLIF(TRIM(sr.key_concerns), ''), NULLIF(TRIM(sr.reasoning), '')) AS note
             FROM skeptic_reviews sr
@@ -1846,7 +1984,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             LIMIT 6
             """,
             (repo_id, resolved_exp_id),
-        ).fetchall()
+        ) if _table_exists("skeptic_reviews") and findings_cols else []
         skeptic_points.extend([
             f"<li>{esc(r['reviewer_type'])}: {esc(r['note'])}</li>"
             for r in concern_rows
