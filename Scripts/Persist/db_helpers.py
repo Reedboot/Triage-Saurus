@@ -548,7 +548,8 @@ def _ensure_schema(conn: sqlite3.Connection):
       auth_method TEXT,
       is_encrypted BOOLEAN,
       via_component TEXT,
-      notes TEXT
+      notes TEXT,
+      inferred_internet BOOLEAN DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS trust_boundaries (

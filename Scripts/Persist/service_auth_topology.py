@@ -48,66 +48,29 @@ def render_service_auth_topology(experiment_id: str, repo_name: str) -> str:
             }
 
             findings_to_create = []
+            # Aggregate by mapped service name so multiple resource types that map to the same
+            # service are shown once (summing counts and combining auth/issue descriptions).
+            service_summary: dict[str, dict] = {}
             for resource_type, count in service_types:
                 risk = auth_risks.get(resource_type)
                 if not risk:
                     continue
 
                 service_name, auth_method, risk_level, issue = risk
-                lines.append(f"{risk_level} **{service_name}** (x{count})")
-                lines.append(f"  - Auth: {auth_method}")
-                lines.append(f"  - Issue: {issue}")
+                if service_name not in service_summary:
+                    service_summary[service_name] = {"count": 0, "auth_methods": set(), "issues": set()}
+                service_summary[service_name]["count"] += count
+                service_summary[service_name]["auth_methods"].add(auth_method)
+                service_summary[service_name]["issues"].add(issue)
+
+            for service_name, data in service_summary.items():
+                lines.append(f"**{service_name}** (x{data['count']})")
+                lines.append(f"  - Auth: {', '.join(sorted(data['auth_methods']))}")
+                lines.append(f"  - Why: {', '.join(sorted(data['issues']))}")
                 lines.append("")
 
-                # Prepare corresponding finding to ensure Risks/Findings include these issues
-                findings_to_create.append({
-                    'title': f"{service_name}: {issue}",
-                    'severity': 'CRITICAL' if '🔴' in risk_level or 'critical' in risk_level.lower() else 'HIGH',
-                    'description': f"Detected {count} {service_name}(s) using {auth_method}. Issue: {issue}",
-                    'resource_type': resource_type,
-                })
-
-            # Persist suggested findings idempotently so they appear in Findings/Risks
-            try:
-                with db_helpers.get_db_connection() as conn:
-                    findings_for_insert = []
-                    for f in findings_to_create:
-                        rule_id = 'service_auth_topology'
-                        title = f['title']
-                        # Deduplicate on experiment + rule_id + title
-                        exists = conn.execute(
-                            "SELECT id FROM findings WHERE experiment_id = ? AND rule_id = ? AND title = ? LIMIT 1",
-                            (experiment_id, rule_id, title),
-                        ).fetchone()
-                        if exists:
-                            continue
-                        base_severity = f['severity']
-                        severity_score = 10 if base_severity.upper() == 'CRITICAL' else 8 if base_severity.upper() == 'HIGH' else 5
-                        findings_for_insert.append({
-                            'experiment_id': experiment_id,
-                            'repo_id': conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone()[0] if conn.execute("SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?", (experiment_id, repo_name)).fetchone() else None,
-                            'resource_id': None,
-                            'title': title,
-                            'description': f.get('description'),
-                            'category': 'Topology',
-                            'severity_score': severity_score,
-                            'base_severity': base_severity,
-                            'evidence_location': f"service_auth_topology:{f['resource_type']}",
-                            'source_file': None,
-                            'source_line_start': None,
-                            'source_line_end': None,
-                            'rule_id': rule_id,
-                            'proposed_fix': None,
-                            'code_snippet': None,
-                            'reason': None,
-                        })
-                    if findings_for_insert:
-                        ids = db_helpers.batch_insert_findings(conn, findings_for_insert)
-                        for fid, fd in zip(ids, findings_for_insert):
-                            db_helpers.record_risk_score(fid, fd['severity_score'], scored_by='service_auth_topology', conn=conn)
-            except Exception:
-                # Best-effort persistence: don't fail topology rendering when DB ops fail
-                pass
+            # Do not persist findings in Phase 1 — return topology description only
+            # (AI enrichment will create scored findings during Phase 2/Enrich).
 
             lines.append("**Service-to-Service Auth Flows:**\n")
             # Only include generic KeyVault node if a Key Vault was actually detected
