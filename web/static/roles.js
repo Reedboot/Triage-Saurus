@@ -13,9 +13,9 @@
     if (!typeFilter) {
       typeFilter = document.createElement('select');
       typeFilter.id = 'roles-type-filter';
-      typeFilter.multiple = true;
+      typeFilter.multiple = false;
       typeFilter.style.minWidth = '160px';
-      typeFilter.title = 'Filter by type (multi-select)';
+      typeFilter.title = 'Filter by type';
       container.querySelector('.assets-toolbar')?.insertBefore(typeFilter, container.querySelector('.assets-toolbar')?.children[1] || null);
     }
 

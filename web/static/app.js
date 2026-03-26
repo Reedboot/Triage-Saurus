@@ -95,7 +95,8 @@
     try { localStorage.setItem('diagramHidden', '1'); } catch (e) {}
   }
 
-  let showingSections = false; // whether sections are currently shown in the log panel
+  // Sections should be visible by default after load so users immediately see tabbed content.
+  let showingSections = true;
 
   // Zoom/pan state
   let zoomLevel = 1, panX = 0, panY = 0;
@@ -119,6 +120,7 @@
   let activeTab = 0;
   let currentRepoName = '';
   let currentExpId    = '';
+  let scanInProgress  = false;
 
   function resolveSelectedRepoName() {
     if (currentRepoName) return currentRepoName;
@@ -234,65 +236,44 @@
 
   // Collapse/expand the scan (left) sidebar and resize diagram accordingly
   const workspaceEl = document.querySelector('.workspace');
-  function setSidebarCollapsed(collapsed) {
+
+  function setSidebarCollapsed(collapsed, { persist = true } = {}) {
     if (!workspaceEl) return;
     if (collapsed) workspaceEl.classList.add('collapsed'); else workspaceEl.classList.remove('collapsed');
-    try { localStorage.setItem('scanCollapsed', collapsed ? '1' : '0'); } catch (e) {}
-    // Also ensure the actual log panel is shown/hidden (guard against duplicate inline handlers)
+    if (persist) {
+      try { localStorage.setItem('scanCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    }
     const lp = document.getElementById('log-panel');
     if (lp) lp.style.display = collapsed ? 'none' : '';
     if (toggleLogBtn) {
       toggleLogBtn.textContent = collapsed ? 'Expand scan' : 'Hide scan';
       toggleLogBtn.title = collapsed ? 'Expand/Show scan output' : 'Hide/Collapse scan output';
     }
-    // Recompute layout immediately and again after a small delay so the Mermaid SVG can be fitted correctly
     try { fitDiagram(); } catch (e) {}
     scheduleFitDiagram(260);
   }
 
-  // Ensure the diagram refits whenever its container changes size
-  if (typeof ResizeObserver !== 'undefined' && diagramWrap) {
-    try {
-      const diagramResizeObserver = new ResizeObserver(() => { scheduleFitDiagram(); });
-      diagramResizeObserver.observe(diagramWrap);
-    } catch (e) { console.warn('ResizeObserver error:', e); }
-  }
-  if (typeof window !== 'undefined') {
-    window.addEventListener('resize', scheduleFitDiagram);
-  }
-
-  // Initialize state from localStorage
-  try {
-    const saved = localStorage.getItem('scanCollapsed');
-    if (saved === '1') setSidebarCollapsed(true);
-    else if (toggleLogBtn) { toggleLogBtn.textContent = 'Hide scan'; toggleLogBtn.title = 'Hide/Collapse scan output'; }
-  } catch (e) {}
-
-  if (toggleLogBtn) {
-    toggleLogBtn.addEventListener('click', () => {
-      const collapsed = workspaceEl && workspaceEl.classList.contains('collapsed');
-      setSidebarCollapsed(!collapsed);
-    });
-  }
-
-  // Initialize diagram visibility from localStorage (collapsed => hidden)
-  function setDiagramHidden(hidden) {
+  function setDiagramHidden(hidden, { persist = true } = {}) {
     if (!diagramPanel || !workspaceEl) return;
+    if (persist) {
     try { localStorage.setItem('diagramHidden', hidden ? '1' : '0'); } catch (e) {}
+    }
     diagramPanel.style.display = hidden ? 'none' : '';
     if (hidden) workspaceEl.classList.add('diagram-hidden'); else workspaceEl.classList.remove('diagram-hidden');
-    // Update all toggle buttons (persistent + status-bar) if present
     toggleDiagramBtns.forEach(b => {
       try { b.textContent = hidden ? 'Show diagram' : 'Hide diagram'; b.title = hidden ? 'Show architecture diagram' : 'Hide architecture diagram'; } catch (e) {}
     });
-    // Recompute layout after toggling so Mermaid can fit correctly
     scheduleFitDiagram(200);
   }
+
+  // Initialize diagram visibility from localStorage (collapsed => hidden)
 
   try {
     const savedDiag = localStorage.getItem('diagramHidden');
     if (savedDiag === '1') setDiagramHidden(true);
     else { toggleDiagramBtns.forEach(b => { try { b.textContent = 'Hide diagram'; b.title = 'Hide architecture diagram'; } catch (e) {} }); }
+    const savedCollapsed = localStorage.getItem('scanCollapsed');
+    if (savedCollapsed === '1') setSidebarCollapsed(true, { persist: false });
   } catch (e) {}
 
   // Attach click handler to all toggle buttons (persistent + status-bar)
@@ -307,6 +288,33 @@
 
   // -- Section tabs (left panel) --
   let activeSection = '';
+
+  function initIngressApiDetails(sectionContent) {
+    if (!sectionContent) return;
+    const table = sectionContent.querySelector('#section-api-details-table');
+    if (!table) return;
+
+    // Initialize toggle glyph state
+    table.querySelectorAll('.expand-toggle').forEach(toggle => {
+      toggle.dataset.iconCollapsed = toggle.dataset.iconCollapsed || '▶';
+      toggle.dataset.iconExpanded = toggle.dataset.iconExpanded || '▼';
+      toggle.textContent = toggle.dataset.iconCollapsed;
+    });
+
+    table.addEventListener('click', (event) => {
+      const toggle = event.target.closest('.expand-toggle');
+      if (!toggle || !table.contains(toggle)) return;
+      event.preventDefault();
+      const apiId = toggle.dataset.apiId;
+      if (!apiId) return;
+      const expanded = toggle.classList.toggle('expanded');
+      toggle.textContent = expanded ? (toggle.dataset.iconExpanded || '▼') : (toggle.dataset.iconCollapsed || '▶');
+      const childRows = table.querySelectorAll(`tr[data-parent-api="${apiId.replace(/"/g, '\\"')}"]`);
+      childRows.forEach(row => {
+        row.style.display = expanded ? '' : 'none';
+      });
+    });
+  }
 
   async function loadSectionTabs(expId, repoName) {
     const resolvedRepoName = repoName || resolveSelectedRepoName();
@@ -375,23 +383,13 @@
     const tabMap = new Map();
     for (const t of tabs) tabMap.set(t.key, t);
 
-    // Desired order: Log, Assets, TLDR, then the rest in server order
-    const ordered = ['__log__', 'assets', 'tldr'];
+    // Desired order: Assets, TLDR, then the rest in server order (omit Log tab — use Show Log button)
+    const ordered = ['assets', 'tldr'];
     for (const t of tabs) {
       if (!ordered.includes(t.key)) ordered.push(t.key);
     }
 
     for (const key of ordered) {
-      if (key === '__log__') {
-        const logBtn = document.createElement('button');
-        logBtn.className = 'section-tab-btn';
-        logBtn.textContent = '📜 Log';
-        logBtn.dataset.key = '__log__';
-        logBtn.addEventListener('click', () => { activateSectionKey('__log__'); });
-        sectionTabBar.appendChild(logBtn);
-        continue;
-      }
-
       const tab = tabMap.get(key);
       if (!tab) continue;
       const btn = document.createElement('button');
@@ -402,8 +400,16 @@
       sectionTabBar.appendChild(btn);
     }
 
-    // Default to Log tab so logs are visible before TLDR
-    activateSectionKey('__log__');
+    // Default selection: TL;DR if present, else Assets, else the first available tab
+    let defaultKey = null;
+    if (tabMap.has('tldr')) defaultKey = 'tldr';
+    else if (tabMap.has('assets')) defaultKey = 'assets';
+    else defaultKey = tabs[0].key;
+    activateSectionKey(defaultKey);
+
+    if (!showingSections && !scanInProgress) {
+      showSectionsInLog();
+    }
   }
 
   async function loadSectionContent(key, expId, repoName) {
@@ -414,9 +420,7 @@
 
     sectionContent.innerHTML = '<div class="section-loading"><span>Loading…</span></div>';
 
-    const aiKeys = ['tldr', 'risks', 'architecture', 'auth', 'containers', 'kubernetes',
-                    'network', 'cicd', 'dependencies', 'detection', 'meta'];
-    const structuredKeys = ['assets', 'findings', 'ingress', 'egress', 'roles'];
+    const structuredKeys = ['tldr', 'overview', 'risks', 'assets', 'findings', 'ingress', 'egress', 'ports', 'roles', 'containers'];
 
     try {
       const resolvedRepoName = repoName || currentRepoName || resolveSelectedRepoName();
@@ -431,12 +435,11 @@
         showSectionsInLog();
         return;
       }
-      let url;
-      if (structuredKeys.includes(key)) {
-        url = `/api/view/${key}/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}`;
-      } else {
-        url = `/api/view/ai/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}/${encodeURIComponent(key)}`;
+      if (!structuredKeys.includes(key)) {
+        sectionContent.innerHTML = '<div class="empty-state"><p class="s-inline-e09362">Unsupported section key.</p></div>';
+        return;
       }
+      const url = `/api/view/${key}/${encodeURIComponent(targetExpId)}/${encodeURIComponent(resolvedRepoName)}`;
       const resp = await fetch(url);
       const html = await resp.text();
       sectionContent.innerHTML = html;
@@ -453,6 +456,15 @@
         if (key === 'roles' && window.initRoles) {
           try { window.initRoles(sectionContent, resolvedRepoName); } catch (e) { console.warn('initRoles error:', e); }
         }
+        if (key === 'containers' && window.initContainers) {
+          try { window.initContainers(sectionContent); } catch (e) { console.warn('initContainers error:', e); }
+        }
+        if (key === 'overview' && window.initOverview) {
+          try { window.initOverview(sectionContent); } catch (e) { console.warn('initOverview error:', e); }
+        }
+        if (key === 'ingress') {
+          initIngressApiDetails(sectionContent);
+        }
         
         // Initialize column resizing for all section tables (including multiple tables per section)
         if (window.initTableColumnResize) {
@@ -468,12 +480,8 @@
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
       }
-
-      // After loading a section, ensure the section area is visible and raw log is hidden
-      showSectionsInLog();
     } catch (err) {
       sectionContent.innerHTML = `<div class="empty-state"><p style="color:var(--red)">Failed to load section: ${err}</p></div>`;
-      showSectionsInLog();
     }
   }
 
@@ -488,9 +496,11 @@
     return '';
   }
 
-  function appendLog(line) {
-    // If sections are currently visible in the log panel, don't append streaming logs.
-    if (showingSections) return;
+  function appendLog(line, opts = {}) {
+    const force = !!(opts && opts.force);
+    // If sections are currently visible in the log panel, don't append streaming logs
+    // unless the caller explicitly forces it (used by AI analysis feedback).
+    if (showingSections && !force) return;
     const wasEmpty = logOutput.querySelector('span[style]');
     if (wasEmpty) logOutput.innerHTML = '';
     const span = document.createElement('span');
@@ -868,7 +878,7 @@
   // -- Past scans --
   function _scanOptionLabel(scan) {
     const dt = scan.scanned_at ? scan.scanned_at.replace('T', ' ').slice(0, 19) : '';
-    const flag = scan.has_diagrams ? ' 🖼' : '';
+    const flag = ''; // removed visual flag to avoid clutter
     return `Scan ${scan.experiment_id}${dt ? ' - ' + dt : ''}${flag}`;
   }
 
@@ -1078,27 +1088,32 @@
       repoSelect.disabled = false;
       if (nameInput) nameInput.disabled = false;
       resetBtn.style.display = 'inline-block';
+      scanInProgress = false;
     }
   }
 
   function showSectionsInLog() {
     if (!sectionTabBar || !sectionContent || !logOutput) return;
-    // Hide raw log and show sections
     logOutput.style.display = 'none';
     sectionTabBar.style.display = 'flex';
     sectionContent.style.display = 'flex';
     showingSections = true;
-    if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Show log';
+    if (toggleSectionsBtn) {
+      toggleSectionsBtn.textContent = 'Show Log';
+      toggleSectionsBtn.title = 'Show raw scan log';
+    }
   }
 
   function showRawLog() {
     if (!sectionTabBar || !sectionContent || !logOutput) return;
-    // Show raw log and hide sections
     logOutput.style.display = '';
     sectionTabBar.style.display = 'none';
     sectionContent.style.display = 'none';
     showingSections = false;
-    if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Sections';
+    if (toggleSectionsBtn) {
+      toggleSectionsBtn.textContent = 'Sections';
+      toggleSectionsBtn.title = 'Show structured sections';
+    }
   }
 
   if (toggleSectionsBtn) {
@@ -1135,6 +1150,10 @@
     resetBtn.style.display = 'none';
     spinner.style.display = '';
     setStatus('Connecting…');
+
+    // Keep the raw log visible during the scan
+    scanInProgress = true;
+    showRawLog();
 
     const formData = new FormData();
     formData.append('repo_path', repoPath);
@@ -1257,11 +1276,8 @@
           for (let i = scans.length - 1; i >= 0; i--) {
             if (scans[i].has_diagrams) { hasDiags = true; break; }
           }
-          if (hasDiags) {
-            if (!opt.textContent.includes('🖼')) opt.textContent = opt.textContent + ' 🖼';
-          } else {
-            if (!opt.textContent.includes('⬜')) opt.textContent = opt.textContent + ' ⬜';
-          }
+          // Do not append symbols to option text — they caused visual clutter and overlap
+          // If visual annotation is needed in future, prefer adding a CSS class or separate inline element.
         }
       } catch (err) {
         // Ignore per-repo errors
@@ -1285,6 +1301,9 @@
     renderDiagrams,
     renderDiff,
     fitDiagram,
+    showRawLog,
+    appendLog: (line) => appendLog(line, { force: true }),
+    setStatus,
   };
 
 })();
