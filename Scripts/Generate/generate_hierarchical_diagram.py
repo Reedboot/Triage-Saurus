@@ -142,6 +142,56 @@ class HierarchicalDiagramBuilder:
         rtype = (resource.get('resource_type') or '').lower()
         provider = (resource.get('provider') or '').lower()
         return provider == 'kubernetes' or 'kubernetes' in rtype or 'aks' in rtype
+
+    def is_public_edge_resource(self, resource: dict) -> bool:
+        """Heuristic for resources that can plausibly receive traffic from Internet."""
+        rtype = (resource.get('resource_type') or '').lower()
+        name = (resource.get('resource_name') or '').lower()
+
+        # API gateways are internet entry points by design.
+        if self.is_api_gateway(resource) or self.is_api_operation(resource):
+            return True
+
+        # Common edge/service-entry resource types across clouds.
+        edge_type_tokens = [
+            'application_gateway', 'app_gateway',
+            'frontdoor', 'cloudfront',
+            'load_balancer', 'lb', 'alb', 'elb',
+            'ingress', 'gateway',
+            'api_gateway', 'apigateway',
+            'web_app', 'app_service'
+        ]
+        if any(tok in rtype for tok in edge_type_tokens):
+            return True
+
+        # Kubernetes-specific: avoid marking background workers/jobs/listeners as internet-facing.
+        if self.is_kubernetes(resource):
+            blocked_name_tokens = [
+                'listener', 'worker', 'consumer', 'job', 'cron', 'batch', 'queue', 'processor'
+            ]
+            if any(tok in name for tok in blocked_name_tokens):
+                return False
+
+            if 'ingress' in rtype or 'gateway' in rtype or 'load_balancer' in rtype:
+                return True
+
+            # Service-like resources are considered edge only if name suggests frontend/API role.
+            if 'service' in rtype:
+                public_name_tokens = ['api', 'web', 'frontend', 'front-end', 'gateway', 'public']
+                return any(tok in name for tok in public_name_tokens)
+
+            return False
+
+        return False
+
+    def is_identity_principal_like(self, resource: dict) -> bool:
+        """Detect identity principal/group resources that are often unconnected noise in diagrams."""
+        rtype = (resource.get('resource_type') or '').lower()
+        name = (resource.get('resource_name') or '').lower()
+
+        principal_type_tokens = ['identity', 'iam', 'principal', 'role', 'group', 'user', 'serviceaccount']
+        principal_name_tokens = ['principal', 'role', 'group', 'user', 'service_account', 'serviceaccount']
+        return any(tok in rtype for tok in principal_type_tokens) or any(tok in name for tok in principal_name_tokens)
     
     def is_service_bus(self, resource: dict) -> bool:
         """Check if resource is Service Bus/messaging related."""
@@ -241,6 +291,10 @@ class HierarchicalDiagramBuilder:
             
             lines.append("    end")
             self.emitted_nodes.add(main_product['resource_name'])  # Mark as emitted for connections
+        elif products:
+            # Products exist but operations are not available in extracted data; show products directly.
+            for product in products:
+                lines.append(self.render_node(product, indent="    "))
         elif all_operations:
             # Just operations, no products
             for op in all_operations:
@@ -354,6 +408,10 @@ class HierarchicalDiagramBuilder:
             
             if not src or not tgt:
                 continue
+
+            # Never render self-referential edges (node -> same node); these add noise.
+            if src == tgt or sanitize_id(src) == sanitize_id(tgt):
+                continue
             
             # Skip if nodes weren't emitted
             if src != 'Internet' and src not in self.emitted_nodes:
@@ -440,24 +498,10 @@ class HierarchicalDiagramBuilder:
                     connected_pairs.add(pair_key)
                     has_internet = True
         
-        # Infer Internet → PaaS services (UNCONFIRMED - dashed, with subscription key or generic label)
-        paass_types = [
-            self.is_api_gateway,
-            self.is_api_operation,
-            self.is_kubernetes,
-            lambda r: 'keyvault' in (r.get('resource_type') or '').lower() or 'secret' in (r.get('resource_type') or '').lower() or 'kms' in (r.get('resource_type') or '').lower(),
-            lambda r: 'storage' in (r.get('resource_type') or '').lower() or 's3' in (r.get('resource_type') or '').lower() or 'blob' in (r.get('resource_type') or '').lower() or 'bucket' in (r.get('resource_type') or '').lower(),
-            lambda r: 'sql' in (r.get('resource_type') or '').lower() or 'database' in (r.get('resource_type') or '').lower() or 'rds' in (r.get('resource_type') or '').lower() or 'cosmos' in (r.get('resource_type') or '').lower() or 'dynamodb' in (r.get('resource_type') or '').lower(),
-            lambda r: 'vm' in (r.get('resource_type') or '').lower() or 'compute' in (r.get('resource_type') or '').lower() or 'ec2' in (r.get('resource_type') or '').lower() or 'instance' in (r.get('resource_type') or '').lower(),
-            lambda r: 'app_gateway' in (r.get('resource_type') or '').lower() or 'application_gateway' in (r.get('resource_type') or '').lower(),
-        ]
         for r in self.resources:
-            if any(f(r) for f in paass_types):
+            if self.is_public_edge_resource(r):
                 pair_key = ('Internet', r['resource_name'])
                 if pair_key not in connected_pairs:
-                    label = 'https'
-                    if self.is_api_gateway(r) or self.is_api_operation(r):
-                        label = 'https', 'Subscription Key'
                     self.connections.append({
                         'source': 'Internet',
                         'target': r['resource_name'],
@@ -490,6 +534,9 @@ class HierarchicalDiagramBuilder:
                         break
                 
                 if matched:
+                    # Avoid emitting operation -> service self-loop when names collide.
+                    if op_name == svc_name:
+                        continue
                     pair_key = (op_name, svc_name)
                     if pair_key not in connected_pairs:
                         self.connections.append({
@@ -593,6 +640,11 @@ class HierarchicalDiagramBuilder:
             lines.append("")
         
         # Render other resources not in above categories (exclude subscriptions which are metadata)
+        connected_resource_names = {
+            n for c in self.connections for n in (c.get('source'), c.get('target'))
+            if n and n != 'Internet'
+        }
+
         other_resources = [
             r for r in self.resources 
             if r['id'] not in all_children 
@@ -608,6 +660,10 @@ class HierarchicalDiagramBuilder:
             and 'terraform_data' not in r.get('resource_type', '').lower()  # Exclude terraform data
             and not r.get('resource_name', '').startswith('${var.')  # Exclude unresolved variables
             and not r.get('resource_name', '').startswith('${local.')  # Exclude unresolved locals
+            and not (
+                self.is_identity_principal_like(r)
+                and r.get('resource_name') not in connected_resource_names
+            )
         ]
         
         for res in other_resources:
@@ -648,6 +704,21 @@ class HierarchicalDiagramBuilder:
             "Monitoring": "#888888",
         }
         
+        # Resolve style per rendered node id (not resource name) to avoid duplicate
+        # style lines when multiple resources sanitize to the same Mermaid id.
+        category_priority = {
+            "Security": 8,
+            "Identity": 7,
+            "Database": 6,
+            "Storage": 5,
+            "Network": 4,
+            "Container": 3,
+            "Compute": 2,
+            "Monitoring": 1,
+            "Other": 0,
+        }
+        style_by_node_id: Dict[str, Tuple[int, str]] = {}
+
         # Group emitted nodes by category
         for resource_name in self.emitted_nodes:
             if resource_name == 'Internet':
@@ -663,7 +734,14 @@ class HierarchicalDiagramBuilder:
             
             if color:
                 node_id = sanitize_id(resource_name)
-                lines.append(f"  style {node_id} stroke:{color}, stroke-width:2px")
+                priority = category_priority.get(category, 0)
+                existing = style_by_node_id.get(node_id)
+                if existing is None or priority >= existing[0]:
+                    style_by_node_id[node_id] = (priority, color)
+
+        for node_id in sorted(style_by_node_id.keys()):
+            color = style_by_node_id[node_id][1]
+            lines.append(f"  style {node_id} stroke:{color}, stroke-width:2px")
         
         return lines
     

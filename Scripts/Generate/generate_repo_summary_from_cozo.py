@@ -15,6 +15,7 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Iterable, Tuple
+import sys
 
 from cozo_helpers import fetch_findings_with_context
 
@@ -226,9 +227,14 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="Repository name (used for summary filename).")
     parser.add_argument("--scan-id", required=True, help="Scan identifier stored in Cozo.")
     parser.add_argument(
+        "--write-md",
+        action="store_true",
+        help="Also write a markdown file to disk for debugging/back-compat.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="Output/Summary/Repos",
-        help="Directory where the summary file will be written.",
+        help="Directory where markdown will be written when --write-md is set.",
     )
     args = parser.parse_args()
 
@@ -238,12 +244,16 @@ def main() -> int:
         return 0
 
     summary = build_summary_markdown(args.repo, args.scan_id, findings, context_map)
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{_sanitize_repo_name(args.repo)}.md"
-    out_path.write_text(summary, encoding="utf-8")
 
-    print(f"Repo summary generated: {out_path}")
+    print("Repo summary materialization skipped: UI renders dynamically from DB data")
+
+    if args.write_md:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{_sanitize_repo_name(args.repo)}.md"
+        out_path.write_text(summary, encoding="utf-8")
+        print(f"Repo summary markdown export: {out_path}")
+
     return 0
 
 

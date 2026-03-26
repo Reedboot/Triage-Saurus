@@ -3958,65 +3958,6 @@ def write_repo_summary(
             with open("Output/Summary/Repos/report_debug.log", "a") as log:
                 log.write(f"[ERROR] Failed to write summary content: {e}\n")
 
-    # ── Persist key sections as HTML to DB ───────────────────────────────────
-    try:
-        # TLDR section — summary table + key stats
-        repo_type_label = "Infrastructure (likely IaC/platform)" if resource_types else "Application/Other"
-        tldr_html = (
-            f'<table class="section-table">'
-            f"<thead><tr><th>Aspect</th><th>Value</th></tr></thead>"
-            f"<tbody>"
-            f"<tr><td>Type</td><td>{repo_type_label}</td></tr>"
-            f"<tr><td>Languages</td><td>{language_text}</td></tr>"
-            f"<tr><td>Hosting</td><td>{hosting_text}</td></tr>"
-            f"<tr><td>CI/CD</td><td>{ci_cd_text}</td></tr>"
-            f"<tr><td>Cloud Providers</td><td>{provider_text}</td></tr>"
-            f"<tr><td>Resources Extracted</td><td>{len(context.resources)}</td></tr>"
-            f"<tr><td>Security Status</td><td>&#x1F50D; Phase 1&#x2013;2 discovery &#x2014; security review pending</td></tr>"
-            f"</tbody></table>"
-        )
-        _db.upsert_ai_section(
-            experiment_id=experiment_id,
-            repo_name=repo_name,
-            section_key="tldr",
-            title="TL;DR",
-            content_html=tldr_html,
-            generated_by="report_generation.py",
-        )
-
-        # Risks section — auto-detected findings
-        risks_html = _md_to_html(auto_findings_md)
-        _db.upsert_ai_section(
-            experiment_id=experiment_id,
-            repo_name=repo_name,
-            section_key="risks",
-            title="Risks",
-            content_html=risks_html,
-            generated_by="report_generation.py",
-        )
-
-        # Overview section — auth, network, external dependencies
-        overview_md = (
-            "## Authentication & Identity\n\n"
-            f"{auth_summary}\n\n"
-            "## Service Authentication Topology\n\n"
-            f"{service_auth_topology_md}\n\n"
-            "## Network Topology\n\n"
-            f"{network_summary}\n\n"
-            "## External Dependencies\n\n"
-            f"{external_deps}"
-        )
-        _db.upsert_ai_section(
-            experiment_id=experiment_id,
-            repo_name=repo_name,
-            section_key="overview",
-            title="Overview",
-            content_html=_md_to_html(overview_md),
-            generated_by="report_generation.py",
-        )
-    except Exception as e:
-        print(f"[WARN] Failed to persist HTML sections to DB: {e}")
-
     return out_path
 
 
