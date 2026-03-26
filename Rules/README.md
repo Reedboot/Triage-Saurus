@@ -22,6 +22,17 @@ Detection/
 └── Frameworks/     Language and framework version detection
 ```
 
+### Recent context-discovery additions
+
+- `Code/ingress-wildcard-bind-detection.yml`
+	- Detects wildcard runtime bind/listen patterns (for example `0.0.0.0`, `listen(*)`, `.NET UseUrls` wildcard forms).
+	- Used as ingress posture signal by context extraction.
+- `AppConfig/cloud-endpoint-dependency-detection.yml`
+	- Detects AWS RDS, AWS S3, and GCP Cloud SQL endpoint references in app/config files.
+	- Used to seed external dependency inference before Python fallback scanning.
+
+These are `context_discovery` rules (INFO signal extraction) and are consumed by `Scripts/Context/context_extraction.py` in a rules-first, Python-fallback flow.
+
 ---
 
 ## Misconfigurations/
