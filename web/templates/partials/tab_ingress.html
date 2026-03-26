@@ -1,84 +1,130 @@
 {# partials/tab_ingress.html — Internet-facing resources and inbound paths #}
-{% if ingress_resources or ingress_connections %}
+{% if operations %}
 <div class="callout info s-inline-157a9c">
-  <strong>{{ (ingress_resources | length) + (ingress_connections | length) }}</strong>
-  internet-facing entry point{{ 's' if (ingress_resources | length) + (ingress_connections | length) != 1 }}
+  <strong>{{ operations | length }}</strong>
+  API endpoint{{ 's' if operations | length != 1 }}
   detected in this experiment.
 </div>
 
-{% if ingress_resources %}
-<h3 class="s-inline-f1c952">Internet-Facing Resources</h3>
+
+{# Inline API details moved into Ingress: show API parents and operations under a collapsible section #}
+{% if operations %}
+<h3 class="s-inline-f1c952">API Endpoints</h3>
 <div class="section-table-wrap" style="margin-bottom:18px;">
-  <table class="section-table">
+  <table class="section-table" id="section-api-details-table">
     <thead>
       <tr>
-        <th>Resource</th>
+        <th>Name</th>
         <th>Type</th>
-        <th>Provider</th>
-        <th>Region</th>
         <th>Source</th>
+        <th>Line</th>
+        <th>Exposed</th>
+        <th>Auth</th>
       </tr>
     </thead>
     <tbody>
-      {% for r in ingress_resources %}
-      <tr>
-        <td><span class="asset-name">{{ r.resource_name }}</span></td>
-        <td><span class="asset-type-badge">{{ r.resource_type }}</span></td>
-        <td>
-          {% set p = (r.provider or 'unknown') | lower %}
-          <span class="prov-pill {{ p }}">{{ r.provider or '—' }}</span>
-        </td>
-        <td>{{ r.region or '—' }}</td>
-        <td>
-          {% if r.source_file %}
-            <span class="file-link" title="{{ r.source_file }}">{{ r.source_file | basename }}</span>
-            {% if r.source_line_start %}
-              <span class="line-num">:{{ r.source_line_start }}</span>
+      {% for op in operations %}
+        {% if op.resource_type == 'azurerm_api_management_api' %}
+        <tr class="api-parent" data-api-id="{{ op.id }}" data-search="{{ [op.operation_name, op.resource_type] | join(' ') | lower }}">
+          <td>
+            {% set child_count = children_by_parent.get(op.id, [])|length %}
+            {% if child_count > 0 %}
+              <span class="expand-toggle" data-api-id="{{ op.id }}" title="Expand/collapse operations">▶</span>
+            {% else %}
+              <span style="display:inline-block; width:16px;"></span>
             {% endif %}
-          {% else %}—{% endif %}
-        </td>
-      </tr>
+            <span class="operation-name" style="font-weight: bold;">{{ op.operation_name }}</span>
+            {% if child_count > 0 %}<span class="child-count-badge" title="{{ child_count }} operation(s)">{{ child_count }}</span>{% endif %}
+          </td>
+          <td>
+            <span class="api-type-badge" title="API container/definition">📡 API</span>
+          </td>
+          <td>
+            <small class="muted">{{ op.source_file or '—' }}</small>
+          </td>
+          <td>
+            <small class="muted">{{ op.source_line_start or '—' }}</small>
+          </td>
+          <td>
+            {% if op.internet_access == '—' %}
+              <span class="finding-badge none">—</span>
+            {% elif op.internet_access and op.internet_access | lower == 'true' %}
+              {% if op.internet_access_signals and 'verified' in op.internet_access_signals|lower %}
+                <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
+              {% else %}
+                <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
+              {% endif %}
+            {% elif op.internet_access and op.internet_access | lower == 'false' %}
+              <span class="finding-badge none">🔒 Private</span>
+            {% else %}
+              <span class="finding-badge none">{{ op.internet_access or '—' }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if op.is_public and op.is_public | lower == 'true' %}
+              <span class="finding-badge critical" title="No auth required at APIM level">🔓 None</span>
+            {% else %}
+              <span class="finding-badge info">🔐 Subscription Key</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% for child_id in children_by_parent.get(op.id, []) %}
+          {% set child_op = operations_by_id.get(child_id) %}
+          {% if child_op %}
+          <tr class="api-operation child-row" data-parent-api="{{ op.id }}" style="display:none;"
+              data-search="{{ [child_op.operation_name, child_op.resource_type] | join(' ') | lower }}"
+              data-operation_name="{{ child_op.operation_name | e }}"
+              data-resource_type="{{ child_op.resource_type | e }}"
+              data-is_public="{{ child_op.is_public | lower }}"
+              data-internet_access="{{ child_op.internet_access | e }}">
+            <td>
+              <span style="display:inline-block; width:16px; margin-left:20px;"></span>
+              <span class="operation-name">{{ child_op.operation_name }}</span>
+            </td>
+            <td>
+              <span class="api-type-badge" title="Individual endpoint/method">⚙️ Operation</span>
+            </td>
+            <td>
+              <small class="muted">{{ child_op.source_file or '—' }}</small>
+            </td>
+            <td>
+              <small class="muted">{{ child_op.source_line_start or '—' }}</small>
+            </td>
+            <td>
+              {% if child_op.internet_access == '—' %}
+                <span class="finding-badge none">—</span>
+              {% elif child_op.internet_access and child_op.internet_access | lower == 'true' %}
+                {% if child_op.internet_access_signals and 'verified' in child_op.internet_access_signals|lower %}
+                  <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
+                {% else %}
+                  <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
+                {% endif %}
+              {% elif child_op.internet_access and child_op.internet_access | lower == 'false' %}
+                <span class="finding-badge none">🔒 Private</span>
+              {% else %}
+                <span class="finding-badge none">{{ child_op.internet_access or '—' }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if op.is_public and op.is_public | lower == 'true' %}
+                <span class="finding-badge critical" title="No auth required - inherited by operations">🔓 None</span>
+              {% else %}
+                <span class="finding-badge info" title="Inherited by all operations">🔐 Subscription Key (inherited)</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+        {% endif %}
       {% endfor %}
     </tbody>
   </table>
 </div>
+{% else %}
+<p style="color:var(--text-muted);">No API endpoints detected for this scan.</p>
 {% endif %}
 
-{% if ingress_connections %}
-<h3 class="s-inline-f1c952">Inbound Connections</h3>
-<div class="section-table-wrap">
-  <table class="section-table">
-    <thead>
-      <tr>
-        <th>From</th>
-        <th>To</th>
-        <th>Protocol</th>
-        <th>Port</th>
-        <th>Auth</th>
-        <th>Encrypted</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in ingress_connections %}
-      <tr>
-        <td><span class="asset-name">{{ c.source_name or c.source_resource_id }}</span></td>
-        <td><span class="asset-name">{{ c.target_name or c.target_resource_id }}</span></td>
-        <td>{{ c.protocol or '—' }}</td>
-        <td>{{ c.port or '—' }}</td>
-        <td>{{ c.authentication or c.auth_method or '—' }}</td>
-        <td>
-          {% if c.is_encrypted == 1 %}
-            <span class="s-inline-4bfd80">✓ Yes</span>
-          {% elif c.is_encrypted == 0 %}
-            <span class="s-inline-e09362">✗ No</span>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% endif %}
+
 
 {% else %}
 <div class="empty-state">

@@ -1,0 +1,99 @@
+{# partials/tab_containers.html — Containers / Dockerfile / images listing #}
+<div class="containers-section">
+  {% if containers %}
+  <div class="containers-hero markdown-card">
+    <div>
+      <div class="containers-pill">Containers</div>
+      <h3>{{ containers | length }} container{{ 's' if containers | length != 1 else '' }} discovered</h3>
+      <p class="containers-subtitle">Results are cached from the last scan so this tab loads instantly.</p>
+    </div>
+    <div class="containers-search-wrap">
+      <label for="containers-search">Search containers</label>
+      <input type="text" id="containers-search" class="assets-search" placeholder="Filter by name, image, provider…" autocomplete="off" />
+    </div>
+  </div>
+
+  <div class="container-list">
+    {% for c in containers %}
+    <article class="container-card markdown-card" data-search="{{ [c.resource_name, c.resource_type, c.provider, c.image or '', c.base_images_search or ''] | join(' ') | lower }}">
+      <header class="container-card-header">
+        <div>
+          <div class="container-name">{{ c.resource_name or 'Unnamed container' }}</div>
+          <div class="container-meta">
+            <span class="asset-type-badge">{{ c.container_type or c.resource_type or 'Container' }}</span>
+            <span class="prov-pill {{ (c.provider or 'unknown') | lower }}">{{ c.provider or '—' }}</span>
+          </div>
+        </div>
+        {% if c.source_file %}
+        <div class="container-source" title="{{ c.source_file }}">
+          <span class="file-link">{{ c.source_file | basename }}</span>
+        </div>
+        {% endif %}
+      </header>
+      <div class="container-body">
+        <div class="container-image">
+          <span class="label">Image</span>
+          <code>{{ c.image or 'Not specified' }}</code>
+        </div>
+        {% if c.base_images %}
+        <div class="container-base-images">
+          <span class="label">Base images</span>
+          <div class="base-badges">
+            {% for img in c.base_images %}
+            <span class="base-badge">{{ img.image or img }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+
+  <div id="containers-empty" class="assets-empty s-inline-cb4589">No containers match the current filter.</div>
+
+  {% if base_image_usages %}
+  <div class="base-image-panel markdown-card">
+    <div class="base-image-header">
+      <h3>Base images overview</h3>
+      <p class="containers-subtitle">Deduplicated references grouped by Dockerfile path.</p>
+    </div>
+    <div class="base-image-list" role="list">
+      {% for entry in base_image_usages %}
+      <article class="base-image-row" role="listitem">
+        <header class="base-image-row-header">
+          <div class="base-image-name">{{ entry.image }}</div>
+          <div class="base-image-stats">
+            <span class="base-stat">{{ entry.usage_count }} use{{ 's' if entry.usage_count != 1 else '' }}</span>
+            <span class="base-stat">{{ entry.container_count }} container{{ 's' if entry.container_count != 1 else '' }}</span>
+            <span class="base-stat">{{ entry.reference_count }} file{{ 's' if entry.reference_count != 1 else '' }}</span>
+          </div>
+        </header>
+        {% if entry.reference_preview %}
+        <ul class="base-reference-list">
+          {% for ref in entry.reference_preview %}
+          <li>
+            <span class="base-ref-path" title="{{ ref.reference }}">{{ ref.reference }}</span>
+            <span class="base-ref-meta">{{ ref.count }} use{{ 's' if ref.count != 1 else '' }}{% if ref.lines %} • lines {{ ref.lines | join(', ') }}{% endif %}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if entry.remaining_reference_count > 0 %}
+        <div class="base-ref-more">+ {{ entry.remaining_reference_count }} more reference{{ 's' if entry.remaining_reference_count != 1 else '' }}</div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="7" width="18" height="10" rx="2"/>
+      <path d="M7 11h10"/>
+    </svg>
+    <p>No container or Dockerfile resources detected.<br/>Container data is populated from Dockerfiles, skaffold manifests and Kubernetes manifests during scanning.</p>
+  </div>
+  {% endif %}
+</div>

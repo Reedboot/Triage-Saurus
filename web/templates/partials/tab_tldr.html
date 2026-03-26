@@ -1,0 +1,24 @@
+{# TL;DR tab — AI first, DB fallback #}
+<div class="tldr-wrapper markdown-card">
+  {% if error %}
+    <div class="overview-empty">
+      <div class="overview-empty-icon">⚠️</div>
+      <div>
+        <h3>Unable to load TL;DR</h3>
+        <p>{{ error }}</p>
+      </div>
+    </div>
+  {% elif tldr_html %}
+    <article class="tldr-body">
+      {{ tldr_html | safe }}
+    </article>
+  {% else %}
+    <div class="overview-empty">
+      <div class="overview-empty-icon">📊</div>
+      <div>
+        <h3>No TL;DR yet</h3>
+        <p>Run a scan to generate TL;DR content, or add repo metadata in the dashboard.</p>
+      </div>
+    </div>
+  {% endif %}
+</div>

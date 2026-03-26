@@ -1,0 +1,24 @@
+{# Risks tab — AI first, DB fallback from findings #}
+<div class="risks-wrapper markdown-card">
+  {% if error %}
+    <div class="overview-empty">
+      <div class="overview-empty-icon">⚠️</div>
+      <div>
+        <h3>Unable to load Risks</h3>
+        <p>{{ error }}</p>
+      </div>
+    </div>
+  {% elif risks_html %}
+    <article class="risks-body">
+      {{ risks_html | safe }}
+    </article>
+  {% else %}
+    <div class="overview-empty">
+      <div class="overview-empty-icon">🛡️</div>
+      <div>
+        <h3>No risks documented yet</h3>
+        <p>Run a scan or add findings to populate this tab.</p>
+      </div>
+    </div>
+  {% endif %}
+</div>

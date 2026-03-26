@@ -27,7 +27,6 @@
         <th data-key="render_category" class="sortable">Category <span class="sort-indicator"></span></th>
         <th data-key="display_on_architecture_chart">Shown on Diagram</th>
         <th data-key="provider" class="sortable">Provider <span class="sort-indicator"></span></th>
-        <th data-key="region" class="sortable">Region <span class="sort-indicator"></span></th>
         <th data-key="finding_count" class="sortable">Findings <span class="sort-indicator"></span></th>
         <th data-key="source_file">Source</th>
         <th data-key="discovered_by" class="sortable">Discovered by <span class="sort-indicator"></span></th>
@@ -69,7 +68,6 @@
           {% set p = (a.provider or 'unknown') | lower %}
           <span class="prov-pill {{ p }}">{{ a.provider or '—' }}</span>
         </td>
-        <td>{{ a.region or '—' }}</td>
         <td>
           {% set sev = (a.worst_severity or '') | lower %}
           {% if a.finding_count and a.finding_count > 0 %}

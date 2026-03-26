@@ -21,14 +21,13 @@
     <tbody>
       {% for c in egress_connections %}
       <tr>
-        <td><span class="asset-name">{{ c.source_name or c.source_resource_id }}</span></td>
+        <td><span class="asset-name">{{ c.source_name or c.source_resource_id or '—' }}</span></td>
         <td>
-          <span class="asset-name">{{ c.target_external or c.target_name or c.target_resource_id }}</span>
-          {% if c.target_domain %}
+          <span class="asset-name">{{ c.target_name or c.target_domain or c.target_external or c.target_resource_id or '—' }}</span>
+          {% if c.target_domain and (c.target_domain|lower) not in (c.target_name|default('', true)|lower) %}
             <div class="s-inline-b6d566">{{ c.target_domain }}</div>
           {% endif %}
         </td>
-        <td>{{ c.target_type or '—' }}</td>
         <td>{{ c.protocol or '—' }}</td>
         <td>{{ c.port or '—' }}</td>
         <td>
@@ -38,7 +37,9 @@
             <span class="s-inline-e09362">✗ No</span>
           {% else %}—{% endif %}
         </td>
-        <td style="font-size:0.78rem; color:var(--text-muted);">{{ c.connection_purpose or c.description or '—' }}</td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">
+          {{ c.connection_purpose or c.target_type or c.description or '—' }}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

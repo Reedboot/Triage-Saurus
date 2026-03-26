@@ -1,0 +1,33 @@
+{# partials/tab_ports.html — Port/protocol inventory #}
+{% if ports %}
+<div class="section-table-wrap">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>From</th>
+        <th>To</th>
+        <th>Port</th>
+        <th>Protocol</th>
+        <th>Auth</th>
+        <th>Internet Exposed</th>
+        <th>Confidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in ports %}
+      <tr>
+        <td><span class="asset-name">{{ p.source_name or '—' }}</span></td>
+        <td><span class="asset-name">{{ p.target_name or '—' }}</span></td>
+        <td>{{ p.port or '—' }}</td>
+        <td>{{ p.protocol or '—' }}</td>
+        <td>{{ p.auth_method or '—' }}</td>
+        <td>{% if p.is_internet_exposed == 1 %}<span class="s-inline-4bfd80">✓</span>{% else %}—{% endif %}</td>
+        <td>{{ p.protocol_confidence or 'inferred' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state"><p>No port/protocol connections detected for this repo.</p></div>
+{% endif %}

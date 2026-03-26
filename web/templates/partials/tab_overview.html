@@ -1,0 +1,20 @@
+{# Overview tab — high-level experiment summary from AI/metadata #}
+<div class="overview-wrapper markdown-card">
+  <div class="overview-actions" data-experiment-id="{{ experiment_id or '' }}" data-repo-name="{{ repo_name or '' }}">
+    <button type="button" class="btn-small" id="overview-run-ai-btn">Run AI Analysis</button>
+    <span id="overview-ai-status" class="overview-ai-status">Idle</span>
+  </div>
+  {% if overview_html %}
+  <article class="overview-body">
+    {{ overview_html | safe }}
+  </article>
+  {% else %}
+  <div class="overview-empty">
+    <div class="overview-empty-icon">📝</div>
+    <div>
+      <h3>No overview yet</h3>
+      <p>Run a scan to generate Overview content, or add an Overview section in the experiment summary.</p>
+    </div>
+  </div>
+  {% endif %}
+</div>
