@@ -1,0 +1,30 @@
+rules:
+  - id: context-db-connection-string-reference
+    message: |
+      Database connection string reference detected.
+      Captures app/IaC connection-string usage even when the secret value is supplied externally.
+    severity: INFO
+    languages: [generic]
+    pattern-regex: |
+      (?im)(ConnectionStrings(?:__|:)[A-Za-z0-9_\-]+\s*[:=]\s*(?:\$\{[^\n}]+\}|var\.[A-Za-z0-9_\-]+|\$\([A-Za-z0-9_\-]+\)|[^\n"']*(?:Server|Data\s*Source|Host)\s*=))
+    metadata:
+      finding_kind: Asset
+      asset_provider: unknown
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [database, connection-string, config]
+      target_files: ["**/*.tf", "**/*.tfvars", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.config", "**/*.cs", "**/*.env", "**/docker-compose*.yml", "**/docker-compose*.yaml"]
+      extracts:
+        service_type: Database Connection String Reference
+        resource_type: connection_string_reference
+        resource_name: DB connection configuration
+        properties:
+          - name: key_name
+            pattern-regex: (?i)(ConnectionStrings(?:__|:)[A-Za-z0-9_\-]+)
+          - name: backend_hint
+            pattern-regex: (?i)(Server|Data\s*Source|Host)\s*=
+      description: |
+        Detects references to database connection strings where values may come from variables,
+        secret stores, or environment substitution. Complements hardcoded-secret rules by
+        preserving architecture/dependency context for DB-backed services.
