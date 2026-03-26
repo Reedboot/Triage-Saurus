@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Enrich"))
 import db_helpers
 from llm_resource_interpreter import _call_llm
 
@@ -29,9 +30,10 @@ ROLE_INTROS = {
 def _build_prompt(row: dict, reviewer: str) -> str:
     snippet = (row.get("code_snippet") or "").strip()
     intro = ROLE_INTROS[reviewer]
+    finding_title = row.get("title") or row.get("rule_id") or "Finding"
     return (
         f"{intro}\n\n"
-        f"Title: {row.get('title') or row.get('finding_name')}\n"
+        f"Title: {finding_title}\n"
         f"Description: {row.get('description') or ''}\n"
         f"Severity score: {row.get('severity_score')}/10\n"
         f"File: {row.get('source_file')}\n"
@@ -85,7 +87,7 @@ def main():
 
     # Fetch enriched findings
     query = """
-        SELECT id, finding_name, title, description, severity_score,
+        SELECT id, rule_id, title, description, severity_score,
                source_file, code_snippet, proposed_fix, reason
         FROM findings
         WHERE experiment_id = ? AND llm_enriched_at IS NOT NULL
