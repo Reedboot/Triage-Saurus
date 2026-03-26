@@ -1,0 +1,104 @@
+rules:
+  - id: context-azure-api-management-api-policy
+    message: |
+      Azure API Management API policy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_api_policy" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: apim
+      technology: [terraform, azure, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Management API Policy
+        resource_type: azurerm_api_management_api_policy
+        resource_name: $NAME
+
+  - id: context-azure-api-management-product
+    message: |
+      Azure API Management product detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_product" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: apim
+      technology: [terraform, azure, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Management Product
+        resource_type: azurerm_api_management_product
+        resource_name: $NAME
+        properties:
+          - name: subscription_required
+            pattern: subscription_required = $VAL
+          - name: approval_required
+            pattern: approval_required = $VAL
+
+  - id: context-azure-api-management-product-api-link
+    message: |
+      Azure API Management product-to-api link detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_product_api" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: service-dependencies
+      subcategory: apim-product-routing
+      technology: [terraform, azure, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Management Product API Link
+        resource_type: azurerm_api_management_product_api
+        resource_name: $NAME
+        relationship_type: product_api_binding
+        properties:
+          - name: api_name
+            pattern: api_name = $API_NAME
+          - name: product_id
+            pattern: product_id = $PRODUCT_ID
+
+  - id: context-azure-api-management-subscription
+    message: |
+      Azure API Management subscription detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_subscription" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: identity-access
+      subcategory: apim-subscription
+      technology: [terraform, azure, apim]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Management Subscription
+        resource_type: azurerm_api_management_subscription
+        resource_name: $NAME
+        properties:
+          - name: display_name
+            pattern: display_name = "$VAL"
+          - name: state
+            pattern: state = "$VAL"
