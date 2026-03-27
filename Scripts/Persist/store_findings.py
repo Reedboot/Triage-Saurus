@@ -18,7 +18,53 @@ from shared_utils import _severity_score
 
 
 def _base_severity(severity: str) -> str:
-    return "High" if severity.upper() == "ERROR" else "Medium"
+    s = severity.upper()
+    if s == "ERROR":
+        return "High"
+    if s == "INFO":
+        return "Low"
+    return "Medium"
+
+
+# File extension → display language name
+_EXT_TO_LANG: dict[str, str] = {
+    'cs': 'C#/.NET', 'csproj': 'C#/.NET', 'fsproj': 'C#/.NET',
+    'vbproj': 'C#/.NET', 'sln': 'C#/.NET',
+    'tf': 'Terraform', 'tfvars': 'Terraform',
+    'py': 'Python',
+    'ts': 'TypeScript', 'tsx': 'TypeScript',
+    'js': 'JavaScript', 'jsx': 'JavaScript',
+    'go': 'Go',
+    'java': 'Java', 'kt': 'Kotlin',
+    'rb': 'Ruby',
+    'php': 'PHP',
+    'rs': 'Rust',
+    'swift': 'Swift',
+    'scala': 'Scala',
+    'sql': 'SQL',
+    'ps1': 'PowerShell',
+}
+# Languages considered infrastructure/config — deprioritised for primary selection
+_CONFIG_LANGS = {'Terraform', 'SQL', 'PowerShell'}
+
+
+def _detect_languages(scanned_paths: list[str]) -> tuple[str, list[str]]:
+    """Derive (primary_language, ordered_all_languages) from a list of scanned file paths."""
+    counts: dict[str, int] = {}
+    for path in scanned_paths:
+        filename = path.rsplit('/', 1)[-1]
+        if '.' not in filename:
+            continue
+        ext = filename.rsplit('.', 1)[-1].lower()
+        lang = _EXT_TO_LANG.get(ext)
+        if lang:
+            counts[lang] = counts.get(lang, 0) + 1
+    if not counts:
+        return '', []
+    ordered = sorted(counts, key=lambda l: counts[l], reverse=True)
+    # Prefer a non-config language as the primary
+    primary = next((l for l in ordered if l not in _CONFIG_LANGS), ordered[0])
+    return primary, ordered
 
 
 def _find_resource_id(conn, experiment_id: str, path: str, start_line: int):
@@ -61,6 +107,10 @@ def main():
     data = json.loads(scan_path.read_text())
     results = data.get("results", [])
 
+    # Detect languages from the full list of scanned files
+    scanned_paths = data.get("paths", {}).get("scanned", [])
+    primary_lang, all_langs = _detect_languages(scanned_paths)
+
     stored = 0
     skipped = 0
     resource_updates = []  # Track resource_id updates to batch later
@@ -92,14 +142,9 @@ def main():
             severity: str = result.get("extra", {}).get("severity", "WARNING")
             extra = result.get("extra", {})
 
-            # Skip only INFO rules; keep Context detection results that may indicate misconfigs
-            if severity.upper() == "INFO":
-                continue
-            # Historically some check_ids include 'context' lowercase; skip only detection-only rules that are explicitly marked
-            # as 'rule_type': 'context_discovery' *and* have severity INFO. This keeps actionable misconfiguration hits
-            # that may be emitted with non-INFO severity.
+            # Skip pure asset-detection context-discovery rules (INFO severity only)
+            # All other INFO findings are stored with base_severity=Low and severity_score=2
             if severity.upper() == 'INFO' and (extra.get('metadata') or {}).get('rule_type') == 'context_discovery':
-                # Pure asset-detection; do not store as findings
                 continue
 
             path: str = result.get("path", "")
@@ -159,6 +204,28 @@ def main():
                 stored += 1
 
     print(f"\nStored {stored} new findings, skipped {skipped} duplicates")
+
+    # Persist language detection results
+    if primary_lang or all_langs:
+        with db_helpers.get_db_connection() as conn:
+            conn.execute(
+                """
+                UPDATE repositories
+                SET primary_language = ?
+                WHERE experiment_id = ? AND repo_name = ?
+                """,
+                (primary_lang, args.experiment, args.repo),
+            )
+        if all_langs:
+            db_helpers.upsert_context_metadata(
+                args.experiment, args.repo,
+                key="languages_detected",
+                value=", ".join(all_langs),
+                namespace="scan",
+                source="store_findings",
+            )
+        print(f"  Primary language : {primary_lang or '(none)'}")
+        print(f"  Languages detected: {', '.join(all_langs) or '(none)'}")
 
 
 if __name__ == "__main__":
