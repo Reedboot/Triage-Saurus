@@ -33,6 +33,10 @@ ${resource_inventory}
 
 ${security_controls}
 
+## 🔗 External Dependencies
+
+${external_dependencies}
+
 ## ⚠️ High-Risk PaaS Exposure Checks
 
 ${paas_exposure_checks}
