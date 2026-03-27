@@ -247,55 +247,162 @@ def analyze_service_auth(conn: sqlite3.Connection, repo_id: int) -> Dict:
         'total_authenticated_services': len(services),
     }
 
+_SERVICE_CATEGORY_MAP: Dict[str, str] = {
+    # Messaging
+    "azurerm_servicebus_namespace": "messaging",
+    "azurerm_servicebus_queue": "messaging",
+    "azurerm_servicebus_topic": "messaging",
+    "azurerm_servicebus_subscription": "messaging",
+    "azurerm_eventhub_namespace": "messaging",
+    "azurerm_eventhub": "messaging",
+    "aws_sqs_queue": "messaging",
+    "aws_sns_topic": "messaging",
+    "google_pubsub_topic": "messaging",
+    # API Gateway
+    "azurerm_api_management_api_operation": "api",
+    "azurerm_api_management_subscription": "api",
+    "aws_api_gateway_rest_api": "api",
+    # Database
+    "azurerm_cosmosdb_account": "database",
+    "azurerm_sql_server": "database",
+    "aws_rds_cluster": "database",
+    "google_sql_database_instance": "database",
+    # Storage
+    "azurerm_storage_account": "storage",
+    "aws_s3_bucket": "storage",
+    "google_storage_bucket": "storage",
+    # Secrets
+    "azurerm_key_vault": "secrets",
+    "azurerm_app_configuration": "secrets",
+    "aws_secrets_manager_secret": "secrets",
+    "google_secret_manager_secret": "secrets",
+    # Compute
+    "kubernetes_service": "compute",
+    "google_cloud_run_service": "compute",
+}
+
+_CATEGORY_LABELS: Dict[str, str] = {
+    "messaging": "📨 Messaging",
+    "api": "🔌 API Gateway",
+    "database": "🗄️ Database",
+    "storage": "💾 Storage",
+    "secrets": "🔐 Secrets / Config",
+    "compute": "☸️ Compute",
+}
+
+# Namespace-like resource types that own child resources within them
+_NAMESPACE_TYPES = {
+    "azurerm_servicebus_namespace",
+    "azurerm_eventhub_namespace",
+}
+
+
 def generate_mermaid_topology(analysis: Dict, repo_name: str) -> str:
-    """Generate Mermaid diagram of service authentication topology (combined)."""
-    
+    """Generate Mermaid diagram of service authentication topology (combined).
+
+    Groups resources by service category (messaging, database, etc.) rather than
+    cloud-provider prefix so Service Bus queues/topics are correctly nested under
+    their parent namespace instead of appearing as sibling top-level nodes.
+    """
     services = analysis['services']
     relationships = analysis['relationships']
-    
+
     if not services:
         return "# No authenticated services found"
-    
+
     lines = [
         'graph TD',
         '  internet["🌐 External Clients/Services"]',
         '',
     ]
-    
-    # Group services by type for better organization
-    by_category = defaultdict(list)
+
+    # Determine which services are children of namespace resources so we can
+    # skip direct internet edges for them.
+    child_ids: set = set()
+    parent_children: Dict = defaultdict(list)  # parent_id → [child_id, ...]
+    for rel in relationships:
+        for p_id, p_svc in services.items():
+            if p_svc['name'] != rel['from']:
+                continue
+            for c_id, c_svc in services.items():
+                if c_svc['name'] == rel['to'] and p_svc.get('type') in _NAMESPACE_TYPES:
+                    child_ids.add(c_id)
+                    parent_children[p_id].append(c_id)
+
+    # Group by service category
+    by_category: Dict[str, list] = defaultdict(list)
     for service_id, service in services.items():
-        category = service['type'].split('_')[0]  # azure, aws, google, kubernetes
+        category = _SERVICE_CATEGORY_MAP.get(service['type'], service['type'].split('_')[0])
         by_category[category].append((service_id, service))
-    
-    # Add service nodes
-    service_map = {}  # Map service_id to node_id
+
+    service_map: Dict = {}  # service_id → mermaid node_id
+
     for category in sorted(by_category.keys()):
-        lines.append(f'  subgraph {category}["🔷 {category.upper()} Services"]')
-        
-        for service_id, service in by_category[category]:
-            node_id = f"svc_{service_id}"
-            service_map[service_id] = node_id
-            
-            auth_str = '; '.join(service['auth_types'][:2])
-            if len(service['auth_types']) > 2:
-                auth_str += f" +{len(service['auth_types'])-2}"
-            
-            risk_emoji = '🔴' if service['risk'] == 'critical' else '🟠' if service['risk'] == 'high' else '🟡'
-            
-            lines.append(f'    {node_id}["{service["icon"]} {service["name"]}<br/>{risk_emoji}<br/><small>{auth_str}</small>"]')
-        
+        cat_label = _CATEGORY_LABELS.get(category, f"🔷 {category.upper()}")
+        # Use sanitised subgraph id (no spaces)
+        sg_id = f"sg_{category}"
+        lines.append(f'  subgraph {sg_id}["{cat_label}"]')
+
+        # Within messaging, group children visually under their namespace subgraph
+        if category == "messaging":
+            rendered_in_ns: set = set()
+            ns_services = [(sid, svc) for sid, svc in by_category[category]
+                           if svc.get('type') in _NAMESPACE_TYPES]
+            other_services = [(sid, svc) for sid, svc in by_category[category]
+                              if svc.get('type') not in _NAMESPACE_TYPES]
+
+            for ns_id, ns_svc in ns_services:
+                node_id = f"svc_{ns_id}"
+                service_map[ns_id] = node_id
+                risk_emoji = '🔴' if ns_svc['risk'] == 'critical' else '🟠' if ns_svc['risk'] == 'high' else '🟡'
+                lines.append(f'    {node_id}["{ns_svc["icon"]} {ns_svc["name"]}<br/>{risk_emoji}"]')
+
+                # Emit child nodes in a nested sub-subgraph
+                ns_children = parent_children.get(ns_id, [])
+                if ns_children:
+                    ns_sg = f"sg_ns_{ns_id}"
+                    lines.append(f'    subgraph {ns_sg}["{ns_svc["name"]} resources"]')
+                    for c_id in ns_children:
+                        c_svc = services.get(c_id)
+                        if not c_svc:
+                            continue
+                        c_node_id = f"svc_{c_id}"
+                        service_map[c_id] = c_node_id
+                        rendered_in_ns.add(c_id)
+                        auth_str = '; '.join(c_svc['auth_types'][:2])
+                        lines.append(f'      {c_node_id}["{c_svc["icon"]} {c_svc["name"]}<br/><small>{auth_str}</small>"]')
+                    lines.append('    end')
+
+            # Orphan messaging resources (no namespace parent found)
+            for sid, svc in other_services:
+                if sid in rendered_in_ns:
+                    continue
+                if sid not in service_map:
+                    node_id = f"svc_{sid}"
+                    service_map[sid] = node_id
+                    auth_str = '; '.join(svc['auth_types'][:2])
+                    risk_emoji = '🔴' if svc['risk'] == 'critical' else '🟠' if svc['risk'] == 'high' else '🟡'
+                    lines.append(f'    {node_id}["{svc["icon"]} {svc["name"]}<br/>{risk_emoji}<br/><small>{auth_str}</small>"]')
+        else:
+            for service_id, service in by_category[category]:
+                node_id = f"svc_{service_id}"
+                service_map[service_id] = node_id
+                auth_str = '; '.join(service['auth_types'][:2])
+                if len(service['auth_types']) > 2:
+                    auth_str += f" +{len(service['auth_types'])-2}"
+                risk_emoji = '🔴' if service['risk'] == 'critical' else '🟠' if service['risk'] == 'high' else '🟡'
+                lines.append(f'    {node_id}["{service["icon"]} {service["name"]}<br/>{risk_emoji}<br/><small>{auth_str}</small>"]')
+
         lines.append('  end')
         lines.append('')
-    
-    # Add edges (client to services)
-    for service_id in services.keys():
-        if service_id in service_map:
+
+    # Connect internet only to ROOT-level services (not children of namespace nodes)
+    for service_id, service in services.items():
+        if service_id not in child_ids and service_id in service_map:
             lines.append(f'  internet -->|API/Client SDK| {service_map[service_id]}')
-    
-    # Add inter-service relationships
+
+    # Add inter-service relationships (non-parent/child — those are already implicit via subgraph)
     for rel in relationships:
-        # Find matching service IDs for from/to names
         from_id = None
         to_id = None
         for sid, svc in services.items():
@@ -303,8 +410,10 @@ def generate_mermaid_topology(analysis: Dict, repo_name: str) -> str:
                 from_id = sid
             if svc['name'] == rel['to']:
                 to_id = sid
-        
         if from_id and to_id and from_id in service_map and to_id in service_map:
+            # Skip parent→child edges in namespace groups (already shown via subgraph nesting)
+            if to_id in child_ids and from_id in parent_children and to_id in parent_children.get(from_id, []):
+                continue
             auth_label = rel['auth'][0] if rel['auth'] else 'inherited'
             lines.append(f'  {service_map[from_id]} -->|{auth_label}| {service_map[to_id]}')
     
