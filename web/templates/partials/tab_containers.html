@@ -64,7 +64,7 @@
         <header class="base-image-row-header">
           <div class="base-image-name">{{ entry.image }}</div>
           <div class="base-image-stats">
-            <span class="base-stat">{{ entry.usage_count }} use{{ 's' if entry.usage_count != 1 else '' }}</span>
+            <span class="base-stat" title="Unique Dockerfile FROM occurrences">{{ entry.usage_count }} FROM use{{ 's' if entry.usage_count != 1 else '' }}</span>
             <span class="base-stat">{{ entry.container_count }} container{{ 's' if entry.container_count != 1 else '' }}</span>
             <span class="base-stat">{{ entry.reference_count }} file{{ 's' if entry.reference_count != 1 else '' }}</span>
           </div>

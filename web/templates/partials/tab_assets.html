@@ -49,6 +49,8 @@
           data-parent-id="{{ a.parent_resource_id or '' }}"
           data-children-count="{{ a.children_count or 0 }}"
           data-is-child="{{ '1' if a.is_child else '0' }}"
+                    data-depth="{{ a.depth or 0 }}"
+                    data-ancestors="{{ a.ancestors or '' }}"
           {% if a.is_child %}class="child-row s-inline-cb4589"{% endif %}>
         <td>
           {% if a.children_count and a.children_count > 0 %}

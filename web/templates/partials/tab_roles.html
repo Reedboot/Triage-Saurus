@@ -20,7 +20,7 @@
     </thead>
     <tbody>
       {% for r in roles %}
-      <tr data-search="{{ [r.identity_name, r.role_type, r.provider, r.resource_name, r.permissions] | join(' ') | lower }}">
+      <tr data-search="{{ [r.identity_name, r.role_type, r.provider, r.resource_name, r.permissions, r.permission_summary, (r.permission_details | join(' '))] | join(' ') | lower }}">
         <td>
           <span class="asset-name">{{ r.identity_name or r.role_name or '—' }}</span>
           {% if r.principal_id %}
@@ -37,17 +37,20 @@
             <span style="font-size:0.75rem; padding:2px 6px; background:var(--surface-2,#1e1e1e); border-radius:3px; font-family:monospace;">{{ r.resource_name }}</span>
           {% else %}—{% endif %}
         </td>
-        <td class="wrap" style="max-width:220px; font-size:0.76rem;">
-          {% if r.permissions %}
+        <td class="wrap" style="max-width:260px; font-size:0.76rem;">
+          {% if r.permission_details and (r.permission_details | length) > 1 %}
             <details style="cursor:pointer">
               <summary style="list-style:none; cursor:pointer; outline:none; display:flex; align-items:center; gap:4px;">
-                <span class="details-arrow" style="font-size:0.65rem; color:var(--accent); transition:transform 0.2s;">▶</span>{{ r.permissions | truncate(60) }}
+                <span class="details-arrow" style="font-size:0.65rem; color:var(--accent); transition:transform 0.2s;">▶</span>{{ (r.permission_summary or r.permissions or '—') | truncate(72) }}
               </summary>
-              <div style="margin-top:6px; padding:6px 8px; background:var(--surface-2,#1e1e1e); border-radius:4px; font-family:monospace; font-size:0.72rem; white-space:pre-wrap; word-break:break-all; color:var(--text);">{{ r.permissions }}</div>
-              {% if r.principal_id %}
-                <div style="margin-top:4px; font-size:0.7rem; color:var(--text-muted);">Principal: <code>{{ r.principal_id }}</code></div>
-              {% endif %}
+              <div style="margin-top:6px; padding:6px 8px; background:var(--surface-2,#1e1e1e); border-radius:4px; font-family:monospace; font-size:0.72rem; white-space:normal; color:var(--text); display:grid; gap:4px;">
+                {% for detail in r.permission_details %}
+                  <div>{{ detail }}</div>
+                {% endfor %}
+              </div>
             </details>
+          {% elif r.permission_summary or r.permissions %}
+            <div style="font-family:monospace; font-size:0.72rem; color:var(--text); white-space:normal;">{{ r.permission_summary or r.permissions }}</div>
           {% else %}—{% endif %}
         </td>
         <td>
