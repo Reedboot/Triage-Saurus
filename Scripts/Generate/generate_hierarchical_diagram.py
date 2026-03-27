@@ -9,6 +9,7 @@ Creates cloud-agnostic architecture diagrams showing:
 """
 
 import sys
+import re
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict
@@ -68,6 +69,7 @@ class HierarchicalDiagramBuilder:
         self.repo_name = repo_name
         self.resources = []
         self.connections = []
+        self.sql_hints: Dict[str, Optional[str]] = {}
         self.resource_by_name = {}
         self.resource_by_id = {}
         self.children_by_parent = defaultdict(list)
@@ -143,6 +145,30 @@ class HierarchicalDiagramBuilder:
         provider = (resource.get('provider') or '').lower()
         return provider == 'kubernetes' or 'kubernetes' in rtype or 'aks' in rtype
 
+    def get_kubernetes_namespace(self, resource: dict) -> str:
+        """Resolve Kubernetes namespace from resource properties with sane fallbacks."""
+        props = resource.get('properties') or {}
+        candidates = [
+            props.get('namespace'),
+            props.get('kubernetes_namespace'),
+            props.get('k8s_namespace'),
+            props.get('release_namespace'),
+            props.get('target_namespace'),
+        ]
+
+        for candidate in candidates:
+            value = str(candidate or '').strip()
+            if value and not value.startswith('${'):
+                return value
+
+        rtype = (resource.get('resource_type') or '').lower()
+        if 'namespace' in rtype:
+            name = str(resource.get('resource_name') or '').strip()
+            if name:
+                return name
+
+        return 'default'
+
     def is_public_edge_resource(self, resource: dict) -> bool:
         """Heuristic for resources that can plausibly receive traffic from Internet."""
         rtype = (resource.get('resource_type') or '').lower()
@@ -217,11 +243,263 @@ class HierarchicalDiagramBuilder:
         """Check if resource is a subscription."""
         rtype = (resource.get('resource_type') or '').lower()
         return 'subscription' in rtype and 'servicebus' in rtype
+
+    def is_database_resource(self, resource: dict) -> bool:
+        """Check if resource looks like a SQL/database endpoint."""
+        rtype = (resource.get('resource_type') or '').lower()
+        name = (resource.get('resource_name') or '').lower()
+        type_tokens = ['sql', 'database', 'mssql', 'postgres', 'mysql', 'cosmos', 'rds']
+        # Type-based match is authoritative; name-based match requires the type to not be a non-DB resource
+        if any(tok in rtype for tok in type_tokens):
+            # Exclude APIM subscriptions/revisions that happen to have 'sql' in their name
+            if 'subscription' in rtype or 'apim' in rtype or 'api_management' in rtype:
+                return False
+            return True
+        # Name-based match only if type also has a database-like token (avoids false positives)
+        name_tokens = ['mssql', 'sqlserver']
+        return any(tok in name for tok in name_tokens) and not ('subscription' in rtype or 'apim' in rtype or 'api_management' in rtype)
+
+    def is_application_service(self, resource: dict) -> bool:
+        """Heuristic for application workloads that may connect to data stores."""
+        if not self.is_kubernetes(resource):
+            return False
+
+        rtype = (resource.get('resource_type') or '').lower()
+        name = (resource.get('resource_name') or '').lower()
+
+        blocked_name_tokens = ['listener', 'worker', 'consumer', 'job', 'queue', 'cron', 'batch']
+        if any(tok in name for tok in blocked_name_tokens):
+            return False
+
+        # Prefer API/front-end workloads first.
+        if any(tok in name for tok in ['api', 'web', 'frontend', 'front-end', 'service', 'app']):
+            return True
+
+        return any(tok in rtype for tok in ['deployment', 'service', 'container'])
+
+    def _ensure_synthetic_sql_server_node(self, server_name: Optional[str] = None) -> str:
+        """Ensure an explicit SQL Server node exists for architecture dependency views."""
+        fallback_name = 'SQL Server'
+        candidate = str(server_name or '').strip()
+        if self._score_sql_hint_value(candidate) < 2:
+            candidate = fallback_name
+
+        sql_node_name = candidate
+        existing = self.resource_by_name.get(fallback_name)
+        if existing and candidate != fallback_name:
+            existing['resource_name'] = candidate
+            self.resource_by_name.pop(fallback_name, None)
+            self.resource_by_name[candidate] = existing
+            return candidate
+
+        if sql_node_name in self.resource_by_name:
+            return sql_node_name
+
+        synthetic_id = -1
+        while synthetic_id in self.resource_by_id:
+            synthetic_id -= 1
+
+        synthetic_resource = {
+            'id': synthetic_id,
+            'resource_name': sql_node_name,
+            'resource_type': 'synthetic_sql_server',
+            'provider': 'external',
+            'repo_name': self.repo_name or '',
+            'properties': {'synthetic': True},
+        }
+        self.resources.append(synthetic_resource)
+        self.resource_by_name[sql_node_name] = synthetic_resource
+        self.resource_by_id[synthetic_id] = synthetic_resource
+        return sql_node_name
+
+    def _clean_conn_value(self, value: str) -> str:
+        """Normalize connection-string values for display."""
+        cleaned = str(value or '').strip().strip('"\'')
+        if cleaned.startswith('tcp:'):
+            cleaned = cleaned[4:]
+        return cleaned
+
+    def _parse_sql_connection_string(self, text: str) -> Dict[str, Optional[str]]:
+        """Parse server/database/auth hints from SQL-style connection strings."""
+        result: Dict[str, Optional[str]] = {'server': None, 'database': None, 'auth_method': None, 'port': None}
+        if not text:
+            return result
+
+        raw = str(text)
+        kv_matches = re.findall(r'([A-Za-z][A-Za-z0-9_ ]*)\s*=\s*([^;\n\r]+)', raw)
+        if not kv_matches:
+            return result
+
+        values: Dict[str, str] = {}
+        for key, value in kv_matches:
+            values[key.strip().lower()] = self._clean_conn_value(value)
+
+        server = (
+            values.get('server')
+            or values.get('data source')
+            or values.get('address')
+            or values.get('addr')
+            or values.get('network address')
+        )
+        if server:
+            # SQL server endpoints are commonly host,port or host:port.
+            host = server
+            port = None
+            if ',' in server:
+                host_part, port_part = server.rsplit(',', 1)
+                host = host_part.strip()
+                if port_part.strip().isdigit():
+                    port = port_part.strip()
+            elif ':' in server and server.rsplit(':', 1)[1].isdigit():
+                host_part, port_part = server.rsplit(':', 1)
+                host = host_part.strip()
+                port = port_part.strip()
+
+            result['server'] = host or server
+            if port:
+                result['port'] = port
+
+        result['database'] = values.get('database') or values.get('initial catalog')
+
+        auth_value = values.get('authentication', '')
+        auth_value_lower = auth_value.lower()
+
+        has_user = 'user id' in values or 'uid' in values
+        has_password = 'password' in values or 'pwd' in values
+        is_integrated = values.get('integrated security', '').lower() in ('true', 'sspi')
+        is_trusted = values.get('trusted_connection', '').lower() in ('true', 'yes')
+
+        if 'managed identity' in auth_value_lower or 'active directory msi' in auth_value_lower:
+            result['auth_method'] = 'Managed Identity'
+        elif 'active directory' in auth_value_lower:
+            result['auth_method'] = 'Azure AD'
+        elif has_user and has_password:
+            result['auth_method'] = 'Credentials'
+        elif is_integrated or is_trusted:
+            result['auth_method'] = 'Integrated Security'
+
+        return result
+
+    def _score_sql_hint_value(self, value: Optional[str]) -> int:
+        """Score hint quality, preferring concrete over placeholder values."""
+        if not value:
+            return 0
+        candidate = str(value).strip().lower()
+        if not candidate:
+            return 0
+
+        placeholders = ['your-', 'changeme', 'example', 'placeholder', '<', 'localhost', 'host.docker.internal']
+        if any(tok in candidate for tok in placeholders):
+            return 1
+        return 2
+
+    def _collect_sql_connection_hints(self) -> Dict[str, Optional[str]]:
+        """Collect SQL server/database/auth hints from connections and findings."""
+        hints: Dict[str, Optional[str]] = {'server': None, 'database': None, 'auth_method': None, 'port': None}
+
+        def _maybe_update(key: str, value: Optional[str]):
+            if not value:
+                return
+            current = hints.get(key)
+            if self._score_sql_hint_value(value) >= self._score_sql_hint_value(current):
+                hints[key] = str(value).strip()
+
+        # 1) Existing connection metadata already loaded for this diagram.
+        for conn in self.connections:
+            parsed = self._parse_sql_connection_string(str(conn.get('notes') or ''))
+            for field in ('server', 'database', 'auth_method', 'port'):
+                _maybe_update(field, parsed.get(field))
+
+            _maybe_update('server', conn.get('server'))
+            _maybe_update('database', conn.get('database'))
+
+            auth = self.get_auth_method(conn)
+            if auth and auth.lower() not in {'connection string', 'inferred'}:
+                _maybe_update('auth_method', auth)
+
+            port = conn.get('port')
+            if port:
+                _maybe_update('port', str(port))
+
+        # 2) Findings table can contain direct connection string snippets.
+        with get_db_connection() as conn:
+            params: List[object] = [self.experiment_id]
+            where_repo = ''
+            if self.repo_name:
+                where_repo = ' AND (repo.repo_name = ? OR f.source_file LIKE ?)'
+                params.extend([self.repo_name, f'%/{self.repo_name}/%'])
+
+            rows = conn.execute(
+                f"""
+                SELECT f.code_snippet, f.description
+                FROM findings f
+                LEFT JOIN repositories repo ON f.repo_id = repo.id
+                WHERE f.experiment_id = ?
+                  AND (
+                    LOWER(COALESCE(f.rule_id, '')) LIKE '%sql-connection-string%'
+                    OR COALESCE(f.code_snippet, '') LIKE '%Server=%'
+                    OR COALESCE(f.code_snippet, '') LIKE '%Data Source=%'
+                  )
+                  {where_repo}
+                ORDER BY f.id
+                """,
+                params,
+            ).fetchall()
+
+            for row in rows:
+                snippet = str(row['code_snippet'] or '')
+                description = str(row['description'] or '')
+
+                for text in (snippet, description):
+                    parsed = self._parse_sql_connection_string(text)
+                    for field in ('server', 'database', 'auth_method', 'port'):
+                        _maybe_update(field, parsed.get(field))
+
+        return hints
     
     def get_auth_method(self, connection: dict) -> str:
         """Extract authentication method from connection."""
         auth = connection.get('auth_method') or connection.get('authentication') or ''
-        return str(auth).strip()
+        normalized = str(auth).strip()
+        if not normalized:
+            return ''
+
+        lowered = normalized.lower()
+        if lowered in {'connection string', 'inferred', 'unknown'}:
+            return ''
+
+        parsed = self._parse_sql_connection_string(normalized)
+        return str(parsed.get('auth_method') or normalized).strip()
+
+    def render_sql_hierarchy(self, sql_resources: List[dict]) -> List[str]:
+        """Render SQL server nodes, optionally as subgraphs with child database nodes."""
+        if not sql_resources:
+            return []
+
+        lines: List[str] = []
+        preferred_database = str(self.sql_hints.get('database') or '').strip()
+
+        for res in sql_resources:
+            server_name = res['resource_name']
+            server_id = sanitize_id(server_name)
+            props = res.get('properties') or {}
+            database_name = str(props.get('database') or preferred_database or '').strip()
+
+            if database_name:
+                db_node_id = sanitize_id(f"{server_name}_{database_name}")
+                # Use server_id as the subgraph ID so that existing connection edges
+                # (which reference the server by name/id) correctly target the subgraph.
+                # Databases are rendered as child nodes inside.
+                lines.append(f"  subgraph {server_id}[\"SQL Server: {server_name}\"]")
+                lines.append(f"    {db_node_id}[\"{database_name}\"]")
+                lines.append("  end")
+                self.emitted_nodes.add(server_name)
+                self.emitted_nodes.add(database_name)
+            else:
+                lines.append(f"  {server_id}[\"{server_name}\"]")
+                self.emitted_nodes.add(server_name)
+
+        return lines
     
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node."""
@@ -304,33 +582,72 @@ class HierarchicalDiagramBuilder:
         return lines
     
     def render_kubernetes_cluster(self, k8s_resources: List[dict]) -> List[str]:
-        """Render Kubernetes/AKS cluster with services inside."""
+        """Render Kubernetes/AKS cluster with namespace subgraphs and workloads."""
         if not k8s_resources:
             return []
-        
+
+        # Separate the AKS cluster resource(s) from the workloads inside them.
+        # Cluster resources should label the outer subgraph, not appear as
+        # namespace-bucketed workload nodes inside it.
+        cluster_resources = [
+            r for r in k8s_resources
+            if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
+        ]
+        workload_resources = [r for r in k8s_resources if r not in cluster_resources]
+
+        # Build the outer subgraph label, incorporating cluster names when known.
+        if cluster_resources:
+            cluster_names = ", ".join(r['resource_name'] for r in cluster_resources)
+            cluster_label = f"Kubernetes Cluster<br/>{cluster_names}"
+            # Mark cluster resources as emitted so connections to them still render.
+            for r in cluster_resources:
+                self.emitted_nodes.add(r['resource_name'])
+        else:
+            cluster_label = "Kubernetes Cluster"
+
         lines = []
-        lines.append("  subgraph k8s[Kubernetes Cluster]")
-        
-        for res in k8s_resources:
-            # Get docker image/helm chart info from properties
-            props = res.get('properties', {})
-            image = props.get('image', '')
-            dockerfile = props.get('dockerfile', '')
-            
-            # Enhance label with image info
+        lines.append(f"  subgraph k8s[\"{cluster_label}\"]")
+
+        resources_by_namespace: Dict[str, List[dict]] = defaultdict(list)
+        emitted_node_ids: Set[str] = set()
+        for res in workload_resources:
             node_id = sanitize_id(res['resource_name'])
-            name = res['resource_name']
-            
-            if image:
-                label = f"{name}<br/>📦 {image}"
-            elif dockerfile:
-                label = f"{name}<br/>🐳 {Path(dockerfile).name}"
-            else:
-                label = name
-            
-            lines.append(f"    {node_id}[\"{label}\"]")
-            self.emitted_nodes.add(res['resource_name'])
-        
+            if node_id in emitted_node_ids:
+                continue
+            emitted_node_ids.add(node_id)
+            namespace = self.get_kubernetes_namespace(res)
+            resources_by_namespace[namespace].append(res)
+
+        for namespace, namespace_resources in resources_by_namespace.items():
+            namespace_id = f"k8s_ns_{sanitize_id(namespace)}"
+            lines.append(f"    subgraph {namespace_id}[\"{namespace}\"]")
+
+            for res in namespace_resources:
+                props = res.get('properties', {})
+                image = str(props.get('image', '') or '').strip()
+                dockerfile = str(props.get('dockerfile', '') or '').strip()
+
+                node_id = sanitize_id(res['resource_name'])
+                name = res['resource_name']
+
+                # Only show image when it adds information beyond the resource name.
+                # If the image tag is already a prefix of the workload name (e.g.
+                # image="aks-helloworld" and name="aks-helloworld-dr-testapp-api"),
+                # the label would appear to repeat part of the name, so suppress it.
+                image_is_redundant = image and name.lower().startswith(image.lower())
+
+                if image and not image_is_redundant:
+                    label = f"{name}<br/>📦 Image: {image}"
+                elif dockerfile:
+                    label = f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}"
+                else:
+                    label = name
+
+                lines.append(f"      {node_id}[\"{label}\"]")
+                self.emitted_nodes.add(res['resource_name'])
+
+            lines.append("    end")
+
         lines.append("  end")
         return lines
     
@@ -341,58 +658,75 @@ class HierarchicalDiagramBuilder:
         
         lines = []
         lines.append("  subgraph servicebus[Service Bus]")
-        
-        # Find the namespace (if exists) - it's the parent of all other SB resources
-        namespace = next((r for r in sb_resources if 'namespace' in r.get('resource_type', '').lower()), None)
-        
-        if namespace:
-            # Get all children of namespace
-            topics = [r for r in self.children_by_parent.get(namespace['id'], []) 
-                     if self.is_service_bus_topic(r)]
-            queues = [r for r in self.children_by_parent.get(namespace['id'], []) 
-                     if self.is_service_bus_queue(r)]
-            
-            # Render topics with their subscriptions
+
+        namespaces = [r for r in sb_resources if 'namespace' in r.get('resource_type', '').lower()]
+        rendered_ids = set()
+
+        def _render_topic(topic: dict):
+            topic_subs = [
+                s for s in self.children_by_parent.get(topic['id'], [])
+                if self.is_service_bus_subscription(s)
+            ]
+
+            if topic_subs:
+                topic_id = sanitize_id(topic['resource_name'])
+                lines.append(f"    subgraph {topic_id}[📬 {topic['resource_name']}]")
+                for sub in topic_subs:
+                    lines.append(self.render_node(sub, indent="      "))
+                    rendered_ids.add(sub['id'])
+                lines.append("    end")
+            else:
+                lines.append(f"    {sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
+                self.emitted_nodes.add(topic['resource_name'])
+
+            rendered_ids.add(topic['id'])
+
+        def _render_queue(queue: dict):
+            lines.append(f"    {sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
+            self.emitted_nodes.add(queue['resource_name'])
+            rendered_ids.add(queue['id'])
+
+        # Render each namespace and its known children.
+        for namespace in namespaces:
+            namespace_name = namespace['resource_name']
+            namespace_id = sanitize_id(namespace_name)
+            lines.append(f"    {namespace_id}[\"{namespace_name}\"]")
+            self.emitted_nodes.add(namespace_name)
+            rendered_ids.add(namespace['id'])
+
+            ns_children = self.children_by_parent.get(namespace['id'], [])
+            topics = [r for r in ns_children if self.is_service_bus_topic(r)]
+            queues = [r for r in ns_children if self.is_service_bus_queue(r)]
+
             for topic in topics:
-                topic_subs = [s for s in self.children_by_parent.get(topic['id'], []) 
-                             if self.is_service_bus_subscription(s)]
-                
-                if topic_subs:
-                    topic_id = sanitize_id(topic['resource_name'])
-                    lines.append(f"    subgraph {topic_id}[📬 {topic['resource_name']}]")
-                    for sub in topic_subs:
-                        lines.append(self.render_node(sub, indent="      "))
-                    lines.append("    end")
-                else:
-                    lines.append(f"    {sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
-                    self.emitted_nodes.add(topic['resource_name'])
-            
-            # Render queues
+                _render_topic(topic)
+
             for queue in queues:
-                lines.append(f"    {sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
-                self.emitted_nodes.add(queue['resource_name'])
-        else:
-            # No namespace - render top-level topics/queues
-            topics = [r for r in sb_resources if self.is_service_bus_topic(r)]
-            queues = [r for r in sb_resources if self.is_service_bus_queue(r)]
-            
-            for topic in topics:
-                topic_subs = [s for s in self.children_by_parent.get(topic['id'], []) 
-                             if self.is_service_bus_subscription(s)]
-                
-                if topic_subs:
-                    topic_id = sanitize_id(topic['resource_name'])
-                    lines.append(f"    subgraph {topic_id}[📬 {topic['resource_name']}]")
-                    for sub in topic_subs:
-                        lines.append(self.render_node(sub, indent="      "))
-                    lines.append("    end")
-                else:
-                    lines.append(f"    {sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
-                    self.emitted_nodes.add(topic['resource_name'])
-            
-            for queue in queues:
-                lines.append(f"    {sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
-                self.emitted_nodes.add(queue['resource_name'])
+                _render_queue(queue)
+
+        # Render orphan Service Bus resources that are known but not parent-linked.
+        orphan_topics = [
+            r for r in sb_resources
+            if self.is_service_bus_topic(r) and r['id'] not in rendered_ids
+        ]
+        orphan_queues = [
+            r for r in sb_resources
+            if self.is_service_bus_queue(r) and r['id'] not in rendered_ids
+        ]
+        orphan_subscriptions = [
+            r for r in sb_resources
+            if self.is_service_bus_subscription(r) and r['id'] not in rendered_ids
+        ]
+
+        for topic in orphan_topics:
+            _render_topic(topic)
+
+        for queue in orphan_queues:
+            _render_queue(queue)
+
+        for subscription in orphan_subscriptions:
+            lines.append(self.render_node(subscription, indent="    "))
+            rendered_ids.add(subscription['id'])
         
         lines.append("  end")
         return lines
@@ -434,7 +768,7 @@ class HierarchicalDiagramBuilder:
             elif auth:
                 # Only show raw auth string if it definitively represents a method (e.g., 'SAS', 'ManagedIdentity')
                 label_parts.append(f"🔐 {auth}")
-            
+
             protocol = conn.get('protocol', '')
             if protocol:
                 # Only include protocol if it was actually detected on the connection record
@@ -472,6 +806,11 @@ class HierarchicalDiagramBuilder:
         
         # Track connected pairs to avoid duplicates
         connected_pairs = set()
+        for conn in self.connections:
+            src = conn.get('source')
+            tgt = conn.get('target')
+            if src and tgt:
+                connected_pairs.add((src, tgt))
         
         with get_db_connection() as conn:
             # Check for CONFIRMED internet exposure
@@ -554,7 +893,9 @@ class HierarchicalDiagramBuilder:
         
         for deployment in k8s_deployments:
             dep_name = deployment['resource_name'].lower()
-            if any(kw in dep_name for kw in ['queue', 'listener', 'worker', 'consumer']):
+            # Include explicitly service-bus-oriented workloads even when they
+            # are not named as listeners/workers.
+            if any(kw in dep_name for kw in ['queue', 'listener', 'worker', 'consumer', 'servicebus']):
                 for queue in sb_queues:
                     pair_key = (queue['resource_name'], deployment['resource_name'])
                     if pair_key not in connected_pairs:
@@ -573,6 +914,68 @@ class HierarchicalDiagramBuilder:
                             'connection_type': 'consumed_by'
                         })
                         connected_pairs.add(pair_key)
+
+        # App → SQL data dependency. If SQL signals exist, always show an explicit
+        # SQL Server node so data-store dependencies are visible in architecture diagrams.
+        sql_signal_names = set()
+        for resource in self.resources:
+            if self.is_database_resource(resource):
+                sql_signal_names.add((resource.get('resource_name') or '').strip())
+
+        for conn in self.connections:
+            src = str(conn.get('source') or '').strip()
+            tgt = str(conn.get('target') or '').strip()
+            if 'sql' in src.lower() or 'database' in src.lower() or 'mssql' in src.lower():
+                sql_signal_names.add(src)
+            if 'sql' in tgt.lower() or 'database' in tgt.lower() or 'mssql' in tgt.lower():
+                sql_signal_names.add(tgt)
+
+        sql_signal_names = {n for n in sql_signal_names if n}
+        if sql_signal_names:
+            sql_hints = self._collect_sql_connection_hints()
+            self.sql_hints = dict(sql_hints)
+            sql_node_name = self._ensure_synthetic_sql_server_node(sql_hints.get('server'))
+
+            sql_resource = self.resource_by_name.get(sql_node_name)
+            if sql_resource is not None:
+                props = dict(sql_resource.get('properties') or {})
+                if sql_hints.get('database'):
+                    props['database'] = sql_hints.get('database')
+                sql_resource['properties'] = props
+
+            app_services = [r for r in self.resources if self.is_application_service(r)]
+
+            # Prefer API-like services for SQL dependency edges.
+            app_services.sort(
+                key=lambda r: 0 if 'api' in (r.get('resource_name') or '').lower() else 1
+            )
+
+            for app in app_services[:2]:
+                app_name = app['resource_name']
+                pair_key = (app_name, sql_node_name)
+                if pair_key in connected_pairs:
+                    continue
+
+                has_existing_sql_link = any(
+                    (
+                        (str(existing.get('source') or '').strip() == app_name and str(existing.get('target') or '').strip() in sql_signal_names)
+                        or (str(existing.get('target') or '').strip() == app_name and str(existing.get('source') or '').strip() in sql_signal_names)
+                    )
+                    for existing in self.connections
+                )
+
+                self.connections.append({
+                    'source': app_name,
+                    'target': sql_node_name,
+                    'connection_type': 'uses_database',
+                    'protocol': 'tcp',
+                    'port': sql_hints.get('port') or 1433,
+                    'auth_method': sql_hints.get('auth_method') or 'Credentials',
+                    'server': sql_hints.get('server') or sql_node_name,
+                    'database': sql_hints.get('database'),
+                    'confirmed': has_existing_sql_link,
+                })
+                connected_pairs.add(pair_key)
         
         return has_internet
     
@@ -645,12 +1048,29 @@ class HierarchicalDiagramBuilder:
             if n and n != 'Internet'
         }
 
+        sql_resources = [
+            r for r in self.resources
+            if self.is_database_resource(r)
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+
+        sql_lines = self.render_sql_hierarchy(sql_resources)
+        if sql_lines:
+            lines.extend(sql_lines)
+            lines.append("")
+
         other_resources = [
             r for r in self.resources 
             if r['id'] not in all_children 
             and r['id'] not in apim_related_ids
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
+            and r not in sql_resources
             and not self.is_api_gateway(r)
             and not self.is_kubernetes(r)
             and not self.is_service_bus(r)

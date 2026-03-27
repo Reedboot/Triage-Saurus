@@ -3466,6 +3466,68 @@ def _build_external_dependencies_summary(
     repo_path: Path | None,
     db_connections: list[dict],
 ) -> str:
+    def _detect_sql_dependency_targets() -> set[str]:
+        sql_targets: set[str] = set()
+        sql_tokens = ('sql', 'mssql', 'database')
+
+        # DB topology signals
+        for connection in db_connections:
+            src_name = str(connection.get("source") or "").strip().lower()
+            dst_name = str(connection.get("target") or "").strip().lower()
+            if any(tok in src_name for tok in sql_tokens) or any(tok in dst_name for tok in sql_tokens):
+                sql_targets.add("SQL Server")
+
+        # Extracted resources signals
+        for resource in context.resources:
+            r_name = str(getattr(resource, "name", "") or "").strip().lower()
+            r_type = str(getattr(resource, "resource_type", "") or "").strip().lower()
+            if any(tok in r_type for tok in ('sql', 'database', 'mssql')):
+                sql_targets.add("SQL Server")
+                continue
+            # Keep name-based inference conservative by requiring sql/mssql tokens.
+            if 'sql' in r_name or 'mssql' in r_name:
+                sql_targets.add("SQL Server")
+
+        # File-content signals (connection strings/runtime SQL images)
+        if repo_path and repo_path.exists():
+            patterns = [
+                re.compile(r"ConnectionStrings?(__|\.|:)?SqlServer", re.IGNORECASE),
+                re.compile(r"Server=[^;]+;Database=[^;]+;", re.IGNORECASE),
+                re.compile(r"azure-sql-edge|mssql-tools|database\.windows\.net", re.IGNORECASE),
+            ]
+            candidate_suffixes = {
+                '.json', '.yaml', '.yml', '.env', '.md', '.txt', '.config', '.tf', '.cs'
+            }
+            candidate_names = {
+                'docker-compose.yml', 'docker-compose.yaml', 'dockerfile', 'appsettings.json',
+                'appsettings.development.json', '.env'
+            }
+
+            scanned = 0
+            for file in repo_path.rglob('*'):
+                if scanned >= 400:
+                    break
+                if not file.is_file():
+                    continue
+                if any(part in {'.git', '.terraform', '.venv', 'node_modules', '__pycache__'} for part in file.parts):
+                    continue
+
+                name_lower = file.name.lower()
+                if file.suffix.lower() not in candidate_suffixes and name_lower not in candidate_names:
+                    continue
+
+                scanned += 1
+                try:
+                    text = file.read_text(encoding='utf-8', errors='ignore')
+                except Exception:
+                    continue
+
+                if any(p.search(text) for p in patterns):
+                    sql_targets.add("SQL Server")
+                    break
+
+        return sql_targets
+
     local_resource_names = {r.name for r in context.resources if getattr(r, "name", None)}
     db_external_targets: set[str] = set()
 
@@ -3483,9 +3545,13 @@ def _build_external_dependencies_summary(
         if src_name in local_resource_names and dst_name not in local_resource_names:
             db_external_targets.add(dst_name)
 
-    if db_external_targets:
-        lines = ["- External dependencies detected from DB topology:"]
-        for target in sorted(db_external_targets):
+    sql_dependency_targets = _detect_sql_dependency_targets()
+    merged_targets = set(db_external_targets)
+    merged_targets.update(sql_dependency_targets)
+
+    if merged_targets:
+        lines = ["- External dependencies detected:"]
+        for target in sorted(merged_targets):
             lines.append(f"  - {target}")
         return "\n".join(lines)
 
@@ -3506,10 +3572,17 @@ def _build_external_dependencies_summary(
                 fallback_targets.add(dependency)
 
     if fallback_targets:
+        fallback_targets.update(sql_dependency_targets)
         lines = [
             "- Fallback externLoad previous resultal dependencies (DB topology had no outbound external dependency signals):"
         ]
         for target in sorted(fallback_targets):
+            lines.append(f"  - {target}")
+        return "\n".join(lines)
+
+    if sql_dependency_targets:
+        lines = ["- External dependencies detected:"]
+        for target in sorted(sql_dependency_targets):
             lines.append(f"  - {target}")
         return "\n".join(lines)
 
@@ -4071,6 +4144,13 @@ def write_experiment_cloud_architecture_summary(
         paas_service_names = sorted({_rtdb.get_friendly_name(_get_db(), t) for t in paas_types})
         network_control_service_names = sorted({_rtdb.get_friendly_name(_get_db(), t) for t in network_control_types})
         paas_exposure_checks = _build_paas_exposure_checks(provider_resources)
+        db_topology_connections = _load_repo_topology_connections(repo_name)
+        external_dependencies = _build_external_dependencies_summary(
+            context,
+            repo_name=repo_name,
+            repo_path=repo,
+            db_connections=db_topology_connections,
+        )
         if paas_types:
             controls_line = (
                 "- Network control signals detected: "
@@ -4124,6 +4204,7 @@ def write_experiment_cloud_architecture_summary(
                 ),
                 "resource_inventory": resource_inventory,
                 "security_controls": security_controls,
+                "external_dependencies": external_dependencies,
                 "paas_exposure_checks": paas_exposure_checks,
                 "recommendations": recommendations,
             },
@@ -4187,12 +4268,77 @@ def generate_reports(
 def write_to_database(context: RepositoryContext, db_path: str = None, experiment_id: str = "001") -> None:
     from db_helpers import insert_repository, insert_resource, insert_connection
 
+    def _is_unresolved_tf_expression(value: object) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return True
+        lower = text.lower()
+        # Unresolved references should not replace canonical resource labels.
+        if "${" in lower or "}" in lower:
+            return True
+        prefixes = (
+            "local.",
+            "var.",
+            "module.",
+            "data.",
+            "path.",
+            "terraform.",
+            "each.",
+            "count.",
+        )
+        return lower.startswith(prefixes)
+
     # Keep DB writes scoped to each helper call; holding a long-lived bootstrap
     # connection here causes sqlite write-lock contention in nested inserts.
     insert_repository(
         experiment_id=experiment_id,
         repo_path=Path(context.repository_name),
     )
+
+    # Reruns can change display labels (for example unresolved var.* names later
+    # resolving to concrete names). Clear prior repo-scoped resource rows so each
+    # context discovery write is a clean snapshot for this repo/experiment.
+    from db_helpers import get_db_connection as _gdb
+    with _gdb(db_path) as conn:
+        repo_row = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+            (experiment_id, context.repository_name),
+        ).fetchone()
+        if repo_row:
+            repo_id = repo_row[0]
+            resource_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM resources WHERE experiment_id = ? AND repo_id = ?",
+                    (experiment_id, repo_id),
+                ).fetchall()
+            ]
+            if resource_ids:
+                placeholders = ",".join("?" for _ in resource_ids)
+                conn.execute(
+                    f"DELETE FROM resource_properties WHERE resource_id IN ({placeholders})",
+                    resource_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM resource_connections WHERE source_resource_id IN ({placeholders}) OR target_resource_id IN ({placeholders})",
+                    resource_ids + resource_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM findings WHERE resource_id IN ({placeholders})",
+                    resource_ids,
+                )
+                # Optional table in newer schemas; best-effort cleanup.
+                try:
+                    conn.execute(
+                        f"DELETE FROM shared_resource_references WHERE local_resource_id IN ({placeholders})",
+                        resource_ids,
+                    )
+                except Exception:
+                    pass
+                conn.execute(
+                    "DELETE FROM resources WHERE experiment_id = ? AND repo_id = ?",
+                    (experiment_id, repo_id),
+                )
 
     # First pass: insert all resources, collect type.name → db_id map
     res_db_ids: dict[str, int] = {}
@@ -4202,7 +4348,9 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
         display_name = resource.name
         
         if resource.properties and resource.properties.get("actual_name"):
-            display_name = resource.properties["actual_name"]
+            candidate_name = resource.properties["actual_name"]
+            if not _is_unresolved_tf_expression(candidate_name):
+                display_name = candidate_name
         
         db_id = insert_resource(
             experiment_id=experiment_id,
