@@ -226,13 +226,32 @@ def _get_base_images_from_dockerfile(df_path: Path) -> list[dict]:
     except Exception:
         return []
 
-    entries: list[tuple[str, int]] = []
+    # Capture external image references and drop internal stage aliases.
+    # Example: "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build" then "FROM build"
+    # should only count the external image, not the stage alias.
+    from_pattern = re.compile(
+        r"^FROM(?:\s+--[^\s]+)*\s+([^\s]+)(?:\s+AS\s+([^\s]+))?",
+        re.IGNORECASE,
+    )
+    parsed_froms: list[tuple[str, int]] = []
+    stage_aliases: set[str] = set()
     for idx, line in enumerate(txt.splitlines(), start=1):
         s = line.strip()
-        if s.upper().startswith("FROM "):
-            parts = s.split()
-            if len(parts) > 1:
-                entries.append((parts[1], idx))
+        m = from_pattern.match(s)
+        if not m:
+            continue
+        image = (m.group(1) or "").strip()
+        alias = (m.group(2) or "").strip().lower()
+        if image:
+            parsed_froms.append((image, idx))
+        if alias:
+            stage_aliases.add(alias)
+
+    entries: list[tuple[str, int]] = [
+        (image, line_no)
+        for image, line_no in parsed_froms
+        if image.lower() not in stage_aliases
+    ]
     serialized = tuple(entries)
     if len(_DOCKERFILE_CACHE) >= _DOCKERFILE_CACHE_MAX:
         # Drop an arbitrary entry to cap growth.
@@ -461,63 +480,8 @@ def _sanitize_mermaid(code: str) -> str:
     return code
 
 
-def _extract_mermaid_blocks(md_text: str) -> list[str]:
-    """Return all mermaid code block bodies from a markdown string."""
-    return [
-        _sanitize_mermaid(m.group(1).strip())
-        for m in re.finditer(r"```mermaid\n(.*?)\n```", md_text, re.DOTALL)
-    ]
-
-
-def _collect_diagrams(experiment_id: str) -> list[dict]:
-    """Return list of {title, code} dicts for all architecture diagrams in an experiment.
-
-    Groups Architecture_*.md files by provider (case-insensitive) to avoid duplicate
-    tabs caused by differing filename casing. If a provider has multiple mermaid
-    blocks (or multiple files), each block becomes its own tab with an index when
-    needed: "Azure Architecture (1)", "Azure Architecture (2)".
-    """
-    candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}_*"))
-    if not candidates:
-        return []
-    exp_dir = candidates[0]
-    cloud_dir = exp_dir / "Summary" / "Cloud"
-    if not cloud_dir.exists():
-        return []
-
-    # Collect blocks keyed by provider (normalized to lowercase)
-    provider_map: dict[str, dict] = {}
-    for arch_file in sorted(cloud_dir.glob("Architecture_*.md")):
-        try:
-            text = arch_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        provider = arch_file.stem.replace("Architecture_", "")
-        key = provider.lower()
-        if key == "terraform":
-            continue
-        blocks = _extract_mermaid_blocks(text)
-        if blocks:
-            provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].extend(blocks)
-        elif re.match(r"^\s*(flowchart|graph|sequenceDiagram|classDiagram)\b", text, re.I):
-            provider_map.setdefault(key, {"provider": provider, "blocks": []})["blocks"].append(_sanitize_mermaid(text.strip()))
-
-    diagrams: list[dict] = []
-    for key in sorted(provider_map.keys()):
-        entry = provider_map[key]
-        raw_provider = entry.get("provider", key)
-        # Normalize display name (Title case the provider)
-        disp = raw_provider.capitalize()
-        blocks = entry.get("blocks", [])
-        for idx, block in enumerate(blocks):
-            title = f"{disp} Architecture" if len(blocks) == 1 else f"{disp} Architecture ({idx+1})"
-            diagrams.append({"title": title, "code": block})
-
-    return diagrams
-
-
 def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
-    """Try DB-backed cloud_diagrams first, fall back to _collect_diagrams."""
+    """Return DB-backed cloud diagrams only (no markdown fallback)."""
     try:
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
@@ -532,7 +496,7 @@ def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
     except Exception:
         pass
 
-    return _collect_diagrams(experiment_id)
+    return []
 
 
 def _extract_mermaid_nodes(mermaid_code: str) -> set[str]:
@@ -565,12 +529,13 @@ def _extract_mermaid_nodes(mermaid_code: str) -> set[str]:
 
 
 def _has_diagrams(experiment_id: str) -> bool:
-    """Return True if the experiment has at least one Architecture_*.md with a mermaid block."""
-    candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}_*"))
-    if not candidates:
+    """Return True if the experiment has at least one diagram in cloud_diagrams."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+        return bool(get_cloud_diagrams(experiment_id))
+    except Exception:
         return False
-    cloud_dir = candidates[0] / "Summary" / "Cloud"
-    return cloud_dir.exists() and any(cloud_dir.glob("Architecture_*.md"))
 
 
 def _sse(event: str, data) -> str:
@@ -739,7 +704,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Stream error: {exc}")
 
     if experiment_id:
-        # Prefer DB-backed diagrams to avoid duplicates caused by multiple Architecture_*.md files
+        # DB-only: read architecture diagrams from cloud_diagrams.
         diagrams = []
         try:
             sys.path.insert(0, str(REPO_ROOT))
@@ -750,14 +715,10 @@ def _stream_scan(repo_path: str, scan_name: str):
         except Exception:
             diagrams = []
 
-        # Fall back to file-based collection if DB didn't have any diagrams
-        if not diagrams:
-            diagrams = _collect_diagrams(experiment_id)
-
         if diagrams:
             yield _sse("diagrams", diagrams)
         else:
-            yield _sse("log", "[Web] No architecture diagrams found in experiment output.")
+            yield _sse("log", "[Web] No architecture diagrams found in cloud_diagrams.")
 
     # Remove lock file if it refers to this experiment so future scans can start.
     try:
@@ -856,10 +817,8 @@ def api_analysis_status(experiment_id: str, repo_name: str):
 def api_diagrams(experiment_id: str):
     """Return Mermaid diagrams for a past experiment.
 
-    Prefers the cloud_diagrams DB table; falls back to Architecture_*.md files
-    for backwards compatibility with experiments run before the DB migration.
+    Uses cloud_diagrams DB table only.
     """
-    # Try DB first
     try:
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
@@ -872,13 +831,9 @@ def api_diagrams(experiment_id: str):
                 ]
             })
     except Exception:
-        pass
+        return jsonify({"diagrams": [], "error": "Failed to query cloud_diagrams"}), 500
 
-    # Fall back to legacy file-based approach
-    diagrams = _collect_diagrams(experiment_id)
-    if not diagrams:
-        return jsonify({"diagrams": [], "error": f"No diagrams found for experiment {experiment_id}"}), 404
-    return jsonify({"diagrams": diagrams})
+    return jsonify({"diagrams": [], "error": f"No diagrams found in cloud_diagrams for experiment {experiment_id}"}), 404
 
 
 @app.route("/api/repo_summary/<experiment_id>/<repo_name>")
@@ -1268,6 +1223,24 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         repo_type = repo_row["repo_type"] if repo_row else ""
         primary_language = repo_row["primary_language"] if repo_row else ""
 
+        # Supplement primary_language from context_metadata if the column is empty
+        if not primary_language and _table_exists(conn, "context_metadata"):
+            cm_pl = conn.execute(
+                """
+                SELECT value FROM context_metadata
+                WHERE experiment_id = ? AND key = 'languages_detected'
+                  AND repo_id = (
+                    SELECT id FROM repositories
+                    WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                  )
+                LIMIT 1
+                """,
+                (resolved_exp_id, resolved_exp_id, repo_name),
+            ).fetchone()
+            if cm_pl and cm_pl["value"]:
+                # Use the first entry as the primary when the column was never populated
+                primary_language = cm_pl["value"].split(",")[0].strip()
+
         def _guess_hosting() -> str:
             if not _table_exists(conn, "resources"):
                 return ""
@@ -1436,7 +1409,41 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             }
             detected = [language_map.get(row['ext'], row['ext']) for row in lang_rows if row['ext']]
 
-            if detected:
+            # Supplement with context_metadata['languages_detected'] stored during scan
+            cm_langs: list[str] = []
+            if _table_exists(conn, "context_metadata"):
+                try:
+                    cm_row2 = conn.execute(
+                        """
+                        SELECT value FROM context_metadata
+                        WHERE experiment_id = ? AND key = 'languages_detected'
+                          AND repo_id = (
+                            SELECT id FROM repositories
+                            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                          )
+                        LIMIT 1
+                        """,
+                        (resolved_exp_id, resolved_exp_id, repo_name),
+                    ).fetchone()
+                    if cm_row2 and cm_row2["value"]:
+                        cm_langs = [l.strip() for l in cm_row2["value"].split(",") if l.strip()]
+                except Exception:
+                    pass
+
+            # Merge file-evidence detections with metadata-stored list (metadata wins for ordering)
+            if cm_langs:
+                seen = set()
+                merged = []
+                for name in cm_langs:
+                    if name not in seen:
+                        seen.add(name)
+                        merged.append(name)
+                for name in detected:
+                    if name not in seen:
+                        seen.add(name)
+                        merged.append(name)
+                add_row("Languages detected", ", ".join(merged))
+            elif detected:
                 # keep order stable while removing duplicates
                 seen = set()
                 ordered = []
@@ -2099,7 +2106,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
             """,
-            (repo_name, experiment_id),
+            (repo_name, experiment_target),
         ).fetchall()
         hidden_count = 0
 
@@ -2138,6 +2145,27 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 children_by_parent[parent_id].append(hr['child_id'])
         except Exception:
             pass
+
+        # Build parent map for depth calculation
+        asset_id_to_parent_id: dict = {}
+        try:
+            for hr in hierarchy_rows:
+                asset_id_to_parent_id[hr['child_id']] = hr['parent_id']
+        except Exception:
+            pass
+
+        # Function to calculate depth and all ancestor IDs for an asset
+        def get_depth_and_ancestors(asset_id: str) -> tuple:
+            """Returns (depth, [list of ancestor IDs from direct parent up to root])"""
+            ancestors = []
+            current_id = asset_id
+            max_depth = 100  # Prevent infinite loops
+            while current_id in asset_id_to_parent_id and max_depth > 0:
+                parent_id = asset_id_to_parent_id[current_id]
+                ancestors.append(parent_id)
+                current_id = parent_id
+                max_depth -= 1
+            return len(ancestors), ancestors
 
         for row in rows:
             a = dict(row)
@@ -2233,6 +2261,13 @@ def api_view_assets(experiment_id: str, repo_name: str):
         if has_unknown:
             providers.add('unknown')
             provider_counts.setdefault('unknown', 0)
+
+        # Calculate depth and ancestors for each asset
+        for a in assets:
+            depth, ancestors = get_depth_and_ancestors(a.get('id'))
+            a['depth'] = depth
+            a['ancestors'] = ','.join(ancestors) if ancestors else ''
+
         return _db_render(
             "tab_assets.html",
             assets=assets,
@@ -2874,6 +2909,41 @@ def api_view_egress(experiment_id: str, repo_name: str):
 @app.route("/api/view/roles/<experiment_id>/<repo_name>")
 def api_view_roles(experiment_id: str, repo_name: str):
     """Render the roles & permissions tab HTML."""
+    def _normalize_permission_lines(raw_value: object) -> list[str]:
+        if raw_value is None:
+            return []
+        text = str(raw_value).strip()
+        if not text:
+            return []
+
+        parsed = None
+        if (text.startswith("[") and text.endswith("]")) or (text.startswith("{") and text.endswith("}")):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+
+        if isinstance(parsed, list):
+            return [str(v).strip() for v in parsed if str(v).strip()]
+        if isinstance(parsed, dict):
+            out: list[str] = []
+            for k, v in parsed.items():
+                if isinstance(v, list):
+                    joined = ", ".join(str(x).strip() for x in v if str(x).strip())
+                    if joined:
+                        out.append(f"{k}: {joined}")
+                elif str(v).strip():
+                    out.append(f"{k}: {v}")
+            return out
+
+        if "\n" in text:
+            return [line.strip() for line in text.splitlines() if line.strip()]
+        if ";" in text:
+            return [part.strip() for part in text.split(";") if part.strip()]
+        if "," in text:
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return [text]
+
     conn = _get_db()
     if conn is None:
         return _db_render("tab_roles.html", roles=[], error="DB unavailable")
@@ -2898,6 +2968,7 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 MAX(CASE WHEN LOWER(rp.property_key) IN ('subscription_scope', 'subscription_scope_name') THEN rp.property_value END) AS subscription_scope,
                 MAX(CASE WHEN rp.property_key = 'principal_id' THEN rp.property_value END) AS principal_id,
                 MAX(CASE WHEN rp.property_key IN ('permissions','role_definition_name','role') THEN rp.property_value END) AS permissions,
+                MAX(CASE WHEN LOWER(rp.property_key) IN ('role_name','role_definition_name','role_definition_id','role') THEN rp.property_value END) AS role_name,
                 MAX(CASE WHEN LOWER(rp.property_key) = 'is_excessive' THEN rp.property_value END) AS is_excessive
             FROM resources res
             JOIN repositories repo ON res.repo_id = repo.id
@@ -2924,6 +2995,7 @@ def api_view_roles(experiment_id: str, repo_name: str):
         roles = []
         for r in rows:
             entry = dict(r)
+            resource_id = entry.get("id")
             scope_candidates = [
                 (entry.pop("scope_prop", None) or "").strip(),
                 (entry.pop("subscription_scope", None) or "").strip(),
@@ -2932,6 +3004,63 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 entry.get("identity_name", ""),
             ]
             entry["resource_name"] = next((s for s in scope_candidates if s), "")
+
+            role_props = conn.execute(
+                """
+                SELECT LOWER(property_key) AS property_key, property_value
+                FROM resource_properties
+                WHERE resource_id = ?
+                """,
+                (resource_id,),
+            ).fetchall()
+            prop_map = {p["property_key"]: (p["property_value"] or "") for p in role_props}
+
+            role_name = (
+                (entry.get("role_name") or "").strip()
+                or (prop_map.get("role_definition_name") or "").strip()
+                or (prop_map.get("role_definition_id") or "").strip()
+                or (prop_map.get("role") or "").strip()
+            )
+
+            permission_details: list[str] = []
+            if role_name:
+                permission_details.append(f"Role: {role_name}")
+
+            for label, key in (
+                ("Allowed actions", "actions"),
+                ("Allowed data actions", "data_actions"),
+                ("Denied actions", "not_actions"),
+                ("Denied data actions", "not_data_actions"),
+            ):
+                values = _normalize_permission_lines(prop_map.get(key))
+                if values:
+                    permission_details.append(f"{label}: {', '.join(values)}")
+
+            raw_permissions = _normalize_permission_lines(entry.get("permissions") or prop_map.get("permissions"))
+            if raw_permissions:
+                permission_details.extend([f"Permissions: {v}" for v in raw_permissions])
+
+            if entry.get("resource_name"):
+                permission_details.append(f"Scope: {entry['resource_name']}")
+            if entry.get("principal_id"):
+                permission_details.append(f"Principal: {entry['principal_id']}")
+
+            seen: set[str] = set()
+            deduped_details: list[str] = []
+            for line in permission_details:
+                if not line or line in seen:
+                    continue
+                deduped_details.append(line)
+                seen.add(line)
+
+            entry["permission_details"] = deduped_details
+            entry["permission_summary"] = deduped_details[0] if deduped_details else "—"
+
+            if role_name:
+                entry["permissions"] = role_name
+            elif raw_permissions:
+                entry["permissions"] = raw_permissions[0]
+
             roles.append(entry)
         
         # Add API subscriptions and keys
@@ -2987,9 +3116,15 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 # Format permissions to show accessible operations
                 ops = r_dict.get('permissions')
                 if ops:
-                    r_dict['permissions'] = f"Access to operations: {ops}"
+                    op_list = [o.strip() for o in str(ops).split(',') if o.strip()]
+                    r_dict['permission_details'] = [f"Operation: {op}" for op in op_list]
+                    r_dict['permission_summary'] = f"{len(op_list)} operation(s)" if op_list else "Access to operations"
+                    r_dict['permissions'] = r_dict['permission_summary']
                 else:
-                    r_dict['permissions'] = f"Access to {r_dict.get('resource_name', 'API')}"
+                    summary = f"Access to {r_dict.get('resource_name', 'API')}"
+                    r_dict['permission_details'] = [summary]
+                    r_dict['permission_summary'] = summary
+                    r_dict['permissions'] = summary
                 roles.append(r_dict)
         except Exception as e:
             print(f"Warning: Could not fetch API keys/subscriptions: {e}")
@@ -3113,23 +3248,31 @@ def api_view_containers(experiment_id: str, repo_name: str):
                     continue
                 entry = base_image_map.setdefault(img_name, {
                     "image": img_name,
-                    "usage_count": 0,
+                    "usage_keys": set(),
                     "containers": set(),
                     "references": {},
                 })
-                entry["usage_count"] += 1
                 entry["containers"].add(c.get('resource_name') or '—')
+
+                parsed_line = None
+                if line_no is not None:
+                    try:
+                        parsed_line = int(line_no)
+                    except (TypeError, ValueError):
+                        parsed_line = None
+                occurrence_key = (ref, parsed_line if parsed_line is not None else img_name.lower())
+                entry["usage_keys"].add(occurrence_key)
 
                 ref_entry = entry["references"].setdefault(ref, {
                     "reference": ref,
-                    "count": 0,
+                    "occurrence_keys": set(),
                     "containers": set(),
                     "lines": set(),
                 })
-                ref_entry["count"] += 1
+                ref_entry["occurrence_keys"].add(occurrence_key[1])
                 ref_entry["containers"].add(c.get('resource_name') or '—')
-                if line_no:
-                    ref_entry["lines"].add(int(line_no))
+                if parsed_line is not None:
+                    ref_entry["lines"].add(parsed_line)
 
         base_image_usages = []
         for img_name, entry in base_image_map.items():
@@ -3137,7 +3280,7 @@ def api_view_containers(experiment_id: str, repo_name: str):
             for ref_item in entry["references"].values():
                 refs.append({
                     "reference": ref_item["reference"],
-                    "count": ref_item["count"],
+                    "count": len(ref_item["occurrence_keys"]),
                     "container_count": len(ref_item["containers"]),
                     "lines": sorted(ref_item["lines"]),
                 })
@@ -3146,7 +3289,7 @@ def api_view_containers(experiment_id: str, repo_name: str):
             preview_limit = 8
             base_image_usages.append({
                 "image": img_name,
-                "usage_count": entry["usage_count"],
+                "usage_count": len(entry["usage_keys"]),
                 "container_count": len(entry["containers"]),
                 "reference_count": len(refs),
                 "reference_preview": refs[:preview_limit],
