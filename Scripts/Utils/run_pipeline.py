@@ -3,10 +3,10 @@
 run_pipeline.py — Offline Phase 1-3c pipeline runner.
 
 Runs the complete AI-free triage pipeline against a repository:
-    Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
-    Phase 2 — Script-based code context discovery → metadata in DB
-  Phase 3a — Internet exposure analysis → exposure findings + provider diagrams
-    Phase 3b — Render architecture diagram from DB
+        Phase 1 — opengrep detection + targeted misconfiguration scan → findings in DB
+        Phase 2 — Script-based code context discovery → metadata in DB
+        Phase 3a — Internet exposure analysis
+        Phase 3b — Render architecture diagram into cloud_diagrams (DB)
 
 No LLM or internet access required.
 
@@ -20,10 +20,9 @@ Examples:
 
 Output:
     Output/Learning/experiments/<id>_<name>/
-    ├── Summary/
-    │   ├── Cloud/Architecture_AWS.md     ← layered architecture diagram
-    │   └── Repos/<repo-name>.md          ← languages, frameworks, K8s context
     └── scan_<repo-name>.json             ← raw opengrep results
+
+Architecture diagrams are persisted to DB table cloud_diagrams and rendered by the web UI.
 """
 
 from __future__ import annotations
@@ -250,15 +249,9 @@ def main() -> int:
     print(f"\n[Pipeline] Phase 3b keeps findings in DB only ({len(finding_ids)} finding(s)); no finding .md files are written.")
 
     # ── Phase 3c: Architecture diagram ───────────────────────────────────────
-    cloud_dir = exp_dir / "Summary" / "Cloud"
-    cloud_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Generate hierarchical diagram (works with Phase 1+2 data, infers connections)
-    # This replaces the old per-provider diagrams
-    hierarchical_output = cloud_dir / "Architecture_Hierarchical.md"
+    # DB-first mode: persist cloud diagrams only; do not emit Summary/Cloud markdown artifacts.
     rc_hierarchical = _run(
-        [sys.executable, str(_GEN_HIERARCHICAL), "--experiment-id", experiment_id,
-         "--output", str(hierarchical_output), "--persist-db"],
+        [sys.executable, str(_GEN_HIERARCHICAL), "--experiment-id", experiment_id, "--persist-db"],
         "Phase 3c — Generate hierarchical architecture diagram",
     )
 
@@ -269,7 +262,7 @@ def main() -> int:
     print(f"\n  Experiment ID : {experiment_id}")
     print(f"  Findings      : {len(finding_ids)} (stored in DB; rendered dynamically in portal)")
     print(f"  Repo summary  : dynamically rendered from DB (Overview tab)")
-    print(f"  Architectures : {cloud_dir}/Architecture_<PROVIDER>.md (per-provider files written)")
+    print(f"  Architectures : stored in DB table cloud_diagrams (portal renders dynamically)")
     print(f"\n  Next steps (require LLM):")
     print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
     print(f"    python3 Scripts/run_skeptics.py --experiment {experiment_id} --reviewer all")
