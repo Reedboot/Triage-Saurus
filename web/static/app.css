@@ -748,6 +748,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   gap: 14px;
 }
 
+/* Grid cards should not inherit stacked-card spacing from .markdown-card + .markdown-card */
+.container-list .markdown-card + .markdown-card {
+  margin-top: 0;
+}
+
 .container-card {
   display: flex;
   flex-direction: column;

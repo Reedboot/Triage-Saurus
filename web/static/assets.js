@@ -37,6 +37,8 @@
       source_file: r.dataset.source_file || '',
       discovered_by: toLower(r.dataset.discovered_by || ''),
       search: toLower(r.dataset.search || ''),
+      depth: parseInt(r.dataset.depth || '0', 10) || 0,
+      ancestors: r.dataset.ancestors || '',
     }));
 
     // Sorting state: array of {key, dir} (dir = 1 asc, -1 desc)
@@ -245,22 +247,32 @@
         const childRows = Array.from(container.querySelectorAll(`tr[data-parent-id="${parentId}"]`));
         const isOpen = toggle.classList.contains('open');
         toggle.classList.toggle('open', !isOpen);
-        if (!isOpen && childRows.length) {
-          // Insert child rows immediately after the parent in DOM order for visual proximity
+        if (isOpen) {
+          // Collapse: recursively hide all descendants (direct children and their descendants)
+          const allRows = Array.from(container.querySelectorAll('tbody tr'));
+          allRows.forEach(row => {
+            const ancestors = (row.dataset.ancestors || '').split(',').filter(a => a);
+            if (ancestors.includes(parentId)) {
+              row.style.display = 'none';
+            }
+          });
+        } else {
+          // Expand: show only direct children, keep grandchildren hidden unless their parent is expanded
           const parentRow = toggle.closest('tr');
           let insertAfter = parentRow;
           childRows.forEach(row => {
             insertAfter.parentNode.insertBefore(row, insertAfter.nextSibling);
             insertAfter = row;
             row.style.display = 'table-row';
+            // If this child also has children, ensure expand toggle is initially closed
+            const childToggle = row.querySelector('.expand-toggle');
+            if (childToggle) {
+              childToggle.classList.remove('open');
+            }
           });
-        } else {
-          // Collapse: hide child rows (keep original order intact)
-          childRows.forEach(row => { row.style.display = 'none'; });
         }
       });
     }
-
     // Column resizing functionality (using shared utility)
     if (window.initTableColumnResize) {
       window.initTableColumnResize(table, `assets_col_widths_${repoName}`);

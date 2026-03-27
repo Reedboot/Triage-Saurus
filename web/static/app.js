@@ -95,8 +95,25 @@
     try { localStorage.setItem('diagramHidden', '1'); } catch (e) {}
   }
 
-  // Sections should be visible by default after load so users immediately see tabbed content.
-  let showingSections = true;
+  function syncSectionsToggleButton() {
+    if (!toggleSectionsBtn) return;
+    if (showingSections) {
+      toggleSectionsBtn.textContent = 'Show Log';
+      toggleSectionsBtn.title = 'Show raw scan log';
+      return;
+    }
+    toggleSectionsBtn.textContent = 'Sections';
+    toggleSectionsBtn.title = 'Show structured sections';
+  }
+
+  const sectionsVisibleOnLoad = !!(
+    sectionTabBar &&
+    sectionContent &&
+    getComputedStyle(sectionTabBar).display !== 'none' &&
+    getComputedStyle(sectionContent).display !== 'none'
+  );
+  let showingSections = sectionsVisibleOnLoad;
+  syncSectionsToggleButton();
 
   // Zoom/pan state
   let zoomLevel = 1, panX = 0, panY = 0;
@@ -1111,6 +1128,8 @@
       const effectiveRepoName = currentRepoName || repoName;
       if (code === 0) {
         setStatus(`✅ Scan complete — Experiment ${expId}`, 'success');
+        // Scan is complete; allow section rendering logic to show tabs/content.
+        scanInProgress = false;
         // Refresh past scans list and section tabs
         if (effectiveRepoName) {
           currentRepoName = effectiveRepoName;
@@ -1119,6 +1138,7 @@
             if (expId) {
               await loadSectionTabs(expId, effectiveRepoName);
               // After scan completes, switch to Assets tab
+              try { showSectionsInLog(); } catch (e) {}
               try { activateSectionKey('assets', expId, effectiveRepoName); } catch (e) {}
               scheduleFitDiagram(500); // fit diagram after render
             }
@@ -1142,10 +1162,7 @@
     sectionTabBar.style.display = 'flex';
     sectionContent.style.display = 'flex';
     showingSections = true;
-    if (toggleSectionsBtn) {
-      toggleSectionsBtn.textContent = 'Show Log';
-      toggleSectionsBtn.title = 'Show raw scan log';
-    }
+    syncSectionsToggleButton();
   }
 
   function showRawLog() {
@@ -1154,10 +1171,7 @@
     sectionTabBar.style.display = 'none';
     sectionContent.style.display = 'none';
     showingSections = false;
-    if (toggleSectionsBtn) {
-      toggleSectionsBtn.textContent = 'Sections';
-      toggleSectionsBtn.title = 'Show structured sections';
-    }
+    syncSectionsToggleButton();
   }
 
   if (toggleSectionsBtn) {
@@ -1255,6 +1269,7 @@
       </svg>
       <p>Run or load a scan to view<br/>section details.</p>
     </div>`;
+    showRawLog();
     // Reset diagram
     resetZoomPan();
   });
