@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, List, Dict, Set, Tuple, Optional
 
-from ..Utils.models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
+from Utils.models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +861,14 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_application_gateway_http_listener": "azurerm_application_gateway",
         "azurerm_key_vault_key": "azurerm_key_vault",
         "azurerm_key_vault_secret": "azurerm_key_vault",
+        # Service Bus hierarchy
+        "azurerm_servicebus_queue": "azurerm_servicebus_namespace",
+        "azurerm_servicebus_topic": "azurerm_servicebus_namespace",
+        "azurerm_servicebus_subscription": "azurerm_servicebus_topic",
+        "azurerm_servicebus_subscription_rule": "azurerm_servicebus_subscription",
+        # Event Hub hierarchy
+        "azurerm_eventhub": "azurerm_eventhub_namespace",
+        "azurerm_eventhub_consumer_group": "azurerm_eventhub",
     }
     try:
         from ..Persist import resource_type_db as _rtdb
@@ -895,7 +903,12 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     # Parse Terraform resource + data blocks with source location.
     block_re = re.compile(r'^\s*(resource|data)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+"([^"]+)"')
     # Detect attribute references to other resources: type.name.attr
+    # Note: this regex matches TYPE.NAME (the capture group) followed by .ATTR.
+    # For data source references like data.TYPE.NAME.attr, the leading `data.TYPE`
+    # segment is matched first and TYPE.NAME is never captured — see data_ref_re.
     ref_re = re.compile(r'\b([a-z][a-z0-9_]+\.[a-z][a-z0-9_\-]+)\.[a-z_]+\b')
+    # Detect data source references explicitly: data.<resource_type>.<block_label>.<attr>
+    data_ref_re = re.compile(r'\bdata\.([a-z][a-z0-9_]+)\.([a-z][a-z0-9_\-]+)\.', re.I)
 
     # First pass: collect all resources and build a lookup map
     resource_blocks: list[tuple[Resource, str]] = []  # (resource, raw_block_text)
@@ -1085,6 +1098,25 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         pattern = re.compile(rf'/{re.escape(segment)}/([^/"\s\]]+)', re.I)
         return sorted({m.group(1) for m in pattern.finditer(text)})
 
+    def _is_unresolved_tf_expression(value: object) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return True
+        lower = text.lower()
+        if "${" in lower or "}" in lower:
+            return True
+        prefixes = (
+            "local.",
+            "var.",
+            "module.",
+            "data.",
+            "path.",
+            "terraform.",
+            "each.",
+            "count.",
+        )
+        return lower.startswith(prefixes)
+
     def _is_world_source(value: object) -> bool:
         if value is None:
             return False
@@ -1099,13 +1131,13 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         top_level_name_match = re.search(r'^\s*name\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
         if top_level_name_match:
             name_value = top_level_name_match.group(1)
-            # Only use the name if it's not a variable/local reference
-            if not name_value.startswith("${var.") and not name_value.startswith("${local."):
+            # Only use resolved names, never local/var/module expressions.
+            if not _is_unresolved_tf_expression(name_value):
                 props["actual_name"] = name_value
         elif "name" in attrs and attrs["name"]:
             name_value = attrs["name"].strip('"').strip("'")
-            # Only use the name if it's not a variable/local reference
-            if not name_value.startswith("${var.") and not name_value.startswith("${local."):
+            # Only use resolved names, never local/var/module expressions.
+            if not _is_unresolved_tf_expression(name_value):
                 props["actual_name"] = name_value
 
         # For API operations, also extract operation_id
@@ -1113,13 +1145,11 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             op_id_match = re.search(r'^\s*operation_id\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
             if op_id_match:
                 op_id_value = op_id_match.group(1)
-                # Only use the operation_id if it's not a variable/local reference
-                if not op_id_value.startswith("${var.") and not op_id_value.startswith("${local."):
+                if not _is_unresolved_tf_expression(op_id_value):
                     props["actual_name"] = op_id_value
             elif "operation_id" in attrs and attrs["operation_id"]:
                 op_id_value = attrs["operation_id"].strip('"').strip("'")
-                # Only use the operation_id if it's not a variable/local reference
-                if not op_id_value.startswith("${var.") and not op_id_value.startswith("${local."):
+                if not _is_unresolved_tf_expression(op_id_value):
                     props["actual_name"] = op_id_value
 
         # Normalize common explicit public-access toggles used across providers.
@@ -1392,6 +1422,12 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         for ref_match in ref_re.finditer(block_text):
             ref_key = ref_match.group(1)
             if ref_key in res_lookup and res_lookup[ref_key] is not resource:
+                ref_candidates.append(ref_key)
+        # data.<resource_type>.<block_label>.attr references are consumed by ref_re
+        # as `data.<resource_type>` which is never in res_lookup. Scan explicitly.
+        for data_match in data_ref_re.finditer(block_text):
+            ref_key = f"{data_match.group(1)}.{data_match.group(2)}"
+            if ref_key in res_lookup and res_lookup[ref_key] is not resource and ref_key not in ref_candidates:
                 ref_candidates.append(ref_key)
 
         preferred_parent_type = parent_type_map.get(resource.resource_type)
