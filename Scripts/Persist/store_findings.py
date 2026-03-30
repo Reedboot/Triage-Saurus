@@ -3,6 +3,8 @@
 
 Usage:
     python3 Scripts/store_findings.py <scan_json> --experiment <id> [--repo <name>]
+    opengrep scan --config Rules/Misconfigurations /path/to/repo --json --quiet | \
+        python3 Scripts/store_findings.py --stdin-json --experiment <id> [--repo <name>]
 """
 
 import argparse
@@ -94,17 +96,33 @@ def _already_exists(conn, experiment_id: str, rule_id: str, source_file: str, so
 
 def main():
     parser = argparse.ArgumentParser(description="Store opengrep findings to DB")
-    parser.add_argument("scan_json", help="Path to opengrep JSON output file")
+    parser.add_argument("scan_json", nargs="?", help="Path to opengrep JSON output file")
+    parser.add_argument(
+        "--stdin-json",
+        action="store_true",
+        help="Read opengrep JSON payload from stdin instead of a file",
+    )
     parser.add_argument("--experiment", required=True, help="Experiment ID")
     parser.add_argument("--repo", default="unknown", help="Repository name")
     args = parser.parse_args()
 
-    scan_path = Path(args.scan_json)
-    if not scan_path.exists():
-        print(f"ERROR: file not found: {scan_path}", file=sys.stderr)
-        sys.exit(1)
+    if args.stdin_json:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            data = {"results": [], "paths": {"scanned": []}}
+        else:
+            data = json.loads(raw)
+    else:
+        if not args.scan_json:
+            print("ERROR: provide <scan_json> or use --stdin-json", file=sys.stderr)
+            sys.exit(1)
 
-    data = json.loads(scan_path.read_text())
+        scan_path = Path(args.scan_json)
+        if not scan_path.exists():
+            print(f"ERROR: file not found: {scan_path}", file=sys.stderr)
+            sys.exit(1)
+
+        data = json.loads(scan_path.read_text())
     results = data.get("results", [])
 
     # Detect languages from the full list of scanned files
