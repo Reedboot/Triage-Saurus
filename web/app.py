@@ -2266,7 +2266,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
         for a in assets:
             depth, ancestors = get_depth_and_ancestors(a.get('id'))
             a['depth'] = depth
-            a['ancestors'] = ','.join(ancestors) if ancestors else ''
+            a['ancestors'] = ','.join(str(x) for x in ancestors) if ancestors else ''
 
         return _db_render(
             "tab_assets.html",
