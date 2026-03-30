@@ -93,7 +93,7 @@ What it does:
 1. Runs `Detection/` rules → identifies which resource types exist
 2. Maps fired rule IDs → only the relevant `Misconfigurations/<Provider>/<ResourceType>/` folders
 3. Runs a single targeted scan against those folders only
-4. Calls `store_findings.py` to write results to DB
+4. Streams findings directly into `store_findings.py` for DB persistence (no intermediate scan JSON artifact)
 
 `triage_experiment.py run <id>` calls `targeted_scan.py` automatically.
 
