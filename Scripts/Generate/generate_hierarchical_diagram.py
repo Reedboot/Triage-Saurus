@@ -74,6 +74,16 @@ class HierarchicalDiagramBuilder:
         self.resource_by_id = {}
         self.children_by_parent = defaultdict(list)
         self.emitted_nodes = set()
+        self.connected_resource_names: Set[str] = set()
+
+    def _is_connected_name(self, name: str) -> bool:
+        """Return True when a resource should be rendered based on connection participation.
+
+        If no connections were detected, do not prune and keep all nodes.
+        """
+        if not self.connected_resource_names:
+            return True
+        return name in self.connected_resource_names
         
     def load_data(self):
         """Load resources and connections from database."""
@@ -556,6 +566,10 @@ class HierarchicalDiagramBuilder:
         for api in apim_apis:
             api_children = self.children_by_parent.get(api['id'], [])
             all_operations.extend([c for c in api_children if self.is_api_operation(c)])
+
+        # Prune APIM entries that are not connected to any edge.
+        products = [p for p in products if self._is_connected_name(p.get('resource_name', ''))]
+        all_operations = [op for op in all_operations if self._is_connected_name(op.get('resource_name', ''))]
         
         if products and all_operations:
             # Render the first product as a proper subgraph with operations
@@ -593,7 +607,13 @@ class HierarchicalDiagramBuilder:
             r for r in k8s_resources
             if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
         ]
-        workload_resources = [r for r in k8s_resources if r not in cluster_resources]
+        workload_resources = [
+            r for r in k8s_resources
+            if r not in cluster_resources and self._is_connected_name(r.get('resource_name', ''))
+        ]
+
+        if not workload_resources:
+            return []
 
         # Build the outer subgraph label, incorporating cluster names when known.
         if cluster_resources:
@@ -662,7 +682,7 @@ class HierarchicalDiagramBuilder:
         namespaces = [r for r in sb_resources if 'namespace' in r.get('resource_type', '').lower()]
         rendered_ids = set()
 
-        def _render_topic(topic: dict):
+        def _render_topic(topic: dict, indent: str = "    "):
             topic_subs = [
                 s for s in self.children_by_parent.get(topic['id'], [])
                 if self.is_service_bus_subscription(s)
@@ -670,19 +690,19 @@ class HierarchicalDiagramBuilder:
 
             if topic_subs:
                 topic_id = sanitize_id(topic['resource_name'])
-                lines.append(f"    subgraph {topic_id}[📬 {topic['resource_name']}]")
+                lines.append(f"{indent}subgraph {topic_id}[\"📬 {topic['resource_name']}\"]")
                 for sub in topic_subs:
-                    lines.append(self.render_node(sub, indent="      "))
+                    lines.append(self.render_node(sub, indent=indent + "  "))
                     rendered_ids.add(sub['id'])
-                lines.append("    end")
+                lines.append(f"{indent}end")
             else:
-                lines.append(f"    {sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
+                lines.append(f"{indent}{sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
                 self.emitted_nodes.add(topic['resource_name'])
 
             rendered_ids.add(topic['id'])
 
-        def _render_queue(queue: dict):
-            lines.append(f"    {sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
+        def _render_queue(queue: dict, indent: str = "    "):
+            lines.append(f"{indent}{sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
             self.emitted_nodes.add(queue['resource_name'])
             rendered_ids.add(queue['id'])
 
@@ -690,19 +710,38 @@ class HierarchicalDiagramBuilder:
         for namespace in namespaces:
             namespace_name = namespace['resource_name']
             namespace_id = sanitize_id(namespace_name)
-            lines.append(f"    {namespace_id}[\"{namespace_name}\"]")
-            self.emitted_nodes.add(namespace_name)
-            rendered_ids.add(namespace['id'])
-
             ns_children = self.children_by_parent.get(namespace['id'], [])
             topics = [r for r in ns_children if self.is_service_bus_topic(r)]
             queues = [r for r in ns_children if self.is_service_bus_queue(r)]
-
+            topics_to_render = []
             for topic in topics:
-                _render_topic(topic)
+                topic_subs = [
+                    s for s in self.children_by_parent.get(topic['id'], [])
+                    if self.is_service_bus_subscription(s) and self._is_connected_name(s.get('resource_name', ''))
+                ]
+                if self._is_connected_name(topic.get('resource_name', '')) or topic_subs:
+                    topics_to_render.append(topic)
+            queues_to_render = [q for q in queues if self._is_connected_name(q.get('resource_name', ''))]
 
-            for queue in queues:
-                _render_queue(queue)
+            namespace_connected = self._is_connected_name(namespace_name)
+            if not namespace_connected and not topics_to_render and not queues_to_render:
+                continue
+
+            namespace_subgraph_id = f"sb_ns_{namespace_id}"
+            lines.append(f"    subgraph {namespace_subgraph_id}[\"🚌 {namespace_name}\"]")
+            # Keep a concrete namespace node only when it actually participates in connections.
+            if namespace_connected:
+                lines.append(f"      {namespace_id}[\"{namespace_name}\"]")
+                self.emitted_nodes.add(namespace_name)
+            rendered_ids.add(namespace['id'])
+
+            for topic in topics_to_render:
+                _render_topic(topic, indent="      ")
+
+            for queue in queues_to_render:
+                _render_queue(queue, indent="      ")
+
+            lines.append("    end")
 
         # Render orphan Service Bus resources that are known but not parent-linked.
         orphan_topics = [
@@ -719,14 +758,17 @@ class HierarchicalDiagramBuilder:
         ]
 
         for topic in orphan_topics:
-            _render_topic(topic)
+            if self._is_connected_name(topic.get('resource_name', '')):
+                _render_topic(topic)
 
         for queue in orphan_queues:
-            _render_queue(queue)
+            if self._is_connected_name(queue.get('resource_name', '')):
+                _render_queue(queue)
 
         for subscription in orphan_subscriptions:
-            lines.append(self.render_node(subscription, indent="    "))
-            rendered_ids.add(subscription['id'])
+            if self._is_connected_name(subscription.get('resource_name', '')):
+                lines.append(self.render_node(subscription, indent="    "))
+                rendered_ids.add(subscription['id'])
         
         lines.append("  end")
         return lines
@@ -991,6 +1033,13 @@ class HierarchicalDiagramBuilder:
         # Infer connections if resource_connections table is empty/sparse
         if self.infer_connections():
             lines.append("  internet[🌐 Internet]")
+
+        # Track resources that actually participate in at least one edge so we
+        # can prune isolated boxes that add visual noise.
+        self.connected_resource_names = {
+            n for c in self.connections for n in (c.get('source'), c.get('target'))
+            if n and n != 'Internet'
+        }
         
         # Filter out children that will be rendered in subgraphs
         all_children = set()
@@ -1043,10 +1092,7 @@ class HierarchicalDiagramBuilder:
             lines.append("")
         
         # Render other resources not in above categories (exclude subscriptions which are metadata)
-        connected_resource_names = {
-            n for c in self.connections for n in (c.get('source'), c.get('target'))
-            if n and n != 'Internet'
-        }
+        connected_resource_names = set(self.connected_resource_names)
 
         sql_resources = [
             r for r in self.resources
@@ -1084,6 +1130,7 @@ class HierarchicalDiagramBuilder:
                 self.is_identity_principal_like(r)
                 and r.get('resource_name') not in connected_resource_names
             )
+            and self._is_connected_name(r.get('resource_name', ''))
         ]
         
         for res in other_resources:

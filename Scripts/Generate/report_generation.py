@@ -2042,6 +2042,7 @@ def _build_simple_architecture_diagram(
             sql_child_candidates = set(sql_nested_services)
             kv_child_candidates = set(kv_nested_services)
             lb_child_candidates = set(lb_nested_services)
+            sb_child_candidates = set(sb_nested_services)
             ecs_child_candidates = set(ecs_nested_instances)
             cosmos_child_candidates = set(cosmos_nested_services)
 
@@ -2050,7 +2051,9 @@ def _build_simple_architecture_diagram(
             sql_nested_services = sql_child_candidates
             kv_nested_services = kv_child_candidates
             lb_nested_services = lb_child_candidates
+            sb_nested_services = sb_child_candidates
             ecs_nested_instances = ecs_child_candidates
+            cosmos_nested_services = cosmos_child_candidates
 
             all_nested = (
                 storage_child_candidates
@@ -2058,7 +2061,9 @@ def _build_simple_architecture_diagram(
                 | sql_child_candidates
                 | kv_child_candidates
                 | lb_child_candidates
+                | sb_child_candidates
                 | ecs_child_candidates
+                | cosmos_child_candidates
             )
 
             # Adjust layer service count to account for all nested services
