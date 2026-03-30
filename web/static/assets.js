@@ -106,18 +106,75 @@
         return matchQ && matchP;
       });
 
-      // Apply multi-key sort
-      if (sortStack.length) {
-        filtered.sort((x, y) => {
+      // If a child matches filters, include its ancestors so hierarchy context remains visible.
+      if (filtered.length) {
+        const byIdAll = new Map(assetsData.map(a => [String(a.id || ''), a]));
+        const includeIds = new Set(filtered.map(a => String(a.id || '')));
+        filtered.forEach(a => {
+          let parentId = String(a.parent_id || '');
+          let safety = 0;
+          while (parentId && safety < 100) {
+            if (includeIds.has(parentId)) break;
+            const parent = byIdAll.get(parentId);
+            if (!parent) break;
+            includeIds.add(parentId);
+            parentId = String(parent.parent_id || '');
+            safety += 1;
+          }
+        });
+        filtered = assetsData.filter(a => includeIds.has(String(a.id || '')));
+      }
+
+      function sortItems(items) {
+        if (!sortStack.length) return items.slice();
+        const out = items.slice();
+        out.sort((x, y) => {
           for (const s of sortStack) {
-            const k = s.key;
-            const dir = s.dir;
-            const cmp = compare(x, y, k);
-            if (cmp !== 0) return cmp * dir;
+            const cmp = compare(x, y, s.key);
+            if (cmp !== 0) return cmp * s.dir;
           }
           return 0;
         });
+        return out;
       }
+
+      function orderHierarchically(items) {
+        const byId = new Map(items.map(a => [String(a.id || ''), a]));
+        const childrenByParent = new Map();
+        for (const a of items) {
+          const pid = String(a.parent_id || '');
+          if (!pid || !byId.has(pid)) continue;
+          if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+          childrenByParent.get(pid).push(a);
+        }
+
+        const roots = items.filter(a => {
+          const pid = String(a.parent_id || '');
+          return !pid || !byId.has(pid);
+        });
+
+        const ordered = [];
+        const seen = new Set();
+
+        function appendNode(node, depth) {
+          const nodeId = String(node.id || '');
+          if (!nodeId || seen.has(nodeId) || depth > 100) return;
+          seen.add(nodeId);
+          ordered.push(node);
+          const children = sortItems(childrenByParent.get(nodeId) || []);
+          children.forEach(child => appendNode(child, depth + 1));
+        }
+
+        sortItems(roots).forEach(root => appendNode(root, 0));
+        // Safety fallback for orphan/cycle rows.
+        items.forEach(a => {
+          const id = String(a.id || '');
+          if (id && !seen.has(id)) ordered.push(a);
+        });
+        return ordered;
+      }
+
+      filtered = orderHierarchically(filtered);
 
       // Re-render tbody
       tbody.innerHTML = '';
@@ -149,7 +206,8 @@
           }
           if (toggle) {
             toggle.style.display = c ? '' : 'none';
-            if (!c) toggle.classList.remove('open');
+            // Keep hierarchy collapsed by default after sort/filter; user can expand explicitly.
+            toggle.classList.remove('open');
           }
 
           // Ensure child rows are hidden by default after filtering
