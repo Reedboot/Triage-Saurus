@@ -108,16 +108,16 @@ When `status = "pending"`:
 
    **CRITICAL:** Apply ALL detection rules to achieve complete coverage.
 
-   **`triage_experiment.py run` handles this automatically:**
-   - Runs `opengrep scan --config Rules/ <repo> --json --output scan_<repo>.json`
-   - Immediately calls `store_findings.py scan_<repo>.json --experiment <id>` → raw findings in DB
+      **`triage_experiment.py run` handles this automatically:**
+      - Runs targeted opengrep detection + misconfiguration scans
+      - Streams JSON results directly into `store_findings.py --stdin-json --experiment <id>` → findings in DB
 
    **Manual run if needed:**
    ```bash
-   opengrep scan --config /home/neil/code/Triage-Saurus/Rules/ <repo_path> \
-       --json --output Output/Learning/experiments/<id>/scan_<repo>.json
-   python3 Scripts/Persist/store_findings.py Output/Learning/experiments/<id>/scan_<repo>.json \
-       --experiment <id> --repo <repo_name>
+      opengrep scan --config /home/neil/code/Triage-Saurus/Rules/Misconfigurations/ <repo_path> \
+         --json --quiet | \
+         python3 Scripts/Persist/store_findings.py --stdin-json \
+         --experiment <id> --repo <repo_name>
    ```
 
    **After Phase 3, render all finding MDs and update diagrams:**
