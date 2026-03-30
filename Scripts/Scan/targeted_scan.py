@@ -13,7 +13,6 @@ Usage:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -221,24 +220,27 @@ ALWAYS_INCLUDE: list[str] = [
 FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = []
 
 
-def run_opengrep(config_path: Path, target: Path, output_file: Path, label: str) -> dict:
-    """Run opengrep scan and return parsed JSON results."""
-    cmd = [
-        "opengrep", "scan",
-        "--config", str(config_path),
-        str(target),
-        "--json",
-        "--output", str(output_file),
-        "--quiet",
-    ]
+def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
+    """Run opengrep scan and return parsed JSON results from stdout."""
+    cmd = ["opengrep", "scan"]
+    for config_path in config_paths:
+        cmd += ["--config", str(config_path)]
+    cmd += [str(target), "--json", "--quiet"]
+
     print(f"\n[{label}] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     # opengrep exits non-zero when findings exist — that's expected
-    if output_file.exists():
-        with open(output_file) as f:
-            return json.load(f)
-    # If no output file (e.g. zero findings), return empty structure
-    return {"results": [], "errors": []}
+    stdout = (result.stdout or "").strip()
+    if stdout:
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            print(f"[error] Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
+            sys.exit(1)
+    # If no stdout (e.g. zero findings), return empty structure
+    return {"results": [], "errors": [], "paths": {"scanned": []}}
 
 
 def extract_fired_rule_ids(scan_data: dict) -> set[str]:
@@ -309,24 +311,12 @@ def main() -> None:
         print(f"[error] Target path does not exist: {target}", file=sys.stderr)
         sys.exit(1)
 
-    # Resolve output directory
-    experiment_dir = REPO_ROOT / "Output" / "Learning" / "experiments"
-    matching = list(experiment_dir.glob(f"{args.experiment}_*"))
-    if matching:
-        out_dir = matching[0]
-    else:
-        out_dir = REPO_ROOT / "Output" / "Learning" / "experiments" / args.experiment
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-    detection_json  = out_dir / f"detection_{args.repo}.json"
-    misconfig_json  = out_dir / f"scan_{args.repo}.json"
-
     # ── Phase 1: Detection ────────────────────────────────────────────────────
     print("=" * 60)
     print("PHASE 1 — Detection (asset discovery)")
     print("=" * 60)
 
-    detection_data = run_opengrep(DETECTION, target, detection_json, "Detection")
+    detection_data = run_opengrep([DETECTION], target, "Detection")
     fired_ids = extract_fired_rule_ids(detection_data)
 
     misconfig_paths = resolve_misconfig_paths(fired_ids, target)
@@ -351,26 +341,12 @@ def main() -> None:
     print("PHASE 2 — Targeted Misconfigurations")
     print("=" * 60)
 
-    # Build multi-config command (opengrep accepts multiple --config flags)
-    cmd = ["opengrep", "scan"]
-    for p in misconfig_paths:
-        cmd += ["--config", str(p)]
-    cmd += [str(target), "--json", "--output", str(misconfig_json), "--quiet"]
-
     print(f"\n[Misconfigurations] Running targeted scan...")
     print(f"  Configs: {len(misconfig_paths)} folder(s)")
     print(f"  Target:  {target}")
-    print(f"  Output:  {misconfig_json}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if misconfig_json.exists():
-        with open(misconfig_json) as f:
-            scan_data = json.load(f)
-        finding_count = len(scan_data.get("results", []))
-        print(f"\n[Misconfigurations] {finding_count} finding(s) written to {misconfig_json.name}")
-    else:
-        print("[Misconfigurations] No output file produced (zero findings or error).")
-        sys.exit(0)
+    scan_data = run_opengrep(misconfig_paths, target, "Misconfigurations")
+    finding_count = len(scan_data.get("results", []))
+    print(f"\n[Misconfigurations] {finding_count} finding(s) ready for DB persistence")
 
     # ── Phase 3: Store findings in DB ─────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -380,16 +356,15 @@ def main() -> None:
     store_cmd = [
         sys.executable,
         str(REPO_ROOT / "Scripts" / "Persist" / "store_findings.py"),
-        str(misconfig_json),
+        "--stdin-json",
         "--experiment", args.experiment,
         "--repo", args.repo,
     ]
     print(f"\n[Store] Running: {' '.join(store_cmd)}")
-    subprocess.run(store_cmd, check=True)
+    subprocess.run(store_cmd, check=True, text=True, input=json.dumps(scan_data))
 
     print("\n✓ Scan complete.")
-    print(f"  Detection results : {detection_json.name}")
-    print(f"  Findings JSON     : {misconfig_json.name}")
+    print("  Findings persisted directly to DB")
     print(f"\nNext steps:")
     print(f"  python3 Scripts/Enrich/enrich_findings.py --experiment {args.experiment}")
     print(f"  python3 Scripts/run_skeptics.py --experiment {args.experiment} --reviewer all")
