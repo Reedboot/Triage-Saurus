@@ -34,7 +34,7 @@ sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "Utils"))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "Persist"))
 
-from db_helpers import upsert_context_metadata, get_db_connection, ensure_repository_entry
+from db_helpers import upsert_context_metadata, get_db_connection, ensure_repository_entry, update_repository_stats
 from output_paths import REPO_ROOT
 from service_auth_topology import render_service_auth_topology
 
@@ -887,6 +887,22 @@ def main() -> int:
     _merge(raw, _parse_go_mod(target))
     _merge(raw, _parse_dockerfiles(target))
 
+    # Terraform modules (captures local paths / remote registry/git sources)
+    try:
+        sys.path.insert(0, str((Path(__file__).resolve().parent)))
+        from analyze_terraform_modules import extract_modules  # type: ignore
+        for m in extract_modules(str(target)):
+            name = str(m.get('name') or '').strip()
+            if not name:
+                continue
+            raw[f"terraform.module.{name}"] = json.dumps({
+                "source": m.get('source'),
+                "file": m.get('file'),
+                "line": m.get('line'),
+            })
+    except Exception:
+        pass
+
     # ── 4. Kubernetes manifests ──────────────────────────────────────────────
     print("[Phase 2] Parsing Kubernetes manifests ...")
     _merge(raw, _parse_k8s_manifests(target))
@@ -898,6 +914,17 @@ def main() -> int:
     # ── 6. Persist to DB ─────────────────────────────────────────────────────
     flat = _flatten_for_db(raw)
     print(f"\n[Phase 2] Persisting {len(flat)} metadata entries to DB (clearing stale entries first) ...")
+
+    # Update basic repo scan stats (best-effort) so Overview can show file counts.
+    try:
+        all_files = [p for p in target.rglob('*') if p.is_file() and '.git' not in p.parts and 'node_modules' not in p.parts and '.terraform' not in p.parts]
+        files_scanned = len(all_files)
+        iac_files = sum(1 for p in all_files if p.suffix.lower() in ('.tf', '.tfvars', '.bicep') or p.name.lower().endswith('.tf.json'))
+        code_files = sum(1 for p in all_files if p.suffix.lower() in ('.cs', '.csproj', '.vb', '.fs', '.js', '.ts', '.py', '.java', '.go', '.rb', '.php'))
+        update_repository_stats(args.experiment, args.repo, files_scanned, iac_files, code_files)
+    except Exception:
+        pass
+
     # Clear stale entries so removed/fixed data doesn't persist across runs
     repo_id = ensure_repository_entry(args.experiment, args.repo)
     with get_db_connection() as conn:

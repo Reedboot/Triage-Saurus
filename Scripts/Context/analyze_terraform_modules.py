@@ -80,10 +80,16 @@ def extract_modules(repo_path):
                         module_name = match.group(1)
                         source = match.group(2)
                         rel_path = os.path.relpath(file_path, repo_path)
+                        # Line number where the source string is detected
+                        try:
+                            source_line = content.count('\n', 0, match.start(2)) + 1
+                        except Exception:
+                            source_line = None
                         modules.append({
                             'name': module_name,
                             'source': source,
-                            'file': rel_path
+                            'file': rel_path,
+                            'line': source_line,
                         })
                 except Exception as e:
                     print(f"Warning: Could not read {file_path}: {e}", file=sys.stderr)

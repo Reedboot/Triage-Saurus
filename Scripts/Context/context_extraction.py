@@ -7,7 +7,13 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, List, Dict, Set, Tuple, Optional
 
-from Utils.models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
+import sys
+from pathlib import Path
+
+# Ensure Scripts/Utils is importable when this module is called directly
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'Utils'))
+
+from models import Resource, Connection, Relationship, RelationshipType, RepositoryContext
 
 
 # ---------------------------------------------------------------------------
@@ -1898,11 +1904,26 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     # -------------------------------------------------------------------------
     try:
         from skaffold_parser import extract_skaffold_workloads
-        
+
         skaffold_workloads = extract_skaffold_workloads(repo_path)
         if skaffold_workloads:
             print(f"[+] Found {len(skaffold_workloads)} Skaffold workloads")
-            
+
+            # If we have k8s workloads but no explicit AKS cluster resource in this repo,
+            # create an inferred cluster parent so assets/diagrams can nest correctly.
+            has_explicit_cluster = any(
+                r.resource_type == 'azurerm_kubernetes_cluster'
+                for r in context.resources
+            )
+            inferred_cluster_name = None
+            if not has_explicit_cluster:
+                inferred_cluster_name = _ensure_inferred_resource(
+                    'azurerm_kubernetes_cluster',
+                    canonical_name=f"{repo_name}-aks-cluster",
+                    source_file='skaffold.yaml',
+                    line_number=1,
+                )
+
             # Add workloads as resources
             for wl in skaffold_workloads:
                 # Create a resource for the AKS workload
@@ -1923,8 +1944,11 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                         "is_ingress_endpoint": wl.health_check_path is not None,
                     }
                 )
+                # Link inferred cluster → workload
+                if inferred_cluster_name:
+                    workload_resource.parent = f"azurerm_kubernetes_cluster.{inferred_cluster_name}"
                 context.resources.append(workload_resource)
-                
+
                 # Infer connections from API Gateway to API workloads
                 if "api" in wl.name and not "queuelistener" in wl.name and not "worker" in wl.name:
                     # Find API Gateway resources (Azure, AWS, GCP)
@@ -1939,7 +1963,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                         "google_api_gateway_api",
                         "google_api_gateway_gateway",
                     ]
-                    
+
                     for resource in context.resources:
                         if resource.resource_type in api_gateway_types:
                             # Create connection: API Gateway → Kubernetes API workload
@@ -1949,7 +1973,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                                 connection_type="routes_to_backend"
                             )
                             context.connections.append(conn)
-                            
+
                             # Also create relationship
                             rel = Relationship(
                                 source_type=resource.resource_type,
@@ -1960,7 +1984,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                                 notes="Inferred from API Gateway and Skaffold API workload"
                             )
                             context.relationships.append(rel)
-                
+
                 # Infer connections from messaging services to queue listener/worker workloads
                 if any(keyword in wl.name for keyword in ["queuelistener", "worker", "consumer", "subscriber"]) or \
                    any(keyword in (wl.helm_chart or "") for keyword in ["background-worker", "consumer", "worker"]):
