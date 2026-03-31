@@ -4,11 +4,10 @@ rules:
       - pattern-either:
           - pattern: connection_string = "$CS"
           - pattern: ConnectionString = "$CS"
-    pattern-not-regex:
-      - pattern: |
-          connection_string = "\$\{.*\}"
-      - pattern: |
-          connection_string = var\..*
+      - pattern-not-regex:
+          pattern: connection_string = "(\$\{[^}]+\}|\$\([^)]+\)|%[A-Za-z_][A-Za-z0-9_]*%|\{\{[^}]+\}\}|env\.[A-Za-z_][A-Za-z0-9_]*)"
+      - pattern-not:
+          pattern: connection_string = var.$VAR
     message: |
       Hardcoded connection string detected. This exposes all service credentials.
       Connection strings contain account names, access keys, and SAS tokens.
@@ -22,6 +21,8 @@ rules:
       - Cosmos DB
       - Event Hubs
       - Any service with connection strings
+      
+      Template variables (${VAR}, $(VAR), %VAR%, {{VAR}}) are safe - these get replaced by CI/CD.
       
       Fix: Store in Key Vault or use managed identities.
     languages:
