@@ -13,6 +13,7 @@ import os
 import select
 import time
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, Response, render_template, request, stream_with_context, jsonify
@@ -32,6 +33,10 @@ GENERATE_PROJECT_OVERVIEW = SCRIPTS / "Enrich" / "generate_project_overview.py"
 EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
+
+# DB helpers are used to persist Copilot-generated overview metadata.
+sys.path.insert(0, str(REPO_ROOT))
+from Scripts.Persist import db_helpers
 
 # Load repo search paths from config
 def _load_search_paths():
@@ -70,18 +75,382 @@ def _ai_job_key(experiment_id: str, repo_name: str) -> str:
 
 
 def _append_ai_job_log(key: str, line: str) -> None:
-    """Append a log line to an AI analysis job with a bounded history."""
-    ts = time.strftime("%H:%M:%S")
+    """Append a log line to an AI analysis job with a bounded history and write to a per-job logfile.
+
+    Logfile path: Output/AILogs/<key>.log (safe filename characters).
+    """
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
+    log_dir = REPO_ROOT / 'Output' / 'AILogs'
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    log_file = log_dir / f"{safe_key}.log"
+
+    line_with_ts = f"[{ts}] {line}"
+
+    # Append to in-memory job logs
     with _AI_ANALYSIS_LOCK:
         job = _AI_ANALYSIS_JOBS.get(key)
-        if not job:
-            return
-        logs = job.get("logs", [])
-        logs.append(f"[{ts}] {line}")
-        if len(logs) > 500:
-            logs = logs[-500:]
-        job["logs"] = logs
-        _AI_ANALYSIS_JOBS[key] = job
+        if job:
+            logs = job.get("logs", [])
+            logs.append(line_with_ts)
+            if len(logs) > 500:
+                logs = logs[-500:]
+            job["logs"] = logs
+            _AI_ANALYSIS_JOBS[key] = job
+
+    # Append to disk logfile for post-mortem
+    try:
+        with open(log_file, 'a', encoding='utf-8') as fh:
+            fh.write(line_with_ts + "\n")
+    except Exception:
+        pass
+
+
+def _extract_json_object(text: str) -> dict | None:
+    """Best-effort extraction of a JSON object from model output.
+
+    Enhanced: handles leading bullets/characters, tidy common stray line breaks inside
+    JSON string values, and attempts to repair half-quoted multiline strings by
+    joining broken lines inside quotes.
+    """
+    if not text:
+        return None
+    s = text.strip()
+
+    # Remove a leading bullet marker if present (e.g., '● { ...')
+    s = re.sub(r'^\s*[\u25CF\u2022\*-]+\s*', '', s)
+    # Also strip any leading bullet '●' placed on its own line before the JSON
+    s = re.sub(r'^[\u25CF\u2022\*-]+\s*\n\s*', '', s)
+
+    # Try direct parse first
+    if s.startswith('{') and s.endswith('}'):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+    # Try fenced JSON block
+    fence_m = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', s, re.IGNORECASE)
+    if fence_m:
+        try:
+            return json.loads(fence_m.group(1))
+        except Exception:
+            pass
+
+    # Extract largest {...} blob
+    blob_m = re.search(r'(\{[\s\S]*\})', s)
+    candidate = blob_m.group(1) if blob_m else s
+
+    # Attempt naive repair: join lines that appear to be broken inside string values.
+    # This looks for patterns like "...": "some text\n more text" split across lines
+    def _repair_multiline_strings(t: str) -> str:
+        lines = t.splitlines()
+        out_lines = []
+        in_quote = False
+        buf = ''
+        for ln in lines:
+            if not in_quote:
+                if re.search(r'"\s*:\s*"[^"]*$', ln):
+                    # Line starts a quoted value but doesn't close it
+                    in_quote = True
+                    buf = ln
+                else:
+                    out_lines.append(ln)
+            else:
+                # We're inside an unterminated quote; append this line to buffer
+                buf += ' ' + ln.strip()
+                if '"' in ln:
+                    # Heuristic: closing quote on this line — end buffer
+                    in_quote = False
+                    out_lines.append(buf)
+                    buf = ''
+        if in_quote and buf:
+            out_lines.append(buf)
+        repaired = '\n'.join(out_lines) if out_lines else t
+        return repaired
+
+    tried = candidate
+    try:
+        return json.loads(tried)
+    except Exception:
+        pass
+
+    # Try repair and parse
+    repaired = _repair_multiline_strings(candidate)
+    try:
+        return json.loads(repaired)
+    except Exception:
+        pass
+
+    # As a last resort, attempt to convert smart-quoted multiline JSON by
+    # replacing imbalanced newlines inside arrays/strings.
+    simple_norm = re.sub(r"\n\s+", ' ', candidate)
+    try:
+        return json.loads(simple_norm)
+    except Exception:
+        return None
+
+
+def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict] | None:
+    """Fetch a compact fact-set for Copilot to summarise."""
+    conn = _get_db()
+    if conn is None:
+        return None
+
+    try:
+        repo_row = conn.execute(
+            """
+            SELECT id FROM repositories
+            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+            LIMIT 1
+            """,
+            (experiment_id, repo_name),
+        ).fetchone()
+        if not repo_row:
+            return None
+        repo_id = int(repo_row["id"])
+
+        # Ensure inferred AKS cluster exists (so facts/AI can see it) when only k8s workloads are present.
+        try:
+            from Scripts.Persist import db_helpers as _dbh  # type: ignore
+            _dbh.ensure_inferred_aks_cluster(experiment_id, repo_name)
+            _dbh.infer_aks_cluster_link(experiment_id, repo_name)
+        except Exception:
+            pass
+
+        providers = [
+            r["provider"]
+            for r in conn.execute(
+                """
+                SELECT COALESCE(provider, 'unknown') AS provider
+                FROM resources
+                WHERE experiment_id = ? AND repo_id = ?
+                GROUP BY COALESCE(provider, 'unknown')
+                ORDER BY COUNT(*) DESC
+                LIMIT 5
+                """,
+                (experiment_id, repo_id),
+            ).fetchall()
+        ]
+
+        resource_types = [
+            r["resource_type"]
+            for r in conn.execute(
+                """
+                SELECT resource_type
+                FROM resources
+                WHERE experiment_id = ? AND repo_id = ?
+                GROUP BY resource_type
+                ORDER BY COUNT(*) DESC
+                LIMIT 8
+                """,
+                (experiment_id, repo_id),
+            ).fetchall()
+        ]
+
+        interaction_types = [
+            r["connection_type"]
+            for r in conn.execute(
+                """
+                SELECT connection_type
+                FROM resource_connections
+                WHERE experiment_id = ?
+                  AND (source_repo_id = ? OR target_repo_id = ?)
+                  AND connection_type IS NOT NULL
+                  AND LOWER(connection_type) NOT IN ('contains')
+                GROUP BY connection_type
+                ORDER BY COUNT(*) DESC
+                LIMIT 8
+                """,
+                (experiment_id, repo_id, repo_id),
+            ).fetchall()
+        ] if _table_exists(conn, "resource_connections") else []
+
+        dep_types = [
+            r["connection_type"]
+            for r in conn.execute(
+                """
+                SELECT connection_type
+                FROM resource_connections
+                WHERE experiment_id = ?
+                  AND source_repo_id = ?
+                  AND connection_type IS NOT NULL
+                  AND LOWER(connection_type) NOT IN ('contains')
+                GROUP BY connection_type
+                ORDER BY COUNT(*) DESC
+                LIMIT 8
+                """,
+                (experiment_id, repo_id),
+            ).fetchall()
+        ] if _table_exists(conn, "resource_connections") else []
+
+        top_findings = [
+            (r["title"] or r["rule_id"] or "Untitled")
+            for r in conn.execute(
+                """
+                SELECT title, rule_id
+                FROM findings
+                WHERE experiment_id = ? AND repo_id = ?
+                ORDER BY severity_score DESC, id ASC
+                LIMIT 8
+                """,
+                (experiment_id, repo_id),
+            ).fetchall()
+        ] if _table_exists(conn, "findings") else []
+
+        # Include full findings data (all findings for this repo) so the AI has the complete set
+        # of findings and associated metadata from the Findings tab.
+        all_findings = []
+        if _table_exists(conn, "findings"):
+            rows = conn.execute(
+                """
+                SELECT id, rule_id, title, description, severity_score, category, source_file, source_line_start
+                FROM findings
+                WHERE experiment_id = ? AND repo_id = ?
+                ORDER BY severity_score DESC, id ASC
+                """,
+                (experiment_id, repo_id),
+            ).fetchall()
+            all_findings = [dict(r) for r in rows]
+
+        facts = {
+            "providers": providers,
+            "resource_types": resource_types,
+            "interaction_types": interaction_types,
+            "dependency_types": dep_types,
+            "top_findings": top_findings,
+            "findings": all_findings,
+        }
+
+        # Global Knowledge Q&A (per experiment; optionally scoped to this repo)
+        try:
+            qna = {"global": [], "repo": []}
+            if _table_exists(conn, "subscription_context"):
+                g_rows = conn.execute(
+                    "SELECT question, answer, confidence, tags, answered_by, updated_at FROM subscription_context WHERE experiment_id = ? AND scope_key = 'global' ORDER BY updated_at DESC, id DESC LIMIT 50",
+                    (experiment_id,),
+                ).fetchall()
+                qna["global"] = [dict(r) for r in g_rows] if g_rows else []
+
+                r_rows = conn.execute(
+                    "SELECT question, answer, confidence, tags, answered_by, updated_at FROM subscription_context WHERE experiment_id = ? AND scope_key = 'repo' AND LOWER(repo_name)=LOWER(?) ORDER BY updated_at DESC, id DESC LIMIT 50",
+                    (experiment_id, repo_name),
+                ).fetchall()
+                qna["repo"] = [dict(r) for r in r_rows] if r_rows else []
+            facts["global_knowledge_qna"] = qna
+        except Exception:
+            facts["global_knowledge_qna"] = {"global": [], "repo": []}
+
+        # Minimal additional tab data: assets, ingress (api operations), egress, roles (RBAC), containers, ports, terraform modules
+        # Each key contains a list of lightweight dicts representing rows to give AI context about each tab.
+        try:
+            # Assets: core resource rows
+            assets_rows = conn.execute(
+                "SELECT id, resource_name, resource_type, provider, region, source_file FROM resources WHERE experiment_id = ? AND repo_id = ? LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, "resources") else []
+            assets = [dict(r) for r in assets_rows]
+        except Exception:
+            assets = []
+
+        try:
+            # Ingress/API operations: mirror what the ingress tab renders
+            ops_rows = conn.execute(
+                "SELECT id, operation_name, resource_type, source_file, source_line_start, is_public, internet_access FROM resources WHERE experiment_id = ? AND repo_id = ? AND resource_type LIKE '%api%' LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, "resources") else []
+            ingress = [dict(r) for r in ops_rows]
+        except Exception:
+            ingress = []
+
+        try:
+            # Egress: resource connections where this repo is source
+            eg_rows = conn.execute(
+                "SELECT source_resource_id, target_resource_id, connection_type FROM resource_connections WHERE experiment_id = ? AND source_repo_id = ? LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, "resource_connections") else []
+            egress = [dict(r) for r in eg_rows]
+        except Exception:
+            egress = []
+
+        try:
+            # Roles: role assignments and identity-related resources
+            role_rows = conn.execute(
+                "SELECT id, resource_name, resource_type, provider FROM resources WHERE experiment_id = ? AND repo_id = ? AND resource_type LIKE '%role%' LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, "resources") else []
+            roles = [dict(r) for r in role_rows]
+        except Exception:
+            roles = []
+
+        try:
+            # Containers: kubernetes deployments / components
+            cont_rows = conn.execute(
+                "SELECT id, resource_name, resource_type, source_file FROM resources WHERE experiment_id = ? AND repo_id = ? AND (resource_type LIKE '%kubernetes%' OR resource_type LIKE '%container%') LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, "resources") else []
+            containers = [dict(r) for r in cont_rows]
+        except Exception:
+            containers = []
+
+        try:
+            # Ports: exposures or ports table if present; fallback to exposure_analysis
+            ports = []
+            if _table_exists(conn, 'exposure_analysis'):
+                p_rows = conn.execute(
+                    "SELECT resource_id, port, protocol, evidence FROM exposure_analysis WHERE experiment_id = ? LIMIT 200",
+                    (experiment_id,),
+                ).fetchall()
+                ports = [dict(r) for r in p_rows]
+        except Exception:
+            ports = []
+
+        # Terraform modules: extracted module sources (to detect shared/internal modules across repos)
+        try:
+            mod_rows = conn.execute(
+                "SELECT key, value FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND namespace = 'phase2_code' AND key LIKE 'terraform.module.%' ORDER BY id DESC LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall() if _table_exists(conn, 'context_metadata') else []
+            terraform_modules = []
+            for r in mod_rows:
+                k = (r['key'] or '')
+                name = k.split('terraform.module.', 1)[-1] if 'terraform.module.' in k else k
+                terraform_modules.append({"name": name, "value": r['value']})
+        except Exception:
+            terraform_modules = []
+
+        # Attach these to facts with descriptive keys so AI knows their origin
+        facts['assets'] = assets
+        facts['ingress'] = ingress
+        facts['egress'] = egress
+        facts['roles'] = roles
+        facts['containers'] = containers
+        facts['ports'] = ports
+        facts['terraform_modules'] = terraform_modules
+
+        # Include mermaid diagram node lists (if diagrams are present in DB) so AI can detect missing arrows
+        try:
+            from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+            db_diags = get_cloud_diagrams(experiment_id)
+            diagrams = []
+            for d in db_diags:
+                code = d.get('mermaid_code') or ''
+                nodes = list(_extract_mermaid_nodes(code)) if code else []
+                diagrams.append({
+                    'title': d.get('diagram_title'),
+                    'nodes': nodes,
+                    'code_snippet': (code[:200] + '...') if code and len(code) > 200 else code,
+                })
+            facts['diagrams'] = diagrams
+        except Exception:
+            facts['diagrams'] = []
+
+        return repo_id, facts
+    finally:
+        conn.close()
 
 
 def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
@@ -92,6 +461,13 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         ("run_skeptics", [sys.executable, str(RUN_SKEPTICS), "--experiment", experiment_id, "--reviewer", "all"]),
         ("generate_project_overview", [sys.executable, str(GENERATE_PROJECT_OVERVIEW), "--experiment", experiment_id, "--repo", repo_name]),
     ]
+
+    # Friendly names so UI can treat skeptics as a subtask/status flag.
+    step_labels = {
+        "enrich_findings": "Enriching findings",
+        "run_skeptics": "Running skeptics",
+        "generate_project_overview": "Generating overview",
+    }
 
     with _AI_ANALYSIS_LOCK:
         _AI_ANALYSIS_JOBS[key] = {
@@ -121,7 +497,14 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
 
     for step_name, cmd in commands:
         started = time.time()
-        _append_ai_job_log(key, f"Starting step: {step_name}")
+        label = step_labels.get(step_name, step_name)
+        with _AI_ANALYSIS_LOCK:
+            job = _AI_ANALYSIS_JOBS.get(key, {})
+            job["active_step"] = step_name
+            job["active_step_label"] = label
+            job["skeptics_running"] = True if step_name == "run_skeptics" else False
+            _AI_ANALYSIS_JOBS[key] = job
+        _append_ai_job_log(key, f"Starting step: {label}")
         result = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
@@ -131,7 +514,8 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         )
         stdout_tail = "\n".join((result.stdout or "").splitlines()[-12:])
         stderr_tail = "\n".join((result.stderr or "").splitlines()[-12:])
-        _append_ai_job_log(key, f"Step {step_name} finished with exit code {result.returncode}")
+        label = step_labels.get(step_name, step_name)
+        _append_ai_job_log(key, f"Step {label} finished with exit code {result.returncode}")
         if stdout_tail:
             for ln in stdout_tail.splitlines():
                 _append_ai_job_log(key, f"{step_name} stdout: {ln}")
@@ -144,6 +528,7 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
             steps = job.get("steps", [])
             steps.append({
                 "name": step_name,
+                "label": step_labels.get(step_name, step_name),
                 "returncode": result.returncode,
                 "duration_sec": round(time.time() - started, 2),
                 "stdout_tail": stdout_tail,
@@ -169,6 +554,9 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         job = _AI_ANALYSIS_JOBS.get(key, {})
         job["status"] = "completed"
         job["completed_at"] = time.time()
+        job["active_step"] = None
+        job["active_step_label"] = None
+        job["skeptics_running"] = False
         _AI_ANALYSIS_JOBS[key] = job
     _append_ai_job_log(key, "AI analysis completed successfully")
 
@@ -322,13 +710,13 @@ def _sanitize_mermaid(code: str) -> str:
     # This handles cases where the opening '[' and closing ']' are on different lines
     code = re.sub(r'\[([^\]]*\n[^\]]*)\]', lambda m: '[' + m.group(1).replace('\n', ' ').replace('\r',' ') + ']', code, flags=re.M|re.S)
 
-    # 7. Remove explicit "contains" edges — containment should be represented via subgraphs
-    lines = [ln for ln in code.splitlines() if not re.search(r'\bcontains\b', ln, flags=re.I)]
+    # 7. Preserve "contains" edges so relationship-heavy diagrams remain connected.
+    lines = code.splitlines()
 
-    # 7. Collapse newlines inside bracketed labels across all lines first
+    # 8. Collapse newlines inside bracketed labels across all lines first
     collapsed = [re.sub(r'\[([^\]]*\n[^\]]*)\]', lambda m: '[' + m.group(1).replace('\n', ' ').replace('\r',' ') + ']', ln) for ln in lines]
 
-    # 8. Remove self-edges (node linking to itself) from the collapsed lines
+    # 9. Remove self-edges (node linking to itself) from the collapsed lines
     filtered: list[str] = []
     for ln in collapsed:
         if re.search(r'[-.]+>', ln):
@@ -343,7 +731,7 @@ def _sanitize_mermaid(code: str) -> str:
                     continue
         filtered.append(ln)
 
-    # 8. Deduplicate subgraph blocks, node defs and style lines
+    # 10. Deduplicate subgraph blocks, node defs and style lines
     out_lines: list[str] = []
     seen_subs: set[str] = set()
     seen_nodes: set[str] = set()
@@ -805,12 +1193,794 @@ def api_analysis_start(experiment_id: str, repo_name: str):
 @app.route("/api/analysis/status/<experiment_id>/<repo_name>")
 def api_analysis_status(experiment_id: str, repo_name: str):
     """Get status for current/last AI analysis job for an experiment+repo."""
-    key = _ai_job_key(experiment_id, repo_name)
+    conn = _get_db()
+    resolved_exp_id = experiment_id
+    if conn:
+        try:
+            resolved = _get_experiment_for_repo(conn, repo_name, experiment_id)
+            if resolved:
+                resolved_exp_id = resolved
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    key = _ai_job_key(resolved_exp_id, repo_name)
     with _AI_ANALYSIS_LOCK:
         job = _AI_ANALYSIS_JOBS.get(key)
         if not job:
-            return jsonify({"status": "idle", "experiment_id": experiment_id, "repo_name": repo_name})
-        return jsonify(job)
+            return jsonify({"status": "idle", "experiment_id": resolved_exp_id, "repo_name": repo_name})
+        # Create a shallow serializable copy excluding non-serializable fields like subprocess handles
+        safe_job = {}
+        for k, v in job.items():
+            if k == 'process':
+                continue
+            try:
+                json.dumps(v)
+                safe_job[k] = v
+            except Exception:
+                safe_job[k] = str(v)
+        return jsonify(safe_job)
+
+
+@app.route("/api/analysis/copilot/stream/<experiment_id>/<repo_name>")
+def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
+    """Stream a Copilot-generated overview into the Log panel via SSE."""
+
+    def _gen():
+        conn = _get_db()
+        if conn is None:
+            yield _sse("error", "DB unavailable")
+            return
+
+        try:
+            resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+            if not resolved_exp_id:
+                yield _sse("error", f"No completed scan found for {repo_name}.")
+                return
+        finally:
+            conn.close()
+
+        key = _ai_job_key(resolved_exp_id, repo_name)
+
+        with _AI_ANALYSIS_LOCK:
+            existing = _AI_ANALYSIS_JOBS.get(key)
+            if existing and existing.get("status") == "running":
+                yield _sse("log", "Already running")
+                yield _sse("done", {"status": "running"})
+                return
+
+            _AI_ANALYSIS_JOBS[key] = {
+                "status": "running",
+                "experiment_id": resolved_exp_id,
+                "repo_name": repo_name,
+                "started_at": time.time(),
+                "completed_at": None,
+                "steps": [],
+                "logs": [],
+                "error": "",
+            }
+
+        _append_ai_job_log(key, "Copilot streaming job started")
+        yield _sse("log", "Step 1/3: Collecting repository facts from DB...")
+
+        facts = _fetch_overview_facts(resolved_exp_id, repo_name)
+        if not facts:
+            err = "Repo facts unavailable (missing DB rows)"
+            _append_ai_job_log(key, err)
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job["status"] = "failed"
+                job["error"] = err
+                job["completed_at"] = time.time()
+                job.pop("process", None)
+                _AI_ANALYSIS_JOBS[key] = job
+            yield _sse("error", err)
+            return
+
+        yield _sse("log", "Step 2/3: Asking Copilot for key summaries + action points...")
+
+        _, fact_json = facts
+        # Gather recent skeptic reviews for prompt enrichment (if present)
+        skeptic_rows = []
+        try:
+            conn3 = _get_db()
+            if conn3:
+                try:
+                    skeptic_rows = conn3.execute(
+                        "SELECT f.id AS finding_id, f.rule_id, f.title, f.severity_score, sr.reviewer_type, sr.adjusted_score, sr.confidence, sr.reasoning FROM findings f LEFT JOIN skeptic_reviews sr ON sr.finding_id = f.id WHERE f.experiment_id = ?",
+                        (resolved_exp_id,),
+                    ).fetchall()
+                    skeptic_rows = [dict(r) for r in skeptic_rows]
+                finally:
+                    conn3.close()
+        except Exception:
+            skeptic_rows = []
+
+        # Present context in priority order to reduce wrong assumptions.
+        qna_json = json.dumps((fact_json or {}).get("global_knowledge_qna") or {"global": [], "repo": []})
+        diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
+        assets_json = json.dumps((fact_json or {}).get("assets") or [])
+        findings_json = json.dumps((fact_json or {}).get("findings") or [])
+        other_facts = dict(fact_json or {})
+        for k in ("global_knowledge_qna", "diagrams", "assets", "findings"):
+            other_facts.pop(k, None)
+
+        prompt = (
+            "You are creating an executive technical overview for a security triage portal. "
+            "Use the supplied repository facts and respond with JSON only. "
+            "Be concise and high-signal.\n\n"
+            "The data below is provided in PRIORITY ORDER (earlier sections should override later ambiguity).\n\n"
+            "Constraints:\n"
+            "- Each *summary* field must be <= 1 sentence.\n"
+            "- action_items: max 6 items. Each item MUST be a JSON object with keys:\n"
+            "  title, what, why, file, line, current_snippet, fix_snippet\n"
+            "  - title: short imperative (used as a subheader)\n"
+            "  - what: what to change\n"
+            "  - why: risk/impact (1 sentence)\n"
+            "  - file: repo-relative path to the deployable file\n"
+            "  - line: integer line number (use source_line_start where available)\n"
+            "  - current_snippet: minimal snippet showing the problem\n"
+            "  - fix_snippet: minimal snippet showing a plausible fix\n"
+            "- open_questions: max 5 items. Each item MUST be a JSON object with keys: question, file, line, asset (optional).\n"
+            "  - question: the question text\n"
+            "  - file/line: repo-relative location that caused the question (use findings source_file/source_line_start when possible)\n"
+            "  - asset: optional asset/resource name or type if clearly tied\n"
+            "- asset_visibility: optional list of JSON objects with keys: resource_type, resource_name (optional), decision(show|hide|review), reason.\n"
+            "  Only suggest hide/show for assets that are clearly internal details vs user-consumed services.\n"
+            "- learning_suggestions: optional list of JSON objects with keys: kind(rule_add|rule_update|rule_remove|logic_change), target, rationale, example_evidence (file:line + snippet), proposed_change.\n"
+            "  Use this to suggest new OpenGrep rules, amendments to existing rules, or code logic improvements in Triage-Saurus.\n"
+            "- IMPORTANT: If a recommendation depends on an unknown decision (e.g., whether APIM should use subscription keys only vs JWT), ASK it as an open_question instead of emitting an action_item.\n"
+            "  Example open question: 'Is APIM intended to be authenticated via subscription keys only, or must it also enforce JWT (Entra ID) for caller identity?'.\n"
+            "- If APIM exposure is not explicitly verified, ASK as an open_question whether APIM is internet-accessible or only reachable from an internal network (VNet/private endpoint/app gateway).\n"
+            "- If an application gateway/WAF/front door is used in front of APIM, ASK which one and how traffic flows.\n"
+            "- If Kubernetes deployments/services are present but no AKS cluster resource is defined in this repo, ASK which AKS cluster they actually run on (cluster name + owning repo/module), so we can link them.\n"
+            "- Documentation files (README, quickstart, docs/, examples/, samples/, *.md) provide CONTEXT but code examples within them are NOT implemented code.\n"
+            "- EXCLUDE findings from documentation/example files when creating action_items and issues_summary.\n"
+            "- ONLY report findings from deployable files: production code, IaC (*.tf, *.tfvars), docker-compose.yml, k8s manifests, CI/CD configs.\n"
+            "- Template variables are SAFE: ${VAR}, {{VAR}}, $VAR, $(VAR), %VAR% are pipeline/CI variables that get replaced at deploy time.\n"
+            "- ONLY flag as secrets: actual hardcoded values like passwords, connection strings with real credentials, API keys with visible values.\n"
+            "- Use the source_file and source_line_start from findings data to create accurate file references.\n"
+            "- Read the actual source files to extract accurate code snippets showing the vulnerable line and a realistic fix.\n"
+            "- You MAY suggest which Assets should be hidden/shown in the Assets tab via asset_visibility (see output schema).\n"
+            "  Use this for resources that are internal implementation detail (e.g., helper/child resources) vs user-consumed services.\n\n"
+            f"Repository: {repo_name}\n\n"
+            f"1) Global Knowledge Q&A JSON: {qna_json}\n\n"
+            f"2) Architecture / diagrams JSON: {diagrams_json}\n\n"
+            f"3) Assets JSON: {assets_json}\n\n"
+            f"4) Detected findings (evidence) JSON: {findings_json}\n\n"
+            f"5) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
+            f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
+            "Return compact JSON with keys: project_summary, deployment_summary, interactions_summary, auth_summary, dependencies_summary, issues_summary, skeptic_summary, action_items, open_questions, observations, asset_visibility, learning_suggestions, new_assets, fixed_information"
+        )
+
+        # We stream *progress* + a compact formatted result, not the raw token stream.
+        model = os.environ.get("COPILOT_MODEL", "gpt-5-mini")
+        cmd = [
+            "copilot",
+            "--no-color",
+            "--model",
+            model,
+            "--stream",
+            "off",
+            "-s",
+            "--allow-all-tools",
+            "--allow-all-paths",
+            "--allow-all-urls",
+            "-p",
+            prompt,
+        ]
+
+        yield _sse("log", "Copilot started (building summaries)...")
+
+        # Attempt to run copilot in a temporary copy of the repository so the CLI can read source files safely.
+        repo_cwd = str(REPO_ROOT)
+        temp_copy_dir = None
+        try:
+            conn2 = _get_db()
+            if conn2:
+                try:
+                    row = conn2.execute(
+                        "SELECT COALESCE(path, '') AS path FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
+                        (resolved_exp_id, repo_name),
+                    ).fetchone()
+                    if row and row["path"]:
+                        p = Path(row["path"]).expanduser().resolve()
+                        if p.exists() and p.is_dir():
+                            # Create a temporary copy inside the server's Output/WorkingCopies folder
+                            wc_root = REPO_ROOT / "Output" / "WorkingCopies"
+                            wc_root.mkdir(parents=True, exist_ok=True)
+                            dest = wc_root / f"{resolved_exp_id}_{repo_name}"
+                            # Remove any stale copy first
+                            if dest.exists():
+                                try:
+                                    import shutil
+
+                                    shutil.rmtree(dest)
+                                except Exception:
+                                    pass
+                            try:
+                                import shutil
+
+                                shutil.copytree(p, dest, dirs_exist_ok=True)
+                                temp_copy_dir = dest
+                                repo_cwd = str(dest)
+                            except Exception:
+                                # Fall back to original repo path if copy fails
+                                repo_cwd = str(p)
+                finally:
+                    conn2.close()
+        except Exception:
+            # Best-effort: fall back to REPO_ROOT when DB lookup fails
+            pass
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=repo_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            )
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job["process"] = proc
+                _AI_ANALYSIS_JOBS[key] = job
+        except Exception as exc:
+            err = f"Failed to start copilot: {exc}"
+            _append_ai_job_log(key, err)
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job["status"] = "failed"
+                job["error"] = err
+                job["completed_at"] = time.time()
+                _AI_ANALYSIS_JOBS[key] = job
+            yield _sse("error", err)
+            return
+
+        start_ts = time.time()
+        last_hb = start_ts
+        lines: list[str] = []
+
+        try:
+            # Read incrementally to avoid pipe backpressure, but don't spam the UI.
+            while True:
+                reads, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if reads:
+                    raw = proc.stdout.readline()
+                    if raw == "" and proc.poll() is not None:
+                        break
+                    if raw:
+                        lines.append(raw.rstrip("\n"))
+
+                now = time.time()
+                if now - last_hb >= 2.0:
+                    yield _sse("log", f"Copilot running... {int(now - start_ts)}s")
+                    last_hb = now
+
+                if proc.poll() is not None:
+                    # Drain any remaining output
+                    for raw in proc.stdout or []:
+                        if raw:
+                            lines.append(raw.rstrip("\n"))
+                    break
+        finally:
+            try:
+                rc = proc.wait(timeout=1)
+            except Exception:
+                rc = proc.poll()
+            finally:
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    if job.get("process") is proc:
+                        job.pop("process", None)
+                        _AI_ANALYSIS_JOBS[key] = job
+
+        yield _sse("log", "Step 3/3: Parsing + persisting results (and refreshing Overview)...")
+
+        combined = "\n".join([ln for ln in lines if ln and ln.strip()])
+        # Persist raw Copilot output for diagnostics
+        try:
+            safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
+            raw_log_dir = REPO_ROOT / 'Output' / 'AILogs'
+            raw_log_dir.mkdir(parents=True, exist_ok=True)
+            raw_file = raw_log_dir / f"{safe_key}-raw.txt"
+            try:
+                raw_file.write_text(combined, encoding='utf-8')
+                _append_ai_job_log(key, f"Raw Copilot output saved to: {raw_file}")
+            except Exception:
+                _append_ai_job_log(key, "Failed to save raw Copilot output to file")
+        except Exception:
+            pass
+
+        parsed = _extract_json_object(combined)
+
+        if parsed:
+            # Stream a compact, human-friendly view to the Log panel.
+            yield _sse("log", "")
+            yield _sse("log", "=== Copilot Summary ===")
+            for label, k in [
+                ("Project", "project_summary"),
+                ("Deployment", "deployment_summary"),
+                ("Interactions", "interactions_summary"),
+                ("Auth", "auth_summary"),
+                ("Dependencies", "dependencies_summary"),
+                ("Issues", "issues_summary"),
+                ("Skeptics", "skeptic_summary"),
+            ]:
+                val = (parsed.get(k) or "").strip()
+                if val:
+                    # Prevent embedded newlines from breaking log prefixes/formatting.
+                    val = re.sub(r"\s+", " ", val).strip()
+                    yield _sse("log", f"{label}: {val}")
+
+            # New assets detected by the AI
+            new_assets = parsed.get("new_assets")
+            if isinstance(new_assets, list) and new_assets:
+                yield _sse("log", "")
+                yield _sse("log", "New assets detected:")
+                for a in new_assets:
+                    try:
+                        label = a.get("label") if isinstance(a, dict) else str(a)
+                    except Exception:
+                        label = str(a)
+                    yield _sse("log", f"- {label}")
+
+            # Fixed information reported by the AI
+            fixed_info = parsed.get("fixed_information") or parsed.get("fixed_info")
+            if isinstance(fixed_info, list) and fixed_info:
+                yield _sse("log", "")
+                yield _sse("log", "Fixed information (what was corrected and why):")
+                for f in fixed_info:
+                    s = f if not isinstance(f, dict) else (f.get("description") or str(f))
+                    yield _sse("log", f"- {s}")
+
+            observations = parsed.get("observations")
+            if isinstance(observations, list) and observations:
+                yield _sse("log", "")
+                yield _sse("log", "Observations (potential improvements / inconsistencies):")
+                clean_obs = []
+                for o in observations[:8]:
+                    if isinstance(o, dict):
+                        title = str(o.get('title') or '').strip()
+                        detail = str(o.get('detail') or '').strip()
+                        target = str(o.get('target') or '').strip()
+                        s = title or detail or target
+                        if s:
+                            clean_obs.append({"title": title, "detail": detail, "target": target})
+                            suffix = f" ({target})" if target else ""
+                            yield _sse("log", f"- {(title or detail)}{suffix}")
+                    else:
+                        s = str(o).strip()
+                        if s:
+                            clean_obs.append({"title": s, "detail": "", "target": ""})
+                            yield _sse("log", f"- {s}")
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_observations",
+                        json.dumps(clean_obs),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+            asset_visibility = parsed.get("asset_visibility")
+            if isinstance(asset_visibility, list) and asset_visibility:
+                yield _sse("log", "")
+                yield _sse("log", "Asset visibility suggestions (what to hide/show):")
+                clean_vis = []
+                for v in asset_visibility[:20]:
+                    if not isinstance(v, dict):
+                        continue
+                    rtype = str(v.get('resource_type') or '').strip()
+                    name = str(v.get('resource_name') or '').strip()
+                    decision = str(v.get('decision') or '').strip().lower()  # show/hide
+                    reason = str(v.get('reason') or '').strip()
+                    if not (rtype or name):
+                        continue
+                    clean_vis.append({"resource_type": rtype, "resource_name": name, "decision": decision, "reason": reason})
+                    label = name or rtype
+                    yield _sse("log", f"- {label}: {decision or 'review'}{(' — ' + reason) if reason else ''}")
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_asset_visibility",
+                        json.dumps(clean_vis),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+            learning = parsed.get("learning_suggestions")
+            if isinstance(learning, list) and learning:
+                yield _sse("log", "")
+                yield _sse("log", "Learning suggestions (improve rules/logic):")
+                clean_learning = []
+                for s in learning[:12]:
+                    if not isinstance(s, dict):
+                        continue
+                    kind = str(s.get('kind') or '').strip()
+                    target = str(s.get('target') or '').strip()
+                    rationale = str(s.get('rationale') or '').strip()
+                    evidence = str(s.get('example_evidence') or '').strip()
+                    proposed = str(s.get('proposed_change') or '').strip()
+                    if not (kind or target or rationale or proposed):
+                        continue
+                    clean_learning.append({
+                        "kind": kind,
+                        "target": target,
+                        "rationale": rationale,
+                        "example_evidence": evidence,
+                        "proposed_change": proposed,
+                    })
+                    headline = (target or kind or 'suggestion').strip()
+                    why = f" — {rationale}" if rationale else ""
+                    yield _sse("log", f"- {kind}: {headline}{why}")
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_learning_suggestions",
+                        json.dumps(clean_learning),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+            action_items = parsed.get("action_items")
+            if isinstance(action_items, list) and action_items:
+                yield _sse("log", "")
+                yield _sse("log", "Action items:")
+                for item in action_items[:6]:
+                    if isinstance(item, dict):
+                        title = str(item.get('title') or '').strip()
+                        file = str(item.get('file') or '').strip()
+                        line = item.get('line')
+                        what = str(item.get('what') or '').strip()
+                        why = str(item.get('why') or '').strip()
+                        parts = [p for p in [title, what, why] if p]
+                        loc = file + (f":{line}" if line else "")
+                        if loc:
+                            parts.append(loc)
+                        s = " — ".join(parts)
+                    else:
+                        s = str(item).strip()
+                    if s:
+                        yield _sse("log", f"- {s}")
+
+            open_q = parsed.get("open_questions")
+            if isinstance(open_q, list) and open_q:
+                yield _sse("log", "")
+                yield _sse("log", "Open questions:")
+                clean_q = []
+                for item in open_q[:5]:
+                    if isinstance(item, dict):
+                        q = str(item.get('question') or '').strip()
+                        fpath = str(item.get('file') or '').strip()
+                        line = item.get('line')
+                        asset = str(item.get('asset') or '').strip()
+                        if q:
+                            clean_q.append({"question": q, "file": fpath, "line": line, "asset": asset})
+                            loc = fpath + (f":{line}" if line else "")
+                            suffix = f" ({loc})" if loc else ""
+                            yield _sse("log", f"- {q}{suffix}")
+                    else:
+                        s = str(item).strip()
+                        if s:
+                            clean_q.append({"question": s, "file": "", "line": None, "asset": ""})
+                            yield _sse("log", f"- {s}")
+
+                # Persist in Overview metadata as JSON for richer rendering.
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_open_questions",
+                        json.dumps(clean_q),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+                # Store on the job so the UI can navigate user to Q&A after completion.
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["open_questions"] = clean_q
+                    _AI_ANALYSIS_JOBS[key] = job
+
+            # Persist to DB so Overview tab renders it.
+            mapping = {
+                "project_summary": "ai_project_summary",
+                "deployment_summary": "ai_deployment_summary",
+                "interactions_summary": "ai_interactions_summary",
+                "auth_summary": "ai_auth_summary",
+                "dependencies_summary": "ai_dependencies_summary",
+                "issues_summary": "ai_issues_summary",
+                "skeptic_summary": "ai_skeptic_summary",
+            }
+            for k_in, k_out in mapping.items():
+                val = (parsed.get(k_in) or "").strip()
+                if val:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        k_out,
+                        val,
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+
+            if isinstance(action_items, list) and action_items:
+                # Prefer structured JSON for richer HTML rendering in Overview.
+                if all(isinstance(x, dict) for x in action_items[:6]):
+                    action_payload = json.dumps(action_items[:6])
+                else:
+                    action_payload = "; ".join([str(x).strip() for x in action_items[:6] if str(x).strip()])
+                db_helpers.upsert_context_metadata(
+                    resolved_exp_id,
+                    repo_name,
+                    "ai_action_items",
+                    action_payload,
+                    namespace="ai_overview",
+                    source="copilot_stream",
+                )
+
+            # ai_open_questions is now persisted above (as JSON) when present.
+
+            # Persist new assets and fixed information for later review
+            if isinstance(new_assets, list) and new_assets:
+                try:
+                    # Normalize to list of dicts with name/type when possible
+                    normalized = []
+                    for a in new_assets:
+                        if isinstance(a, dict):
+                            normalized.append(a)
+                        else:
+                            s = str(a)
+                            # Heuristic: split 'Name (type1, type2)'
+                            m = re.match(r"^(.*?)\s*\((.*)\)", s)
+                            if m:
+                                name = m.group(1).strip()
+                                types = [t.strip() for t in m.group(2).split(',') if t.strip()]
+                                normalized.append({"label": name, "types": types})
+                            else:
+                                normalized.append({"label": s})
+
+                    # Fuzzy match against existing resources: attempt to find likely matches
+                    conn = _get_db()
+                    matches = []
+                    if conn:
+                        try:
+                            rows = conn.execute(
+                                "SELECT id, resource_name, resource_type, provider FROM resources WHERE experiment_id = ?",
+                                (resolved_exp_id,),
+                            ).fetchall()
+                            existing = [dict(r) for r in rows]
+                        finally:
+                            conn.close()
+                    else:
+                        existing = []
+
+                    def _fuzzy_match(candidate_label, candidate_types):
+                        # Simple case-insensitive containment + type overlap scoring
+                        label = candidate_label.lower()
+                        best = None
+                        best_score = 0
+                        for e in existing:
+                            score = 0
+                            if e.get('resource_name') and e['resource_name'].lower() == label:
+                                score += 50
+                            elif e.get('resource_name') and label in e['resource_name'].lower():
+                                score += 20
+                            # type overlap
+                            etype = (e.get('resource_type') or '').lower()
+                            for t in (candidate_types or []):
+                                if t.lower() in etype or etype in t.lower():
+                                    score += 10
+                            if score > best_score:
+                                best = e
+                                best_score = score
+                        return best, best_score
+
+                    augmented = []
+                    for cand in normalized:
+                        label = cand.get('label') or cand.get('name') or ''
+                        types = cand.get('types') or []
+                        match, score = _fuzzy_match(label, types)
+                        if match and score >= 20:
+                            augmented.append({
+                                'candidate': cand,
+                                'matched_resource_id': match['id'],
+                                'matched_name': match.get('resource_name'),
+                                'matched_type': match.get('resource_type'),
+                                'match_score': score,
+                            })
+                        else:
+                            augmented.append({
+                                'candidate': cand,
+                                'matched_resource_id': None,
+                                'matched_name': None,
+                                'matched_type': None,
+                                'match_score': score,
+                            })
+
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_new_assets",
+                        json.dumps(augmented),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+            if isinstance(fixed_info, list) and fixed_info:
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_fixed_information",
+                        json.dumps(fixed_info),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+        else:
+            _append_ai_job_log(key, "Failed to parse Copilot JSON output")
+            yield _sse("log", "Copilot output wasn't valid JSON; no summaries extracted.")
+
+        with _AI_ANALYSIS_LOCK:
+            job = _AI_ANALYSIS_JOBS.get(key, {})
+            if rc == 0:
+                job["status"] = "completed"
+            else:
+                job["status"] = "failed"
+                job["error"] = job.get("error") or f"copilot exited with code {rc}"
+            job["completed_at"] = time.time()
+            _AI_ANALYSIS_JOBS[key] = job
+
+        if rc == 0:
+            try:
+                db_helpers.upsert_context_metadata(
+                    resolved_exp_id,
+                    repo_name,
+                    "ai_analysis_completed_at",
+                    str(int(job["completed_at"])),
+                    namespace="ai_overview",
+                    source="copilot_stream",
+                )
+            except Exception:
+                pass
+            yield _sse("done", {"status": "completed"})
+        else:
+            yield _sse("error", job.get("error") or "copilot failed")
+
+        # Clean up any temporary repository copy we created
+        if temp_copy_dir:
+            try:
+                import shutil
+
+                shutil.rmtree(temp_copy_dir)
+            except Exception:
+                pass
+
+    return Response(stream_with_context(_gen()), mimetype="text/event-stream")
+
+
+@app.route("/api/analysis/generate_rules/<experiment_id>/<repo_name>", methods=["POST"])
+def api_analysis_generate_rules(experiment_id: str, repo_name: str):
+    """Start a background job that asks Copilot to synthesise opengrep detection rules.
+
+    The job runs similarly to the Copilot overview stream but writes generated
+    rules into Output/WorkingCopies/<experiment>_<repo>/generated_rules.txt for
+    review. It returns immediately with status 'started'.
+    """
+    key = _ai_job_key(experiment_id, repo_name) + ":generate_rules"
+    with _AI_ANALYSIS_LOCK:
+        existing = _AI_ANALYSIS_JOBS.get(key)
+        if existing and existing.get("status") == "running":
+            return jsonify({"status": "running"}), 202
+        _AI_ANALYSIS_JOBS[key] = {
+            "status": "running",
+            "experiment_id": experiment_id,
+            "repo_name": repo_name,
+            "started_at": time.time(),
+            "completed_at": None,
+            "steps": [],
+            "logs": [],
+            "error": "",
+        }
+
+    def _bg():
+        key_local = key
+        _append_ai_job_log(key_local, "Generate rules job started")
+        # Gather brief findings and example snippets from DB
+        conn = _get_db()
+        snippets = []
+        try:
+            if conn:
+                try:
+                    rows = conn.execute(
+                        "SELECT title, rule_id, source_file, source_line_start, source_line_end FROM findings WHERE experiment_id = ? AND repo_id = (SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name)=LOWER(?) LIMIT 1) LIMIT 20",
+                        (experiment_id, experiment_id, repo_name),
+                    ).fetchall()
+                    for r in rows:
+                        snippets.append({
+                            "title": r["title"],
+                            "rule_id": r["rule_id"],
+                            "source_file": r["source_file"],
+                            "start": r["source_line_start"],
+                            "end": r["source_line_end"],
+                        })
+                finally:
+                    conn.close()
+        except Exception:
+            pass
+
+        prompt = (
+            "You are to write opengrep detection rules based on the following findings and file snippets. "
+            "Return a list of rules in plain text. Keep rules focused and specific.\n\n"
+            f"Repo: {repo_name}\n"
+            f"Findings (JSON): {json.dumps(snippets)}\n\n"
+            "For each rule include: id, short_description, file_glob, regex, rationale."
+        )
+
+        cmd = [
+            "copilot",
+            "--no-color",
+            "--model",
+            os.environ.get("COPILOT_MODEL", "gpt-5-mini"),
+            "--stream",
+            "off",
+            "-p",
+            prompt,
+        ]
+
+        wc_root = REPO_ROOT / "Output" / "WorkingCopies"
+        wc_root.mkdir(parents=True, exist_ok=True)
+        out_dir = wc_root / f"{experiment_id}_{repo_name}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / "generated_rules.txt"
+
+        try:
+            proc = subprocess.run(cmd, cwd=str(out_dir), capture_output=True, text=True, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+            txt = proc.stdout or ''
+            # Save output for review
+            try:
+                out_file.write_text(txt, encoding='utf-8')
+            except Exception:
+                _append_ai_job_log(key_local, "Failed to save generated rules")
+            _append_ai_job_log(key_local, "Rule generation completed")
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key_local, {})
+                job["status"] = "completed" if proc.returncode == 0 else "failed"
+                job["completed_at"] = time.time()
+                if proc.returncode != 0:
+                    job["error"] = (proc.stderr or '').splitlines()[-1] if proc.stderr else f"exit {proc.returncode}"
+                _AI_ANALYSIS_JOBS[key_local] = job
+        except Exception as e:
+            _append_ai_job_log(key_local, f"Rule generation failed: {e}")
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key_local, {})
+                job["status"] = "failed"
+                job["completed_at"] = time.time()
+                job["error"] = str(e)
+                _AI_ANALYSIS_JOBS[key_local] = job
+
+    t = threading.Thread(target=_bg, daemon=True)
+    t.start()
+    return jsonify({"status": "started"})
 
 
 @app.route("/api/diagrams/<experiment_id>")
@@ -819,17 +1989,143 @@ def api_diagrams(experiment_id: str):
 
     Uses cloud_diagrams DB table only.
     """
+    repo_name = (request.args.get("repo_name") or "").strip()
+    include_api_operations_raw = (request.args.get("include_api_operations") or "").strip().lower()
+    include_api_operations_override: bool | None = None
+    if include_api_operations_raw in {"1", "true", "yes", "on"}:
+        include_api_operations_override = True
+    elif include_api_operations_raw in {"0", "false", "no", "off"}:
+        include_api_operations_override = False
+
+    def _edge_count(code: str) -> int:
+        if not code:
+            return 0
+        return sum(1 for ln in code.splitlines() if ("-->" in ln or "-.>" in ln))
+
+    def _response_payload(diagrams: list[dict]) -> dict:
+        return {
+            "diagrams": [
+                {"title": d.get("diagram_title"), "code": d.get("mermaid_code")}
+                for d in diagrams
+                if d.get("mermaid_code")
+            ]
+        }
+
     try:
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
-        db_diagrams = get_cloud_diagrams(experiment_id)
+
+        # Repo-scoped diagram requests should be regenerated from current topology,
+        # especially when the UI requests explicit API operation visibility.
+        if repo_name:
+            try:
+                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+
+                generated: list[dict] = []
+                with db_helpers.get_db_connection() as conn:
+                    prov_rows = conn.execute(
+                        """
+                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                        FROM resources r
+                        JOIN repositories repo ON repo.id = r.repo_id
+                        WHERE r.experiment_id = ?
+                          AND LOWER(repo.repo_name) = LOWER(?)
+                          AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                        ORDER BY provider
+                        """,
+                        (experiment_id, repo_name),
+                    ).fetchall()
+
+                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                for provider in providers:
+                    code = generate_architecture_diagram(
+                        experiment_id,
+                        repo_name=repo_name,
+                        provider=provider,
+                        include_operation_resources=include_api_operations_override,
+                    )
+                    if code and "No resources found" not in code:
+                        generated.append({
+                            "provider": provider.capitalize(),
+                            "diagram_title": f"{provider.capitalize()} Architecture",
+                            "mermaid_code": code,
+                            "display_order": 0,
+                        })
+                        # Persist only default-mode diagrams (no explicit override)
+                        # so toggle interactions do not overwrite canonical stored views.
+                        if include_api_operations_override is None:
+                            try:
+                                db_helpers.upsert_cloud_diagram(
+                                    experiment_id=experiment_id,
+                                    provider=provider,
+                                    diagram_title=f"{provider.capitalize()} Architecture",
+                                    mermaid_code=code,
+                                    display_order=0,
+                                )
+                            except Exception:
+                                pass
+
+                if generated:
+                    return jsonify(_response_payload(generated))
+            except Exception:
+                pass
+
+        db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name or None)
+
+        # For repo-scoped requests, legacy rows may be experiment-scoped only.
+        # Keep only legacy diagrams that already contain meaningful edges.
+        if repo_name and not db_diagrams:
+            legacy = get_cloud_diagrams(experiment_id)
+            db_diagrams = [d for d in legacy if _edge_count(d.get("mermaid_code") or "") > 0]
+
+        # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
+        if repo_name and (not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
+            try:
+                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+
+                generated: list[dict] = []
+                with db_helpers.get_db_connection() as conn:
+                    prov_rows = conn.execute(
+                        """
+                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                        FROM resources r
+                        JOIN repositories repo ON repo.id = r.repo_id
+                        WHERE r.experiment_id = ?
+                          AND LOWER(repo.repo_name) = LOWER(?)
+                          AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                        ORDER BY provider
+                        """,
+                        (experiment_id, repo_name),
+                    ).fetchall()
+
+                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                for provider in providers:
+                    code = generate_architecture_diagram(experiment_id, repo_name=repo_name, provider=provider)
+                    if code and "No resources found" not in code:
+                        generated.append({
+                            "provider": provider.capitalize(),
+                            "diagram_title": f"{provider.capitalize()} Architecture",
+                            "mermaid_code": code,
+                            "display_order": 0,
+                        })
+                        try:
+                            db_helpers.upsert_cloud_diagram(
+                                experiment_id=experiment_id,
+                                provider=provider,
+                                diagram_title=f"{provider.capitalize()} Architecture",
+                                mermaid_code=code,
+                                display_order=0,
+                            )
+                        except Exception:
+                            pass
+
+                if generated:
+                    return jsonify(_response_payload(generated))
+            except Exception:
+                pass
+
         if db_diagrams:
-            return jsonify({
-                "diagrams": [
-                    {"title": d["diagram_title"], "code": d["mermaid_code"]}
-                    for d in db_diagrams
-                ]
-            })
+            return jsonify(_response_payload(db_diagrams))
     except Exception:
         return jsonify({"diagrams": [], "error": "Failed to query cloud_diagrams"}), 500
 
@@ -1165,6 +2461,7 @@ def api_view_tabs(experiment_id: str, repo_name: str):
             {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
             {"key": "ingress",    "label": "➡️ Ingress"},
             {"key": "egress",     "label": "⬅️ Egress"},
+            {"key": "subscription", "label": "🌐 Global Knowledge Q&A"},
         ]
 
         return jsonify({"tabs": tabs})
@@ -1480,6 +2777,8 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             add_row("High/Critical findings", f"{critical_high} critical/high · {high_or_above} sev ≥ 7")
 
         # Scan status heuristics
+        ai_ready = False
+        ai_text = "pending"
         try:
             stage_counts = conn.execute(
                 """
@@ -1528,22 +2827,28 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                              FROM context_metadata cm
                              WHERE cm.experiment_id = ?
                                AND cm.repo_id = repo.id
+                               AND cm.namespace = 'ai_overview') AS ai_overview,
+                            (SELECT COUNT(*)
+                             FROM context_metadata cm
+                             WHERE cm.experiment_id = ?
+                               AND cm.repo_id = repo.id
                                AND cm.namespace = 'ai_overview'
-                               AND cm.key = 'ai_project_summary') AS ai_overview
+                               AND cm.key = 'ai_analysis_completed_at') AS ai_completed
                         FROM findings f
                         JOIN repositories repo ON f.repo_id = repo.id
                         WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
                         """,
-                        (resolved_exp_id, resolved_exp_id, resolved_exp_id, repo_name),
+                        (resolved_exp_id, resolved_exp_id, resolved_exp_id, resolved_exp_id, repo_name),
                     ).fetchone()
                     if ai_counts:
                         total = ai_counts["total_findings"] or 0
                         enriched = ai_counts["enriched_findings"] or 0
                         skeptic_reviews = ai_counts["skeptic_reviews"] or 0
                         ai_overview = ai_counts["ai_overview"] or 0
-                        if total == 0:
-                            ai_icon, ai_text = "🟡", "pending"
-                        elif enriched >= total and skeptic_reviews > 0 and ai_overview > 0:
+                        ai_completed = ai_counts["ai_completed"] or 0
+                        if ai_completed > 0:
+                            ai_icon, ai_text = "🟢", "complete"
+                        elif ai_overview > 0 and (total == 0 or enriched >= total):
                             ai_icon, ai_text = "🟢", "complete"
                         elif enriched > 0 or skeptic_reviews > 0 or ai_overview > 0:
                             ai_icon, ai_text = "🟠", "partial"
@@ -1559,8 +2864,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                     ]
                 )
                 add_row("Scan status", status_html)
+
+                ai_ready = bool(stage_counts["p1"] and stage_counts["p2"] and stage_counts["p3"])
         except Exception:
-            pass
+            ai_ready = False
 
         table_html = (
             '<table class="tldr-table">'
@@ -1569,7 +2876,14 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             + "</tbody></table>"
         )
 
-        return _db_render("tab_tldr.html", tldr_html=table_html)
+        return _db_render(
+            "tab_tldr.html",
+            tldr_html=table_html,
+            experiment_id=resolved_exp_id,
+            repo_name=repo_name,
+            ai_ready=ai_ready,
+            ai_status=ai_text,
+        )
     except Exception as exc:
         return _db_render("tab_tldr.html", tldr_html="", error=str(exc))
     finally:
@@ -1767,16 +3081,274 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 "ai_dependencies_summary": "Dependencies",
                 "ai_issues_summary": "Issues",
                 "ai_skeptic_summary": "Skeptics",
+                "ai_action_items": "Actions",
+                "ai_open_questions": "Open questions",
+                "ai_observations": "Observations",
+                "ai_asset_visibility": "Asset visibility",
+                "ai_learning_suggestions": "Learning suggestions",
+                "ai_analysis_completed_at": "Analysis completed",
             }
-            ai_points = []
+            # Fields that should be formatted as numbered lists (semicolon-separated)
+            list_fields = {"ai_action_items", "ai_open_questions", "ai_observations", "ai_asset_visibility", "ai_learning_suggestions"}
+            # Fields that contain JSON arrays (skip rendering raw JSON)
+            json_fields = {"ai_new_assets", "ai_fixed_information"}
+            timestamp_fields = {"ai_analysis_completed_at"}
+            
+            ai_sections = []
             for row in ai_overview_rows:
                 val = (row["value"] or "").strip()
-                if not val:
+                if not val or row["key"] in json_fields:
                     continue
                 label = label_map.get(row["key"], row["key"])
-                ai_points.append(f"<li><strong>{esc(label)}</strong>: {esc(val)}</li>")
-            if ai_points:
-                overview_sections.append("<h2>🤖 AI Project Overview</h2><ul>" + ''.join(ai_points) + "</ul>")
+                
+                if row["key"] in list_fields:
+                    # Actions may be stored as structured JSON for rich rendering.
+                    if row["key"] == "ai_action_items":
+                        parsed_actions = None
+                        try:
+                            parsed_actions = json.loads(val)
+                        except Exception:
+                            parsed_actions = None
+
+                        if isinstance(parsed_actions, list) and parsed_actions and all(isinstance(x, dict) for x in parsed_actions):
+                            blocks = []
+                            for idx, a in enumerate(parsed_actions[:6], start=1):
+                                title = (a.get('title') or '').strip() or f"Action {idx}"
+                                what = (a.get('what') or '').strip()
+                                why = (a.get('why') or '').strip()
+                                file = (a.get('file') or '').strip()
+                                line = a.get('line')
+                                current_snip = (a.get('current_snippet') or '').strip()
+                                fix_snip = (a.get('fix_snippet') or '').strip()
+
+                                loc_html = ''
+                                if file:
+                                    base = Path(file).name
+                                    loc_html = f"<span class=\"file-link\" title=\"{esc(file)}\">{esc(base)}</span>"
+                                    if line:
+                                        loc_html += f"<span class=\"line-num\">:{esc(str(line))}</span>"
+
+                                block = f"<div class=\"ai-action\">"
+                                block += f"<h4 class=\"ai-action-title\">{esc(title)}</h4>"
+                                if what:
+                                    block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">What</span> <span>{esc(what)}</span></div>"
+                                if why:
+                                    block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Why</span> <span>{esc(why)}</span></div>"
+                                if loc_html:
+                                    block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Where</span> {loc_html}</div>"
+                                if current_snip:
+                                    block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Current</span><pre class=\"md-code\"><code>{esc(current_snip)}</code></pre></div>"
+                                if fix_snip:
+                                    block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Proposed</span><pre class=\"md-code\"><code>{esc(fix_snip)}</code></pre></div>"
+                                block += "</div>"
+                                blocks.append(block)
+
+                            ai_sections.append(f"<h3>{esc(label)}</h3><div class=\"ai-actions\">" + ''.join(blocks) + "</div>")
+                        else:
+                            # Fallback: Split semicolon-separated items into numbered list
+                            items = [item.strip() for item in val.split(';') if item.strip()]
+                            if items:
+                                list_html = "<ol>" + ''.join(f"<li>{esc(item)}</li>" for item in items) + "</ol>"
+                                ai_sections.append(f"<h3>{esc(label)}</h3>{list_html}")
+                    else:
+                        # Open questions may be stored as structured JSON for richer rendering.
+                        if row["key"] == "ai_open_questions":
+                            parsed_q = None
+                            try:
+                                parsed_q = json.loads(val)
+                            except Exception:
+                                parsed_q = None
+
+                            if isinstance(parsed_q, list) and parsed_q and all(isinstance(x, dict) for x in parsed_q):
+                                li = []
+                                for q in parsed_q[:5]:
+                                    text = (q.get('question') or '').strip()
+                                    fpath = (q.get('file') or '').strip()
+                                    line = q.get('line')
+                                    asset = (q.get('asset') or '').strip()
+                                    if not text:
+                                        continue
+                                    loc = ''
+                                    if fpath:
+                                        base = Path(fpath).name
+                                        loc = f"<span class=\"file-link\" title=\"{esc(fpath)}\">{esc(base)}</span>" + (f"<span class=\"line-num\">:{esc(str(line))}</span>" if line else "")
+                                    extra = f" <span class=\"how-badge\" style=\"margin-left:6px\"\">{esc(asset)}</span>" if asset else ""
+                                    suffix = f" <span style=\"margin-left:8px\">{loc}</span>" if loc else ""
+                                    li.append(f"<li>{esc(text)}{extra}{suffix}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ol>" + ''.join(li) + "</ol>")
+                                    continue
+
+                        # Observations stored as JSON: list of {title, detail, target}
+                        if row["key"] == "ai_observations":
+                            parsed_o = None
+                            try:
+                                parsed_o = json.loads(val)
+                            except Exception:
+                                parsed_o = None
+
+                            if isinstance(parsed_o, list) and parsed_o and all(isinstance(x, dict) for x in parsed_o):
+                                li = []
+                                for o in parsed_o[:8]:
+                                    title = (o.get('title') or '').strip()
+                                    detail = (o.get('detail') or '').strip()
+                                    target = (o.get('target') or '').strip()
+                                    text = title or detail
+                                    if not text:
+                                        continue
+                                    suffix = f" <span class=\"file-link\" style=\"margin-left:8px\"\">{esc(target)}</span>" if target else ""
+                                    li.append(f"<li><strong>{esc(text)}</strong>{suffix}{(f'<div style=\"margin-top:4px;color:var(--text-muted);font-size:0.82rem\">{esc(detail)}</div>' if detail and title else '')}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
+                                    continue
+
+                        # Asset visibility suggestions stored as JSON: list of {resource_type, resource_name, decision, reason}
+                        if row["key"] == "ai_asset_visibility":
+                            parsed_v = None
+                            try:
+                                parsed_v = json.loads(val)
+                            except Exception:
+                                parsed_v = None
+
+                            if isinstance(parsed_v, list) and parsed_v and all(isinstance(x, dict) for x in parsed_v):
+                                li = []
+                                for v in parsed_v[:20]:
+                                    rtype = (v.get('resource_type') or '').strip()
+                                    rname = (v.get('resource_name') or '').strip()
+                                    decision = (v.get('decision') or '').strip().lower()
+                                    reason = (v.get('reason') or '').strip()
+                                    label_txt = rname or rtype
+                                    if not label_txt:
+                                        continue
+                                    badge = ''
+                                    if decision in ('hide', 'show'):
+                                        badge = f" <span class=\"how-badge\" style=\"margin-left:6px\"\">{esc(decision)}</span>"
+                                    details = f"<div style=\"margin-top:4px;color:var(--text-muted);font-size:0.82rem\">{esc(reason)}</div>" if reason else ''
+                                    li.append(f"<li><strong>{esc(label_txt)}</strong>{badge}{details}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
+                                    continue
+
+                        # Learning suggestions stored as JSON: list of {kind, target, rationale, example_evidence, proposed_change}
+                        if row["key"] == "ai_learning_suggestions":
+                            parsed_l = None
+                            try:
+                                parsed_l = json.loads(val)
+                            except Exception:
+                                parsed_l = None
+
+                            if isinstance(parsed_l, list) and parsed_l and all(isinstance(x, dict) for x in parsed_l):
+                                blocks = []
+                                for s in parsed_l[:12]:
+                                    kind = (s.get('kind') or '').strip()
+                                    target = (s.get('target') or '').strip()
+                                    rationale = (s.get('rationale') or '').strip()
+                                    evidence = (s.get('example_evidence') or '').strip()
+                                    proposed = (s.get('proposed_change') or '').strip()
+                                    title = target or kind or 'Suggestion'
+                                    badge = f" <span class=\"how-badge\" style=\"margin-left:6px\"\">{esc(kind)}</span>" if kind else ''
+                                    block = f"<div class=\"ai-action\">"
+                                    block += f"<h4 class=\"ai-action-title\">{esc(title)}{badge}</h4>"
+                                    if rationale:
+                                        block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Why</span> <span>{esc(rationale)}</span></div>"
+                                    if evidence:
+                                        block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Evidence</span><pre class=\"md-code\"><code>{esc(evidence)}</code></pre></div>"
+                                    if proposed:
+                                        block += f"<div class=\"ai-action-row\"><span class=\"ai-action-label\">Proposed</span><pre class=\"md-code\"><code>{esc(proposed)}</code></pre></div>"
+                                    block += "</div>"
+                                    blocks.append(block)
+                                if blocks:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><div class=\"ai-actions\">" + ''.join(blocks) + "</div>")
+                                    continue
+                            parsed_v = None
+                            try:
+                                parsed_v = json.loads(val)
+                            except Exception:
+                                parsed_v = None
+
+                            if isinstance(parsed_v, list) and parsed_v and all(isinstance(x, dict) for x in parsed_v):
+                                li = []
+                                for v in parsed_v[:20]:
+                                    rtype = (v.get('resource_type') or '').strip()
+                                    rname = (v.get('resource_name') or '').strip()
+                                    decision = (v.get('decision') or '').strip().lower()
+                                    reason = (v.get('reason') or '').strip()
+                                    label_txt = rname or rtype
+                                    if not label_txt:
+                                        continue
+                                    badge = ''
+                                    if decision in ('hide', 'show'):
+                                        badge = f" <span class=\"how-badge\" style=\"margin-left:6px\"\">{esc(decision)}</span>"
+                                    details = f"<div style=\"margin-top:4px;color:var(--text-muted);font-size:0.82rem\">{esc(reason)}</div>" if reason else ''
+                                    li.append(f"<li><strong>{esc(label_txt)}</strong>{badge}{details}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
+                                    continue
+                            parsed_o = None
+                            try:
+                                parsed_o = json.loads(val)
+                            except Exception:
+                                parsed_o = None
+
+                            if isinstance(parsed_o, list) and parsed_o and all(isinstance(x, dict) for x in parsed_o):
+                                li = []
+                                for o in parsed_o[:8]:
+                                    title = (o.get('title') or '').strip()
+                                    detail = (o.get('detail') or '').strip()
+                                    target = (o.get('target') or '').strip()
+                                    text = title or detail
+                                    if not text:
+                                        continue
+                                    suffix = f" <span class=\"file-link\" style=\"margin-left:8px\"\">{esc(target)}</span>" if target else ""
+                                    li.append(f"<li><strong>{esc(text)}</strong>{suffix}{(f'<div style=\"margin-top:4px;color:var(--text-muted);font-size:0.82rem\">{esc(detail)}</div>' if detail and title else '')}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ul>" + ''.join(li) + "</ul>")
+                                    continue
+                            parsed_q = None
+                            try:
+                                parsed_q = json.loads(val)
+                            except Exception:
+                                parsed_q = None
+
+                            if isinstance(parsed_q, list) and parsed_q and all(isinstance(x, dict) for x in parsed_q):
+                                li = []
+                                for q in parsed_q[:5]:
+                                    text = (q.get('question') or '').strip()
+                                    fpath = (q.get('file') or '').strip()
+                                    line = q.get('line')
+                                    asset = (q.get('asset') or '').strip()
+                                    if not text:
+                                        continue
+                                    loc = ''
+                                    if fpath:
+                                        base = Path(fpath).name
+                                        loc = f"<span class=\"file-link\" title=\"{esc(fpath)}\">{esc(base)}</span>" + (f"<span class=\"line-num\">:{esc(str(line))}</span>" if line else "")
+                                    extra = f" <span class=\"how-badge\" style=\"margin-left:6px\"\">{esc(asset)}</span>" if asset else ""
+                                    suffix = f" <span style=\"margin-left:8px\">{loc}</span>" if loc else ""
+                                    li.append(f"<li>{esc(text)}{extra}{suffix}</li>")
+                                if li:
+                                    ai_sections.append(f"<h3>{esc(label)}</h3><ol>" + ''.join(li) + "</ol>")
+                                    continue
+
+                        # Fallback: Split semicolon-separated items into numbered list
+                        items = [item.strip() for item in val.split(';') if item.strip()]
+                        if items:
+                            list_html = "<ol>" + ''.join(f"<li>{esc(item)}</li>" for item in items) + "</ol>"
+                            ai_sections.append(f"<h3>{esc(label)}</h3>{list_html}")
+                else:
+                    if row["key"] in timestamp_fields:
+                        try:
+                            timestamp_value = float(val)
+                            if timestamp_value > 10_000_000_000:
+                                timestamp_value /= 1000.0
+                            val = datetime.fromtimestamp(timestamp_value).strftime("%Y-%m-%d %H:%M:%S")
+                        except (TypeError, ValueError, OSError, OverflowError):
+                            pass
+                    # Regular paragraph
+                    ai_sections.append(f"<h3>{esc(label)}</h3><p>{esc(val)}</p>")
+            
+            if ai_sections:
+                overview_sections.append("<h2>🤖 AI Project Overview</h2>" + ''.join(ai_sections))
 
         # 1) What the repo does
         purpose_rows = _safe_fetchall(
@@ -1963,13 +3535,116 @@ def api_view_overview(experiment_id: str, repo_name: str):
             """,
             (resolved_exp_id, repo_id),
         ) if _table_exists("context_metadata") else []
-        dep_points = [f"<li>Connection dependency: {esc(r['connection_type'])} ({r['cnt']})</li>" for r in dep_rows]
+        dep_points = []
+        connection_dep_points = [
+            f"<li><strong>{esc(r['connection_type'])}</strong> ({r['cnt']})</li>"
+            for r in dep_rows
+        ]
+        if connection_dep_points:
+            dep_points.append("<h3>Connection Dependencies</h3><ul>" + ''.join(connection_dep_points) + "</ul>")
+
+        module_repo_root = None
+        try:
+            for ent in _resolve_repos():
+                if str(ent.get('name') or '').strip().lower() != repo_name.lower():
+                    continue
+                if not ent.get('found'):
+                    continue
+                candidate_root = Path(str(ent.get('path') or '')).expanduser()
+                if candidate_root.exists() and candidate_root.is_dir():
+                    module_repo_root = candidate_root
+                    break
+        except Exception:
+            module_repo_root = None
+
+        def _infer_module_line_number(module_name: str, module_file: str) -> int | None:
+            if not module_repo_root or not module_file or not module_name:
+                return None
+
+            rel_path = Path(module_file)
+            candidate_paths = [module_repo_root / rel_path]
+            if module_file.startswith('./'):
+                candidate_paths.append(module_repo_root / module_file[2:])
+            candidate_paths.append(module_repo_root / rel_path.name)
+
+            seen = set()
+            pattern = re.compile(r'^\s*module\s+"([^"]+)"\s*\{')
+            for candidate in candidate_paths:
+                try:
+                    resolved = candidate.resolve()
+                except Exception:
+                    resolved = candidate
+                key = str(resolved)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not resolved.exists() or not resolved.is_file():
+                    continue
+
+                try:
+                    lines = resolved.read_text(encoding='utf-8', errors='ignore').splitlines()
+                except Exception:
+                    continue
+
+                for idx, line in enumerate(lines, start=1):
+                    m = pattern.match(line)
+                    if m and m.group(1).strip() == module_name:
+                        return idx
+            return None
+
+        module_dep_points = []
         for r in module_rows:
             name = r['key'].split(':', 1)[1]
-            src = (r['value'] or '').strip()
-            dep_points.append(f"<li>Module dependency: <strong>{esc(name)}</strong>{(': ' + esc(src)) if src else ''}</li>")
+            raw_value = (r['value'] or '').strip()
+            source = ''
+            module_file = ''
+            module_line = None
+
+            if raw_value:
+                parsed_value = None
+                try:
+                    parsed_value = json.loads(raw_value)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parsed_value = None
+
+                if isinstance(parsed_value, dict):
+                    source = str(parsed_value.get('source') or '').strip()
+                    module_file = str(parsed_value.get('file') or '').strip()
+                    module_line = parsed_value.get('line')
+                else:
+                    source = raw_value
+
+            if module_line is not None:
+                try:
+                    module_line = int(str(module_line).strip())
+                except (TypeError, ValueError):
+                    module_line = None
+            if module_line is None:
+                module_line = _infer_module_line_number(name, module_file)
+
+            file_html = ''
+            if module_file:
+                base = Path(module_file).name
+                file_html = f"<span class=\"file-link\" title=\"{esc(module_file)}\">{esc(base)}</span>"
+                if module_line:
+                    file_html += f"<span class=\"line-num\">:{esc(str(module_line))}</span>"
+
+            parts = []
+            if source:
+                parts.append(
+                    f"<div class=\"module-dep-row module-dep-row--stack\"><span class=\"module-dep-label\">Module source</span>"
+                    f"<pre class=\"md-code\"><code>{esc(source)}</code></pre></div>"
+                )
+            if file_html:
+                parts.append(f"<div class=\"module-dep-row\"><span class=\"module-dep-label\">Detected</span> {file_html}</div>")
+
+            body = ''.join(parts) if parts else '<div class="module-dep-row"><span class="module-dep-label">Details</span> —</div>'
+            module_dep_points.append(f"<li class=\"module-dep-item\"><div class=\"module-dep-name\">{esc(name)}</div>{body}</li>")
+
+        if module_dep_points:
+            dep_points.append("<h3>Module Dependencies</h3><ul class=\"module-deps\">" + ''.join(module_dep_points) + "</ul>")
         if dep_points:
-            overview_sections.append("<h2>🧩 Dependencies</h2><ul>" + ''.join(dep_points) + "</ul>")
+            overview_sections.append("<h2>🧩 Dependencies</h2>" + ''.join(dep_points))
 
         # 6) Issues (condensed)
         findings_cols = _table_columns("findings")
@@ -2057,7 +3732,29 @@ def api_view_overview(experiment_id: str, repo_name: str):
         conn.close()
 
     final_html = '<div class="markdown-content">' + ''.join(overview_sections) + '</div>' if overview_sections else ''
-    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name)
+    # Load AI-provided metadata (if present) for template rendering
+    ai_new_assets = None
+    ai_fixed_information = None
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        ai_new_assets = db_helpers.get_context_metadata(resolved_exp_id, repo_name, 'ai_new_assets', namespace='ai_overview')
+        ai_fixed_information = db_helpers.get_context_metadata(resolved_exp_id, repo_name, 'ai_fixed_information', namespace='ai_overview')
+        # db_helpers.get_context_metadata may return JSON strings; attempt to parse
+        try:
+            if ai_new_assets:
+                ai_new_assets = json.loads(ai_new_assets)
+        except Exception:
+            pass
+        try:
+            if ai_fixed_information:
+                ai_fixed_information = json.loads(ai_fixed_information)
+        except Exception:
+            pass
+    except Exception:
+        ai_new_assets = None
+        ai_fixed_information = None
+
+    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information)
 
 
 @app.route("/api/view/assets/<experiment_id>/<repo_name>")
@@ -2088,6 +3785,16 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 error=f"No completed scan found for {repo_name}.",
             )
         experiment_target = resolved_exp_id
+
+        # Best-effort: if k8s workloads exist but no AKS cluster is defined in this repo,
+        # create an inferred cluster so Assets can nest correctly.
+        try:
+            from Scripts.Persist import db_helpers as _dbh  # type: ignore
+            _dbh.ensure_inferred_aks_cluster(experiment_target, repo_name)
+            _dbh.infer_aks_cluster_link(experiment_target, repo_name)
+        except Exception:
+            pass
+
         rows = conn.execute(
             """
             SELECT res.id, res.resource_type, res.resource_name, res.provider,
@@ -2204,7 +3911,12 @@ def api_view_assets(experiment_id: str, repo_name: str):
             # Identity / RBAC resources are hidden by default (they appear in Roles).
             # When `include_hidden` is true, include them in the Assets view so the
             # displayed list can match the repository's total resource count.
-            if (a.get('render_category', '').lower() == 'identity') or (rtype_lower in skip_types):
+            is_identity_like = (
+                (a.get('render_category', '').lower() == 'identity')
+                or (rtype_lower in skip_types)
+                or rtype_lower.startswith('azuread_')
+            )
+            if is_identity_like:
                 if not include_hidden:
                     hidden_count += 1
                     continue
@@ -2212,8 +3924,10 @@ def api_view_assets(experiment_id: str, repo_name: str):
 
             # If include_hidden is false, hide generator/utility types and any resource
             # explicitly marked as not to be displayed on architecture diagrams.
+            hide_tokens = set(hidden_tokens)
+            hide_tokens.add("terraform_data")
             if not include_hidden:
-                if any(tok in rtype_lower for tok in hidden_tokens) or (not a.get('display_on_architecture_chart', True)):
+                if any(tok in rtype_lower for tok in hide_tokens) or (not a.get('display_on_architecture_chart', True)):
                     hidden_count += 1
                     continue
 
@@ -2285,6 +3999,32 @@ def api_view_assets(experiment_id: str, repo_name: str):
         conn.close()
 
 
+@app.route("/api/finding/triage/<experiment_id>/<finding_id>", methods=["POST"])
+def api_finding_triage(experiment_id: str, finding_id: str):
+    """Update triage status for a finding (learning signal)."""
+    payload = request.get_json(force=True, silent=True) or {}
+    status = (payload.get("triage_status") or "").strip()
+    reason = (payload.get("triage_reason") or "").strip()
+    if status not in ("valid", "false_positive", "needs_context"):
+        return jsonify({"error": "invalid_status"}), 400
+
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"error": "db_unavailable"}), 500
+    try:
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE findings SET triage_status = ?, triage_reason = ?, triage_set_by = ?, triage_set_at = ? WHERE experiment_id = ? AND id = ?",
+            (status, reason, "human", now, experiment_id, int(finding_id)),
+        )
+        conn.commit()
+        return jsonify({"status": "ok"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        conn.close()
+
+
 @app.route("/api/view/findings/<experiment_id>/<repo_name>")
 def api_view_findings(experiment_id: str, repo_name: str):
     """Render the findings tab HTML."""
@@ -2300,9 +4040,17 @@ def api_view_findings(experiment_id: str, repo_name: str):
             """
             SELECT f.id, f.title, f.description, f.base_severity,
                    f.severity_score, f.rule_id, f.source_file, f.source_line_start,
-                   f.resource_id, f.category
+                   f.resource_id, f.category,
+                   COALESCE(NULLIF(f.triage_status,''), 'valid') AS triage_status,
+                   f.triage_reason, f.triage_set_by, f.triage_set_at,
+                   dev.adjusted_score AS dev_score, dev.confidence AS dev_confidence,
+                   plat.adjusted_score AS platform_score, plat.confidence AS platform_confidence,
+                   sec.adjusted_score AS security_score, sec.confidence AS security_confidence
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
+            LEFT JOIN skeptic_reviews dev ON dev.finding_id = f.id AND dev.reviewer_type = 'dev'
+            LEFT JOIN skeptic_reviews plat ON plat.finding_id = f.id AND plat.reviewer_type = 'platform'
+            LEFT JOIN skeptic_reviews sec ON sec.finding_id = f.id AND sec.reviewer_type = 'security'
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             ORDER BY
                 CASE f.base_severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
@@ -2680,6 +4428,9 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             children_by_parent = {}
             operations_by_id = {}
 
+        operation_count = sum(
+            1 for op in operations if op.get('resource_type') != 'azurerm_api_management_api'
+        )
 
         ingress_resources = [dict(r) for r in res_rows]
 
@@ -2759,9 +4510,186 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             operations=operations,
             children_by_parent=children_by_parent,
             operations_by_id=operations_by_id,
+            operation_count=operation_count,
         )
     except Exception as exc:
-        return _db_render("tab_ingress.html", ingress_resources=[], ingress_connections=[], error=str(exc))
+        return _db_render(
+            "tab_ingress.html",
+            ingress_resources=[],
+            ingress_connections=[],
+            operations=[],
+            children_by_parent={},
+            operations_by_id={},
+            operation_count=0,
+            error=str(exc),
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/subscription/<experiment_id>/<repo_name>")
+def api_view_subscription(experiment_id: str, repo_name: str):
+    """Render subscription-wide Q&A (stored per experiment, applies across repos)."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_subscription.html", entries=[], error="DB unavailable")
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            resolved_exp_id = experiment_id
+        if not _table_exists(conn, "subscription_context"):
+            return _db_render("tab_subscription.html", repo_entries=[], global_entries=[], experiment_id=resolved_exp_id, repo_name=repo_name)
+
+        # Repo-scoped
+        repo_rows = conn.execute(
+            "SELECT id, question, answer, answered_by, confidence, tags, created_at, updated_at FROM subscription_context WHERE experiment_id = ? AND scope_key = 'repo' AND LOWER(repo_name)=LOWER(?) ORDER BY updated_at DESC, id DESC LIMIT 200",
+            (resolved_exp_id, repo_name),
+        ).fetchall()
+        # Global
+        global_rows = conn.execute(
+            "SELECT id, question, answer, answered_by, confidence, tags, created_at, updated_at FROM subscription_context WHERE experiment_id = ? AND scope_key = 'global' ORDER BY updated_at DESC, id DESC LIMIT 200",
+            (resolved_exp_id,),
+        ).fetchall()
+
+        repo_entries = [dict(r) for r in repo_rows] if repo_rows else []
+        global_entries = [dict(r) for r in global_rows] if global_rows else []
+
+        # Suggested questions from AI scan (unanswered)
+        suggested = []
+        try:
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name)=LOWER(?) LIMIT 1",
+                (resolved_exp_id, repo_name),
+            ).fetchone()
+            repo_id = int(repo_row["id"]) if repo_row else None
+            if repo_id and _table_exists(conn, "context_metadata"):
+                cm = conn.execute(
+                    "SELECT value FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND namespace = 'ai_overview' AND key = 'ai_open_questions' ORDER BY id DESC LIMIT 1",
+                    (resolved_exp_id, repo_id),
+                ).fetchone()
+                if cm and cm["value"]:
+                    parsed_q = json.loads(cm["value"])
+                    if isinstance(parsed_q, list):
+                        answered_keys = set()
+                        for e in repo_entries:
+                            answered_keys.add(("repo", (e.get("question") or "").strip().lower()))
+                        for e in global_entries:
+                            answered_keys.add(("global", (e.get("question") or "").strip().lower()))
+
+                        for q in parsed_q:
+                            if not isinstance(q, dict):
+                                continue
+                            text = (q.get("question") or "").strip()
+                            if not text:
+                                continue
+                            # default scope suggestion is repo; if user answers globally it will be stored there
+                            if ("repo", text.lower()) in answered_keys or ("global", text.lower()) in answered_keys:
+                                continue
+                            suggested.append({
+                                "question": text,
+                                "file": (q.get("file") or ""),
+                                "line": q.get("line"),
+                                "asset": (q.get("asset") or ""),
+                            })
+        except Exception:
+            suggested = []
+
+        return _db_render(
+            "tab_subscription.html",
+            repo_entries=repo_entries,
+            global_entries=global_entries,
+            suggested_questions=suggested,
+            experiment_id=resolved_exp_id,
+            repo_name=repo_name,
+        )
+    except Exception as exc:
+        return _db_render("tab_subscription.html", entries=[], error=str(exc), experiment_id=experiment_id, repo_name=repo_name)
+    finally:
+        conn.close()
+
+
+@app.route("/api/subscription_context/<experiment_id>", methods=["POST"])
+def api_subscription_context_upsert(experiment_id: str):
+    """Upsert a subscription-wide Q&A entry."""
+    payload = request.get_json(force=True, silent=True) or {}
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "missing_question"}), 400
+    scope = (payload.get("scope") or "repo").strip().lower() or "repo"
+    if scope not in ("repo", "global"):
+        scope = "repo"
+    repo_name = (payload.get("repo_name") or "").strip()
+
+    answer = (payload.get("answer") or "").strip()
+    answered_by = (payload.get("answered_by") or "").strip()
+    tags = (payload.get("tags") or "").strip()
+    confidence = payload.get("confidence")
+    try:
+        confidence = float(confidence) if confidence is not None and confidence != "" else None
+    except Exception:
+        confidence = None
+
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"error": "db_unavailable"}), 500
+    try:
+        if not _table_exists(conn, "subscription_context"):
+            return jsonify({"error": "table_missing"}), 500
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        # Upsert key is (experiment_id, scope_key, repo_name?, question)
+        if scope == "repo" and not repo_name:
+            repo_name = "(unknown)"
+
+        row = conn.execute(
+            "SELECT id FROM subscription_context WHERE experiment_id = ? AND scope_key = ? AND LOWER(COALESCE(repo_name,'')) = LOWER(?) AND LOWER(question) = LOWER(?) LIMIT 1",
+            (experiment_id, scope, repo_name if scope == 'repo' else '', question),
+        ).fetchone()
+
+        # If this is a new question, only allow questions that were generated by the AI scan (ai_open_questions)
+        if not row:
+            allowed = False
+            try:
+                # Determine repo_id from repo_name for this experiment
+                if repo_name:
+                    rr = conn.execute(
+                        "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name)=LOWER(?) LIMIT 1",
+                        (experiment_id, repo_name),
+                    ).fetchone()
+                    repo_id = int(rr["id"]) if rr else None
+                else:
+                    repo_id = None
+
+                if repo_id and _table_exists(conn, "context_metadata"):
+                    cm = conn.execute(
+                        "SELECT value FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND namespace='ai_overview' AND key='ai_open_questions' ORDER BY id DESC LIMIT 1",
+                        (experiment_id, repo_id),
+                    ).fetchone()
+                    if cm and cm["value"]:
+                        pq = json.loads(cm["value"])
+                        if isinstance(pq, list):
+                            for q in pq:
+                                if isinstance(q, dict) and str(q.get('question') or '').strip().lower() == question.lower():
+                                    allowed = True
+                                    break
+            except Exception:
+                allowed = False
+
+            if not allowed:
+                return jsonify({"error": "unknown_question"}), 400
+        if row:
+            conn.execute(
+                "UPDATE subscription_context SET answer = ?, answered_by = ?, confidence = ?, tags = ?, updated_at = ? WHERE id = ?",
+                (answer, answered_by, confidence, tags, now, int(row["id"])),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO subscription_context (experiment_id, scope_key, repo_name, question, answer, answered_by, confidence, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (experiment_id, scope, repo_name if scope == 'repo' else None, question, answer, answered_by, confidence, tags, now, now),
+            )
+        conn.commit()
+        return jsonify({"status": "ok"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
     finally:
         conn.close()
 
@@ -3391,5 +5319,35 @@ if __name__ == "__main__":
     debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
     debug = debug_env in ("1", "true", "yes", "on")
     app.run(debug=debug, host="0.0.0.0", port=5000, threaded=True)
+@app.route("/api/analysis/stop/<experiment_id>/<repo_name>", methods=["POST"])
+def api_analysis_stop(experiment_id: str, repo_name: str):
+    """Stop a running Copilot/AI job for this experiment+repo."""
+    conn = _get_db()
+    resolved_id = experiment_id
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        resolved = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if resolved:
+            resolved_id = resolved
+    finally:
+        conn.close()
 
+    key = _ai_job_key(resolved_id, repo_name)
+    with _AI_ANALYSIS_LOCK:
+        job = _AI_ANALYSIS_JOBS.get(key)
+        if not job or job.get("status") != "running":
+            return jsonify({"status": "idle"}), 200
+        proc = job.get("process")
+        job["status"] = "failed"
+        job["error"] = "stopped by user"
+        job["completed_at"] = time.time()
+        job.pop("process", None)
+        _AI_ANALYSIS_JOBS[key] = job
 
+    if proc:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    return jsonify({"status": "stopped"})
