@@ -4067,7 +4067,7 @@ def write_experiment_cloud_architecture_summary(
                 for mod in modules:
                     # Insert as context metadata: module:<module_name> -> JSON data about source and file
                     key = f"module:{mod['name']}"
-                    value = json.dumps({"source": mod['source'], "file": mod['file']})
+                    value = json.dumps({"source": mod.get('source'), "file": mod.get('file'), "line": mod.get('line')})
                     from db_helpers import upsert_context_metadata
                     upsert_context_metadata(experiment_id="001", repo_name=repo_name, key=key, value=value, source="module_discovery")
         except Exception:

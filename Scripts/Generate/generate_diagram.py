@@ -152,6 +152,63 @@ def _should_show_on_diagram(resource: dict, child_ids: set) -> bool:
         return True
 
 
+def _is_operation_resource_type(resource_type: str) -> bool:
+    """Return True when a resource type represents an API operation-level entity.
+
+    Architecture diagrams should focus on service/API-level nodes. Operation-level
+    resources are extremely high-cardinality and make graphs unreadable.
+    """
+    rt = (resource_type or '').strip().lower()
+    if not rt:
+        return False
+    return (
+        'api_operation' in rt
+        or rt.endswith('_operation')
+        or '.operation' in rt
+    )
+
+
+def _is_non_service_resource_type(resource_type: str) -> bool:
+    """Return True when a resource is config/metadata rather than a cloud service.
+
+    Architecture diagrams should emphasize deployable/routable services, not
+    settings, dashboard widgets, alerts, identity/group metadata, or template
+    helper artifacts.
+    """
+    rt = (resource_type or '').strip().lower()
+    if not rt:
+        return False
+
+    exact_exclusions = {
+        'azurerm_app_configuration',
+        'azurerm_app_configuration_key',
+        'azurerm_client_config',
+        'azurerm_subscription',
+        'azurerm_api_management_subscription',
+        'azurerm_api_management_user',
+        'azurerm_portal_dashboard',
+        'azurerm_monitor_metric_alert',
+        'azurerm_monitor_scheduled_query_rules_alert',
+        'azurerm_monitor_scheduled_query_rules_alert_v2',
+        'template_file',
+        'kubernetes_config',
+    }
+    if rt in exact_exclusions:
+        return True
+
+    token_exclusions = (
+        'configuration_key',
+        'client_config',
+        'template_file',
+        'portal_dashboard',
+        'metric_alert',
+        'scheduled_query_rules_alert',
+        'api_management_subscription',
+        'api_management_user',
+    )
+    return any(tok in rt for tok in token_exclusions)
+
+
 def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     protocol = str(connection.get("protocol") or "").strip()
     port = str(connection.get("port") or "").strip()
@@ -261,7 +318,12 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
     return connections
 
 
-def generate_architecture_diagram(experiment_id: str, repo_name: str | None = None, provider: str | None = None) -> str:
+def generate_architecture_diagram(
+    experiment_id: str,
+    repo_name: str | None = None,
+    provider: str | None = None,
+    include_operation_resources: bool | None = None,
+) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
     with _get_db_conn() as _conn:
@@ -301,6 +363,11 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
         connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
 
     # Exclude resource types that are explicitly marked as not to be displayed on architecture charts
+    operation_count_in_scope = sum(
+        1 for r in resources if _is_operation_resource_type((r.get('resource_type') or ''))
+    )
+    if include_operation_resources is None:
+        include_operation_resources = operation_count_in_scope < 10
     try:
         # Use resource_type_db to determine display preference (fallbacks handled inside)
         _display_filtered = []
@@ -309,7 +376,9 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
             rt_info = _rtdb.get_resource_type(None, rt)
             # Explicitly exclude resource groups (some legacy rows use non-standard type names)
             is_resource_group = 'resource_group' in rt.lower() or (r.get('resource_name') or '').lower().endswith('resource group')
-            if rt_info.get('display_on_architecture_chart', True) and not is_resource_group:
+            is_operation_resource = _is_operation_resource_type(rt)
+            is_non_service_resource = _is_non_service_resource_type(rt)
+            if rt_info.get('display_on_architecture_chart', True) and not is_resource_group and (include_operation_resources or not is_operation_resource) and not is_non_service_resource:
                 _display_filtered.append(r)
         resources = _display_filtered
         # Also filter connections to endpoints that remain
@@ -433,6 +502,25 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     # Build a quick lookup of resources by name for property inspection
     resource_map = {r['resource_name']: r for r in resources}
 
+    # Resource names that correspond to operation-level entities (use DB names to
+    # avoid re-introducing operations via _ensure_node_exists).
+    operation_resource_names = set()
+    non_service_resource_names = {
+        r['resource_name']
+        for r in get_resources_for_diagram(experiment_id)
+        if _is_non_service_resource_type(r.get('resource_type') or '')
+        and (not repo_name or r.get('repo_name') == repo_name)
+        and (not provider or (r.get('provider') or '').lower() == provider.lower())
+    }
+    if not include_operation_resources:
+        operation_resource_names = {
+            r['resource_name']
+            for r in get_resources_for_diagram(experiment_id)
+            if _is_operation_resource_type(r.get('resource_type') or '')
+            and (not repo_name or r.get('repo_name') == repo_name)
+            and (not provider or (r.get('provider') or '').lower() == provider.lower())
+        }
+
     # Track which resource nodes have been emitted so we can create missing endpoints
     node_names_present = {r['resource_name'] for r in resources}
 
@@ -440,11 +528,19 @@ def generate_architecture_diagram(experiment_id: str, repo_name: str | None = No
     def _ensure_node_exists(resource_name: str):
         if not resource_name or resource_name in node_names_present:
             return
+        if resource_name in non_service_resource_names:
+            return
+        if resource_name in operation_resource_names:
+            return
         # Try to fetch minimal info from DB if available
         from db_helpers import get_db_connection
         with get_db_connection() as _conn:
             row = _conn.execute("SELECT resource_name, resource_type FROM resources WHERE experiment_id = ? AND resource_name = ? LIMIT 1", [experiment_id, resource_name]).fetchone()
             if row:
+                if (not include_operation_resources) and _is_operation_resource_type(row['resource_type']):
+                    return
+                if _is_non_service_resource_type(row['resource_type']):
+                    return
                 node_id = sanitize_id(row['resource_name'])
                 lines.append(f"  {node_id}[{row['resource_name']}]")
                 node_names_present.add(row['resource_name'])

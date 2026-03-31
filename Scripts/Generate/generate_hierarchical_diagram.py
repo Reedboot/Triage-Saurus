@@ -184,9 +184,11 @@ class HierarchicalDiagramBuilder:
         rtype = (resource.get('resource_type') or '').lower()
         name = (resource.get('resource_name') or '').lower()
 
-        # API gateways are internet entry points by design.
+        # API gateways are not always internet entry points (APIM can be internal/VNet/private).
+        # Only treat as public edge when we have explicit internet_access=true evidence.
         if self.is_api_gateway(resource) or self.is_api_operation(resource):
-            return True
+            props = resource.get('properties') or {}
+            return str(props.get('internet_access') or '').strip().lower() == 'true'
 
         # Common edge/service-entry resource types across clouds.
         edge_type_tokens = [
@@ -679,7 +681,16 @@ class HierarchicalDiagramBuilder:
         lines = []
         lines.append("  subgraph servicebus[Service Bus]")
 
-        namespaces = [r for r in sb_resources if 'namespace' in r.get('resource_type', '').lower()]
+        namespaces = []
+        for r in sb_resources:
+            rtype = (r.get('resource_type') or '').lower()
+            name = (r.get('resource_name') or '').lower()
+            if 'namespace' in rtype:
+                namespaces.append(r)
+                continue
+            if any(name.endswith(suffix) for suffix in ('_service_bus', '-service-bus', ' service bus')):
+                namespaces.append(r)
+                continue
         rendered_ids = set()
 
         def _render_topic(topic: dict, indent: str = "    "):
@@ -730,7 +741,12 @@ class HierarchicalDiagramBuilder:
             namespace_subgraph_id = f"sb_ns_{namespace_id}"
             lines.append(f"    subgraph {namespace_subgraph_id}[\"🚌 {namespace_name}\"]")
             # Keep a concrete namespace node only when it actually participates in connections.
-            if namespace_connected:
+            should_render_namespace_node = (
+                namespace_connected
+                and not topics_to_render
+                and not queues_to_render
+            )
+            if should_render_namespace_node:
                 lines.append(f"      {namespace_id}[\"{namespace_name}\"]")
                 self.emitted_nodes.add(namespace_name)
             rendered_ids.add(namespace['id'])
@@ -836,15 +852,12 @@ class HierarchicalDiagramBuilder:
     def infer_connections(self) -> bool:
         """Infer connections from resource relationships and properties when resource_connections is empty."""
         has_internet = False
-        
-        # If we already have connections from DB, filter out technical ones
+
+        # If we already have connections from DB, do not drop them.
+        # (Dropping 'depends_on' breaks k8s/messaging relationships and causes k8s nodes to be pruned.)
+        # Only fall back to inference when there are effectively no connections.
         if len(self.connections) > 10:
-            filtered_connections = []
-            for conn in self.connections:
-                conn_type = str(conn.get('connection_type', '')).lower()
-                if conn_type not in ('depends_on', 'contains'):
-                    filtered_connections.append(conn)
-            self.connections = filtered_connections
+            return any(str(c.get('source') or '') == 'Internet' for c in self.connections)
         
         # Track connected pairs to avoid duplicates
         connected_pairs = set()
@@ -883,6 +896,10 @@ class HierarchicalDiagramBuilder:
             if self.is_public_edge_resource(r):
                 pair_key = ('Internet', r['resource_name'])
                 if pair_key not in connected_pairs:
+                    # Only emit unconfirmed Internet->X edges for non-APIM edge resources.
+                    # APIM can be internal/private; rely on explicit internet_access=true signals.
+                    if self.is_api_gateway(r) or self.is_api_operation(r):
+                        continue
                     self.connections.append({
                         'source': 'Internet',
                         'target': r['resource_name'],
@@ -1032,7 +1049,8 @@ class HierarchicalDiagramBuilder:
         
         # Infer connections if resource_connections table is empty/sparse
         if self.infer_connections():
-            lines.append("  internet[🌐 Internet]")
+            # Use a neutral client label; APIM isn't always internet-facing.
+            lines.append("  internet[🖧 Network Client]")
 
         # Track resources that actually participate in at least one edge so we
         # can prune isolated boxes that add visual noise.
