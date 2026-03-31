@@ -68,7 +68,7 @@
         await navigator.clipboard.writeText(src);
         // small transient feedback
         const old = copyDiagramBtn.textContent;
-        copyDiagramBtn.textContent = 'Copied';
+        copyDiagramBtn.textContent = '✅ Copied';
         setTimeout(() => { copyDiagramBtn.textContent = old; }, 1200);
       } catch (e) {
         console.warn('Copy failed:', e);
@@ -78,6 +78,7 @@
   const zoomInBtn       = document.getElementById('zoom-in-btn');
   const zoomOutBtn      = document.getElementById('zoom-out-btn');
   const zoomResetBtn    = document.getElementById('zoom-reset-btn');
+  const toggleApiOpsBtn = document.getElementById('toggle-api-ops-btn');
   const toggleLogBtn    = document.getElementById('toggle-log-btn');
   const diagramWrap     = document.getElementById('diagram-zoom-wrap');
   const diagramInner    = document.getElementById('diagram-zoom-inner');
@@ -88,6 +89,7 @@
   const toggleDiagramBtnPrimary = document.getElementById('toggle-diagram-btn');
   const toggleDiagramBtnPersistent = document.getElementById('toggle-diagram-btn-persistent');
   const toggleDiagramBtns = [toggleDiagramBtnPrimary, toggleDiagramBtnPersistent].filter(Boolean);
+  const stopToolbarBtn = document.getElementById('stop-ai-toolbar-btn');
   const diagramPanel = document.getElementById('diagram-panel');
 
   // Ensure diagramPanel exists before attempting to read/set styles
@@ -98,11 +100,11 @@
   function syncSectionsToggleButton() {
     if (!toggleSectionsBtn) return;
     if (showingSections) {
-      toggleSectionsBtn.textContent = 'Show Log';
+      toggleSectionsBtn.textContent = '📜 Show Log';
       toggleSectionsBtn.title = 'Show raw scan log';
       return;
     }
-    toggleSectionsBtn.textContent = 'Sections';
+    toggleSectionsBtn.textContent = '📑 Sections';
     toggleSectionsBtn.title = 'Show structured sections';
   }
 
@@ -137,7 +139,55 @@
   let activeTab = 0;
   let currentRepoName = '';
   let currentExpId    = '';
+  let apiOpsOverride  = null; // null = auto (<10), true = force show, false = force hide
   let scanInProgress  = false;
+  let toolbarStopHandler = null;
+  let toolbarStopEnabled = false;
+  let toolbarStopVisible = false;
+
+  function getToolbarStopLabel(stateLabel) {
+    return stateLabel || '⏹ Stop AI Scan';
+  }
+
+  function updateToolbarStopButton() {
+    if (!stopToolbarBtn) return;
+    stopToolbarBtn.hidden = !toolbarStopVisible;
+    stopToolbarBtn.disabled = !toolbarStopHandler || !toolbarStopEnabled;
+  }
+
+  if (stopToolbarBtn) {
+    stopToolbarBtn.addEventListener('click', () => {
+      if (stopToolbarBtn.disabled) return;
+      if (typeof toolbarStopHandler === 'function') {
+        try { toolbarStopHandler('toolbar'); } catch (err) { console.warn('Toolbar stop handler error:', err); }
+      }
+    });
+  }
+
+  function registerToolbarStop(handler) {
+    toolbarStopHandler = typeof handler === 'function' ? handler : null;
+    if (!toolbarStopHandler) {
+      toolbarStopEnabled = false;
+      toolbarStopVisible = false;
+    }
+    updateToolbarStopButton();
+  }
+
+  function setToolbarStopState({ enabled, label, visible } = {}) {
+    if (!stopToolbarBtn) return;
+    if (typeof label === 'string' && label.length) {
+      stopToolbarBtn.textContent = getToolbarStopLabel(label);
+    } else if (typeof visible === 'boolean' && !visible) {
+      stopToolbarBtn.textContent = getToolbarStopLabel();
+    }
+    if (typeof enabled === 'boolean') {
+      toolbarStopEnabled = enabled;
+    }
+    if (typeof visible === 'boolean') {
+      toolbarStopVisible = visible;
+    }
+    updateToolbarStopButton();
+  }
 
   function resolveSelectedRepoName() {
     if (currentRepoName) return currentRepoName;
@@ -156,6 +206,30 @@
     }
     return '';
   }
+
+  try {
+    const savedApiOps = localStorage.getItem('diagramApiOpsOverride');
+    if (savedApiOps === 'show') apiOpsOverride = true;
+    else if (savedApiOps === 'hide') apiOpsOverride = false;
+    else if (savedApiOps === 'auto') apiOpsOverride = null;
+  } catch (e) {}
+
+  function syncApiOpsToggleButton() {
+    if (!toggleApiOpsBtn) return;
+    if (apiOpsOverride === true) {
+      toggleApiOpsBtn.textContent = '🧩 API ops: Show';
+      toggleApiOpsBtn.title = 'Showing API operations in architecture (click to switch mode)';
+      return;
+    }
+    if (apiOpsOverride === false) {
+      toggleApiOpsBtn.textContent = '🧩 API ops: Hide';
+      toggleApiOpsBtn.title = 'Hiding API operations in architecture (click to switch mode)';
+      return;
+    }
+    toggleApiOpsBtn.textContent = '🧩 API ops: Auto (<10)';
+    toggleApiOpsBtn.title = 'Auto mode: show API operations only when fewer than 10 (click to switch mode)';
+  }
+  syncApiOpsToggleButton();
 
   // -- Zoom + Pan (right panel) --
   function applyTransform() {
@@ -263,7 +337,7 @@
     const lp = document.getElementById('log-panel');
     if (lp) lp.style.display = collapsed ? 'none' : '';
     if (toggleLogBtn) {
-      toggleLogBtn.textContent = collapsed ? 'Expand scan' : 'Hide scan';
+      toggleLogBtn.textContent = collapsed ? '📂 Expand scan' : '📜 Hide scan';
       toggleLogBtn.title = collapsed ? 'Expand/Show scan output' : 'Hide/Collapse scan output';
     }
     try { fitDiagram(); } catch (e) {}
@@ -278,7 +352,7 @@
     diagramPanel.style.display = hidden ? 'none' : '';
     if (hidden) workspaceEl.classList.add('diagram-hidden'); else workspaceEl.classList.remove('diagram-hidden');
     toggleDiagramBtns.forEach(b => {
-      try { b.textContent = hidden ? 'Show diagram' : 'Hide diagram'; b.title = hidden ? 'Show architecture diagram' : 'Hide architecture diagram'; } catch (e) {}
+      try { b.textContent = hidden ? '🖼 Show diagram' : '🖼 Hide diagram'; b.title = hidden ? 'Show architecture diagram' : 'Hide architecture diagram'; } catch (e) {}
     });
     scheduleFitDiagram(200);
   }
@@ -288,7 +362,7 @@
   try {
     const savedDiag = localStorage.getItem('diagramHidden');
     if (savedDiag === '1') setDiagramHidden(true);
-    else { toggleDiagramBtns.forEach(b => { try { b.textContent = 'Hide diagram'; b.title = 'Hide architecture diagram'; } catch (e) {} }); }
+    else { toggleDiagramBtns.forEach(b => { try { b.textContent = '🖼 Hide diagram'; b.title = 'Hide architecture diagram'; } catch (e) {} }); }
     const savedCollapsed = localStorage.getItem('scanCollapsed');
     if (savedCollapsed === '1') setSidebarCollapsed(true, { persist: false });
   } catch (e) {}
@@ -382,7 +456,7 @@
       if (sectionContent) sectionContent.style.display = 'none';
       sectionTabBar.style.display = 'flex';
       showingSections = false;
-      if (toggleSectionsBtn) toggleSectionsBtn.textContent = 'Sections';
+      if (toggleSectionsBtn) toggleSectionsBtn.textContent = '📑 Sections';
       activeSection = '__log__';
     } else {
       // Load content for the requested key
@@ -437,7 +511,7 @@
 
     sectionContent.innerHTML = '<div class="section-loading"><span>Loading…</span></div>';
 
-    const structuredKeys = ['tldr', 'overview', 'risks', 'assets', 'findings', 'ingress', 'egress', 'ports', 'roles', 'containers'];
+    const structuredKeys = ['tldr', 'overview', 'risks', 'assets', 'findings', 'ingress', 'egress', 'ports', 'roles', 'containers', 'subscription'];
 
     try {
       const resolvedRepoName = repoName || currentRepoName || resolveSelectedRepoName();
@@ -476,11 +550,17 @@
         if (key === 'containers' && window.initContainers) {
           try { window.initContainers(sectionContent); } catch (e) { console.warn('initContainers error:', e); }
         }
-        if (key === 'overview' && window.initOverview) {
+        if ((key === 'overview' || key === 'tldr') && window.initOverview) {
           try { window.initOverview(sectionContent); } catch (e) { console.warn('initOverview error:', e); }
+        }
+        if (key === 'findings' && window.initFindings) {
+          try { window.initFindings(sectionContent, resolvedRepoName, targetExpId); } catch (e) { console.warn('initFindings error:', e); }
         }
         if (key === 'ingress') {
           initIngressApiDetails(sectionContent);
+        }
+        if (key === 'subscription' && window.initSubscription) {
+          try { window.initSubscription(sectionContent, resolvedRepoName, targetExpId); } catch (e) { console.warn('initSubscription error:', e); }
         }
         
         // Initialize column resizing for all section tables (including multiple tables per section)
@@ -507,6 +587,26 @@
     if (/^-+$/.test(line) || /^={3,}/.test(line)) return 'line-sep';
     if (/\[ERROR\]|✗|error/i.test(line))           return 'line-error';
     if (/\[WARN\]|WARNING/i.test(line))             return 'line-warn';
+
+    // AI/Copilot: highlight "prep" steps (connecting, collecting facts, prompting) vs steady running output.
+    if (/===\s*Copilot Summary\s*===/i.test(line)) return 'line-ai-summary-title';
+    if (/^\[Copilot\]\s*Open questions\s*:/i.test(line)) return 'line-ai-questions-title';
+    if (/^\[Copilot\]\s*-\s+/i.test(line)) return 'line-ai-question';
+    if (/^\[Copilot\]\s*(Project|Deployment|Interactions|Auth|Dependencies|Issues|Skeptics)\s*:/i.test(line)) return 'line-ai-summary';
+
+    // Background AI analysis job (enrich + skeptics + overview)
+    if (/^\[AI\]\s*Starting step:\s*Running skeptics/i.test(line)) return 'line-ai-skeptics';
+    if (/^\[AI\]\s*Starting step:\s*(Enriching findings|Generating overview)/i.test(line)) return 'line-ai-prep';
+
+    if (/^\[Copilot\]/.test(line)) {
+      if (/connecting stream|step\s*\d+\/\d+|collecting|asking copilot|building summaries|parsing|persist/i.test(line)) {
+        return 'line-ai-prep';
+      }
+      if (/running/i.test(line)) return 'line-ai-run';
+      return 'line-ai-run';
+    }
+    if (/^\[AI\]/.test(line)) return 'line-ai-run';
+
     if (/^▶|Phase \d|Pipeline|Rendering|Experiment/i.test(line)) return 'line-phase';
     if (/✓|✅|complete|success/i.test(line))        return 'line-ok';
     if (/\[Web\]/.test(line))                       return 'line-done';
@@ -621,8 +721,7 @@
     // Remove linkStyle lines which can reference out-of-range indices and crash the renderer
     s = s.replace(/^\s*linkStyle\s+\d+[^\n]*\n/gm, '');
 
-    // Remove explicit "contains" edges: containment should be represented via subgraphs
-    s = s.split('\n').filter(line => !/\bcontains\b/i.test(line)).join('\n');
+    // Preserve "contains" edges so relationship-heavy architecture diagrams remain connected.
 
     // Collapse newlines inside bracketed labels: [a\n b] => [a b]
     s = s.replace(/\[([^\]]*\n[^\]]*)\]/g, (m, g1) => '[' + g1.replace(/\n|\r/g, ' ') + ']');
@@ -1015,7 +1114,14 @@
 
   async function _loadDiagrams(expId, { silent = false } = {}) {
     try {
-      const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
+      currentExpId = (expId || '').trim() || currentExpId;
+      const repoForDiagrams = currentRepoName || resolveSelectedRepoName();
+      const params = new URLSearchParams();
+      if (repoForDiagrams) params.set('repo_name', repoForDiagrams);
+      if (apiOpsOverride === true) params.set('include_api_operations', '1');
+      else if (apiOpsOverride === false) params.set('include_api_operations', '0');
+      const repoQuery = params.toString() ? `?${params.toString()}` : '';
+      const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}${repoQuery}`);
       const data = await resp.json();
       if (data.diagrams && data.diagrams.length > 0) {
         await renderDiagrams(data.diagrams);
@@ -1028,6 +1134,25 @@
       if (!silent) setStatus('Load failed: ' + err, 'error');
       return false;
     }
+  }
+
+  if (toggleApiOpsBtn) {
+    toggleApiOpsBtn.addEventListener('click', async () => {
+      // Cycle: auto -> show -> hide -> auto
+      if (apiOpsOverride === null) apiOpsOverride = true;
+      else if (apiOpsOverride === true) apiOpsOverride = false;
+      else apiOpsOverride = null;
+      try {
+        if (apiOpsOverride === true) localStorage.setItem('diagramApiOpsOverride', 'show');
+        else if (apiOpsOverride === false) localStorage.setItem('diagramApiOpsOverride', 'hide');
+        else localStorage.setItem('diagramApiOpsOverride', 'auto');
+      } catch (e) {}
+      syncApiOpsToggleButton();
+      if (currentExpId) {
+        await _loadDiagrams(currentExpId, { silent: true });
+        scheduleFitDiagram(120);
+      }
+    });
   }
 
   if (loadScanBtn) loadScanBtn.addEventListener('click', async () => {
@@ -1184,6 +1309,11 @@
     statusText.textContent = text;
     statusText.className = 'status-text' + (cls ? ' ' + cls : '');
     statusBar.classList.add('visible');
+  }
+
+  function setStatusBusy(isBusy) {
+    if (!spinner) return;
+    spinner.style.display = isBusy ? '' : 'none';
   }
 
   // -- Form submit --
@@ -1363,6 +1493,10 @@
     showRawLog,
     appendLog: (line) => appendLog(line, { force: true }),
     setStatus,
+    setStatusBusy,
+    registerToolbarStop,
+    setToolbarStopState,
+    activateSectionKey,
   };
 
 })();

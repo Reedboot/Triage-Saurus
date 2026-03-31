@@ -343,6 +343,40 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output .line-warn   { color: var(--yellow); }
 #log-output .line-error  { color: var(--red); }
 #log-output .line-phase  { color: var(--accent); font-weight: 600; }
+#log-output .line-ai-prep { color: var(--accent); font-weight: 600; }
+#log-output .line-ai-run  { color: var(--text-faint); }
+#log-output .line-ai-skeptics { color: var(--yellow); font-weight: 700; }
+
+#log-output .line-ai-summary-title {
+  display: block;
+  color: var(--text);
+  font-weight: 700;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin: 10px 0 6px;
+}
+#log-output .line-ai-summary {
+  display: block;
+  color: var(--text-muted);
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
+#log-output .line-ai-questions-title {
+  display: block;
+  color: var(--text);
+  font-weight: 700;
+  margin: 10px 0 6px;
+}
+#log-output .line-ai-question {
+  display: block;
+  color: var(--yellow);
+  border-left: 2px solid var(--yellow);
+  padding-left: 10px;
+}
+
 #log-output .line-done   { color: var(--green); font-weight: 600; }
 #log-output .line-sep    { color: var(--border); }
 
@@ -1056,6 +1090,46 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.7rem; color: var(--text-faint);
 }
+
+/* ── Module dependencies (Overview) ── */
+.module-deps { margin: 0; padding-left: 18px; }
+.module-dep-item { margin: 10px 0; }
+.module-dep-name { font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.module-dep-row { font-size: 0.78rem; color: var(--text-muted); margin: 6px 0; }
+.module-dep-label { display:inline-block; min-width: 90px; color: var(--text-muted); vertical-align: top; }
+.module-dep-row--stack .module-dep-label { display: block; min-width: 0; margin-bottom: 6px; }
+.module-dep-row--stack .md-code { display: block; width: 100%; margin-top: 0; }
+
+/* Markdown-style code fence block */
+.md-code {
+  display: inline-block;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 4px 0 0 0;
+  max-width: 100%;
+}
+.md-code code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+/* ── AI action blocks (Overview) ── */
+.ai-actions { display: flex; flex-direction: column; gap: 12px; }
+.ai-action {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.ai-action-title { margin: 0 0 8px 0; font-size: 0.95rem; font-weight: 700; color: var(--text); }
+.ai-action-row { font-size: 0.85rem; color: var(--text-muted); margin: 6px 0; }
+.ai-action-label { display: inline-block; min-width: 70px; color: var(--text-faint); vertical-align: top; }
+.ai-action .md-code { width: 100%; margin-top: 6px; }
 .asset-type-badge {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.7rem; color: #79c0ff;
