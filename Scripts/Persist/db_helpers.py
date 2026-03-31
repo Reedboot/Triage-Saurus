@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import time
 import os
+import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -612,6 +613,21 @@ def _ensure_schema(conn: sqlite3.Connection):
       answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Subscription-wide Q&A (applies across repos within an experiment/subscription context)
+    CREATE TABLE IF NOT EXISTS subscription_context (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      scope_key TEXT DEFAULT 'global',
+      repo_name TEXT,
+      question TEXT NOT NULL,
+      answer TEXT,
+      answered_by TEXT,
+      confidence REAL,
+      tags TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS skeptic_reviews (
       id INTEGER PRIMARY KEY,
       finding_id INTEGER NOT NULL,
@@ -1034,6 +1050,21 @@ def _ensure_schema(conn: sqlite3.Connection):
         if "llm_enriched_at" not in findings_columns:
             conn.execute("ALTER TABLE findings ADD COLUMN llm_enriched_at TIMESTAMP")
 
+        # Human/AI triage feedback (learning signal)
+        if "triage_status" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN triage_status TEXT")
+            # Default to 'valid' for existing rows
+            try:
+                conn.execute("UPDATE findings SET triage_status = 'valid' WHERE triage_status IS NULL")
+            except Exception:
+                pass
+        if "triage_reason" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN triage_reason TEXT")
+        if "triage_set_by" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN triage_set_by TEXT")
+        if "triage_set_at" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN triage_set_at TIMESTAMP")
+
         # Exposure analysis table columns (ensure they exist for backward compatibility)
         exposure_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}
         for col_name, col_type in (
@@ -1357,6 +1388,234 @@ def insert_resource(
             pass
 
     return resource_id
+
+
+def ensure_inferred_aks_cluster(experiment_id: str, repo_name: str) -> Optional[int]:
+    """Ensure a synthetic AKS cluster exists when k8s workloads exist but no cluster was scanned.
+
+    This happens when a repo deploys to AKS via a remote Terraform module (e.g., terraform-aks)
+    and only Skaffold/K8s workloads are visible locally.
+
+    NOTE: We do NOT parent kubernetes_* resources under the cluster in DB because some
+    diagram queries filter to root nodes only.
+    """
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
+                (experiment_id, repo_name),
+            ).fetchone()
+            if not repo_row:
+                return None
+            repo_id = int(repo_row[0])
+
+            has_k8s = conn.execute(
+                "SELECT 1 FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type LIKE 'kubernetes_%' LIMIT 1",
+                (experiment_id, repo_id),
+            ).fetchone()
+            if not has_k8s:
+                return None
+
+            existing = conn.execute(
+                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' LIMIT 1",
+                (experiment_id, repo_id),
+            ).fetchone()
+            if existing:
+                return int(existing[0])
+
+            inferred_name = f"__inferred__{repo_name}-aks-cluster"
+            inferred_existing = conn.execute(
+                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' AND resource_name=? LIMIT 1",
+                (experiment_id, repo_id, inferred_name),
+            ).fetchone()
+            if inferred_existing:
+                cluster_id = int(inferred_existing[0])
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO resources
+                      (experiment_id, repo_id, resource_name, resource_type, provider, discovered_by, discovery_method, source_file, source_line_start, status)
+                    VALUES
+                      (?, ?, ?, 'azurerm_kubernetes_cluster', 'azure', 'Inference', 'k8s_workloads', 'inferred:k8s_workloads', 1, 'active')
+                    RETURNING id
+                    """,
+                    (experiment_id, repo_id, inferred_name),
+                )
+                row = cur.fetchone()
+                cluster_id = int(row[0]) if row else None
+
+                if cluster_id:
+                    try:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO resource_properties (resource_id, property_key, property_value, property_type, is_security_relevant) VALUES (?,?,?,?,?)",
+                            (cluster_id, 'inferred', 'true', 'string', 0),
+                        )
+                        conn.execute(
+                            "INSERT OR REPLACE INTO resource_properties (resource_id, property_key, property_value, property_type, is_security_relevant) VALUES (?,?,?,?,?)",
+                            (cluster_id, 'inference_source', 'k8s_workloads', 'string', 0),
+                        )
+                    except Exception:
+                        pass
+
+            return cluster_id
+    except Exception:
+        return None
+
+
+def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
+    """Try to link an inferred AKS cluster to a real AKS cluster from a scanned module repo.
+
+    If we can't resolve a single cluster, store an AI-suggested open question in ai_open_questions.
+    """
+    try:
+        with get_db_connection() as conn:
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id=? AND LOWER(repo_name)=LOWER(?) LIMIT 1",
+                (experiment_id, repo_name),
+            ).fetchone()
+            if not repo_row:
+                return
+            repo_id = int(repo_row[0])
+
+            inferred_row = conn.execute(
+                "SELECT id, resource_name FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' AND resource_name LIKE '__inferred__%' LIMIT 1",
+                (experiment_id, repo_id),
+            ).fetchone()
+            if not inferred_row:
+                return
+            inferred_cluster_id = int(inferred_row[0])
+            inferred_cluster_name = str(inferred_row[1] or '').strip()
+
+            # If we already have a cross-repo link from this inferred cluster, do nothing.
+            existing_link = conn.execute(
+                "SELECT 1 FROM resource_connections WHERE experiment_id=? AND source_resource_id=? AND is_cross_repo=1 LIMIT 1",
+                (experiment_id, inferred_cluster_id),
+            ).fetchone()
+            if existing_link:
+                return
+
+            # Parse terraform module sources from phase2_code metadata.
+            mod_rows = conn.execute(
+                "SELECT key, value FROM context_metadata WHERE experiment_id=? AND repo_id=? AND namespace='phase2_code' AND key LIKE 'terraform.module.%' ORDER BY id DESC LIMIT 200",
+                (experiment_id, repo_id),
+            ).fetchall()
+
+            candidate_repos: list[tuple[str, str, int | None]] = []  # (repo_name, file, line)
+            for r in mod_rows:
+                try:
+                    k = str(r['key'] or '')
+                    v = str(r['value'] or '')
+                    import json as _json
+                    j = _json.loads(v) if v.strip().startswith('{') else {}
+                    src = str(j.get('source') or v)
+                    file = str(j.get('file') or '')
+                    line = j.get('line')
+                except Exception:
+                    src = v
+                    file = ''
+                    line = None
+
+                m = re.search(r"/_git/([^/]+)", src)
+                if m:
+                    candidate_repos.append((m.group(1), file, line))
+                    continue
+                m2 = re.search(r"/([^/]+?)(?:\.git)?(?:(?://|\?)|$)", src)
+                if m2 and 'terraform' in m2.group(1).lower():
+                    candidate_repos.append((m2.group(1), file, line))
+
+            # Dedup preserving order
+            seen = set()
+            candidate_repos = [(a, f, l) for (a, f, l) in candidate_repos if not (a.lower() in seen or seen.add(a.lower()))]
+
+            resolved: list[tuple[str, int, str]] = []  # (repo_name, cluster_resource_id, cluster_resource_name)
+            for cand_repo, f, l in candidate_repos:
+                rr = conn.execute(
+                    "SELECT id FROM repositories WHERE experiment_id=? AND LOWER(repo_name)=LOWER(?) LIMIT 1",
+                    (experiment_id, cand_repo),
+                ).fetchone()
+                if not rr:
+                    continue
+                cand_repo_id = int(rr[0])
+                clusters = conn.execute(
+                    "SELECT id, resource_name FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' LIMIT 5",
+                    (experiment_id, cand_repo_id),
+                ).fetchall()
+                if len(clusters) == 1:
+                    resolved.append((cand_repo, int(clusters[0][0]), str(clusters[0][1] or '').strip()))
+
+            if len(resolved) == 1:
+                cand_repo, target_cluster_id, target_cluster_name = resolved[0]
+                # Create a cross-repo connection inferred_cluster -> target_cluster.
+                try:
+                    insert_connection(
+                        experiment_id=experiment_id,
+                        source_name=inferred_cluster_name,
+                        target_name=target_cluster_name,
+                        connection_type='equivalent_to',
+                        source_repo=repo_name,
+                        target_repo=cand_repo,
+                        notes='Inferred: repo uses Terraform module that likely provisions AKS cluster',
+                    )
+                except Exception:
+                    pass
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO resource_properties (resource_id, property_key, property_value, property_type, is_security_relevant) VALUES (?,?,?,?,?)",
+                        (inferred_cluster_id, 'linked_cluster_repo', cand_repo, 'string', 0),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO resource_properties (resource_id, property_key, property_value, property_type, is_security_relevant) VALUES (?,?,?,?,?)",
+                        (inferred_cluster_id, 'linked_cluster_name', target_cluster_name, 'string', 0),
+                    )
+                except Exception:
+                    pass
+                return
+
+            # Otherwise: emit an AI-suggested open question so the Q&A tab can capture it.
+            trigger_file = ''
+            trigger_line = None
+            if candidate_repos:
+                trigger_file, trigger_line = candidate_repos[0][1], candidate_repos[0][2]
+
+            question = (
+                f"Which AKS cluster do the Kubernetes workloads in repo '{repo_name}' run on (cluster name + owning repo/module)?"
+            )
+            if candidate_repos:
+                cands = ", ".join([cr for cr, _, _ in candidate_repos[:4]])
+                question += f" Candidate module repos: {cands}."
+
+            q_obj = {
+                "question": question,
+                "file": trigger_file or "skaffold.yaml",
+                "line": int(trigger_line) if trigger_line else 1,
+                "asset": inferred_cluster_name,
+            }
+
+            try:
+                row = conn.execute(
+                    "SELECT value FROM context_metadata WHERE experiment_id=? AND repo_id=? AND namespace='ai_overview' AND key='ai_open_questions' ORDER BY id DESC LIMIT 1",
+                    (experiment_id, repo_id),
+                ).fetchone()
+                existing = []
+                if row and row[0]:
+                    import json as _json
+                    existing = _json.loads(row[0]) if str(row[0]).strip().startswith('[') else []
+                if not isinstance(existing, list):
+                    existing = []
+                if not any(isinstance(x, dict) and str(x.get('question','')).strip().lower() == question.strip().lower() for x in existing):
+                    existing.append(q_obj)
+                    upsert_context_metadata(
+                        experiment_id=experiment_id,
+                        repo_name=repo_name,
+                        key='ai_open_questions',
+                        value=json.dumps(existing[:5]),
+                        namespace='ai_overview',
+                        source='aks_inference',
+                    )
+            except Exception:
+                pass
+    except Exception:
+        return
 
 
 def get_resource_id(
@@ -3014,22 +3273,33 @@ def upsert_cloud_diagram(
         conn.commit()
 
 
-def get_cloud_diagrams(experiment_id: str) -> list[dict]:
-    """Return all cloud diagrams for an experiment, deduplicated case-insensitively and ordered by display_order then provider.
+def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> list[dict]:
+    """Return cloud diagrams for an experiment (optionally repo-scoped), deduplicated case-insensitively and ordered by display_order then provider.
 
     Groups diagrams by lowercase(provider)+lower(diagram_title) and keeps the most
     recently updated row for each logical diagram. Provider is returned in Title
     case for display.
     """
     with get_db_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
-            FROM cloud_diagrams
-            WHERE experiment_id = ?
-            """,
-            (experiment_id,),
-        ).fetchall()
+        if repo_name:
+            rows = conn.execute(
+                """
+                SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                FROM cloud_diagrams
+                WHERE experiment_id = ?
+                  AND LOWER(COALESCE(repo_name, '')) = LOWER(?)
+                """,
+                (experiment_id, repo_name),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                FROM cloud_diagrams
+                WHERE experiment_id = ?
+                """,
+                (experiment_id,),
+            ).fetchall()
 
     # Deduplicate case-insensitively by (provider, diagram_title) keeping the latest updated_at
     grouped: dict[tuple[str, str], dict] = {}
