@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Enrich"))
 import db_helpers
 from llm_resource_interpreter import _call_llm
 
-REVIEWER_TYPES = ["security", "dev", "platform"]
+# Run dev + platform first, then security (security should incorporate the other skeptics).
+REVIEWER_TYPES = ["dev", "platform", "security"]
 
 ROLE_INTROS = {
     "security": "You are a Security Engineer reviewing a finding. Be concise.",
@@ -27,18 +28,33 @@ ROLE_INTROS = {
 }
 
 
-def _build_prompt(row: dict, reviewer: str) -> str:
+def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = None) -> str:
     snippet = (row.get("code_snippet") or "").strip()
     intro = ROLE_INTROS[reviewer]
     finding_title = row.get("title") or row.get("rule_id") or "Finding"
+
+    peer_block = ""
+    if reviewer == "security" and peer_reviews:
+        # Security should explicitly incorporate dev/platform skeptical views when setting final severity.
+        peer_lines = []
+        for pr in peer_reviews:
+            rt = pr.get("reviewer_type")
+            adj = pr.get("adjusted_score")
+            conf = pr.get("confidence")
+            rec = pr.get("recommendation")
+            reason = (pr.get("reasoning") or "").strip()
+            peer_lines.append(f"- {rt}: adjusted_score={adj}/10, confidence={conf}, recommendation={rec}; reasoning={reason}")
+        peer_block = "Peer skeptic reviews (incorporate these):\n" + "\n".join(peer_lines) + "\n\n"
+
     return (
         f"{intro}\n\n"
         f"Title: {finding_title}\n"
         f"Description: {row.get('description') or ''}\n"
-        f"Severity score: {row.get('severity_score')}/10\n"
+        f"Base/current severity score: {row.get('severity_score')}/10\n"
         f"File: {row.get('source_file')}\n"
         f"Code snippet:\n```\n{snippet}\n```\n"
         f"Proposed fix: {row.get('proposed_fix') or ''}\n\n"
+        f"{peer_block}"
         "Return JSON only:\n"
         "{\n"
         '  "score_adjustment": <float, positive=escalate / negative=downgrade>,\n'
@@ -162,17 +178,29 @@ def main():
                 scored_by=f"{reviewer}_skeptic",
                 rationale=reasoning,
             )
-            adjusted_scores.append(adjusted_score)
+            reviewer_scores[reviewer] = adjusted_score
             print(f"  [reviewed] finding {fid} by {reviewer}: {adjusted_score}/10 ({recommendation})")
 
-        # If all 3 reviewers completed, set final averaged score
-        if not args.dry_run and len(adjusted_scores) == 3:
-            final_score = round(sum(adjusted_scores) / len(adjusted_scores))
+        # If all 3 reviewers completed, set final score.
+        # Security is expected to incorporate dev+platform views, so use Security's adjusted score as final.
+        if not args.dry_run and len(reviewer_scores) == 3:
+            final_score = reviewer_scores.get("security")
+            if final_score is None:
+                final_score = round(sum(reviewer_scores.values()) / len(reviewer_scores))
             with db_helpers.get_db_connection() as conn:
                 conn.execute(
                     "UPDATE findings SET severity_score = ? WHERE id = ?",
                     (final_score, fid),
                 )
+            try:
+                db_helpers.record_risk_score(
+                    fid,
+                    final_score,
+                    scored_by="skeptic_final",
+                    rationale="Final severity set from security skeptic (after dev+platform review).",
+                )
+            except Exception:
+                pass
             print(f"Final score for finding {fid}: {final_score}")
 
 
