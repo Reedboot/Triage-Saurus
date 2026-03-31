@@ -1,8 +1,8 @@
 {# partials/tab_ingress.html — Internet-facing resources and inbound paths #}
 {% if operations %}
 <div class="callout info s-inline-157a9c">
-  <strong>{{ operations | length }}</strong>
-  API endpoint{{ 's' if operations | length != 1 }}
+  <strong>{{ operation_count }}</strong>
+  API endpoint{{ 's' if operation_count != 1 }}
   detected in this experiment.
 </div>
 

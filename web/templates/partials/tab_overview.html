@@ -2,13 +2,45 @@
 <div class="overview-wrapper markdown-card">
   <div class="overview-actions" data-experiment-id="{{ experiment_id or '' }}" data-repo-name="{{ repo_name or '' }}">
     <button type="button" class="btn-small" id="overview-run-ai-btn">Run AI Analysis</button>
+    <button type="button" class="btn-small" id="overview-gen-rules-btn">Generate opengrep rules</button>
     <span id="overview-ai-status" class="overview-ai-status">Idle</span>
   </div>
   {% if overview_html %}
   <article class="overview-body">
     {{ overview_html | safe }}
   </article>
-  {% else %}
+  {% endif %}
+
+  {# AI-detected new assets and fixed info cards #}
+  {% if ai_new_assets %}
+  <section class="ai-cards">
+    <h4>AI-detected new assets</h4>
+    <div class="ai-card-list">
+      {% for a in ai_new_assets %}
+      <div class="ai-card">
+        <div class="ai-card-title">{{ a.label or a.name or ('Asset ' ~ loop.index) }}</div>
+        <div class="ai-card-body">{{ (a.description or a.details) | default(a | tojson) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if ai_fixed_information %}
+  <section class="ai-cards">
+    <h4>AI-fixed information</h4>
+    <div class="ai-card-list">
+      {% for f in ai_fixed_information %}
+      <div class="ai-card">
+        <div class="ai-card-title">{{ f.title or ('Fix ' ~ loop.index) }}</div>
+        <div class="ai-card-body">{{ (f.description or f.detail) | default(f | tojson) }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not overview_html and not ai_new_assets and not ai_fixed_information %}
   <div class="overview-empty">
     <div class="overview-empty-icon">📝</div>
     <div>

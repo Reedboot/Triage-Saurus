@@ -22,7 +22,11 @@
         <th>Category</th>
         <th>Source</th>
         <th>Resource</th>
-        <th>Score</th>
+        <th>Triage</th>
+        <th>Dev</th>
+        <th>Platform</th>
+        <th>Security</th>
+        <th>Final</th
       </tr>
     </thead>
     <tbody>
@@ -30,7 +34,8 @@
       {% set sev = (f.base_severity or f.severity or '') | upper %}
       {% set sev_css = sev | lower %}
       <tr data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
-          data-sev="{{ sev }}">
+          data-sev="{{ sev }}"
+          data-finding-id="{{ f.id }}">
         <td><span class="severity-badge {{ sev_css }}">{{ sev or '—' }}</span></td>
         <td class="wrap">
           <div style="font-weight:500; color:var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
@@ -54,6 +59,19 @@
           {% if f.resource_id %}
             <span class="asset-type-badge">#{{ f.resource_id }}</span>
           {% else %}—{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% set ts = (f.triage_status or 'valid') %}
+          <span class="how-badge" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">{{ ts }}</span>
+        </td>
+        <td style="text-align:center;">
+          {% if f.dev_score %}<span title="confidence {{ f.dev_confidence or '—' }}">{{ f.dev_score }}/10</span>{% else %}—{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% if f.platform_score %}<span title="confidence {{ f.platform_confidence or '—' }}">{{ f.platform_score }}/10</span>{% else %}—{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% if f.security_score %}<span title="confidence {{ f.security_confidence or '—' }}">{{ f.security_score }}/10</span>{% else %}—{% endif %}
         </td>
         <td style="text-align:center;">
           {% if f.severity_score %}

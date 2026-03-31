@@ -1,0 +1,156 @@
+{# Subscription-wide Q&A — shared context across repos within an experiment #}
+<div class="markdown-card">
+  <h3>🌐 Global Knowledge Q&A</h3>
+  <p style="font-size:0.85rem;color:var(--text-muted);margin:6px 0 12px;">
+    Store cross-repo context (e.g. platform constraints, mandated controls, network assumptions) for this experiment.
+  </p>
+
+  <form id="subscription-qa-form" class="qa-form" onsubmit="return false;" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+    <div class="field compact" style="min-width:200px;">
+      <label>Scope</label>
+      <select id="subscription-qa-scope" class="assets-provider-filter">
+        <option value="repo" selected>This repo</option>
+        <option value="global">Global (this experiment)</option>
+      </select>
+    </div>
+    <div class="field grow" style="min-width:260px;flex:1 1 360px;">
+      <label>Question</label>
+      <input type="text" id="subscription-qa-question" class="assets-search" placeholder="Use a suggested question below" readonly />
+    </div>
+    <div class="field grow" style="min-width:260px;flex:1 1 420px;">
+      <label>Answer</label>
+      <input type="text" id="subscription-qa-answer" class="assets-search" placeholder="e.g. Public for now; must enforce JWT + WAF." />
+    </div>
+    <div class="field compact" style="min-width:170px;">
+      <label>&nbsp;</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:0.8rem;color:var(--text-muted);">
+        <input type="checkbox" id="subscription-qa-dontknow" />
+        Don’t know
+      </label>
+    </div>
+    <div class="field compact" style="min-width:120px;">
+      <label>Confidence</label>
+      <input type="number" id="subscription-qa-confidence" class="assets-search" min="0" max="1" step="0.1" value="0.7" />
+    </div>
+    <div class="field compact" style="min-width:170px;">
+      <label>Answered by</label>
+      <input type="text" id="subscription-qa-by" class="assets-search" placeholder="name/team" />
+    </div>
+    <div class="field compact" style="min-width:200px;">
+      <label>Tags</label>
+      <input type="text" id="subscription-qa-tags" class="assets-search" placeholder="auth, networking, policy" />
+    </div>
+    <div class="field compact">
+      <label>&nbsp;</label>
+      <button type="button" class="btn-small" id="subscription-qa-save">Save</button>
+    </div>
+  </form>
+</div>
+
+<div class="markdown-card" style="margin-top:12px;">
+  <h3>Suggested questions (from AI)</h3>
+  {% if suggested_questions %}
+    <div class="section-table-wrap">
+      <table class="section-table">
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>Triggered by</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for q in suggested_questions %}
+          <tr>
+            <td class="wrap" style="max-width:720px;">{{ q.question }}</td>
+            <td>
+              {% if q.asset %}<span class="how-badge">{{ q.asset }}</span>{% endif %}
+              {% if q.file %}
+                <span class="file-link" title="{{ q.file }}">{{ q.file | basename }}</span>
+                {% if q.line %}<span class="line-num">:{{ q.line }}</span>{% endif %}
+              {% endif %}
+            </td>
+            <td style="text-align:right;">
+              <button type="button" class="btn-small qa-use" data-question="{{ q.question | e }}">Use</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="assets-empty">No suggested questions from the latest AI run.</div>
+  {% endif %}
+</div>
+
+<div class="markdown-card" style="margin-top:12px;">
+  <h3>This repo</h3>
+  {% if repo_entries %}
+    <div class="section-table-wrap">
+      <table class="section-table">
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>Answer</th>
+            <th>Confidence</th>
+            <th>Answered by</th>
+            <th>Tags</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in repo_entries %}
+          <tr>
+            <td class="wrap" style="max-width:420px;">{{ e.question }}</td>
+            <td class="wrap" style="max-width:520px;">{{ e.answer or "Don't know" }}</td>
+            <td style="text-align:center;">{{ e.confidence if e.confidence is not none else '—' }}</td>
+            <td>{{ e.answered_by or '—' }}</td>
+            <td>{{ e.tags or '—' }}</td>
+            <td>
+              {% if e.updated_at %}<span class="file-link" title="{{ e.updated_at }}">{{ e.updated_at }}</span>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="assets-empty">No repo-scoped Q&A yet.</div>
+  {% endif %}
+</div>
+
+<div class="markdown-card" style="margin-top:12px;">
+  <h3>Global (this experiment)</h3>
+  {% if global_entries %}
+    <div class="section-table-wrap">
+      <table class="section-table">
+        <thead>
+          <tr>
+            <th>Question</th>
+            <th>Answer</th>
+            <th>Confidence</th>
+            <th>Answered by</th>
+            <th>Tags</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in global_entries %}
+          <tr>
+            <td class="wrap" style="max-width:420px;">{{ e.question }}</td>
+            <td class="wrap" style="max-width:520px;">{{ e.answer or "Don't know" }}</td>
+            <td style="text-align:center;">{{ e.confidence if e.confidence is not none else '—' }}</td>
+            <td>{{ e.answered_by or '—' }}</td>
+            <td>{{ e.tags or '—' }}</td>
+            <td>
+              {% if e.updated_at %}<span class="file-link" title="{{ e.updated_at }}">{{ e.updated_at }}</span>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="assets-empty">No global Q&A yet.</div>
+  {% endif %}
+</div>

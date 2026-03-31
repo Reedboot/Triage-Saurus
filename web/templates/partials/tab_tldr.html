@@ -1,5 +1,15 @@
 {# TL;DR tab — AI first, DB fallback #}
 <div class="tldr-wrapper markdown-card">
+  {% if experiment_id and repo_name %}
+    <div class="overview-actions" data-experiment-id="{{ experiment_id }}" data-repo-name="{{ repo_name }}" data-refresh-section="tldr">
+      {% if ai_ready %}
+        <button type="button" class="btn-small" id="tldr-run-ai-btn">🤖 Run AI Scan</button>
+        <span id="tldr-ai-status" class="overview-ai-status">{{ (ai_status or 'idle') | capitalize }}</span>
+      {% else %}
+        <span id="tldr-ai-status" class="overview-ai-status">Run AI Scan becomes available after Discovery, Exposure, and Findings are complete.</span>
+      {% endif %}
+    </div>
+  {% endif %}
   {% if error %}
     <div class="overview-empty">
       <div class="overview-empty-icon">⚠️</div>
