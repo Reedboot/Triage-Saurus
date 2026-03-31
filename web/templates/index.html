@@ -164,9 +164,10 @@
         <div class="panel-header">
           <span class="panel-title">Scan Output</span>
           <div class="panel-actions">
-            <button class="btn-small" id="copy-log-btn" title="Copy log">Copy</button>
-            <button class="btn-small" id="clear-log-btn" title="Clear log">Clear</button>
-            <button class="btn-small" id="toggle-sections-btn" title="Show sections">Sections</button>
+            <button class="btn-small" id="copy-log-btn" title="Copy log">📋 Copy</button>
+            <button class="btn-small" id="clear-log-btn" title="Clear log">🧹 Clear</button>
+            <button class="btn-small" id="stop-ai-toolbar-btn" title="Stop AI scan" disabled hidden>⏹ Stop AI Scan</button>
+            <button class="btn-small" id="toggle-sections-btn" title="Show sections">📑 Sections</button>
           </div>
         </div>
 
@@ -200,11 +201,12 @@
               <div class="panel-actions">
                 <div class="diagram-provider-tabs" id="diagram-tabs"
                   style="border:none;padding:0;background:transparent;"></div>
-                <button class="btn-small" id="zoom-in-btn" title="Zoom in">＋</button>
-                <button class="btn-small" id="zoom-out-btn" title="Zoom out">－</button>
-                <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">↺</button>
-                <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">Hide log</button>
-                <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">Copy source</button>
+                <button class="btn-small" id="zoom-in-btn" title="Zoom in">🔍+ Zoom</button>
+                <button class="btn-small" id="zoom-out-btn" title="Zoom out">🔍- Zoom</button>
+                <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">🎯 Fit</button>
+                <button class="btn-small" id="toggle-api-ops-btn" title="API operation visibility mode">🧩 API ops: Auto (&lt;10)</button>
+                <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">📜 Hide scan</button>
+                <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">📋 Copy source</button>
               </div>
             </div>
             <div class="diagram-zoom-wrap" id="diagram-zoom-wrap">
@@ -234,7 +236,10 @@
   <script src="/static/table-resize.js" defer></script>
   <script src="/static/app.js" defer></script>
   <script src="/static/assets.js" defer></script>
+  <script src="/static/findings.js" defer></script>
   <script src="/static/roles.js" defer></script>
+  <script src="/static/overview.js" defer></script>
+  <script src="/static/subscription.js" defer></script>
   <!-- Direct fallback for mermaid if async loading fails -->
   <script src="/static/vendor/mermaid.min.js" defer></script>
 </body>
