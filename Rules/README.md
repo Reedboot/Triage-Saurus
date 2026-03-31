@@ -1,113 +1,158 @@
-# Rules
+# Template Variable Patterns - Safe Pipeline Replacements
 
-Rules follow the two-phase scan pipeline:
+This document defines template variable patterns that are **SAFE** and should **NOT** be flagged as secrets by detection rules.
 
-1. **Detection** — discover what assets exist (INFO severity, no findings)
-2. **Misconfigurations** — find what is wrong with those assets (WARN/ERROR severity, generates findings)
+## Safe Patterns
 
----
+Template variables are placeholders that get replaced by CI/CD pipelines, configuration management tools, or environment variable expansion at deployment time. These are **NOT** hardcoded secrets.
 
-## Detection/
+### Common Template Variable Formats
 
-Run first. Maps the attack surface — what resources, services, frameworks, and auth patterns exist.
+| Pattern | Example | Used By |
+|---------|---------|---------|
+| `${VAR_NAME}` | `${MSSQL_SA_PASSWORD}` | Bash, Docker, Kubernetes, Terraform interpolation |
+| `$(VAR_NAME)` | `$(Build.BuildId)` | Azure DevOps Pipelines, Make |
+| `%VAR_NAME%` | `%DATABASE_PASSWORD%` | Windows batch, cmd |
+| `{{VAR_NAME}}` | `{{.Values.password}}` | Helm, Ansible, Jinja2 |
+| `$VAR_NAME` | `$DATABASE_URL` | Shell scripts, Docker Compose |
+| `env.VAR_NAME` | `env.DB_PASSWORD` | Node.js, Python (dotenv) |
 
-```
-Detection/
-├── Azure/          Azure resource detection (Terraform/HCL)
-├── AWS/            AWS resource detection (Terraform/HCL)
-├── GCP/            GCP resource detection (Terraform/HCL)
-├── Code/           Code-level detection (JWT auth, APIM middleware, etc.)
-├── AppConfig/      App config / connection string detection
-├── Containers/     Dockerfile base image detection
-└── Frameworks/     Language and framework version detection
-```
+### Regex Pattern for Detection Rules
 
-### Recent context-discovery additions
+To exclude template variables from secret detection, use this pattern-not-regex:
 
-- `Code/ingress-wildcard-bind-detection.yml`
-	- Detects wildcard runtime bind/listen patterns (for example `0.0.0.0`, `listen(*)`, `.NET UseUrls` wildcard forms).
-	- Used as ingress posture signal by context extraction.
-- `AppConfig/cloud-endpoint-dependency-detection.yml`
-	- Detects AWS RDS, AWS S3, and GCP Cloud SQL endpoint references in app/config files.
-	- Used to seed external dependency inference before Python fallback scanning.
-
-These are `context_discovery` rules (INFO signal extraction) and are consumed by `Scripts/Context/context_extraction.py` in a rules-first, Python-fallback flow.
-
----
-
-## Misconfigurations/
-
-Run second, scoped to the resource types found in Phase 1.
-Organised by provider → resource type so scans can be targeted precisely.
-
-```
-Misconfigurations/
-├── Azure/
-│   ├── AKS/                AKS cluster misconfigurations
-│   ├── AppService/         App Service misconfigurations
-│   ├── ContainerRegistry/  ACR misconfigurations
-│   ├── IAM/                Managed Identity, Service Principal, AAD
-│   ├── KeyVault/           Key Vault misconfigurations
-│   ├── NSG/                Network Security Group misconfigurations
-│   ├── SQL/                Azure SQL misconfigurations
-│   ├── Storage/            Storage Account misconfigurations
-│   └── VM/                 Virtual Machine misconfigurations
-├── AWS/
-│   ├── EC2/                EC2 instance misconfigurations
-│   ├── IAM/                IAM policy misconfigurations
-│   ├── RDS/                RDS instance misconfigurations
-│   └── SecurityGroup/      Security Group misconfigurations
-├── GCP/
-│   ├── CloudSQL/           Cloud SQL misconfigurations
-│   └── ComputeFirewall/    Compute firewall misconfigurations
-├── Kubernetes/
-│   ├── Workload/           Pod/container security (privileged, root, capabilities...)
-│   ├── RBAC/               RBAC misconfigurations (wildcard, cluster-admin...)
-│   ├── Ingress/            Ingress misconfigurations (no TLS, no auth, no rate limit)
-│   └── Service/            Service exposure (NodePort, LoadBalancer public...)
-├── Terraform/
-│   ├── Secrets/            Hardcoded secrets and credential exposure in HCL
-│   ├── State/              Backend and state management misconfigurations
-│   └── Providers/          Provider version pinning
-├── CICD/                   CI/CD pipeline misconfigurations
-└── Secrets/                Cross-provider hardcoded credential patterns
+```yaml
+pattern-not-regex: '(\$\{[^}]+\}|\$\([^)]+\)|%[A-Za-z_][A-Za-z0-9_]*%|\{\{[^}]+\}\})'
 ```
 
----
+Or for simple shell variables:
+```yaml
+pattern-not-regex: '\$[A-Za-z_][A-Za-z0-9_]*'
+```
 
-## Targeted scanning
+## Example: Safe Connection Strings
 
-`targeted_scan.py` automates the two-phase approach — run it instead of calling opengrep directly:
+### ✅ Safe (Template Variables)
+```bash
+# Docker Compose
+SQLSERVER_CONNECTION=Server=sql.example.com;Password=${MSSQL_SA_PASSWORD}
+
+# Kubernetes
+- name: DB_CONNECTION_STRING
+  value: "Server=$(DB_SERVER);Password=$(DB_PASSWORD)"
+
+# Terraform
+connection_string = "DefaultEndpointsProtocol=https;AccountName=${var.storage_account_name};AccountKey=${var.storage_account_key}"
+
+# Azure DevOps
+SQL_CONNECTION: Server=sql.azure.com;User ID=$(SQL_USER);Password=$(SQL_PASSWORD)
+```
+
+### ❌ Unsafe (Hardcoded Values)
+```bash
+# Docker Compose - REAL SECRET
+SQLSERVER_CONNECTION=Server=sql.example.com;Password=MyRealPassword123!
+
+# Kubernetes - REAL AWS KEY
+- name: AWS_SECRET_ACCESS_KEY
+  value: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+# Terraform - REAL CONNECTION STRING
+connection_string = "DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=abc123def456=="
+```
+
+## Implementation Guidelines
+
+### For AI Analysis (web/app.py)
+The AI prompt already includes:
+```
+Template variables are SAFE: ${VAR}, {{VAR}}, $VAR, $(VAR), %VAR% are pipeline/CI variables.
+ONLY flag as secrets: actual hardcoded values like passwords, connection strings with real credentials.
+```
+
+### For OpenGrep Rules
+Updated rules that now handle template variables:
+- ✅ `Rules/Misconfigurations/Secrets/sql-connection-string.yml`
+- ✅ `Rules/Misconfigurations/Cloud/hardcoded-connection-string.yml`
+- ✅ `Rules/Misconfigurations/Terraform/Secrets/terraform-hardcoded-keyvault-secret.yml`
+- ✅ `Rules/Misconfigurations/Secrets/hardcoded-aws-credentials-k8s.yml`
+- ✅ `Rules/Misconfigurations/AWS/EC2/aws-ec2-user-data-credentials.yml`
+
+## Context vs Real Secrets
+
+### Documentation Files
+Files like `README.md`, `quickstart.md`, `docs/`, `examples/` may contain:
+- ✅ Template variables for documentation purposes (safe)
+- ✅ Example connection strings with placeholders (safe)
+- ❌ Should NOT be used as evidence of real vulnerabilities
+
+The AI has been instructed to:
+> "Documentation files provide CONTEXT but code examples within them are NOT implemented code.
+> EXCLUDE findings from documentation/example files when creating action_items."
+
+### Deployable Files
+Only flag secrets in files that actually deploy:
+- Production code (*.cs, *.js, *.py, etc.)
+- IaC: `*.tf`, `*.tfvars`, `*.bicep`, `*.json` (ARM templates)
+- `docker-compose.yml`
+- Kubernetes manifests: `*.yaml`, `*.yml` in k8s/ dirs
+- CI/CD configs: `.github/workflows/`, `.gitlab-ci.yml`, `azure-pipelines.yml`
+
+## Testing Detection Rules
+
+### Test Case 1: Should NOT Trigger
+```terraform
+resource "azurerm_key_vault_secret" "example" {
+  name         = "db-password"
+  value        = var.database_password        # ✅ Variable reference
+  key_vault_id = azurerm_key_vault.example.id
+}
+```
+
+### Test Case 2: Should NOT Trigger
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+stringData:
+  password: ${DB_PASSWORD}  # ✅ Template variable
+```
+
+### Test Case 3: SHOULD Trigger
+```terraform
+resource "azurerm_key_vault_secret" "example" {
+  name         = "db-password"
+  value        = "SuperSecret123!"  # ❌ Hardcoded
+  key_vault_id = azurerm_key_vault.example.id
+}
+```
+
+### Test Case 4: SHOULD Trigger
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-creds
+stringData:
+  access_key: AKIAIOSFODNN7EXAMPLE  # ❌ Real AWS key format
+  secret_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY  # ❌ Real secret format
+```
+
+## Common False Positives to Avoid
+
+1. **Build/Release Variables**: `$(Release.Artifacts.Drop.BuildNumber)`
+2. **Helm Values**: `{{ .Values.database.password }}`
+3. **Docker Build Args**: `ARG DB_PASSWORD` (becomes `$DB_PASSWORD`)
+4. **Terraform Data Sources**: `data.azurerm_key_vault_secret.example.value`
+5. **Generated Passwords**: `random_password.db.result`
+
+## Rules That Need Review
+
+Run this to find other secret detection rules that might need template variable exclusions:
 
 ```bash
-python3 Scripts/targeted_scan.py /path/to/repo --experiment <id> --repo <name>
-
-# Preview what would run without scanning
-python3 Scripts/targeted_scan.py /path/to/repo --experiment <id> --repo <name> --dry-run
-
-# Detection only (asset inventory, no findings)
-python3 Scripts/targeted_scan.py /path/to/repo --experiment <id> --repo <name> --detection-only
+grep -r "password\|secret\|credential\|api.?key" Rules/ --include="*.yml" | grep -E "(pattern-regex|pattern-either)" | cut -d: -f1 | sort -u
 ```
 
-What it does:
-1. Runs `Detection/` rules → identifies which resource types exist
-2. Maps fired rule IDs → only the relevant `Misconfigurations/<Provider>/<ResourceType>/` folders
-3. Runs a single targeted scan against those folders only
-4. Streams findings directly into `store_findings.py` for DB persistence (no intermediate scan JSON artifact)
-
-`triage_experiment.py run <id>` calls `targeted_scan.py` automatically.
-
-Manual opengrep is still available for ad-hoc checks:
-```bash
-# Single resource type
-opengrep scan --config Rules/Misconfigurations/Azure/Storage/ /path/to/repo
-
-# All Azure
-opengrep scan --config Rules/Misconfigurations/Azure/ /path/to/repo
-```
-
----
-
-## Adding Rules
-
-See [CreationGuide.md](CreationGuide.md) for naming conventions, metadata standards, and testing.
+Then check if they exclude template variables using pattern-not-regex.
