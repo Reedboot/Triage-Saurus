@@ -3193,6 +3193,28 @@ def _is_edge_gateway_signal(resource_type: str, resource_name: str) -> bool:
     return any(token in signal for token in edge_tokens)
 
 
+def _infer_protocol_port(resource_type: str, resource_name: str) -> tuple[str | None, str | None]:
+    """Infer protocol and port from a target resource type/name for egress and ports tabs."""
+    signal = f"{resource_type}.{resource_name}".lower()
+    if "service_bus" in signal or "servicebus" in signal:
+        return ("AMQP", "5671")
+    if "sql" in signal:
+        return ("TCP", "1433")
+    if "redis" in signal or "cache" in signal:
+        return ("TCP", "6380")
+    if "storage" in signal or "blob" in signal or "queue" in signal and "service_bus" not in signal:
+        return ("HTTPS", "443")
+    if "vault" in signal or "key_vault" in signal:
+        return ("HTTPS", "443")
+    if "apim" in signal or "api_management" in signal:
+        return ("HTTPS", "443")
+    if "kubernetes" in signal or "aks" in signal or "container" in signal:
+        return ("HTTPS", "443")
+    if "http" in signal:
+        return ("HTTP", "80")
+    return (None, None)
+
+
 def _mermaid_node_id(label: str, used_ids: set[str]) -> str:
     base = re.sub(r"[^A-Za-z0-9_]", "_", label.strip()) or "node"
     if base[0].isdigit():
@@ -4455,12 +4477,15 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
         inferred_via_component = src_name if (
             rel_type == "routes_ingress_to" and _is_edge_gateway_signal(src_type, src_name)
         ) else None
+        inferred_protocol, inferred_port = _infer_protocol_port(tgt_type, tgt_name)
 
         insert_connection(
             experiment_id=experiment_id,
             source_name=src_name,
             target_name=tgt_name,
             connection_type=rel_type,
+            protocol=inferred_protocol,
+            port=inferred_port,
             authentication=inferred_auth,
             source_repo=context.repository_name,
             target_repo=context.repository_name,
