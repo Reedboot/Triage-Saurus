@@ -1,0 +1,9 @@
+rules:
+  - id: extract-nuget-dependencies
+    message: NuGet dependency
+    severity: INFO
+    languages: [typescript]  # Generic fallback
+    pattern-regex: '<PackageReference\s+Include="([^"]+)"\s+Version="([^"]+)"'
+    metadata:
+      finding_kind: Dependency
+      package_manager: nuget
