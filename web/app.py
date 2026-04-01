@@ -7,10 +7,13 @@ import json
 import html
 import re
 import sqlite3
+import shlex
+import shutil
 import subprocess
 import sys
 import os
 import select
+import tempfile
 import time
 import threading
 from datetime import datetime
@@ -36,7 +39,25 @@ DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
 # DB helpers are used to persist Copilot-generated overview metadata.
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(SCRIPTS / "Utils"))
 from Scripts.Persist import db_helpers
+
+# Load prompt builder for agent instructions
+try:
+    from Scripts.Utils import prompt_builder
+    # Pre-load agent instructions at module level for performance
+    AGENT_INSTRUCTIONS = {
+        "SecurityAgent": prompt_builder.load_agent_instruction("SecurityAgent"),
+        "DevSkeptic": prompt_builder.load_agent_instruction("DevSkeptic"),
+        "PlatformSkeptic": prompt_builder.load_agent_instruction("PlatformSkeptic"),
+        "ContextDiscoveryAgent": prompt_builder.load_agent_instruction("ContextDiscoveryAgent"),
+        "ArchitectureAgent": prompt_builder.load_agent_instruction("ArchitectureAgent"),
+    }
+    PROMPT_BUILDER_AVAILABLE = True
+except Exception as e:
+    print(f"Warning: Could not load prompt_builder or agent instructions: {e}")
+    AGENT_INSTRUCTIONS = {}
+    PROMPT_BUILDER_AVAILABLE = False
 
 # Load repo search paths from config
 def _load_search_paths():
@@ -107,6 +128,117 @@ def _append_ai_job_log(key: str, line: str) -> None:
             fh.write(line_with_ts + "\n")
     except Exception:
         pass
+
+
+def _resolve_copilot_command() -> tuple[list[str] | None, str | None]:
+    """Resolve the command used to invoke Copilot and reject known placeholder wrappers."""
+    override = (os.environ.get("COPILOT_COMMAND") or os.environ.get("COPILOT_CMD") or "").strip()
+    candidates: list[list[str]] = []
+
+    if override:
+        try:
+            candidates.append(shlex.split(override, posix=False))
+        except ValueError as exc:
+            return None, f"Invalid COPILOT_COMMAND/COPILOT_CMD value: {exc}"
+    else:
+        if os.name == "nt":
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                npm_cmd = Path(appdata) / "npm" / "copilot.cmd"
+                npm_sh = Path(appdata) / "npm" / "copilot"
+                if npm_cmd.exists():
+                    candidates.append([str(npm_cmd)])
+                if npm_sh.exists():
+                    candidates.append([str(npm_sh)])
+        candidates.extend([
+            ["gh", "copilot"],
+            ["copilot"],
+        ])
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        first = candidate[0]
+        if os.path.isabs(first) and Path(first).exists():
+            resolved_path = Path(first)
+        else:
+            resolved = shutil.which(first)
+            if not resolved:
+                continue
+            resolved_path = Path(resolved)
+
+        if resolved_path.suffix.lower() == ".ps1":
+            try:
+                script_text = resolved_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                script_text = ""
+
+            if "api.your-api-endpoint.com/ask" in script_text and "Invoke-RestMethod" in script_text:
+                return None, (
+                    f"Resolved Copilot command points to placeholder wrapper {resolved_path}. "
+                    "Set COPILOT_COMMAND to a real Copilot CLI executable before running AI summaries."
+                )
+
+        return [str(resolved_path), *candidate[1:]], None
+
+    return None, "No usable Copilot CLI found. Install/configure a real Copilot CLI or set COPILOT_COMMAND."
+
+
+def _build_copilot_launch(
+    command: list[str],
+    cwd: str,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[list[str] | None, str, dict[str, str], str | None, str | None]:
+    """Build a Copilot subprocess launch without altering the runtime environment."""
+    launch_env = dict(os.environ, PYTHONUNBUFFERED="1")
+    if extra_env:
+        launch_env.update(extra_env)
+    return command, cwd, launch_env, None, None
+
+
+def _prepare_copilot_prompt(prompt: str, cwd: str) -> tuple[list[str], Path | None]:
+    """Return CLI prompt arguments, using a prompt file when the inline prompt would be too large."""
+    prompt_file: Path | None = None
+    prompt_args = ["-p", prompt]
+
+    # Windows process creation fails once the command line grows too large; stage big prompts in a file.
+    if os.name == "nt" and len(prompt) > 6000:
+        prompt_dir = Path(cwd) / ".triage-saurus"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".md",
+            prefix="copilot_prompt_",
+            dir=prompt_dir,
+            delete=False,
+        ) as handle:
+            handle.write(prompt)
+            prompt_file = Path(handle.name)
+
+        relative_prompt = prompt_file.relative_to(Path(cwd))
+        prompt_args = [
+            "-p",
+            (
+                f"Read the full assignment from {relative_prompt.as_posix()} in the current working directory, "
+                "follow it exactly, and return only the requested output format."
+            ),
+        ]
+
+    return prompt_args, prompt_file
+
+
+def _summarize_copilot_output(text: str, max_lines: int = 6, max_chars: int = 500) -> str:
+    """Return a compact summary of Copilot output suitable for logs and status messages."""
+    lines = [line.strip() for line in text.splitlines() if line and line.strip()]
+    if not lines:
+        return ""
+
+    summary = " | ".join(lines[-max_lines:])
+    if len(summary) > max_chars:
+        summary = summary[-max_chars:]
+    return summary
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -1227,6 +1359,30 @@ def api_analysis_status(experiment_id: str, repo_name: str):
 def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
     """Stream a Copilot-generated overview into the Log panel via SSE."""
 
+    def _build_legacy_prompt(repo_name: str, fact_json: dict, skeptic_rows: list) -> str:
+        """Build legacy hardcoded prompt as fallback."""
+        qna_json = json.dumps((fact_json or {}).get("global_knowledge_qna") or {"global": [], "repo": []})
+        diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
+        assets_json = json.dumps((fact_json or {}).get("assets") or [])
+        findings_json = json.dumps((fact_json or {}).get("findings") or [])
+        other_facts = dict(fact_json or {})
+        for k in ("global_knowledge_qna", "diagrams", "assets", "findings"):
+            other_facts.pop(k, None)
+        
+        return (
+            "You are creating an executive technical overview for a security triage portal. "
+            "Use the supplied repository facts and respond with JSON only. "
+            "Be concise and high-signal.\n\n"
+            f"Repository: {repo_name}\n\n"
+            f"1) Global Knowledge Q&A JSON: {qna_json}\n\n"
+            f"2) Architecture / diagrams JSON: {diagrams_json}\n\n"
+            f"3) Assets JSON: {assets_json}\n\n"
+            f"4) Detected findings (evidence) JSON: {findings_json}\n\n"
+            f"5) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
+            f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
+            "Return compact JSON with keys: project_summary, deployment_summary, interactions_summary, auth_summary, dependencies_summary, issues_summary, skeptic_summary, action_items, open_questions, observations, asset_visibility, learning_suggestions, new_assets, fixed_information"
+        )
+
     def _gen():
         conn = _get_db()
         if conn is None:
@@ -1278,7 +1434,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             yield _sse("error", err)
             return
 
-        yield _sse("log", "Step 2/3: Asking Copilot for key summaries + action points...")
+        yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
 
         _, fact_json = facts
         # Gather recent skeptic reviews for prompt enrichment (if present)
@@ -1297,83 +1453,39 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         except Exception:
             skeptic_rows = []
 
-        # Present context in priority order to reduce wrong assumptions.
-        qna_json = json.dumps((fact_json or {}).get("global_knowledge_qna") or {"global": [], "repo": []})
-        diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
-        assets_json = json.dumps((fact_json or {}).get("assets") or [])
-        findings_json = json.dumps((fact_json or {}).get("findings") or [])
-        other_facts = dict(fact_json or {})
-        for k in ("global_knowledge_qna", "diagrams", "assets", "findings"):
-            other_facts.pop(k, None)
+        # Extract baseline data for prompt builder
+        findings_data = (fact_json or {}).get("findings", [])
+        assets_data = (fact_json or {}).get("assets", [])
+        diagrams_data = (fact_json or {}).get("diagrams", [])
 
-        prompt = (
-            "You are creating an executive technical overview for a security triage portal. "
-            "Use the supplied repository facts and respond with JSON only. "
-            "Be concise and high-signal.\n\n"
-            "The data below is provided in PRIORITY ORDER (earlier sections should override later ambiguity).\n\n"
-            "Constraints:\n"
-            "- Each *summary* field must be <= 1 sentence.\n"
-            "- action_items: max 6 items. Each item MUST be a JSON object with keys:\n"
-            "  title, what, why, file, line, current_snippet, fix_snippet\n"
-            "  - title: short imperative (used as a subheader)\n"
-            "  - what: what to change\n"
-            "  - why: risk/impact (1 sentence)\n"
-            "  - file: repo-relative path to the deployable file\n"
-            "  - line: integer line number (use source_line_start where available)\n"
-            "  - current_snippet: minimal snippet showing the problem\n"
-            "  - fix_snippet: minimal snippet showing a plausible fix\n"
-            "- open_questions: max 5 items. Each item MUST be a JSON object with keys: question, file, line, asset (optional).\n"
-            "  - question: the question text\n"
-            "  - file/line: repo-relative location that caused the question (use findings source_file/source_line_start when possible)\n"
-            "  - asset: optional asset/resource name or type if clearly tied\n"
-            "- asset_visibility: optional list of JSON objects with keys: resource_type, resource_name (optional), decision(show|hide|review), reason.\n"
-            "  Only suggest hide/show for assets that are clearly internal details vs user-consumed services.\n"
-            "- learning_suggestions: optional list of JSON objects with keys: kind(rule_add|rule_update|rule_remove|logic_change), target, rationale, example_evidence (file:line + snippet), proposed_change.\n"
-            "  Use this to suggest new OpenGrep rules, amendments to existing rules, or code logic improvements in Triage-Saurus.\n"
-            "- IMPORTANT: If a recommendation depends on an unknown decision (e.g., whether APIM should use subscription keys only vs JWT), ASK it as an open_question instead of emitting an action_item.\n"
-            "  Example open question: 'Is APIM intended to be authenticated via subscription keys only, or must it also enforce JWT (Entra ID) for caller identity?'.\n"
-            "- If APIM exposure is not explicitly verified, ASK as an open_question whether APIM is internet-accessible or only reachable from an internal network (VNet/private endpoint/app gateway).\n"
-            "- If an application gateway/WAF/front door is used in front of APIM, ASK which one and how traffic flows.\n"
-            "- If Kubernetes deployments/services are present but no AKS cluster resource is defined in this repo, ASK which AKS cluster they actually run on (cluster name + owning repo/module), so we can link them.\n"
-            "- Documentation files (README, quickstart, docs/, examples/, samples/, *.md) provide CONTEXT but code examples within them are NOT implemented code.\n"
-            "- EXCLUDE findings from documentation/example files when creating action_items and issues_summary.\n"
-            "- ONLY report findings from deployable files: production code, IaC (*.tf, *.tfvars), docker-compose.yml, k8s manifests, CI/CD configs.\n"
-            "- Template variables are SAFE: ${VAR}, {{VAR}}, $VAR, $(VAR), %VAR% are pipeline/CI variables that get replaced at deploy time.\n"
-            "- ONLY flag as secrets: actual hardcoded values like passwords, connection strings with real credentials, API keys with visible values.\n"
-            "- Use the source_file and source_line_start from findings data to create accurate file references.\n"
-            "- Read the actual source files to extract accurate code snippets showing the vulnerable line and a realistic fix.\n"
-            "- You MAY suggest which Assets should be hidden/shown in the Assets tab via asset_visibility (see output schema).\n"
-            "  Use this for resources that are internal implementation detail (e.g., helper/child resources) vs user-consumed services.\n\n"
-            f"Repository: {repo_name}\n\n"
-            f"1) Global Knowledge Q&A JSON: {qna_json}\n\n"
-            f"2) Architecture / diagrams JSON: {diagrams_json}\n\n"
-            f"3) Assets JSON: {assets_json}\n\n"
-            f"4) Detected findings (evidence) JSON: {findings_json}\n\n"
-            f"5) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
-            f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
-            "Return compact JSON with keys: project_summary, deployment_summary, interactions_summary, auth_summary, dependencies_summary, issues_summary, skeptic_summary, action_items, open_questions, observations, asset_visibility, learning_suggestions, new_assets, fixed_information"
-        )
+        baseline_data = {
+            "findings": findings_data,
+            "resources": assets_data,
+            "diagrams": diagrams_data,
+            "placeholder_tldr": f"Repository with {len(assets_data)} resources, {len(findings_data)} findings",
+            "skeptic_reviews": skeptic_rows,
+        }
+
+        # ContextDiscoveryAgent runs first to enrich architecture context before
+        # the reviewer agents.  Each agent gets only its own instructions so
+        # individual prompts stay well within the model's context window.
+        REVIEWER_AGENTS = [
+            ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
+            ("SecurityAgent",         "🔒 Security",           "security_review"),
+            ("DevSkeptic",            "💻 Dev Skeptic",         "dev_review"),
+            ("PlatformSkeptic",       "☁️ Platform",           "platform_review"),
+        ]
+
+        # Initialise per-agent status in the job dict
+        with _AI_ANALYSIS_LOCK:
+            job = _AI_ANALYSIS_JOBS.get(key, {})
+            job["agent_steps"] = {name: "pending" for name, _, _ in REVIEWER_AGENTS}
+            _AI_ANALYSIS_JOBS[key] = job
 
         # We stream *progress* + a compact formatted result, not the raw token stream.
         model = os.environ.get("COPILOT_MODEL", "gpt-5-mini")
-        cmd = [
-            "copilot",
-            "--no-color",
-            "--model",
-            model,
-            "--stream",
-            "off",
-            "-s",
-            "--allow-all-tools",
-            "--allow-all-paths",
-            "--allow-all-urls",
-            "-p",
-            prompt,
-        ]
 
-        yield _sse("log", "Copilot started (building summaries)...")
-
-        # Attempt to run copilot in a temporary copy of the repository so the CLI can read source files safely.
+        # Set up a single working copy of the repo that all three agents share.
         repo_cwd = str(REPO_ROOT)
         temp_copy_dir = None
         try:
@@ -1414,73 +1526,244 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             # Best-effort: fall back to REPO_ROOT when DB lookup fails
             pass
 
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=repo_cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=dict(os.environ, PYTHONUNBUFFERED="1"),
-            )
-            with _AI_ANALYSIS_LOCK:
-                job = _AI_ANALYSIS_JOBS.get(key, {})
-                job["process"] = proc
-                _AI_ANALYSIS_JOBS[key] = job
-        except Exception as exc:
-            err = f"Failed to start copilot: {exc}"
-            _append_ai_job_log(key, err)
+        copilot_cmd, copilot_err = _resolve_copilot_command()
+        if copilot_err:
+            _append_ai_job_log(key, copilot_err)
             with _AI_ANALYSIS_LOCK:
                 job = _AI_ANALYSIS_JOBS.get(key, {})
                 job["status"] = "failed"
-                job["error"] = err
+                job["error"] = copilot_err
                 job["completed_at"] = time.time()
                 _AI_ANALYSIS_JOBS[key] = job
-            yield _sse("error", err)
+            yield _sse("error", copilot_err)
+            if temp_copy_dir:
+                try:
+                    import shutil
+
+                    shutil.rmtree(temp_copy_dir)
+                except Exception:
+                    pass
             return
 
-        start_ts = time.time()
-        last_hb = start_ts
-        lines: list[str] = []
+        # Run one focused Copilot job per reviewer agent.
+        # SecurityAgent's output drives the main TL;DR parse; all results are saved.
+        per_agent_combined: dict[str, str] = {}
 
-        try:
-            # Read incrementally to avoid pipe backpressure, but don't spam the UI.
-            while True:
-                reads, _, _ = select.select([proc.stdout], [], [], 0.5)
-                if reads:
-                    raw = proc.stdout.readline()
-                    if raw == "" and proc.poll() is not None:
-                        break
-                    if raw:
-                        lines.append(raw.rstrip("\n"))
+        for agent_idx, (agent_name, agent_label, agent_section_key) in enumerate(REVIEWER_AGENTS, 1):
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job["active_agent"] = agent_name
+                job["active_agent_label"] = agent_label
+                job.setdefault("agent_steps", {})[agent_name] = "running"
+                _AI_ANALYSIS_JOBS[key] = job
 
-                now = time.time()
-                if now - last_hb >= 2.0:
-                    yield _sse("log", f"Copilot running... {int(now - start_ts)}s")
-                    last_hb = now
+            yield _sse("log", f"")
+            yield _sse("log", f"▶ STAGE [{agent_idx}/{len(REVIEWER_AGENTS)}] — {agent_label}")
 
-                if proc.poll() is not None:
-                    # Drain any remaining output
-                    for raw in proc.stdout or []:
-                        if raw:
-                            lines.append(raw.rstrip("\n"))
-                    break
-        finally:
-            try:
-                rc = proc.wait(timeout=1)
-            except Exception:
-                rc = proc.poll()
-            finally:
+            agent_content = AGENT_INSTRUCTIONS.get(agent_name, "") if PROMPT_BUILDER_AVAILABLE and AGENT_INSTRUCTIONS else ""
+            if PROMPT_BUILDER_AVAILABLE and agent_content:
+                try:
+                    if agent_name == "ContextDiscoveryAgent":
+                        agent_prompt = prompt_builder.build_context_extraction_prompt(
+                            agent_content=agent_content,
+                            baseline_data=baseline_data,
+                            repo_name=repo_name,
+                            experiment_id=resolved_exp_id,
+                        )
+                    else:
+                        agent_prompt = prompt_builder.build_focused_prompt(
+                            agent_name=agent_name,
+                            agent_content=agent_content,
+                            baseline_data=baseline_data,
+                            repo_name=repo_name,
+                            experiment_id=resolved_exp_id,
+                        )
+                    yield _sse("log", f"  ↳ Prompt ready: {len(agent_prompt):,} chars ({agent_name})")
+                except Exception as build_err:
+                    yield _sse("log", f"  ✗ Prompt build failed: {build_err} — using legacy fallback")
+                    agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
+            else:
+                agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
+                yield _sse("log", f"  ↳ Agent instructions unavailable — using legacy prompt")
+
+            prompt_file = None
+            prompt_args, prompt_file = _prepare_copilot_prompt(agent_prompt, repo_cwd)
+            if prompt_file:
+                _append_ai_job_log(key, f"Prompt staged in {prompt_file}")
+                yield _sse("log", f"  ↳ Prompt staged to file (avoids command-line limits)")
+
+            cmd = [
+                *copilot_cmd,
+                "--no-color",
+                "--model",
+                model,
+                "--stream",
+                "off",
+                "-s",
+                "--allow-all-tools",
+                "--allow-all-paths",
+                "--allow-all-urls",
+                *prompt_args,
+            ]
+
+            launch_cmd, launch_cwd, launch_env, launch_note, launch_err = _build_copilot_launch(cmd, repo_cwd)
+            if launch_err:
+                _append_ai_job_log(key, launch_err)
+                if prompt_file:
+                    try:
+                        if prompt_file.exists():
+                            prompt_file.unlink()
+                    except Exception:
+                        pass
                 with _AI_ANALYSIS_LOCK:
                     job = _AI_ANALYSIS_JOBS.get(key, {})
-                    if job.get("process") is proc:
-                        job.pop("process", None)
-                        _AI_ANALYSIS_JOBS[key] = job
+                    job.setdefault("agent_steps", {})[agent_name] = "failed"
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("log", f"  ✗ Launch failed — skipping: {launch_err}")
+                per_agent_combined[agent_name] = ""
+                continue
+            if launch_note:
+                yield _sse("log", f"  ↳ {launch_note}")
 
-        yield _sse("log", "Step 3/3: Parsing + persisting results (and refreshing Overview)...")
+            yield _sse("log", f"  ↳ Copilot starting… (model: {model})")
 
-        combined = "\n".join([ln for ln in lines if ln and ln.strip()])
+            try:
+                proc = subprocess.Popen(
+                    launch_cmd,
+                    cwd=launch_cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    env=launch_env,
+                )
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["process"] = proc
+                    _AI_ANALYSIS_JOBS[key] = job
+            except Exception as exc:
+                err = f"Failed to start Copilot for {agent_name}: {exc}"
+                _append_ai_job_log(key, err)
+                if prompt_file:
+                    try:
+                        if prompt_file.exists():
+                            prompt_file.unlink()
+                    except Exception:
+                        pass
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job.setdefault("agent_steps", {})[agent_name] = "failed"
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("log", f"  ✗ {err}")
+                per_agent_combined[agent_name] = ""
+                continue
+
+            start_ts = time.time()
+            last_hb = start_ts
+            lines: list[str] = []
+
+            try:
+                while True:
+                    reads, _, _ = select.select([proc.stdout], [], [], 0.5)
+                    if reads:
+                        raw = proc.stdout.readline()
+                        if raw == "" and proc.poll() is not None:
+                            break
+                        if raw:
+                            lines.append(raw.rstrip("\n"))
+
+                    now = time.time()
+                    if now - last_hb >= 4.0:
+                        elapsed = int(now - start_ts)
+                        yield _sse("log", f"  ⏳ {elapsed}s — {agent_label} thinking…")
+                        last_hb = now
+
+                    if proc.poll() is not None:
+                        for raw in proc.stdout or []:
+                            if raw:
+                                lines.append(raw.rstrip("\n"))
+                        break
+            finally:
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+                finally:
+                    with _AI_ANALYSIS_LOCK:
+                        job = _AI_ANALYSIS_JOBS.get(key, {})
+                        if job.get("process") is proc:
+                            job.pop("process", None)
+                            _AI_ANALYSIS_JOBS[key] = job
+
+            if prompt_file:
+                try:
+                    if prompt_file.exists():
+                        prompt_file.unlink()
+                except Exception:
+                    pass
+
+            elapsed_total = int(time.time() - start_ts)
+            agent_combined = "\n".join([ln for ln in lines if ln and ln.strip()])
+            per_agent_combined[agent_name] = agent_combined
+
+            # Show a brief preview of what the AI produced
+            try:
+                preview = _extract_json_object(agent_combined)
+                if preview:
+                    summary_text = (
+                        preview.get("context_summary")
+                        or preview.get("enhanced_tldr")
+                        or ""
+                    )
+                    if summary_text:
+                        short = summary_text[:220].replace("\n", " ")
+                        yield _sse("log", f"  💬 {short}{'…' if len(summary_text) > 220 else ''}")
+                    new_assets = preview.get("new_assets") or []
+                    if new_assets:
+                        yield _sse("log", f"  📦 {len(new_assets)} new asset(s) identified")
+                    gaps = preview.get("connection_gaps") or []
+                    if gaps:
+                        yield _sse("log", f"  🔗 {len(gaps)} connection gap(s) found")
+                    adjustments = preview.get("score_adjustments") or []
+                    if adjustments:
+                        yield _sse("log", f"  ⚖️  {len(adjustments)} score adjustment(s) proposed")
+                    questions = preview.get("open_questions") or []
+                    if questions:
+                        yield _sse("log", f"  ❓ {len(questions)} open question(s) raised")
+            except Exception:
+                pass
+
+            # Persist this agent's raw output for diagnostics and section status tracking
+            try:
+                db_helpers.upsert_ai_section(
+                    resolved_exp_id,
+                    repo_name,
+                    section_key=agent_section_key,
+                    title=f"{agent_label} Review",
+                    content_html=f"<pre style='white-space:pre-wrap'>{agent_combined[:4000]}</pre>",
+                    generated_by=agent_name,
+                )
+            except Exception:
+                pass
+
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job.setdefault("agent_steps", {})[agent_name] = "done"
+                _AI_ANALYSIS_JOBS[key] = job
+            yield _sse("log", f"  ✓ {agent_label} complete in {elapsed_total}s")
+
+        # SecurityAgent output drives the main parse; fall back to whichever ran.
+        combined_source = (
+            per_agent_combined.get("SecurityAgent")
+            or per_agent_combined.get("DevSkeptic")
+            or per_agent_combined.get("PlatformSkeptic")
+            or ""
+        )
+
+        yield _sse("log", f"")
+        yield _sse("log", f"▶ STEP 3/3 — Parsing & persisting results")
+
+        combined = combined_source
         # Persist raw Copilot output for diagnostics
         try:
             safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
@@ -1496,6 +1779,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             pass
 
         parsed = _extract_json_object(combined)
+        output_summary = _summarize_copilot_output(combined)
+        parse_error = ""
 
         if parsed:
             # Stream a compact, human-friendly view to the Log panel.
@@ -1836,21 +2121,191 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     )
                 except Exception:
                     pass
+
+            # === NEW: Parse and persist AI enhancements from agent-based review ===
+            
+            # 1. Parse score_adjustments and persist to skeptic_reviews table
+            score_adjustments = parsed.get("score_adjustments")
+            if isinstance(score_adjustments, list) and score_adjustments:
+                yield _sse("log", "")
+                yield _sse("log", "Score adjustments (AI review):")
+                persisted_count = 0
+                for adj in score_adjustments:
+                    if not isinstance(adj, dict):
+                        continue
+                    finding_id = adj.get("finding_id")
+                    old_score = adj.get("old_score")
+                    new_score = adj.get("new_score")
+                    reasoning = adj.get("reasoning", "")
+                    agent_used = adj.get("agent_used", "ai_copilot")
+                    
+                    if finding_id and new_score is not None:
+                        try:
+                            conn = _get_db()
+                            if conn:
+                                try:
+                                    # Insert into skeptic_reviews table
+                                    conn.execute(
+                                        """
+                                        INSERT INTO skeptic_reviews
+                                            (finding_id, reviewer_type, score_adjustment, adjusted_score, 
+                                             confidence, reasoning, recommendation, reviewed_at)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                                        """,
+                                        (
+                                            finding_id,
+                                            agent_used,  # e.g., "DevSkeptic", "PlatformSkeptic"
+                                            float(new_score) - float(old_score) if old_score else 0,
+                                            float(new_score),
+                                            1.0,  # High confidence from AI
+                                            reasoning,
+                                            "confirm",  # Default recommendation
+                                        ),
+                                    )
+                                    conn.commit()
+                                    persisted_count += 1
+                                    yield _sse("log", f"- Finding #{finding_id}: {old_score} → {new_score} ({agent_used})")
+                                finally:
+                                    conn.close()
+                        except Exception as e:
+                            _append_ai_job_log(key, f"Failed to persist score adjustment for finding {finding_id}: {e}")
+                
+                if persisted_count > 0:
+                    yield _sse("log", f"Persisted {persisted_count} score adjustments to skeptic_reviews table")
+            
+            # 2. Parse enhanced_tldr and persist to repo_ai_content table
+            enhanced_tldr = parsed.get("enhanced_tldr")
+            if enhanced_tldr and isinstance(enhanced_tldr, str):
+                try:
+                    db_helpers.upsert_ai_section(
+                        experiment_id=resolved_exp_id,
+                        repo_name=repo_name,
+                        section_key="enhanced_tldr",
+                        title="AI-Enhanced Summary",
+                        content_html=f"<p>{enhanced_tldr}</p>",
+                        generated_by="copilot_agent_review",
+                    )
+                    yield _sse("log", "")
+                    yield _sse("log", f"Enhanced TLDR: {enhanced_tldr[:100]}...")
+                except Exception as e:
+                    _append_ai_job_log(key, f"Failed to persist enhanced TLDR: {e}")
+            
+            # 3. Parse diagram_corrections and update cloud_diagrams table
+            diagram_corrections = parsed.get("diagram_corrections")
+            if isinstance(diagram_corrections, list) and diagram_corrections:
+                yield _sse("log", "")
+                yield _sse("log", "Diagram corrections:")
+                corrected_count = 0
+                for corr in diagram_corrections:
+                    if not isinstance(corr, dict):
+                        continue
+                    diagram_title = corr.get("diagram_title")
+                    issue_type = corr.get("issue_type")
+                    correction = corr.get("correction")
+                    corrected_mermaid = corr.get("corrected_mermaid_code")
+                    
+                    if diagram_title and correction:
+                        yield _sse("log", f"- {diagram_title}: {issue_type} - {correction[:80]}...")
+                        
+                        # If AI provided corrected Mermaid code, update the diagram
+                        if corrected_mermaid and isinstance(corrected_mermaid, str):
+                            try:
+                                conn = _get_db()
+                                if conn:
+                                    try:
+                                        # Update cloud_diagrams table
+                                        conn.execute(
+                                            """
+                                            UPDATE cloud_diagrams
+                                            SET mermaid_code = ?,
+                                                updated_at = CURRENT_TIMESTAMP
+                                            WHERE experiment_id = ? AND diagram_title = ?
+                                            """,
+                                            (corrected_mermaid, resolved_exp_id, diagram_title),
+                                        )
+                                        conn.commit()
+                                        corrected_count += 1
+                                    finally:
+                                        conn.close()
+                            except Exception as e:
+                                _append_ai_job_log(key, f"Failed to update diagram '{diagram_title}': {e}")
+                        
+                        # Store correction reasoning in repo_ai_content
+                        try:
+                            db_helpers.upsert_ai_section(
+                                experiment_id=resolved_exp_id,
+                                repo_name=repo_name,
+                                section_key=f"diagram_correction_{diagram_title}",
+                                title=f"Diagram Correction: {diagram_title}",
+                                content_html=f"<p><strong>{issue_type}</strong>: {correction}</p>",
+                                generated_by="copilot_agent_review",
+                            )
+                        except Exception as e:
+                            _append_ai_job_log(key, f"Failed to persist diagram correction reasoning: {e}")
+                
+                if corrected_count > 0:
+                    yield _sse("log", f"Updated {corrected_count} architecture diagrams with AI corrections")
+            
+            # 4. Parse description_enhancements and update findings table
+            description_enhancements = parsed.get("description_enhancements")
+            if isinstance(description_enhancements, list) and description_enhancements:
+                yield _sse("log", "")
+                yield _sse("log", "Enhanced descriptions:")
+                enhanced_count = 0
+                for enh in description_enhancements:
+                    if not isinstance(enh, dict):
+                        continue
+                    finding_id = enh.get("finding_id")
+                    enhanced_desc = enh.get("enhanced_description")
+                    
+                    if finding_id and enhanced_desc:
+                        try:
+                            conn = _get_db()
+                            if conn:
+                                try:
+                                    conn.execute(
+                                        """
+                                        UPDATE findings
+                                        SET description = ?,
+                                            llm_enriched_at = CURRENT_TIMESTAMP
+                                        WHERE id = ?
+                                        """,
+                                        (enhanced_desc, finding_id),
+                                    )
+                                    conn.commit()
+                                    enhanced_count += 1
+                                finally:
+                                    conn.close()
+                        except Exception as e:
+                            _append_ai_job_log(key, f"Failed to update finding {finding_id} description: {e}")
+                
+                if enhanced_count > 0:
+                    yield _sse("log", f"Enhanced {enhanced_count} finding descriptions")
+            
+            # === END: AI enhancements parsing ===
         else:
             _append_ai_job_log(key, "Failed to parse Copilot JSON output")
             yield _sse("log", "Copilot output wasn't valid JSON; no summaries extracted.")
+            parse_error = "Copilot completed but did not return valid JSON"
+            if output_summary:
+                parse_error = f"{parse_error}: {output_summary}"
 
         with _AI_ANALYSIS_LOCK:
             job = _AI_ANALYSIS_JOBS.get(key, {})
-            if rc == 0:
+            if parse_error:
+                job["status"] = "failed"
+                job["error"] = parse_error
+            elif rc == 0:
                 job["status"] = "completed"
             else:
                 job["status"] = "failed"
-                job["error"] = job.get("error") or f"copilot exited with code {rc}"
+                job["error"] = job.get("error") or (
+                    f"copilot exited with code {rc}: {output_summary}" if output_summary else f"copilot exited with code {rc}"
+                )
             job["completed_at"] = time.time()
             _AI_ANALYSIS_JOBS[key] = job
 
-        if rc == 0:
+        if job.get("status") == "completed":
             try:
                 db_helpers.upsert_context_metadata(
                     resolved_exp_id,
@@ -1867,6 +2322,12 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             yield _sse("error", job.get("error") or "copilot failed")
 
         # Clean up any temporary repository copy we created
+        if prompt_file:
+            try:
+                if prompt_file.exists():
+                    prompt_file.unlink()
+            except Exception:
+                pass
         if temp_copy_dir:
             try:
                 import shutil
@@ -1936,25 +2397,49 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
             "For each rule include: id, short_description, file_glob, regex, rationale."
         )
 
-        cmd = [
-            "copilot",
-            "--no-color",
-            "--model",
-            os.environ.get("COPILOT_MODEL", "gpt-5-mini"),
-            "--stream",
-            "off",
-            "-p",
-            prompt,
-        ]
-
         wc_root = REPO_ROOT / "Output" / "WorkingCopies"
         wc_root.mkdir(parents=True, exist_ok=True)
         out_dir = wc_root / f"{experiment_id}_{repo_name}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / "generated_rules.txt"
 
+        copilot_cmd, copilot_err = _resolve_copilot_command()
+        if copilot_err:
+            _append_ai_job_log(key_local, copilot_err)
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key_local, {})
+                job["status"] = "failed"
+                job["completed_at"] = time.time()
+                job["error"] = copilot_err
+                _AI_ANALYSIS_JOBS[key_local] = job
+            return
+
+        prompt_args, prompt_file = _prepare_copilot_prompt(prompt, str(out_dir))
+        cmd = [
+            *copilot_cmd,
+            "--no-color",
+            "--model",
+            os.environ.get("COPILOT_MODEL", "gpt-5-mini"),
+            "--stream",
+            "off",
+            *prompt_args,
+        ]
+
+        launch_cmd, launch_cwd, launch_env, launch_note, launch_err = _build_copilot_launch(cmd, str(out_dir))
+        if launch_err:
+            _append_ai_job_log(key_local, launch_err)
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key_local, {})
+                job["status"] = "failed"
+                job["completed_at"] = time.time()
+                job["error"] = launch_err
+                _AI_ANALYSIS_JOBS[key_local] = job
+            return
+        if launch_note:
+            _append_ai_job_log(key_local, launch_note)
+
         try:
-            proc = subprocess.run(cmd, cwd=str(out_dir), capture_output=True, text=True, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+            proc = subprocess.run(launch_cmd, cwd=launch_cwd, capture_output=True, text=True, env=launch_env)
             txt = proc.stdout or ''
             # Save output for review
             try:
@@ -1977,6 +2462,13 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
                 job["completed_at"] = time.time()
                 job["error"] = str(e)
                 _AI_ANALYSIS_JOBS[key_local] = job
+        finally:
+            if prompt_file:
+                try:
+                    if prompt_file.exists():
+                        prompt_file.unlink()
+                except Exception:
+                    pass
 
     t = threading.Thread(target=_bg, daemon=True)
     t.start()
@@ -2019,95 +2511,38 @@ def api_diagrams(experiment_id: str):
         # especially when the UI requests explicit API operation visibility.
         if repo_name:
             try:
-                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+                from Scripts.Generate.generate_hierarchical_diagram import HierarchicalDiagramBuilder  # type: ignore
+
+                # Resolve repository path so the builder can discover OpenAPI specs.
+                repo_path: Optional[str] = None
+                try:
+                    for ent in _resolve_repos():
+                        if (ent.get('name') or '').lower() == repo_name.lower() and ent.get('found'):
+                            repo_path = ent.get('path')
+                            break
+                except Exception:
+                    pass
+
+                builder = HierarchicalDiagramBuilder(
+                    experiment_id,
+                    repo_name=repo_name,
+                    include_api_operations=include_api_operations_override,
+                    repo_path=repo_path,
+                )
+                code = builder.generate()
+                provider = builder.detect_cloud_provider()
 
                 generated: list[dict] = []
-                with db_helpers.get_db_connection() as conn:
-                    prov_rows = conn.execute(
-                        """
-                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
-                        FROM resources r
-                        JOIN repositories repo ON repo.id = r.repo_id
-                        WHERE r.experiment_id = ?
-                          AND LOWER(repo.repo_name) = LOWER(?)
-                          AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
-                        ORDER BY provider
-                        """,
-                        (experiment_id, repo_name),
-                    ).fetchall()
-
-                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
-                for provider in providers:
-                    code = generate_architecture_diagram(
-                        experiment_id,
-                        repo_name=repo_name,
-                        provider=provider,
-                        include_operation_resources=include_api_operations_override,
-                    )
-                    if code and "No resources found" not in code:
-                        generated.append({
-                            "provider": provider.capitalize(),
-                            "diagram_title": f"{provider.capitalize()} Architecture",
-                            "mermaid_code": code,
-                            "display_order": 0,
-                        })
-                        # Persist only default-mode diagrams (no explicit override)
-                        # so toggle interactions do not overwrite canonical stored views.
-                        if include_api_operations_override is None:
-                            try:
-                                db_helpers.upsert_cloud_diagram(
-                                    experiment_id=experiment_id,
-                                    provider=provider,
-                                    diagram_title=f"{provider.capitalize()} Architecture",
-                                    mermaid_code=code,
-                                    display_order=0,
-                                )
-                            except Exception:
-                                pass
-
-                if generated:
-                    return jsonify(_response_payload(generated))
-            except Exception:
-                pass
-
-        db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name or None)
-
-        # For repo-scoped requests, legacy rows may be experiment-scoped only.
-        # Keep only legacy diagrams that already contain meaningful edges.
-        if repo_name and not db_diagrams:
-            legacy = get_cloud_diagrams(experiment_id)
-            db_diagrams = [d for d in legacy if _edge_count(d.get("mermaid_code") or "") > 0]
-
-        # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
-        if repo_name and (not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
-            try:
-                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
-
-                generated: list[dict] = []
-                with db_helpers.get_db_connection() as conn:
-                    prov_rows = conn.execute(
-                        """
-                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
-                        FROM resources r
-                        JOIN repositories repo ON repo.id = r.repo_id
-                        WHERE r.experiment_id = ?
-                          AND LOWER(repo.repo_name) = LOWER(?)
-                          AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
-                        ORDER BY provider
-                        """,
-                        (experiment_id, repo_name),
-                    ).fetchall()
-
-                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
-                for provider in providers:
-                    code = generate_architecture_diagram(experiment_id, repo_name=repo_name, provider=provider)
-                    if code and "No resources found" not in code:
-                        generated.append({
-                            "provider": provider.capitalize(),
-                            "diagram_title": f"{provider.capitalize()} Architecture",
-                            "mermaid_code": code,
-                            "display_order": 0,
-                        })
+                if code and "No resources found" not in code:
+                    generated.append({
+                        "provider": provider.capitalize(),
+                        "diagram_title": f"{provider.capitalize()} Architecture",
+                        "mermaid_code": code,
+                        "display_order": 0,
+                    })
+                    # Persist only default-mode diagrams (no explicit override)
+                    # so toggle interactions do not overwrite canonical stored views.
+                    if include_api_operations_override is None:
                         try:
                             db_helpers.upsert_cloud_diagram(
                                 experiment_id=experiment_id,
@@ -2118,6 +2553,66 @@ def api_diagrams(experiment_id: str):
                             )
                         except Exception:
                             pass
+
+                if generated:
+                    return jsonify(_response_payload(generated))
+            except Exception:
+                pass
+
+        db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name or None)
+
+        # For repo-scoped requests, legacy rows may be experiment-scoped only.
+        # Prefer legacy diagrams that contain meaningful edges; if none have edges,
+        # fall back to returning any legacy diagrams so the UI can at least render nodes.
+        if repo_name and not db_diagrams:
+            legacy = get_cloud_diagrams(experiment_id)
+            db_diagrams = [d for d in legacy if _edge_count(d.get("mermaid_code") or "") > 0]
+            if not db_diagrams and legacy:
+                # No edged legacy diagrams found; fall back to any legacy diagrams so UI can render nodes
+                db_diagrams = legacy
+            if not db_diagrams and legacy:
+                db_diagrams = legacy
+
+        # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
+        if repo_name and (not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
+            try:
+                from Scripts.Generate.generate_hierarchical_diagram import HierarchicalDiagramBuilder  # type: ignore
+
+                _repo_path: Optional[str] = None
+                try:
+                    for ent in _resolve_repos():
+                        if (ent.get('name') or '').lower() == repo_name.lower() and ent.get('found'):
+                            _repo_path = ent.get('path')
+                            break
+                except Exception:
+                    pass
+
+                _builder = HierarchicalDiagramBuilder(
+                    experiment_id,
+                    repo_name=repo_name,
+                    repo_path=_repo_path,
+                )
+                _code = _builder.generate()
+                _provider = _builder.detect_cloud_provider()
+
+                generated: list[dict] = []
+                if _code and "No resources found" not in _code:
+                    generated.append({
+                        "provider": _provider.capitalize(),
+                        "diagram_title": f"{_provider.capitalize()} Architecture",
+                        "mermaid_code": _code,
+                        "display_order": 0,
+                    })
+                    try:
+                        db_helpers.upsert_cloud_diagram(
+                            experiment_id=experiment_id,
+                            provider=_provider,
+                            diagram_title=f"{_provider.capitalize()} Architecture",
+                            mermaid_code=_code,
+                            display_order=0,
+                        )
+                    except Exception:
+                        pass
 
                 if generated:
                     return jsonify(_response_payload(generated))
@@ -2180,6 +2675,60 @@ def api_diff():
 
     diagrams_from = _collect_diagrams_dbfirst(id_from)
     diagrams_to   = _collect_diagrams_dbfirst(id_to)
+
+    # If persisted diagrams are missing for either scan, attempt to regenerate
+    # repo-scoped diagrams from DB topology (best-effort fallback).
+    try:
+        if (not diagrams_from) or (not diagrams_to):
+            sys.path.insert(0, str(REPO_ROOT))
+            from Scripts.Persist import db_helpers as _dbh  # type: ignore
+            from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+            with _dbh.get_db_connection() as conn:
+                prov_rows = conn.execute(
+                    """
+                    SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                    FROM resources r
+                    JOIN repositories repo ON repo.id = r.repo_id
+                    WHERE r.experiment_id = ?
+                      AND LOWER(repo.repo_name) = LOWER(?)
+                      AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                    ORDER BY provider
+                    """,
+                    (id_from, repo),
+                ).fetchall()
+                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                gen = []
+                for provider in providers:
+                    code = generate_architecture_diagram(id_from, repo_name=repo, provider=provider)
+                    if code and "No resources found" not in code:
+                        gen.append({"title": f"{provider.capitalize()} Architecture", "code": code})
+                if gen and not diagrams_from:
+                    diagrams_from = gen
+            # Repeat for 'to' scan
+            with _dbh.get_db_connection() as conn:
+                prov_rows = conn.execute(
+                    """
+                    SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                    FROM resources r
+                    JOIN repositories repo ON repo.id = r.repo_id
+                    WHERE r.experiment_id = ?
+                      AND LOWER(repo.repo_name) = LOWER(?)
+                      AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                    ORDER BY provider
+                    """,
+                    (id_to, repo),
+                ).fetchall()
+                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                gen = []
+                for provider in providers:
+                    code = generate_architecture_diagram(id_to, repo_name=repo, provider=provider)
+                    if code and "No resources found" not in code:
+                        gen.append({"title": f"{provider.capitalize()} Architecture", "code": code})
+                if gen and not diagrams_to:
+                    diagrams_to = gen
+    except Exception:
+        # Best-effort fallback: if regeneration fails, continue with empty lists
+        pass
 
     # Collect all experiment IDs for this repo between id_from and id_to
     conn = _get_db()
@@ -2507,9 +3056,12 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         repo_cols = _table_columns(conn, "repositories")
         repo_type_sel = "repo_type" if "repo_type" in repo_cols else "'' AS repo_type"
         primary_lang_sel = "primary_language" if "primary_language" in repo_cols else "'' AS primary_language"
+        framework_ver_sel = "framework_version" if "framework_version" in repo_cols else "'' AS framework_version"
+        framework_name_sel = "framework_name" if "framework_name" in repo_cols else "'' AS framework_name"
+        iac_type_sel = "iac_type" if "iac_type" in repo_cols else "'' AS iac_type"
         repo_row = conn.execute(
             f"""
-            SELECT {repo_type_sel}, {primary_lang_sel}
+            SELECT {repo_type_sel}, {primary_lang_sel}, {framework_ver_sel}, {framework_name_sel}, {iac_type_sel}
             FROM repositories
             WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
             LIMIT 1
@@ -2519,6 +3071,9 @@ def api_view_tldr(experiment_id: str, repo_name: str):
 
         repo_type = repo_row["repo_type"] if repo_row else ""
         primary_language = repo_row["primary_language"] if repo_row else ""
+        framework_version = repo_row["framework_version"] if repo_row else ""
+        framework_name = repo_row["framework_name"] if repo_row else ""
+        iac_type = repo_row["iac_type"] if repo_row else ""
 
         # Supplement primary_language from context_metadata if the column is empty
         if not primary_language and _table_exists(conn, "context_metadata"):
@@ -2659,6 +3214,37 @@ def api_view_tldr(experiment_id: str, repo_name: str):
 
         add_row("Type", repo_type or "Unknown")
         add_row("Primary language", primary_language or "Unknown")
+        
+        # Tech stack: framework version, name, and IaC type
+        tech_parts = []
+        if framework_version:
+            tech_parts.append(framework_version)
+        if framework_name:
+            tech_parts.append(framework_name)
+        if iac_type:
+            tech_parts.append(f"IaC: {iac_type}")
+        if tech_parts:
+            add_row("Tech Stack", " + ".join(tech_parts))
+        
+        # Dependencies summary
+        if _table_exists(conn, "dependencies"):
+            dep_row = conn.execute(
+                """
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(DISTINCT package_manager) as pkg_managers,
+                    COUNT(DISTINCT project_path) as projects
+                FROM dependencies
+                WHERE experiment_id = ? AND repo_id = (
+                    SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                )
+                """,
+                (resolved_exp_id, resolved_exp_id, repo_name)
+            ).fetchone()
+            
+            if dep_row and dep_row["total"] > 0:
+                dep_summary = f"{dep_row['total']} packages across {dep_row['projects']} project(s)"
+                add_row("Dependencies", dep_summary)
 
         # Languages detected: derive from concrete source-file evidence first.
         # Falls back to primary language when no file-extension evidence exists.
@@ -2855,12 +3441,29 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                         else:
                             ai_icon, ai_text = "🟡", "pending"
 
+                # Per-agent review status from repo_ai_content section keys
+                def _agent_status_line(section_key: str, label: str) -> str:
+                    try:
+                        row = conn.execute(
+                            """SELECT 1 FROM repo_ai_content
+                               WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+                                 AND section_key = ? LIMIT 1""",
+                            (resolved_exp_id, repo_name, section_key),
+                        ).fetchone()
+                        icon, text = ("🟢", "complete") if row else (ai_icon if ai_icon == "🟠" else "🟡", "pending")
+                    except Exception:
+                        icon, text = "🟡", "pending"
+                    return f"<div class='scan-status-line'>{icon} <span>{label} ({text})</span></div>"
+
                 status_html = "".join(
                     [
                         line("Discovery & inventory", stage_counts["p1"]),
                         line("Exposure mapping", stage_counts["p2"]),
                         line("Findings correlation", stage_counts["p3"]),
-                        f"<div class='scan-status-line'>{ai_icon} <span>AI analysis ({ai_text})</span></div>",
+                        _agent_status_line("context_extraction", "🔍 Context extraction"),
+                        _agent_status_line("security_review",    "🔒 Security review"),
+                        _agent_status_line("dev_review",         "💻 Dev skeptic"),
+                        _agent_status_line("platform_review",    "☁️ Platform skeptic"),
                     ]
                 )
                 add_row("Scan status", status_html)
@@ -2876,9 +3479,39 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             + "</tbody></table>"
         )
 
+        # Check for AI-enhanced TLDR
+        ai_tldr = ""
+        try:
+            ai_section = conn.execute(
+                """
+                SELECT content_html, generated_by, updated_at
+                FROM repo_ai_content
+                WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+                  AND section_key = 'enhanced_tldr'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (resolved_exp_id, repo_name),
+            ).fetchone()
+            if ai_section and ai_section["content_html"]:
+                ai_tldr = (
+                    '<div class="ai-enhanced-section" style="background:#1c2128; border-left:3px solid #58a6ff; padding:12px; margin-bottom:16px; border-radius:6px;">'
+                    '<div style="font-weight:600; color:#58a6ff; margin-bottom:8px; display:flex; align-items:center; gap:6px;">'
+                    '🤖 AI-Enhanced Summary'
+                    '<span style="font-weight:400; font-size:0.75rem; color:#8b949e;">(generated by Copilot with agent instructions)</span>'
+                    '</div>'
+                    + ai_section["content_html"]
+                    + '</div>'
+                )
+        except Exception:
+            pass
+
+        # Combine AI TLDR + baseline table
+        final_html = ai_tldr + table_html
+
         return _db_render(
             "tab_tldr.html",
-            tldr_html=table_html,
+            tldr_html=final_html,
             experiment_id=resolved_exp_id,
             repo_name=repo_name,
             ai_ready=ai_ready,
@@ -3038,6 +3671,9 @@ def api_view_overview(experiment_id: str, repo_name: str):
             return conn.execute(sql, params).fetchone()
         except sqlite3.OperationalError:
             return None
+
+    module_deps_data: list[dict] = []
+    available_repos: list[str] = []
 
     try:
         repo_cols = _table_columns("repositories")
@@ -3511,6 +4147,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             overview_sections.append("<h2>🔐 How Access Is Controlled</h2><ul>" + ''.join(auth_points) + "</ul>")
 
         # 5) Dependencies
+        module_deps_data = []
         dep_rows = _safe_fetchall(
             """
             SELECT connection_type, COUNT(*) AS cnt
@@ -3529,7 +4166,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             """
             SELECT key, value
             FROM context_metadata
-            WHERE experiment_id = ? AND repo_id = ? AND key LIKE 'module:%'
+            WHERE experiment_id = ? AND repo_id = ? AND (key LIKE 'module:%' OR key LIKE 'terraform.module.%')
             ORDER BY key
             LIMIT 10
             """,
@@ -3592,9 +4229,33 @@ def api_view_overview(experiment_id: str, repo_name: str):
                         return idx
             return None
 
-        module_dep_points = []
+        # Load existing module→repo mappings
+        existing_mappings: dict = {}
+        if _table_exists('context_metadata'):
+            _map_rows = _safe_fetchall(
+                "SELECT key, value FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND key LIKE 'module.mapping.%' ORDER BY id DESC LIMIT 200",
+                (resolved_exp_id, repo_id),
+            )
+            for _mr in _map_rows:
+                _k = (_mr['key'] or '')
+                if _k.startswith('module.mapping.'):
+                    _modname = _k.split('module.mapping.', 1)[1]
+                    try:
+                        existing_mappings[_modname] = json.loads(_mr['value'])
+                    except Exception:
+                        existing_mappings[_modname] = _mr['value']
+
+        # Build structured module_deps_data for interactive template dropdowns
         for r in module_rows:
-            name = r['key'].split(':', 1)[1]
+            key = r['key']
+            # Handle both 'module:name' and 'terraform.module.name' formats
+            if key.startswith('module:'):
+                name = key.split(':', 1)[1]
+            elif 'terraform.module.' in key:
+                name = key.split('terraform.module.', 1)[1]
+            else:
+                name = key
+            
             raw_value = (r['value'] or '').strip()
             source = ''
             module_file = ''
@@ -3622,6 +4283,22 @@ def api_view_overview(experiment_id: str, repo_name: str):
             if module_line is None:
                 module_line = _infer_module_line_number(name, module_file)
 
+            module_deps_data.append({
+                'name': name,
+                'source': source,
+                'file': module_file,
+                'line': module_line,
+                'current_mapping': existing_mappings.get(name),
+            })
+
+        # Build Module Dependencies section
+        module_dep_points = []
+        for md in module_deps_data:
+            name = md['name']
+            source = md['source']
+            module_file = md['file']
+            module_line = md['line']
+
             file_html = ''
             if module_file:
                 base = Path(module_file).name
@@ -3643,6 +4320,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
         if module_dep_points:
             dep_points.append("<h3>Module Dependencies</h3><ul class=\"module-deps\">" + ''.join(module_dep_points) + "</ul>")
+
         if dep_points:
             overview_sections.append("<h2>🧩 Dependencies</h2>" + ''.join(dep_points))
 
@@ -3732,7 +4410,27 @@ def api_view_overview(experiment_id: str, repo_name: str):
         conn.close()
 
     final_html = '<div class="markdown-content">' + ''.join(overview_sections) + '</div>' if overview_sections else ''
+    
+    # Fetch available repos for module mapping dropdowns — ReposToScan.txt is the primary source
+    available_repos = []
+    try:
+        # Seed from ReposToScan.txt first so those entries appear at the top
+        for _ent in _resolve_repos():
+            _rname = (_ent.get('name') or '').strip()
+            if _rname and _rname not in available_repos:
+                available_repos.append(_rname)
+        # Supplement with any repos recorded in the DB that aren't already listed
+        if _table_exists(conn, 'repositories'):
+            _repo_name_rows = _safe_fetchall("SELECT DISTINCT repo_name FROM repositories ORDER BY repo_name")
+            for _rr in _repo_name_rows:
+                _rname = (_rr['repo_name'] or '').strip()
+                if _rname and _rname not in available_repos:
+                    available_repos.append(_rname)
+    except Exception:
+        available_repos = []
+    
     # Load AI-provided metadata (if present) for template rendering
+
     ai_new_assets = None
     ai_fixed_information = None
     try:
@@ -3754,7 +4452,72 @@ def api_view_overview(experiment_id: str, repo_name: str):
         ai_new_assets = None
         ai_fixed_information = None
 
-    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information)
+    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information, module_deps=module_deps_data, available_repos=available_repos)
+
+
+@app.route("/api/module/mappings/<experiment_id>/<repo_name>", methods=["POST"])
+def api_module_mappings_save(experiment_id: str, repo_name: str):
+    """Save module→repo mappings to context_metadata."""
+    data = request.get_json(silent=True) or {}
+    mappings = data.get('mappings') or {}
+    if not isinstance(mappings, dict):
+        return jsonify({'ok': False, 'error': 'mappings must be an object'}), 400
+
+    conn = _get_db()
+    if conn is None:
+        return jsonify({'ok': False, 'error': 'DB unavailable'}), 503
+
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id) or experiment_id
+
+        repo_row = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
+            (resolved_exp_id, repo_name),
+        ).fetchone()
+        if not repo_row:
+            return jsonify({'ok': False, 'error': f'Repo {repo_name!r} not found in experiment'}), 404
+        repo_id = repo_row['id']
+
+        if not _table_exists(conn, 'context_metadata'):
+            return jsonify({'ok': False, 'error': 'context_metadata table unavailable'}), 503
+
+        for mod_name, mapping_val in mappings.items():
+            key = f'module.mapping.{mod_name}'
+            if mapping_val is None:
+                conn.execute(
+                    "DELETE FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND key = ?",
+                    (resolved_exp_id, repo_id, key),
+                )
+            else:
+                value_str = json.dumps(mapping_val) if not isinstance(mapping_val, str) else mapping_val
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO context_metadata (experiment_id, repo_id, namespace, key, value, source)
+                        VALUES (?, ?, 'module_mapping', ?, ?, 'ui')
+                        ON CONFLICT(experiment_id, repo_id, namespace, key) DO UPDATE SET
+                          value = excluded.value,
+                          source = excluded.source,
+                          created_at = CURRENT_TIMESTAMP
+                        """,
+                        (resolved_exp_id, repo_id, key, value_str, 'ui'),
+                    )
+                except Exception:
+                    conn.execute(
+                        "DELETE FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND key = ?",
+                        (resolved_exp_id, repo_id, key),
+                    )
+                    conn.execute(
+                        "INSERT INTO context_metadata (experiment_id, repo_id, namespace, key, value, source) VALUES (?, ?, 'module_mapping', ?, ?, 'ui')",
+                        (resolved_exp_id, repo_id, key, value_str, 'ui'),
+                    )
+
+        conn.commit()
+        return jsonify({'ok': True, 'saved': len(mappings)})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/api/view/assets/<experiment_id>/<repo_name>")
@@ -4045,12 +4808,16 @@ def api_view_findings(experiment_id: str, repo_name: str):
                    f.triage_reason, f.triage_set_by, f.triage_set_at,
                    dev.adjusted_score AS dev_score, dev.confidence AS dev_confidence,
                    plat.adjusted_score AS platform_score, plat.confidence AS platform_confidence,
-                   sec.adjusted_score AS security_score, sec.confidence AS security_confidence
+                   sec.adjusted_score AS security_score, sec.confidence AS security_confidence,
+                   ai.adjusted_score AS ai_score, ai.confidence AS ai_confidence,
+                   ai.reasoning AS ai_reasoning, ai.reviewer_type AS ai_agent_used
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
             LEFT JOIN skeptic_reviews dev ON dev.finding_id = f.id AND dev.reviewer_type = 'dev'
             LEFT JOIN skeptic_reviews plat ON plat.finding_id = f.id AND plat.reviewer_type = 'platform'
             LEFT JOIN skeptic_reviews sec ON sec.finding_id = f.id AND sec.reviewer_type = 'security'
+            LEFT JOIN skeptic_reviews ai ON ai.finding_id = f.id 
+                AND ai.reviewer_type IN ('DevSkeptic', 'PlatformSkeptic', 'SecurityAgent', 'ai_copilot')
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             ORDER BY
                 CASE f.base_severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
