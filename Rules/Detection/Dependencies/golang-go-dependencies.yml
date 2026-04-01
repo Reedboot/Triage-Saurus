@@ -1,0 +1,23 @@
+rules:
+  - id: extract-go-dependencies
+    message: |
+      Go module dependency detected.
+      Extracts module name and version from go.mod.
+    severity: INFO
+    languages: [generic]
+    patterns:
+      - pattern: require $PACKAGE $VERSION
+    metadata:
+      finding_kind: Dependency
+      rule_type: dependency_discovery
+      category: dependencies
+      technology: [go, golang]
+      target_files: ["go.mod", "**/go.mod"]
+      extracts:
+        package_manager: go
+        language: Go
+        package: $PACKAGE
+        version: $VERSION
+      description: |
+        Detects Go module dependencies from go.mod files.
+        Extracts module name and version from require statements.

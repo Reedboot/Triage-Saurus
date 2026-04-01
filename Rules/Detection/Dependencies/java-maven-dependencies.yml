@@ -1,0 +1,29 @@
+rules:
+  - id: extract-maven-dependencies
+    message: |
+      Maven package dependency detected.
+      Extracts package name and version from pom.xml.
+    severity: INFO
+    languages: [xml]
+    patterns:
+      - pattern: |
+          <dependency>
+            <groupId>$GROUP</groupId>
+            <artifactId>$ARTIFACT</artifactId>
+            <version>$VERSION</version>
+            ...
+          </dependency>
+    metadata:
+      finding_kind: Dependency
+      rule_type: dependency_discovery
+      category: dependencies
+      technology: [java, maven]
+      target_files: ["pom.xml", "**/pom.xml"]
+      extracts:
+        package_manager: maven
+        language: Java
+        package: "$GROUP:$ARTIFACT"
+        version: $VERSION
+      description: |
+        Detects Maven package dependencies from pom.xml files.
+        Extracts groupId:artifactId and declared version.

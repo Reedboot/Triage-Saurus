@@ -1,0 +1,29 @@
+rules:
+  - id: extract-python-dependencies
+    message: |
+      Python package dependency detected.
+      Extracts package name and version from requirements.txt or pyproject.toml.
+    severity: INFO
+    languages: [generic]
+    patterns:
+      - pattern: |
+          $PACKAGE==$VERSION
+      - pattern: |
+          $PACKAGE>=$VERSION
+      - pattern: |
+          $PACKAGE<=$VERSION
+    metadata:
+      finding_kind: Dependency
+      rule_type: dependency_discovery
+      category: dependencies
+      technology: [python, pip]
+      target_files: ["requirements.txt", "requirements-*.txt", "pyproject.toml", "setup.py"]
+      extracts:
+        package_manager: pip
+        language: Python
+        package: $PACKAGE
+        version: $VERSION
+      description: |
+        Detects Python package dependencies from requirements.txt and pyproject.toml.
+        Extracts package name and declared version with operators (==, >=, etc).
+
