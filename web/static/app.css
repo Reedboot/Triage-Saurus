@@ -225,6 +225,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Compare row ── */
 .compare-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
 .compare-row.visible { display: flex; }
+.compare-row .section-label {
+  font-size: 0.72rem; color: var(--accent); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  align-self: flex-end; padding-bottom: 8px; white-space: nowrap;
+}
 
 /* ── Status bar ── */
 .status-bar { display: none; margin-top: 8px; align-items: center; gap: 8px; font-size: 0.8rem; }
@@ -345,6 +350,33 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output .line-phase  { color: var(--accent); font-weight: 600; }
 #log-output .line-ai-prep { color: var(--accent); font-weight: 600; }
 #log-output .line-ai-run  { color: var(--text-faint); }
+
+/* Stage banners — visually distinct from plain log lines */
+#log-output .line-stage-header {
+  display: block;
+  color: var(--accent);
+  font-weight: 700;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-subtle);
+  border-radius: 0 4px 4px 0;
+  padding: 3px 8px;
+  margin: 10px 0 4px;
+}
+
+/* Indented meta lines (↳ prompt size, staging notice, etc.) */
+#log-output .line-ai-info { color: var(--text-muted); padding-left: 16px; }
+
+/* AI response preview — what the model actually said */
+#log-output .line-ai-thinking {
+  color: #79c0ff;
+  border-left: 2px solid #79c0ff44;
+  padding-left: 12px;
+  font-style: italic;
+}
+
+/* Counts of assets / findings returned by the AI */
+#log-output .line-ai-finding { color: var(--yellow); padding-left: 12px; }
+
 #log-output .line-ai-skeptics { color: var(--yellow); font-weight: 700; }
 
 #log-output .line-ai-summary-title {
@@ -1092,13 +1124,31 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 
 /* ── Module dependencies (Overview) ── */
-.module-deps { margin: 0; padding-left: 18px; }
+.module-deps { margin: 0; padding-left: 0; list-style: none; }
 .module-dep-item { margin: 10px 0; }
 .module-dep-name { font-weight: 600; color: var(--text); margin-bottom: 3px; }
 .module-dep-row { font-size: 0.78rem; color: var(--text-muted); margin: 6px 0; }
 .module-dep-label { display:inline-block; min-width: 90px; color: var(--text-muted); vertical-align: top; }
 .module-dep-row--stack .module-dep-label { display: block; min-width: 0; margin-bottom: 6px; }
 .module-dep-row--stack .md-code { display: block; width: 100%; margin-top: 0; }
+
+/* Module dependency mapping controls */
+.module-mapping-section { margin: 18px 0 24px; }
+.module-mapping-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.module-mapping-header h3 { margin: 0; font-size: 1rem; color: var(--text); }
+.module-mapping-controls { display: flex; align-items: center; gap: 10px; }
+.module-mapping-status { font-size: 0.82rem; color: var(--text-muted); }
+.module-dep-map-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.module-repo-select {
+  padding: 4px 8px;
+  font-size: 0.82rem;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  min-width: 200px;
+  max-width: 420px;
+}
 
 /* Markdown-style code fence block */
 .md-code {

@@ -585,7 +585,20 @@
   // -- Log helpers --
   function classifyLine(line) {
     if (/^-+$/.test(line) || /^={3,}/.test(line)) return 'line-sep';
-    if (/\[ERROR\]|✗|error/i.test(line))           return 'line-error';
+
+    // Stage banners emitted by the agent loop
+    if (/^\[Copilot\]\s*▶ STAGE \[/.test(line))   return 'line-stage-header';
+    if (/^\[Copilot\]\s*▶ STEP \d/.test(line))    return 'line-stage-header';
+
+    // Indented sub-status lines
+    if (/^\[Copilot\]\s*↳/.test(line))            return 'line-ai-info';
+    if (/^\[Copilot\]\s*⏳/.test(line))            return 'line-ai-run';
+    if (/^\[Copilot\]\s*💬/.test(line))            return 'line-ai-thinking';
+    if (/^\[Copilot\]\s*(📦|🔗|⚖️|❓)/.test(line)) return 'line-ai-finding';
+    if (/^\[Copilot\]\s*✓/.test(line))            return 'line-ok';
+    if (/^\[Copilot\]\s*✗/.test(line))            return 'line-error';
+
+    if (/\[ERROR\]|error/i.test(line) && !/^\[Copilot\]/.test(line)) return 'line-error';
     if (/\[WARN\]|WARNING/i.test(line))             return 'line-warn';
 
     // AI/Copilot: highlight "prep" steps (connecting, collecting facts, prompting) vs steady running output.
@@ -873,6 +886,8 @@
       const mermaidEl = document.createElement('div');
       mermaidEl.className = 'mermaid';
       mermaidEl.textContent = sanitizeMermaid(code);
+      // Debug: log mermaid code length to help diagnose blank tabs
+      try { console.debug(`renderDiagrams: view idx=${i} title="${title}" codeLen=${(code||'').length}`); } catch (e) {}
       view.appendChild(mermaidEl);
       viewsEl.appendChild(view);
     }
@@ -886,18 +901,34 @@
 
   function switchTab(idx) {
     activeTab = idx;
+    try { console.debug('switchTab: idx=', idx); } catch (e) {}
     tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', +b.dataset.idx === idx));
     viewsEl.querySelectorAll('.diagram-view, .diff-view').forEach(v => {
       v.classList.toggle('active', +v.dataset.idx === idx);
     });
     // Re-apply transform to the newly active diagram
     const activeView = viewsEl.querySelector('.diagram-view.active');
-    if (activeView) void renderMermaidInView(activeView);
+    if (activeView) {
+      // If the view has a mermaid node but mermaid hasn't produced an SVG yet, render it explicitly.
+      const mer = activeView.querySelector('.mermaid');
+      const svg = activeView.querySelector('svg');
+      try { console.debug('switchTab activeView:', { hasMer: !!mer, hasSvg: !!svg, merTextStart: mer ? (mer.textContent||'').slice(0,120) : null }); } catch (e) {}
+      if (mer && !svg) {
+        // Async render and then schedule fit
+        (async () => { try { await renderMermaidInView(activeView); } catch (e) { console.warn('Mermaid render retry failed', e); } scheduleFitDiagram(120); })();
+      } else {
+        // Ensure at least a render attempt occurs (non-blocking)
+        void renderMermaidInView(activeView);
+      }
+    }
     scheduleFitDiagram(100);
   }
 
   // -- Diff rendering --
   async function renderDiff(data) {
+    // make available to page-level scripts
+    try { window.renderDiff = renderDiff; } catch (e) { try { window._triage = window._triage || {}; window._triage.renderDiff = renderDiff; } catch (e2) { /* ignore */ } }
+
     const { from: idFrom, to: idTo, diagrams_from, diagrams_to, timeline } = data;
 
     if (placeholder) placeholder.style.display = 'none';
@@ -1024,6 +1055,7 @@
       const mermaidEl = document.createElement('div');
       mermaidEl.className = 'mermaid';
       mermaidEl.textContent = sanitizeMermaid(allDiags[i].code);
+      try { console.debug('renderDiff: added individual tab', { idx: i+1, title: allDiags[i].title, codeLen: (allDiags[i].code||'').length, sample: (sanitizeMermaid(allDiags[i].code)||'').slice(0,120) }); } catch (e) {}
       view.appendChild(mermaidEl);
       viewsEl.appendChild(view);
     }
@@ -1051,6 +1083,32 @@
         opt.textContent = _scanOptionLabel(s);
         pastScanSelect.appendChild(opt);
       }
+    }
+
+    // Also populate compare dropdowns when present
+    const compareFrom = document.getElementById('compare-from-select');
+    const compareTo = document.getElementById('compare-to-select');
+    if (compareFrom) {
+      compareFrom.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
+      for (const s of scans) {
+        const opt = document.createElement('option');
+        opt.value = s.experiment_id;
+        opt.textContent = _scanOptionLabel(s);
+        compareFrom.appendChild(opt);
+      }
+      // default to oldest scan for "from"
+      if (scans.length) compareFrom.value = scans[0].experiment_id;
+    }
+    if (compareTo) {
+      compareTo.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
+      for (const s of scans) {
+        const opt = document.createElement('option');
+        opt.value = s.experiment_id;
+        opt.textContent = _scanOptionLabel(s);
+        compareTo.appendChild(opt);
+      }
+      // default to most recent scan for "to"
+      if (scans.length) compareTo.value = scans[scans.length - 1].experiment_id;
     }
   }
 
@@ -1163,7 +1221,22 @@
     spinner.style.display = '';
     statusBar.classList.add('visible');
     try {
-      await _loadDiagrams(expId);
+      // Ensure currentRepoName is set from the repo select before loading diagrams
+      const preRepo = resolveSelectedRepoName();
+      if (preRepo) currentRepoName = preRepo;
+      let ok = await _loadDiagrams(expId);
+      // If diagram load failed, try an unscoped fetch as a fallback
+      if (!ok) {
+        try {
+          const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
+          const data = await resp.json();
+          if (data && data.diagrams && data.diagrams.length) {
+            await renderDiagrams(data.diagrams);
+            ok = true;
+          }
+        } catch (e) { /* ignore fallback errors */ }
+      }
+
       // Load section tabs for the selected experiment and switch to Assets
       const targetRepoName = currentRepoName || resolveSelectedRepoName();
       if (targetRepoName) {
@@ -1187,7 +1260,19 @@
     spinner.style.display = '';
     statusBar.classList.add('visible');
     try {
-      await _loadDiagrams(expId);
+      let ok = await _loadDiagrams(expId);
+      // If diagram load failed, try an unscoped fetch as a fallback
+      if (!ok) {
+        try {
+          const resp = await fetch(`/api/diagrams/${encodeURIComponent(expId)}`);
+          const data = await resp.json();
+          if (data && data.diagrams && data.diagrams.length) {
+            await renderDiagrams(data.diagrams);
+            ok = true;
+          }
+        } catch (e) { /* ignore fallback errors */ }
+      }
+
       const targetRepoName = currentRepoName || resolveSelectedRepoName();
       if (targetRepoName) {
         currentRepoName = targetRepoName;

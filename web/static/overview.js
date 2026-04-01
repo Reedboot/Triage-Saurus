@@ -198,11 +198,15 @@
         if (data.status === 'failed' || data.status === 'stopped') {
           observedActiveRun = false;
           closeActiveStream(`${data.status} via status`);
-          setStatus(data.error || 'Failed', true);
+          const detail = (data.error || (data.status === 'stopped' ? 'Stopped' : 'Failed')).toString();
+          setStatus(detail, true);
           if (runBtn) runBtn.disabled = false;
           updateToolbarStop(false);
           updateGlobalBusy(false);
           clearPolling();
+          if (data.status === 'failed' && triage && typeof triage.appendLog === 'function' && detail) {
+            triage.appendLog(`[Copilot] ${detail}`);
+          }
           updateGlobalStatus(data.status === 'stopped' ? 'AI analysis stopped' : 'AI analysis failed', data.status === 'stopped' ? 'warn' : 'error');
           return;
         }
@@ -314,8 +318,12 @@
                   return;
                 }
                 if (st && st.status === 'failed') {
+                  const detail = (st.error || 'Failed').toString();
+                  if (triage && typeof triage.appendLog === 'function' && detail) {
+                    triage.appendLog(`[Copilot] ${detail}`);
+                  }
                   closeActiveStream('failed');
-                  setStatus('Failed', true);
+                  setStatus(detail, true);
                   runBtn.disabled = false;
                   updateToolbarStop(false);
                   updateGlobalBusy(false);
