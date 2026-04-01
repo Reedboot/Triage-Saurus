@@ -1,4 +1,4 @@
-# 🟣 Context Discovery Agent
+# Context Discovery Agent
 
 ## Purpose
 This agent performs **fast, non-security context discovery** of repositories to build foundational understanding. It runs BEFORE any security scanning decisions and provides the information needed to generate architecture diagrams and inform scan scope choices.
@@ -435,6 +435,23 @@ grep -r "kind: NetworkPolicy" --include="*.yaml" -A 20 | grep -E "egress:|to:" |
 - ❓ **Unknown egress:** Boundary unclear from available code
 - Protocols used (HTTP/HTTPS, SQL, message protocols)
 - Downstream flows (what internal services then connect to)
+
+**IMPORTANT — Protocol & Port for Egress/Ports Tabs:** Always specify `protocol` and `port` on every `depends_on`, `calls`, `sends_to`, and `reads_from` connection. Use this reference table:
+
+| Target Resource Type | Protocol | Port | Notes |
+|---|---|---|---|
+| Service Bus / Event Hub | AMQP | 5671 | AMQP over TLS |
+| SQL Server / Azure SQL | TCP | 1433 | |
+| PostgreSQL | TCP | 5432 | |
+| Redis / Azure Cache | TCP | 6380 | TLS port |
+| Azure Storage / Blob | HTTPS | 443 | |
+| Key Vault | HTTPS | 443 | |
+| APIM / API Management | HTTPS | 443 | |
+| AKS / Kubernetes service | HTTPS | 443 | Internal: HTTP/80 |
+| HTTP endpoint | HTTP | 80 | |
+| HTTPS endpoint | HTTPS | 443 | |
+
+Omitting protocol/port leaves the **Egress** and **Ports & Protocols** tabs empty in the UI.
 
 ### Technology Stack
 **Goal:** Identify languages, frameworks, versions
