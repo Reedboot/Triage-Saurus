@@ -413,6 +413,97 @@ def apply_topology_backfills(conn: sqlite3.Connection) -> Dict[str, int]:
         # Best-effort backfill: do not fail migrations on errors
         pass
 
+    # Infer protocol/port on resource_connections from target resource type where missing.
+    # This backfill populates egress and ports tab data for connections created before
+    # protocol/port inference was added to the pipeline.
+    try:
+        _run(
+            "resource_connections_protocol_port_inference",
+            """
+            UPDATE resource_connections
+            SET
+                protocol = CASE
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%service_bus%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%servicebus%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%service_bus%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%servicebus%'
+                    THEN 'AMQP'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%sql%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%sql%'
+                    THEN 'TCP'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%redis%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%cache%'
+                    THEN 'TCP'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%storage%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%vault%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%apim%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%api_management%'
+                    THEN 'HTTPS'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%kubernetes%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%container%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%aks%'
+                    THEN 'HTTPS'
+                    ELSE NULL
+                END,
+                port = CASE
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%service_bus%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%servicebus%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%service_bus%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%servicebus%'
+                    THEN '5671'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%sql%' OR
+                         (SELECT LOWER(r.resource_name) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%sql%'
+                    THEN '1433'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%redis%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%cache%'
+                    THEN '6380'
+                    WHEN (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%storage%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%vault%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%apim%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%api_management%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%kubernetes%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%container%' OR
+                         (SELECT LOWER(r.resource_type) FROM resources r WHERE r.id = resource_connections.target_resource_id)
+                         LIKE '%aks%'
+                    THEN '443'
+                    ELSE NULL
+                END
+            WHERE (protocol IS NULL OR TRIM(protocol) = '')
+              AND connection_type IN ('depends_on', 'routes_ingress_to', 'calls', 'connects_to', 'sends_to', 'reads_from')
+            """,
+        )
+    except Exception:
+        pass
+
     return updates
 
 
@@ -496,6 +587,9 @@ def _ensure_schema(conn: sqlite3.Connection):
       repo_url TEXT,
       repo_type TEXT,
       primary_language TEXT,
+      framework_version TEXT,
+      framework_name TEXT,
+      iac_type TEXT,
       files_scanned INTEGER,
       iac_files_count INTEGER,
       code_files_count INTEGER,
@@ -550,7 +644,9 @@ def _ensure_schema(conn: sqlite3.Connection):
       is_encrypted BOOLEAN,
       via_component TEXT,
       notes TEXT,
-      inferred_internet BOOLEAN DEFAULT 0
+      inferred_internet BOOLEAN DEFAULT 0,
+      target_external TEXT,
+      connection_metadata TEXT
     );
 
     CREATE TABLE IF NOT EXISTS trust_boundaries (
@@ -794,6 +890,13 @@ def _ensure_schema(conn: sqlite3.Connection):
       confidence TEXT DEFAULT 'medium',
       notes TEXT,
       computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      repo_id INTEGER,
+      protocol TEXT,
+      port TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      destination_type TEXT,
+      endpoint TEXT,
       UNIQUE(experiment_id, resource_id),
       FOREIGN KEY (experiment_id) REFERENCES experiments(id)
     );
@@ -863,6 +966,21 @@ def _ensure_schema(conn: sqlite3.Connection):
       FOREIGN KEY (local_resource_id) REFERENCES resources(id),
       UNIQUE(shared_resource_id, repo_name, local_resource_id)
     );
+
+    CREATE TABLE IF NOT EXISTS dependencies (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      experiment_id TEXT NOT NULL,
+      project_path TEXT,
+      package_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      package_manager TEXT NOT NULL,
+      language TEXT NOT NULL,
+      source_file TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(repo_id, project_path, package_name, version, package_manager),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
     """)
 
         # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
@@ -908,6 +1026,9 @@ def _ensure_schema(conn: sqlite3.Connection):
             ("is_encrypted", "BOOLEAN"),
             ("via_component", "TEXT"),
             ("notes", "TEXT"),
+            ("inferred_internet", "BOOLEAN DEFAULT 0"),
+            ("target_external", "TEXT"),
+            ("connection_metadata", "TEXT"),
         ):
             if col_name not in connection_columns:
                 conn.execute(f"ALTER TABLE resource_connections ADD COLUMN {col_name} {col_type}")
@@ -999,6 +1120,19 @@ def _ensure_schema(conn: sqlite3.Connection):
         ):
             if col_name not in queue_columns:
                 conn.execute(f"ALTER TABLE enrichment_queue ADD COLUMN {col_name} {col_type}")
+
+        exposure_analysis_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}
+        for col_name, col_type in (
+            ("repo_id", "INTEGER"),
+            ("protocol", "TEXT"),
+            ("port", "TEXT"),
+            ("auth_method", "TEXT"),
+            ("is_encrypted", "BOOLEAN"),
+            ("destination_type", "TEXT"),
+            ("endpoint", "TEXT"),
+        ):
+            if col_name not in exposure_analysis_columns:
+                conn.execute(f"ALTER TABLE exposure_analysis ADD COLUMN {col_name} {col_type}")
 
         resource_types_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_types'"
@@ -2318,9 +2452,11 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                   parent.id AS parent_resource_id, parent.resource_name AS parent_resource_name, parent.resource_type AS parent_resource_type,
                    COALESCE(MAX(f.severity_score), 0) as max_finding_score
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
+            LEFT JOIN resources parent ON r.parent_resource_id = parent.id
             LEFT JOIN findings f ON r.id = f.resource_id
             WHERE r.experiment_id = ?
             GROUP BY r.id
@@ -2339,6 +2475,9 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
                 'resource_type': r['resource_type'],
                 'provider': r['provider'],
                 'repo_name': r['repo_name'],
+                'parent_resource_id': r.get('parent_resource_id'),
+                'parent_resource_name': r.get('parent_resource_name'),
+                'parent_resource_type': r.get('parent_resource_type'),
                 'max_finding_score': r['max_finding_score'],
                 'properties': prop_dict,
                 'public': _prop_bool(prop_dict.get('public') or prop_dict.get('public_access') or prop_dict.get('public', False)),
