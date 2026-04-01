@@ -252,10 +252,9 @@ def _extract_json_object(text: str) -> dict | None:
         return None
     s = text.strip()
 
-    # Remove a leading bullet marker if present (e.g., '● { ...')
-    s = re.sub(r'^\s*[\u25CF\u2022\*-]+\s*', '', s)
-    # Also strip any leading bullet '●' placed on its own line before the JSON
-    s = re.sub(r'^[\u25CF\u2022\*-]+\s*\n\s*', '', s)
+    # Copilot often prefixes every output line with a bullet marker (● or • or - etc.).
+    # Strip them from the start of every line so JSON structure is preserved.
+    s = '\n'.join(re.sub(r'^\s*[\u25CF\u2022\*\-]+\s*', '', ln) for ln in s.splitlines())
 
     # Try direct parse first
     if s.startswith('{') and s.endswith('}'):
