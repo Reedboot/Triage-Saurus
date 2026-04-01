@@ -368,6 +368,20 @@ def generate_architecture_diagram(
     )
     if include_operation_resources is None:
         include_operation_resources = operation_count_in_scope < 10
+
+    # If API Management (APIM) or explicit API gateway resources are present,
+    # prefer showing operation-level resources so the diagrams show APIs → Operations.
+    try:
+        apim_present = any(
+            ('api_management' in (r.get('resource_type') or '').lower())
+            or ('apim' in (r.get('resource_name') or '').lower())
+            or ('api_management_api' in (r.get('resource_type') or '').lower())
+            for r in resources
+        )
+        if apim_present:
+            include_operation_resources = True
+    except Exception:
+        pass
     try:
         # Use resource_type_db to determine display preference (fallbacks handled inside)
         _display_filtered = []
@@ -490,6 +504,24 @@ def generate_architecture_diagram(
             lines.append(f"    {node_id}[{_display_label(p)}]")
         lines.append("  end")
     
+    # Try to group API Management / API resources and render operations when available
+    try:
+        api_resources = [r for r in resources if 'api' in (r.get('resource_type') or '').lower() or 'apim' in (r.get('resource_name') or '').lower()]
+        if api_resources:
+            for api in api_resources:
+                api_name = api['resource_name']
+                # Find operation-level children (resource_type indicates operation)
+                ops = [r for r in resources if _is_operation_resource_type(r.get('resource_type') or '') and (r.get('parent_resource_name') == api_name or r.get('parent_resource_id') == api.get('id'))]
+                if ops:
+                    api_id = sanitize_id(api_name)
+                    lines.append(f"  subgraph {api_id}_api[API: {api_name}]")
+                    for op in ops:
+                        op_id = sanitize_id(op['resource_name'])
+                        lines.append(f"    {op_id}[Operation: {op['resource_name']}]")
+                    lines.append("  end")
+    except Exception:
+        pass
+
     # Other resources (outside subgraphs)
     for res in other:
         if res['resource_name'] not in ('Internet', 'NSG'):

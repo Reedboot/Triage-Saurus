@@ -64,9 +64,16 @@ _lookup_conn = None
 class HierarchicalDiagramBuilder:
     """Build hierarchical architecture diagrams with proper nesting."""
     
-    def __init__(self, experiment_id: str, repo_name: Optional[str] = None):
+    def __init__(self, experiment_id: str, repo_name: Optional[str] = None,
+                 include_api_operations: Optional[bool] = None,
+                 repo_path: Optional[str] = None):
         self.experiment_id = experiment_id
         self.repo_name = repo_name
+        # When True, parse OpenAPI specs and add operation nodes under APIM APIs.
+        # When None, auto-detect (show ops only if there are <10 operations in DB).
+        self.include_api_operations = include_api_operations
+        # Filesystem path to the repository root (needed for OpenAPI spec discovery).
+        self.repo_path = repo_path
         self.resources = []
         self.connections = []
         self.sql_hints: Dict[str, Optional[str]] = {}
@@ -75,6 +82,9 @@ class HierarchicalDiagramBuilder:
         self.children_by_parent = defaultdict(list)
         self.emitted_nodes = set()
         self.connected_resource_names: Set[str] = set()
+        # Maps resource_name → Mermaid node ID; populated by render_* methods so that
+        # render_connections can use the correct (potentially prefixed) ID for edges.
+        self.node_id_override: Dict[str, str] = {}
 
     def _is_connected_name(self, name: str) -> bool:
         """Return True when a resource should be rendered based on connection participation.
@@ -129,6 +139,379 @@ class HierarchicalDiagramBuilder:
                 if child_id in self.resource_by_id:
                     self.children_by_parent[parent_id].append(self.resource_by_id[child_id])
     
+    def _load_openapi_operations(self) -> None:
+        """Discover OpenAPI spec files in the repo and inject synthetic operation resources
+        as children of matching APIM API resources (when include_api_operations is True).
+
+        Synthetic resources use negative integer IDs (never clash with DB rows).
+        The matching is: OpenAPI filename stem tokens ↔ APIM API name tokens.
+        Falls back to a 1-to-1 pairing when only one spec is present.
+        """
+        if not self.repo_path:
+            return
+
+        root = Path(self.repo_path)
+        # Gather candidate OpenAPI spec files.
+        openapi_candidates: List[Path] = []
+        for pat in ("*.openapi.yaml", "*.openapi.yml", "*openapi*.yaml", "*openapi*.yml",
+                    "*swagger*.yaml", "*swagger*.yml"):
+            openapi_candidates.extend(root.rglob(pat))
+        # Deduplicate preserving order.
+        seen: Set[str] = set()
+        openapi_files: List[Path] = []
+        for p in openapi_candidates:
+            sp = str(p)
+            if sp not in seen:
+                seen.add(sp)
+                openapi_files.append(p)
+
+        if not openapi_files:
+            return
+
+        def _parse_ops(path: Path) -> List[str]:
+            """Return list of 'METHOD /path' strings from an OpenAPI YAML."""
+            ops: List[str] = []
+            try:
+                text = path.read_text(encoding='utf-8', errors='replace')
+                lines = text.splitlines()
+            except Exception:
+                return ops
+            in_paths = False
+            current_path: Optional[str] = None
+            for ln in lines:
+                if re.match(r'^\s*paths\s*:\s*$', ln):
+                    in_paths = True
+                    current_path = None
+                    continue
+                if in_paths and re.match(r'^\s{0,1}[A-Za-z_]+\s*:\s*$', ln):
+                    in_paths = False
+                    current_path = None
+                    continue
+                if not in_paths:
+                    continue
+                m_path = re.match(r'^\s{2,}(/[^\s:]+)\s*:\s*$', ln)
+                if m_path:
+                    current_path = m_path.group(1)
+                    continue
+                m_method = re.match(r'^\s{4,}(get|post|put|patch|delete|head|options)\s*:\s*$',
+                                    ln, re.IGNORECASE)
+                if m_method and current_path:
+                    ops.append(f"{m_method.group(1).upper()} {current_path}")
+            return ops
+
+        def _tokens(s: str) -> Set[str]:
+            return {t for t in re.split(r'[^a-z0-9]+', (s or '').lower()) if len(t) >= 3}
+
+        # Identify APIM API resources in the loaded set.
+        apim_apis = [r for r in self.resources if self.is_api_gateway(r)]
+        if not apim_apis:
+            return
+
+        parsed: Dict[str, List[str]] = {str(p): _parse_ops(p) for p in openapi_files}
+        parsed = {k: v for k, v in parsed.items() if v}
+        if not parsed:
+            return
+
+        unused_files = set(parsed.keys())
+        synthetic_id = -1
+
+        for api in apim_apis:
+            api_tokens = _tokens(str(api.get('resource_name') or ''))
+            best_file: Optional[str] = None
+            best_score = -1
+            for f in list(unused_files):
+                stem_tokens = _tokens(Path(f).stem)
+                score = len(api_tokens & stem_tokens)
+                if score > best_score:
+                    best_score = score
+                    best_file = f
+            # If no token overlap but only one spec left, assign it.
+            if best_file is None and len(unused_files) == 1:
+                best_file = next(iter(unused_files))
+            if best_file is None:
+                continue
+
+            for op_name in parsed[best_file]:
+                s_id = synthetic_id
+                synthetic_id -= 1
+                op_resource = {
+                    'id': s_id,
+                    'resource_name': op_name,
+                    'resource_type': 'azurerm_api_management_api_operation',
+                    'provider': api.get('provider') or 'azure',
+                    'repo_name': api.get('repo_name'),
+                    'parent_resource_id': api['id'],
+                    'properties': {},
+                }
+                self.resources.append(op_resource)
+                self.resource_by_name[op_name] = op_resource
+                self.resource_by_id[s_id] = op_resource
+                self.children_by_parent[api['id']].append(op_resource)
+
+            unused_files.discard(best_file)
+
+    def _infer_from_config_files(self) -> None:
+        """Scan application config files for runtime service dependencies not captured in Terraform.
+
+        Handles sources that Terraform doesn't model:
+        - appsettings*.json : ConnectionStrings.*, ApplicationInsights.*, ServiceBus.* sections
+        - hiera/**/*.yaml   : SQL connection strings with Puppet template variables (%{lookup(...)})
+        - docker-compose.yml: environment variables with connection strings
+
+        Creates synthetic resource nodes (negative IDs) and workload→service connection edges
+        so the diagram shows these dependencies even without a Terraform resource definition.
+        """
+        if not self.repo_path:
+            return
+
+        import json as _json
+
+        root = Path(self.repo_path)
+
+        def _name_tokens(s: str) -> Set[str]:
+            return {t for t in re.split(r'[^a-z0-9]+', s.lower()) if len(t) >= 3}
+
+        # Real workloads only (services + deployments) — exclude catalog-info components/APIs
+        # which are metadata, not actual deployed pods.
+        _META_TYPES = ('component', 'kubernetes_api', 'kubernetes_config')
+        k8s_workloads = [
+            r for r in self.resources
+            if self.is_kubernetes(r)
+            and 'cluster' not in (r.get('resource_type') or '').lower()
+            and not any(t in (r.get('resource_type') or '').lower() for t in _META_TYPES)
+        ]
+
+        def _best_workload_for_dir(directory: Path) -> Optional[dict]:
+            """Return the K8s workload whose name tokens best overlap with the directory name.
+
+            Tie-breaks in favour of kubernetes_service/deployment over other types,
+            and longer workload names (more specific matches).
+            """
+            dir_tokens = _name_tokens(directory.name)
+            best: Optional[dict] = None
+            best_score = 0
+            for wl in k8s_workloads:
+                score = len(dir_tokens & _name_tokens(wl['resource_name']))
+                if score == 0:
+                    continue
+                # Tie-break: prefer concrete workload types and more specific names
+                type_bonus = 1 if wl.get('resource_type') in (
+                    'kubernetes_service', 'kubernetes_deployment') else 0
+                eff_score = score * 10 + type_bonus + len(wl['resource_name']) // 10
+                if eff_score > best_score:
+                    best, best_score = wl, eff_score
+            return best if best_score > 0 else None
+
+        # Track synthetic resources already created: canonical_key → resource_name
+        synth_added: Dict[str, str] = {}
+        _synth_id_counter = [-50000]
+
+        def _next_synth_id() -> int:
+            _synth_id_counter[0] -= 1
+            return _synth_id_counter[0]
+
+        existing_conn_pairs: Set[tuple] = {
+            (c.get('source'), c.get('target')) for c in self.connections
+        }
+
+        def _add_edge(src_name: str, tgt_name: str, conn_type: str = 'depends_on') -> None:
+            if (src_name, tgt_name) not in existing_conn_pairs:
+                self.connections.append({
+                    'source': src_name,
+                    'target': tgt_name,
+                    'connection_type': conn_type,
+                    'confirmed': False,
+                })
+                existing_conn_pairs.add((src_name, tgt_name))
+
+        def _ensure_sql_node(db_name: str, server_hint: str, source_file: str) -> str:
+            """Return name of a synthetic SQL server node, creating one if needed."""
+            db_slug = re.sub(r'[^a-z0-9]', '-', db_name.strip().lower()).strip('-') or 'sql-db'
+            key = f'sql:{db_slug}'
+            if key in synth_added:
+                return synth_added[key]
+            rname = f'sql-{db_slug}'
+            # Don't duplicate an existing DB resource
+            if rname in self.resource_by_name:
+                synth_added[key] = rname
+                return rname
+            synth = {
+                'id': _next_synth_id(),
+                'resource_name': rname,
+                'resource_type': 'azurerm_mssql_server',
+                'provider': 'azure',
+                'repo_name': self.repo_name,
+                'properties': {
+                    'server_hint': server_hint,
+                    'database': db_name,
+                    'source_file': source_file,
+                    'inferred': 'true',
+                },
+            }
+            self.resources.append(synth)
+            self.resource_by_name[rname] = synth
+            self.resource_by_id[synth['id']] = synth
+            synth_added[key] = rname
+            return rname
+
+        def _find_or_add_monitoring_node(source_file: str) -> Optional[str]:
+            """Return name of an App Insights resource, preferring existing ones."""
+            for r in self.resources:
+                if 'application_insights' in (r.get('resource_type') or '').lower():
+                    return r['resource_name']
+            key = 'appinsights:inferred'
+            if key in synth_added:
+                return synth_added[key]
+            rname = 'application-insights'
+            synth = {
+                'id': _next_synth_id(),
+                'resource_name': rname,
+                'resource_type': 'azurerm_application_insights',
+                'provider': 'azure',
+                'repo_name': self.repo_name,
+                'properties': {'source_file': source_file, 'inferred': 'true'},
+            }
+            self.resources.append(synth)
+            self.resource_by_name[rname] = synth
+            self.resource_by_id[synth['id']] = synth
+            synth_added[key] = rname
+            return rname
+
+        def _any_sql_node_exists() -> Optional[str]:
+            """Return name of any SQL node already in resources, or None."""
+            for r in self.resources:
+                if self.is_database_resource(r):
+                    return r['resource_name']
+            return None
+
+        def _find_sb_node() -> Optional[str]:
+            """Return name of existing Service Bus resource (namespace or queue), if any."""
+            for r in self.resources:
+                if self.is_service_bus(r) and 'namespace' in (r.get('resource_type') or '').lower():
+                    return r['resource_name']
+            for r in self.resources:
+                if self.is_service_bus(r):
+                    return r['resource_name']
+            return None
+
+        _SKIP_DIRS = {'test', '.git', 'bin', 'obj', 'node_modules', '__pycache__'}
+
+        # ── Pass 1: Scan hiera / values YAML for SQL connection strings ────────
+        # These contain actual server addresses (even if templated) so we get
+        # meaningful database names. Process these BEFORE appsettings so that
+        # subsequent passes can link to real SQL nodes rather than creating
+        # key-name-derived placeholder nodes.
+        _HIERA_SQL_RE = re.compile(
+            r'Server=tcp:[^;"\s]*\.database\.windows\.net[^;"\s]*;[^"\n]*Database=([^;"\n"\']+)',
+            re.IGNORECASE,
+        )
+        for yaml_file in root.rglob('*.yaml'):
+            if any(p in yaml_file.parts for p in {'.git', '__pycache__', 'node_modules'}):
+                continue
+            yaml_str = str(yaml_file)
+            is_hiera = 'hiera' in yaml_str
+            is_values = yaml_file.name.startswith('values')
+            is_config = 'config' in yaml_str.lower()
+            if not (is_hiera or is_values or is_config):
+                continue
+            try:
+                text = yaml_file.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                continue
+            for m in _HIERA_SQL_RE.finditer(text):
+                db_name = m.group(1).strip().strip('"\'')
+                # Hiera SQL = infrastructure config → link to API workloads (not workers)
+                api_workloads = [
+                    wl for wl in k8s_workloads
+                    if wl.get('resource_type') == 'kubernetes_service'
+                    or 'api' in wl['resource_name'].lower()
+                ]
+                target_wls = api_workloads if api_workloads else k8s_workloads
+                rel_path = str(yaml_file.relative_to(root)).replace('\\', '/')
+                sql_node = _ensure_sql_node(db_name, '*.database.windows.net (hiera)', rel_path)
+                for wl in target_wls:
+                    _add_edge(wl['resource_name'], sql_node)
+
+        # ── Pass 2: Scan appsettings*.json ────────────────────────────────────
+        # SQL: Link to existing SQL nodes (created in Pass 1) rather than creating
+        # new key-name placeholder nodes — avoids duplication.
+        for json_file in root.rglob('appsettings*.json'):
+            if any(p in json_file.parts for p in _SKIP_DIRS):
+                continue
+            if 'test' in json_file.name.lower():
+                continue
+            try:
+                data = _json.loads(json_file.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                continue
+
+            workload = _best_workload_for_dir(json_file.parent)
+            if not workload:
+                continue
+            wl_name = workload['resource_name']
+            rel_path = str(json_file.relative_to(root)).replace('\\', '/')
+
+            conn_strings: dict = data.get('ConnectionStrings') or {}
+            for key in conn_strings:
+                k_lower = key.lower()
+                if any(tok in k_lower for tok in ('sql', 'database', 'db', 'mssql', 'postgres')):
+                    # Prefer an existing SQL node (created from hiera or Terraform).
+                    # Only create a new node if no SQL resource exists at all.
+                    existing_sql = _any_sql_node_exists()
+                    if existing_sql:
+                        _add_edge(wl_name, existing_sql)
+                    else:
+                        db_hint = re.sub(r'(connectionstring|connection)', '', k_lower,
+                                         flags=re.IGNORECASE).strip('_- ') or 'sql-db'
+                        sql_node = _ensure_sql_node(db_hint, '(appsettings key)', rel_path)
+                        _add_edge(wl_name, sql_node)
+                elif any(tok in k_lower for tok in ('servicebus', 'service_bus', 'sb', 'amqp')):
+                    sb_node = _find_sb_node()
+                    if sb_node:
+                        _add_edge(wl_name, sb_node)
+
+            # ApplicationInsights section — key existence (even empty value) is enough
+            ai_section = data.get('ApplicationInsights')
+            if isinstance(ai_section, dict) and 'ConnectionString' in ai_section:
+                ai_node = _find_or_add_monitoring_node(rel_path)
+                if ai_node:
+                    _add_edge(wl_name, ai_node)
+
+            # ServiceBus section with explicit queue/topic config
+            sb_section = data.get('ServiceBus')
+            if sb_section and isinstance(sb_section, dict):
+                sb_node = _find_sb_node()
+                if sb_node:
+                    _add_edge(wl_name, sb_node)
+
+        # ── Pass 3: Scan docker-compose.yml / *.env for connection strings ────
+        _DOCKER_SQL_RE = re.compile(
+            r'(?:ConnectionStrings__\w+|CONNECTIONSTRING\w*)\s*[=:]\s*'
+            r'["\']?Server=([^;"\'\s,]+)[^;"\'\n]*Database=([^;"\'\n]+)',
+            re.IGNORECASE,
+        )
+        for compose_file in list(root.rglob('docker-compose*.yml')) + list(root.rglob('*.env')):
+            if any(p in compose_file.parts for p in {'.git', '__pycache__'}):
+                continue
+            try:
+                text = compose_file.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                continue
+            for m in _DOCKER_SQL_RE.finditer(text):
+                server_hint, db_name = m.group(1).strip(), m.group(2).strip()
+                rel_path = str(compose_file.relative_to(root)).replace('\\', '/')
+                workload = _best_workload_for_dir(compose_file.parent)
+                target_wls = [workload] if workload else k8s_workloads
+                # Prefer existing SQL node or create from docker-compose value
+                existing_sql = _any_sql_node_exists()
+                if existing_sql:
+                    for wl in target_wls:
+                        _add_edge(wl['resource_name'], existing_sql)
+                else:
+                    sql_node = _ensure_sql_node(db_name, server_hint, rel_path)
+                    for wl in target_wls:
+                        _add_edge(wl['resource_name'], sql_node)
+
     def is_api_gateway(self, resource: dict) -> bool:
         """Check if resource is an API Gateway (APIM, API Gateway, etc)."""
         rtype = (resource.get('resource_type') or '').lower()
@@ -231,6 +614,17 @@ class HierarchicalDiagramBuilder:
         principal_name_tokens = ['principal', 'role', 'group', 'user', 'service_account', 'serviceaccount']
         return any(tok in rtype for tok in principal_type_tokens) or any(tok in name for tok in principal_name_tokens)
     
+    def is_monitoring(self, resource: dict) -> bool:
+        """Check if resource is an observability/monitoring resource."""
+        rtype = (resource.get('resource_type') or '').lower()
+        return any(tok in rtype for tok in [
+            'application_insights', 'appinsights',
+            'log_analytics', 'loganalytics',
+            'monitor', 'alert',
+            'cloudwatch', 'stackdriver',
+            'diagnostic',
+        ])
+
     def is_service_bus(self, resource: dict) -> bool:
         """Check if resource is Service Bus/messaging related."""
         rtype = (resource.get('resource_type') or '').lower()
@@ -554,46 +948,96 @@ class HierarchicalDiagramBuilder:
     
     def render_apim_hierarchy(self, apim_apis: List[dict], products: List[dict]) -> List[str]:
         """Render APIM with Products and Operations nested properly.
-        
-        Structure: APIM → Products (as nodes with operations inside as subgraph)
+
+        When API operations are available (from DB or OpenAPI specs), each API is
+        rendered as a named subgraph with its operations inside.  When no operations
+        are available, products are shown as flat nodes.
         """
         if not apim_apis and not products:
             return []
-        
+
         lines = []
         lines.append("  subgraph apim[API Management]")
-        
-        # Get all API operations
-        all_operations = []
-        for api in apim_apis:
-            api_children = self.children_by_parent.get(api['id'], [])
-            all_operations.extend([c for c in api_children if self.is_api_operation(c)])
 
-        # Prune APIM entries that are not connected to any edge.
-        products = [p for p in products if self._is_connected_name(p.get('resource_name', ''))]
-        all_operations = [op for op in all_operations if self._is_connected_name(op.get('resource_name', ''))]
-        
-        if products and all_operations:
-            # Render the first product as a proper subgraph with operations
-            # (In reality each product may have different operations, but for simplicity we'll show the main product)
-            main_product = products[0]
-            product_id = sanitize_id(main_product['resource_name'])
-            lines.append(f"    subgraph {product_id}[\"{main_product['resource_name']}\"]")
-            
-            for op in all_operations:
-                lines.append(self.render_node(op, indent="      "))
-            
-            lines.append("    end")
-            self.emitted_nodes.add(main_product['resource_name'])  # Mark as emitted for connections
-        elif products:
-            # Products exist but operations are not available in extracted data; show products directly.
-            for product in products:
+        # Build a map: product_name → APIM API resource (so we can render ops per API)
+        # Products and APIs typically share the same name in APIM Terraform.
+        api_by_name: Dict[str, dict] = {
+            a['resource_name']: a for a in apim_apis
+        }
+        # Also normalise with hyphen/underscore variants so drtestapp-sql matches drtestapp_sql.
+        for a in apim_apis:
+            normalised = a['resource_name'].replace('-', '_')
+            if normalised not in api_by_name:
+                api_by_name[normalised] = a
+
+        # Products to render (always show all — even without connections)
+        rendered_product_names: Set[str] = set()
+
+        for product in products:
+            pname = product['resource_name']
+            if pname in rendered_product_names:
+                continue
+
+            # Try to find matching API to get operations.
+            matched_api = api_by_name.get(pname)
+            ops_for_product: List[dict] = []
+            if matched_api:
+                api_children = self.children_by_parent.get(matched_api['id'], [])
+                ops_for_product = [c for c in api_children if self.is_api_operation(c)]
+                # When API ops toggle is off, prune unconnected operations.
+                if not self.include_api_operations:
+                    ops_for_product = [op for op in ops_for_product
+                                       if self._is_connected_name(op.get('resource_name', ''))]
+
+            if ops_for_product:
+                product_id = sanitize_id(pname)
+                lines.append(f"    subgraph {product_id}[\"{pname}\"]")
+                seen_op_ids: Set[str] = set()
+                for op in ops_for_product:
+                    op_id = sanitize_id(op.get('resource_name', ''))
+                    if op_id in seen_op_ids:
+                        continue
+                    seen_op_ids.add(op_id)
+                    lines.append(self.render_node(op, indent="      "))
+                lines.append("    end")
+                self.emitted_nodes.add(pname)
+            else:
                 lines.append(self.render_node(product, indent="    "))
-        elif all_operations:
-            # Just operations, no products
-            for op in all_operations:
-                lines.append(self.render_node(op, indent="    "))
-        
+
+            rendered_product_names.add(pname)
+
+        # Render any APIM APIs that don't have a corresponding product node yet.
+        for api in apim_apis:
+            aname = api['resource_name']
+            normalised = aname.replace('-', '_')
+            if aname in rendered_product_names or normalised in rendered_product_names:
+                # API was already rendered via its matching product — register both
+                # name forms in emitted_nodes so render_connections can route edges.
+                # Also map the hyphenated name to the subgraph ID (underscore form).
+                self.emitted_nodes.add(aname)
+                self.emitted_nodes.add(normalised)
+                if aname != normalised:
+                    self.node_id_override[aname] = sanitize_id(normalised)
+                continue
+            api_children = self.children_by_parent.get(api['id'], [])
+            ops = [c for c in api_children if self.is_api_operation(c)]
+            if not self.include_api_operations:
+                ops = [op for op in ops if self._is_connected_name(op.get('resource_name', ''))]
+            if ops:
+                api_id = sanitize_id(aname)
+                lines.append(f"    subgraph {api_id}[\"{aname}\"]")
+                seen_op_ids = set()
+                for op in ops:
+                    op_id = sanitize_id(op.get('resource_name', ''))
+                    if op_id in seen_op_ids:
+                        continue
+                    seen_op_ids.add(op_id)
+                    lines.append(self.render_node(op, indent="      "))
+                lines.append("    end")
+                self.emitted_nodes.add(aname)
+            else:
+                lines.append(self.render_node(api, indent="    "))
+
         lines.append("  end")
         return lines
     
@@ -609,17 +1053,43 @@ class HierarchicalDiagramBuilder:
             r for r in k8s_resources
             if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
         ]
-        workload_resources = [
-            r for r in k8s_resources
-            if r not in cluster_resources and self._is_connected_name(r.get('resource_name', ''))
-        ]
+
+        # Collect workloads via parent-child DB links (primary source).
+        # Skaffold workloads are stored as children of the inferred cluster resource;
+        # the k8s_resources list excludes them because they sit inside all_children.
+        # Fetching from children_by_parent gives us all workloads regardless of that filter.
+        workload_resources: List[dict] = []
+        workload_ids_seen: Set[str] = set()
+        for cr in cluster_resources:
+            for child in self.children_by_parent.get(cr['id'], []):
+                if child['id'] not in workload_ids_seen:
+                    workload_ids_seen.add(child['id'])
+                    workload_resources.append(child)
+
+        # Fallback: non-cluster K8s resources that participate in known connections.
+        # Skip catalog-info metadata types (kubernetes_component, kubernetes_api,
+        # kubernetes_config) — these are service catalogue entries, not running pods.
+        _CATALOG_TYPES = ('component', 'kubernetes_api', 'kubernetes_config')
+        for r in k8s_resources:
+            if r in cluster_resources or r['id'] in workload_ids_seen:
+                continue
+            if any(t in (r.get('resource_type') or '').lower() for t in _CATALOG_TYPES):
+                continue
+            if self._is_connected_name(r.get('resource_name', '')):
+                workload_ids_seen.add(r['id'])
+                workload_resources.append(r)
 
         if not workload_resources:
             return []
 
         # Build the outer subgraph label, incorporating cluster names when known.
         if cluster_resources:
-            cluster_names = ", ".join(r['resource_name'] for r in cluster_resources)
+            # Strip the __inferred__ prefix that the context extractor adds to synthesised names.
+            cluster_display_names = [
+                r['resource_name'].replace("__inferred__", "").lstrip("-")
+                for r in cluster_resources
+            ]
+            cluster_names = ", ".join(cluster_display_names)
             cluster_label = f"Kubernetes Cluster<br/>{cluster_names}"
             # Mark cluster resources as emitted so connections to them still render.
             for r in cluster_resources:
@@ -633,7 +1103,9 @@ class HierarchicalDiagramBuilder:
         resources_by_namespace: Dict[str, List[dict]] = defaultdict(list)
         emitted_node_ids: Set[str] = set()
         for res in workload_resources:
-            node_id = sanitize_id(res['resource_name'])
+            # Use a k8s_wl_ prefix to avoid Mermaid node-ID collisions with
+            # same-named resources in other subgraphs (e.g. APIM products).
+            node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
             if node_id in emitted_node_ids:
                 continue
             emitted_node_ids.add(node_id)
@@ -649,7 +1121,7 @@ class HierarchicalDiagramBuilder:
                 image = str(props.get('image', '') or '').strip()
                 dockerfile = str(props.get('dockerfile', '') or '').strip()
 
-                node_id = sanitize_id(res['resource_name'])
+                node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
                 name = res['resource_name']
 
                 # Only show image when it adds information beyond the resource name.
@@ -667,6 +1139,8 @@ class HierarchicalDiagramBuilder:
 
                 lines.append(f"      {node_id}[\"{label}\"]")
                 self.emitted_nodes.add(res['resource_name'])
+                # Record the prefixed node ID so render_connections uses the right ID.
+                self.node_id_override[res['resource_name']] = node_id
 
             lines.append("    end")
 
@@ -724,23 +1198,35 @@ class HierarchicalDiagramBuilder:
             ns_children = self.children_by_parent.get(namespace['id'], [])
             topics = [r for r in ns_children if self.is_service_bus_topic(r)]
             queues = [r for r in ns_children if self.is_service_bus_queue(r)]
+
+            # Determine connectivity FIRST so it can influence which children to show.
+            namespace_connected = self._is_connected_name(namespace_name)
+
             topics_to_render = []
             for topic in topics:
                 topic_subs = [
                     s for s in self.children_by_parent.get(topic['id'], [])
-                    if self.is_service_bus_subscription(s) and self._is_connected_name(s.get('resource_name', ''))
+                    if self.is_service_bus_subscription(s)
+                    # Include all subs when namespace is connected; else filter by name
+                    and (namespace_connected or self._is_connected_name(s.get('resource_name', '')))
                 ]
-                if self._is_connected_name(topic.get('resource_name', '')) or topic_subs:
+                # Show all topics when namespace is connected; else only named-connected ones
+                if namespace_connected or self._is_connected_name(topic.get('resource_name', '')) or topic_subs:
                     topics_to_render.append(topic)
-            queues_to_render = [q for q in queues if self._is_connected_name(q.get('resource_name', ''))]
 
-            namespace_connected = self._is_connected_name(namespace_name)
+            # Show all queues when namespace is connected; else only named-connected ones
+            queues_to_render = (
+                queues if namespace_connected
+                else [q for q in queues if self._is_connected_name(q.get('resource_name', ''))]
+            )
+
             if not namespace_connected and not topics_to_render and not queues_to_render:
                 continue
 
             namespace_subgraph_id = f"sb_ns_{namespace_id}"
             lines.append(f"    subgraph {namespace_subgraph_id}[\"🚌 {namespace_name}\"]")
-            # Keep a concrete namespace node only when it actually participates in connections.
+            # Emit a plain namespace node only when it has no children to show.
+            # When topics/queues are rendered, the subgraph title itself provides the label.
             should_render_namespace_node = (
                 namespace_connected
                 and not topics_to_render
@@ -748,6 +1234,11 @@ class HierarchicalDiagramBuilder:
             )
             if should_render_namespace_node:
                 lines.append(f"      {namespace_id}[\"{namespace_name}\"]")
+                self.emitted_nodes.add(namespace_name)
+            else:
+                # Register namespace name → subgraph ID so render_connections can route
+                # edges (e.g. workload → dr_test_service_bus) to the namespace subgraph.
+                self.node_id_override[namespace_name] = namespace_subgraph_id
                 self.emitted_nodes.add(namespace_name)
             rendered_ids.add(namespace['id'])
 
@@ -788,31 +1279,79 @@ class HierarchicalDiagramBuilder:
         
         lines.append("  end")
         return lines
-    
+
+    def render_monitoring(self, monitoring_resources: List[dict]) -> List[str]:
+        """Render observability resources (App Insights, Log Analytics, monitors, alerts) as a subgraph."""
+        if not monitoring_resources:
+            return []
+
+        lines = ["  subgraph monitoring[Monitoring & Logging]"]
+        for res in monitoring_resources:
+            node_id = sanitize_id(res['resource_name'])
+            rtype = (res.get('resource_type') or '').lower()
+            if 'application_insights' in rtype or 'appinsights' in rtype:
+                icon = "📊"
+            elif 'log_analytics' in rtype or 'loganalytics' in rtype:
+                icon = "📋"
+            elif 'alert' in rtype:
+                icon = "🔔"
+            elif 'action_group' in rtype:
+                icon = "📣"
+            else:
+                icon = "📈"
+            label = f"{icon} {res['resource_name']}"
+            lines.append(f"    {node_id}[\"{label}\"]")
+            self.emitted_nodes.add(res['resource_name'])
+        lines.append("  end")
+        return lines
+
     def render_connections(self) -> List[str]:
         """Render all connections with labels and line styles."""
+        # Administrative/structural edge types that are captured in the DB but
+        # should NOT be drawn as arrows — they are expressed via subgraph nesting.
+        SKIP_EDGE_TYPES = frozenset({
+            'contains', 'grants_access_to', 'parent_of', 'child_of',
+            'resource_group_member', 'has_role',
+        })
+
         lines = []
         lines.append("")
-        
+
+        has_internet = False
+
         for conn in self.connections:
             src = conn.get('source')
             tgt = conn.get('target')
-            
+
             if not src or not tgt:
+                continue
+
+            # Skip administrative/structural edge types.
+            if (conn.get('connection_type') or '').lower() in SKIP_EDGE_TYPES:
                 continue
 
             # Never render self-referential edges (node -> same node); these add noise.
             if src == tgt or sanitize_id(src) == sanitize_id(tgt):
                 continue
-            
+
+            # ── Special case: Internet → APIM subgraph ────────────────────────
+            # Mermaid allows connecting to subgraph IDs directly.
+            if tgt == '__apim_subgraph__':
+                label = '🔒 unknown visibility'
+                lines.append(f"  internet -.->|\"{label}\"| apim")
+                has_internet = True
+                continue
+
             # Skip if nodes weren't emitted
             if src != 'Internet' and src not in self.emitted_nodes:
                 continue
             if tgt != 'Internet' and tgt not in self.emitted_nodes:
                 continue
             
-            src_id = sanitize_id(src) if src != 'Internet' else 'internet'
-            tgt_id = sanitize_id(tgt) if tgt != 'Internet' else 'internet'
+            src_id = self.node_id_override.get(src) or (sanitize_id(src) if src != 'Internet' else 'internet')
+            tgt_id = self.node_id_override.get(tgt) or (sanitize_id(tgt) if tgt != 'Internet' else 'internet')
+            if src == 'Internet':
+                has_internet = True
             
             # Build label
             label_parts = []
@@ -846,7 +1385,11 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"  {src_id} {arrow}|{label}| {tgt_id}")
             else:
                 lines.append(f"  {src_id} {arrow} {tgt_id}")
-        
+
+        # Prepend internet node definition if any Internet edges were emitted.
+        if has_internet:
+            lines.insert(0, '  internet[/"🌐 Internet/Client"/]')
+
         return lines
     
     def infer_connections(self) -> bool:
@@ -945,7 +1488,7 @@ class HierarchicalDiagramBuilder:
                         })
                         connected_pairs.add(pair_key)
         
-        # Service Bus → Listener
+        # Listener → Service Bus (workload depends on the messaging service)
         k8s_deployments = [r for r in self.resources if self.is_kubernetes(r) and 'deployment' in r.get('resource_type', '').lower()]
         sb_queues = [r for r in self.resources if self.is_service_bus_queue(r)]
         sb_topics = [r for r in self.resources if self.is_service_bus_topic(r)]
@@ -956,21 +1499,21 @@ class HierarchicalDiagramBuilder:
             # are not named as listeners/workers.
             if any(kw in dep_name for kw in ['queue', 'listener', 'worker', 'consumer', 'servicebus']):
                 for queue in sb_queues:
-                    pair_key = (queue['resource_name'], deployment['resource_name'])
+                    pair_key = (deployment['resource_name'], queue['resource_name'])
                     if pair_key not in connected_pairs:
                         self.connections.append({
-                            'source': queue['resource_name'],
-                            'target': deployment['resource_name'],
-                            'connection_type': 'consumed_by'
+                            'source': deployment['resource_name'],
+                            'target': queue['resource_name'],
+                            'connection_type': 'depends_on'
                         })
                         connected_pairs.add(pair_key)
                 for topic in sb_topics:
-                    pair_key = (topic['resource_name'], deployment['resource_name'])
+                    pair_key = (deployment['resource_name'], topic['resource_name'])
                     if pair_key not in connected_pairs:
                         self.connections.append({
-                            'source': topic['resource_name'],
-                            'target': deployment['resource_name'],
-                            'connection_type': 'consumed_by'
+                            'source': deployment['resource_name'],
+                            'target': topic['resource_name'],
+                            'connection_type': 'depends_on'
                         })
                         connected_pairs.add(pair_key)
 
@@ -1041,6 +1584,22 @@ class HierarchicalDiagramBuilder:
     def generate(self) -> str:
         """Generate the complete hierarchical diagram."""
         self.load_data()
+
+        # Decide whether to include API operations (from DB or OpenAPI spec files).
+        if self.include_api_operations is None:
+            # Auto: show operations when there are few of them (avoids clutter on large APIs)
+            # and APIM APIs are present.
+            apim_count = sum(1 for r in self.resources if self.is_api_gateway(r))
+            op_count = sum(1 for r in self.resources if self.is_api_operation(r))
+            self.include_api_operations = apim_count > 0 and op_count < 10
+        if self.include_api_operations:
+            self._load_openapi_operations()
+
+        # Infer runtime connections from application config files (appsettings, hiera, etc.).
+        # This supplements Terraform-only topology with dependencies expressed as connection
+        # strings, config keys, and environment variables.
+        if self.repo_path:
+            self._infer_from_config_files()
         
         if not self.resources:
             return "flowchart LR\n  empty[No resources found]"
@@ -1052,16 +1611,31 @@ class HierarchicalDiagramBuilder:
             # Use a neutral client label; APIM isn't always internet-facing.
             lines.append("  internet[🖧 Network Client]")
 
-        # Track resources that actually participate in at least one edge so we
+        # Track resources that actually participate in at least one *visible* edge
+        # (excluding administrative edge types that are not drawn as arrows) so we
         # can prune isolated boxes that add visual noise.
+        _ADMIN_EDGE_TYPES = frozenset({
+            'contains', 'grants_access_to', 'parent_of', 'child_of',
+            'resource_group_member', 'has_role',
+        })
         self.connected_resource_names = {
-            n for c in self.connections for n in (c.get('source'), c.get('target'))
+            n for c in self.connections
+            if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES
+            for n in (c.get('source'), c.get('target'))
             if n and n != 'Internet'
         }
         
-        # Filter out children that will be rendered in subgraphs
+        # Filter out children that will be rendered inside their parent subgraph.
+        # Resource group membership is purely administrative — resources parented
+        # to a resource group should still be treated as top-level diagram nodes.
+        rg_ids = {
+            r['id'] for r in self.resources
+            if 'resource_group' in (r.get('resource_type') or '').lower()
+        }
         all_children = set()
-        for children in self.children_by_parent.values():
+        for parent_id, children in self.children_by_parent.items():
+            if parent_id in rg_ids:
+                continue  # Resource group children are standalone nodes, not nested items.
             all_children.update(c['id'] for c in children)
         
         # Categorize resources  
@@ -1074,6 +1648,9 @@ class HierarchicalDiagramBuilder:
         # Don't filter SB by all_children - we'll handle parent-child internally
         sb_resources = [r for r in self.resources if self.is_service_bus(r)
                        and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+        # Don't filter monitoring by all_children either - render as dedicated subgraph
+        monitoring_resources = [r for r in self.resources if self.is_monitoring(r)
+                                and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
         
         # Collect IDs that will be rendered in subgraphs
         apim_related_ids = set()
@@ -1090,6 +1667,89 @@ class HierarchicalDiagramBuilder:
         
         # Collect K8s IDs
         k8s_related_ids = {r['id'] for r in k8s_resources}
+
+        # Collect monitoring IDs (handled by dedicated subgraph)
+        monitoring_related_ids = {r['id'] for r in monitoring_resources}
+
+        # ── Synthetic edges: monitoring structure (App Insights→alerts→action groups) ──
+        # Only skip if a non-administrative (rendered) edge already exists for this pair.
+        # DB may have `contains` edges for these which are suppressed in render_connections;
+        # we need explicit `monitors`/`triggers` edges so arrows are actually drawn.
+        _ADMIN_TYPES = frozenset({'contains', 'grants_access_to', 'parent_of', 'child_of', 'resource_group_member', 'has_role'})
+        _mon_rendered = {(c.get('source'), c.get('target')) for c in self.connections
+                         if (c.get('connection_type') or '').lower() not in _ADMIN_TYPES}
+        _ai_mon  = [r for r in monitoring_resources if 'application_insights' in (r.get('resource_type') or '').lower() or 'log_analytics' in (r.get('resource_type') or '').lower()]
+        _alrt_mon = [r for r in monitoring_resources if 'alert' in (r.get('resource_type') or '').lower()]
+        _act_mon  = [r for r in monitoring_resources if 'action_group' in (r.get('resource_type') or '').lower()]
+        for _ai in _ai_mon:
+            for _al in _alrt_mon:
+                if (_ai['resource_name'], _al['resource_name']) not in _mon_rendered:
+                    self.connections.append({'source': _ai['resource_name'], 'target': _al['resource_name'], 'connection_type': 'monitors', 'confirmed': True})
+        for _al in _alrt_mon:
+            for _ac in _act_mon:
+                if (_al['resource_name'], _ac['resource_name']) not in _mon_rendered:
+                    self.connections.append({'source': _al['resource_name'], 'target': _ac['resource_name'], 'connection_type': 'triggers', 'confirmed': True})
+
+        # ── Fallback APIM→K8s routing for APIs with no explicit routes_ingress_to ──
+        _routed_apis = {c['source'] for c in self.connections if c.get('connection_type') == 'routes_ingress_to'}
+        _k8s_svcs = [r for r in self.resources if r.get('resource_type') in ('kubernetes_service', 'kubernetes_deployment')]
+        # Common technology/type suffixes that should be stripped before matching
+        _API_STRIP = re.compile(r'(sql|api|svc|service|app|web|http|https|v\d+)$')
+        # Only route actual API resources (not policies, operations, products, etc.)
+        _APIM_API_TYPES = {'azurerm_api_management_api', 'apim_api', 'api_management_api'}
+        for _api_r in apim_apis:
+            if self.is_api_operation(_api_r):
+                continue
+            if not any(t in ((_api_r.get('resource_type') or '').lower()) for t in ('api_management_api',) if 'policy' not in ((_api_r.get('resource_type') or '').lower()) and 'product' not in ((_api_r.get('resource_type') or '').lower())):
+                continue
+            if _api_r['resource_name'] in _routed_apis:
+                continue
+            _api_norm = re.sub(r'[^a-z0-9]', '', _api_r['resource_name'].lower())
+            # Try progressively shorter prefixes (strip trailing tech tokens)
+            _api_candidates = [_api_norm]
+            _stripped = _API_STRIP.sub('', _api_norm)
+            if _stripped and _stripped != _api_norm:
+                _api_candidates.append(_stripped)
+            _best, _best_score = None, 0
+            for _svc in _k8s_svcs:
+                _svc_norm = re.sub(r'[^a-z0-9]', '', _svc['resource_name'].lower())
+                # Prefer substring containment (any candidate prefix)
+                _score = 0
+                for _cand in _api_candidates:
+                    if _cand and _cand in _svc_norm:
+                        _score = max(_score, len(_cand))
+                if _score == 0:
+                    # Fall back to token overlap
+                    _at = set(re.split(r'[_\-]+', _api_r['resource_name'].lower()))
+                    _st = set(re.split(r'[_\-]+', _svc['resource_name'].lower()))
+                    _score = len(_at & _st) * 3
+                # Tie-break: prefer kubernetes_service and names containing 'api' over workers/jobs
+                if _score == _best_score and _score > 0 and _best is not None:
+                    _prefer = (_svc.get('resource_type') == 'kubernetes_service' or 'api' in _svc['resource_name'].lower())
+                    _prev_prefer = (_best.get('resource_type') == 'kubernetes_service' or 'api' in _best['resource_name'].lower())
+                    if _prefer and not _prev_prefer:
+                        _best = _svc
+                elif _score > _best_score:
+                    _best_score, _best = _score, _svc
+            if _best and _best_score > 0:
+                self.connections.append({
+                    'source': _api_r['resource_name'],
+                    'target': _best['resource_name'],
+                    'connection_type': 'routes_ingress_to',
+                    'confirmed': False,
+                })
+
+        # ── Internet/Client → APIM entry point (visibility unknown) ─────────────
+        if apim_apis:
+            _internet_targets = {c.get('target') for c in self.connections if c.get('source') == 'Internet'}
+            if 'apim' not in _internet_targets:
+                self.connections.append({
+                    'source': 'Internet',
+                    'target': '__apim_subgraph__',
+                    'connection_type': 'inferred_entry',
+                    'confirmed': False,
+                    'notes': 'Visibility unknown — APIM may be internal or public',
+                })
         
         # Render APIM hierarchy
         apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
@@ -1108,6 +1768,12 @@ class HierarchicalDiagramBuilder:
         if sb_lines:
             lines.extend(sb_lines)
             lines.append("")
+
+        # Render Monitoring / Logging
+        monitoring_lines = self.render_monitoring(monitoring_resources)
+        if monitoring_lines:
+            lines.extend(monitoring_lines)
+            lines.append("")
         
         # Render other resources not in above categories (exclude subscriptions which are metadata)
         connected_resource_names = set(self.connected_resource_names)
@@ -1119,6 +1785,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in apim_related_ids
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
         ]
@@ -1129,15 +1796,17 @@ class HierarchicalDiagramBuilder:
             lines.append("")
 
         other_resources = [
-            r for r in self.resources 
-            if r['id'] not in all_children 
+            r for r in self.resources
+            if r['id'] not in all_children
             and r['id'] not in apim_related_ids
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
             and r not in sql_resources
             and not self.is_api_gateway(r)
             and not self.is_kubernetes(r)
             and not self.is_service_bus(r)
+            and not self.is_monitoring(r)
             and not self.is_api_product(r)
             and 'subscription' not in r.get('resource_type', '').lower()  # Exclude subscriptions - they're metadata
             and 'resource_group' not in r.get('resource_type', '').lower()  # Exclude resource groups
@@ -1208,6 +1877,10 @@ class HierarchicalDiagramBuilder:
         for resource_name in self.emitted_nodes:
             if resource_name == 'Internet':
                 continue
+            # Skip inferred synthetic resources — they map to subgraph containers,
+            # not individual Mermaid nodes, so the style would reference nothing.
+            if resource_name.startswith('__inferred__'):
+                continue
             
             resource = self.resource_by_name.get(resource_name)
             if not resource:
@@ -1215,10 +1888,23 @@ class HierarchicalDiagramBuilder:
             
             # Get category
             category = self._get_category(resource)
-            color = category_colors.get(category)
+
+            # Monitoring nodes get type-specific colours rather than a flat grey.
+            if category == 'Monitoring':
+                rtype = (resource.get('resource_type') or '').lower()
+                if 'application_insights' in rtype or 'log_analytics' in rtype or 'loganalytics' in rtype:
+                    color = '#0078d4'   # Azure telemetry blue
+                elif 'alert' in rtype:
+                    color = '#e8a202'   # Amber — warning/threshold
+                elif 'action_group' in rtype:
+                    color = '#c50f1f'   # Red — action/notification
+                else:
+                    color = '#888888'   # Generic grey
+            else:
+                color = category_colors.get(category)
             
             if color:
-                node_id = sanitize_id(resource_name)
+                node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
                 priority = category_priority.get(category, 0)
                 existing = style_by_node_id.get(node_id)
                 if existing is None or priority >= existing[0]:
