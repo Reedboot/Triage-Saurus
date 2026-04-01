@@ -264,6 +264,15 @@ python3 web/app.py
 ```
 
 What the web UI does:
+- **Phase 1-3 (Scripts):** Scans repositories with OpenGrep rules, discovers context, generates baseline data
+  - Stores findings, resources, and Mermaid diagrams in Cozo DB (`Output/Data/cozo.db`)
+  - Creates placeholder TLDRs and severity scores from rules
+- **Phase 4-5 (AI Review via "Run AI" button):**
+  - Loads agent instructions from `Agents/` folder dynamically (DevSkeptic, PlatformSkeptic, SecurityAgent, ArchitectureAgent)
+  - **Reviews script baseline** rather than generating from scratch
+  - Enhances TLDRs, adjusts scores with reasoning, discovers missing assets, validates/corrects Mermaid diagrams
+  - Stores enhancements in DB: `repo_ai_content`, `skeptic_reviews`, updated `cloud_diagrams`
+- **Web UI Display:** Shows both script baseline and AI enhancements with comparison views
 - Presents a pre-populated dropdown from `Intake/ReposToScan.txt` to select a repository (server-side paths are resolved).
 - Runs the same offline Phase 1–3 pipeline (Scripts/Utils/run_pipeline.py) as subprocesses on the machine where the web server runs.
 - Streams the pipeline stdout/stderr to the browser using Server-Sent Events and renders any generated Mermaid diagrams.
