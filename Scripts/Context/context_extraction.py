@@ -86,11 +86,13 @@ def extract_connection_string_dependencies(
     (depends_on, confidence='inferred') to *context.relationships* and
     creates synthetic Resource entries for each discovered external target
     (so they appear in resource_nodes after persist_graph runs).
+
+    Runs ALL rules under Rules/Detection/AppConfig/ (not just
+    cloud-endpoint-dependency-detection.yml) so that SQL, Service Bus,
+    Application Insights, Redis and Storage connections are also captured.
     """
     repo_name = context.repository_name
 
-
-    # Now handled entirely by opengrep rule results
     already_found: set[tuple[str, str]] = set()  # (resource_type, canonical_name)
     for existing in context.resources:
         canonical = (existing.properties or {}).get("canonical_name")
@@ -98,43 +100,48 @@ def extract_connection_string_dependencies(
             already_found.add((existing.resource_type, str(canonical).lower().rstrip("/")))
 
     repo_root = Path(__file__).resolve().parents[2]
-    endpoint_rule_path = repo_root / "Rules" / "Detection" / "AppConfig" / "cloud-endpoint-dependency-detection.yml"
-    endpoint_rule_hits = _run_opengrep_scan(endpoint_rule_path, repo_path)
-    for result in endpoint_rule_hits:
-        rtype = result.get("resource_type") or result.get("type")
-        canonical_name = result.get("canonical_name")
-        if not rtype or not canonical_name:
-            continue
-        key = (rtype, canonical_name.lower().rstrip("/"))
-        if key in already_found:
-            continue
-        already_found.add(key)
-        source_path = Path(str(result.get("path", "")))
-        source_file = _relative_repo_path(repo_path, source_path)
-        start_line = int((result.get("start") or {}).get("line", 1) or 1)
-        # Add a synthetic inferred resource so it gets a node in the graph
-        synth = Resource(
-            name=f"__inferred__{canonical_name}",
-            resource_type=rtype,
-            file_path=source_file,
-            line_number=start_line,
-            properties={"inferred": "true", "canonical_name": canonical_name},
-        )
-        context.resources.append(synth)
-        # Emit a depends_on from the repo itself to the inferred external resource
-        context.relationships.append(Relationship(
-            source_type="repository",
-            source_name=repo_name,
-            target_type=rtype,
-            target_name=f"__inferred__{canonical_name}",
-            relationship_type=RelationshipType.DEPENDS_ON,
-            source_repo=repo_name,
-            confidence="inferred",
-            notes=(
-                f"Connection string in {source_file} references "
-                f"{canonical_name} ({rtype.replace('azurerm_','').replace('aws_','').replace('_',' ').title()})"
-            ),
-        ))
+    appconfig_dir = repo_root / "Rules" / "Detection" / "AppConfig"
+
+    # Collect all rule files in AppConfig — each is run independently so that a
+    # failure in one rule doesn't suppress results from the others.
+    rule_paths = sorted(appconfig_dir.glob("*.yml")) if appconfig_dir.is_dir() else []
+
+    for rule_path in rule_paths:
+        hits = _run_opengrep_scan(rule_path, repo_path)
+        for result in hits:
+            rtype = result.get("resource_type") or result.get("type")
+            canonical_name = result.get("canonical_name")
+            if not rtype or not canonical_name:
+                continue
+            key = (rtype, canonical_name.lower().rstrip("/"))
+            if key in already_found:
+                continue
+            already_found.add(key)
+            source_path = Path(str(result.get("path", "")))
+            source_file = _relative_repo_path(repo_path, source_path)
+            start_line = int((result.get("start") or {}).get("line", 1) or 1)
+            # Synthetic resource so the node appears in the graph
+            synth = Resource(
+                name=f"__inferred__{canonical_name}",
+                resource_type=rtype,
+                file_path=source_file,
+                line_number=start_line,
+                properties={"inferred": "true", "canonical_name": canonical_name},
+            )
+            context.resources.append(synth)
+            context.relationships.append(Relationship(
+                source_type="repository",
+                source_name=repo_name,
+                target_type=rtype,
+                target_name=f"__inferred__{canonical_name}",
+                relationship_type=RelationshipType.DEPENDS_ON,
+                source_repo=repo_name,
+                confidence="inferred",
+                notes=(
+                    f"Connection string in {source_file} references "
+                    f"{canonical_name} ({rtype.replace('azurerm_','').replace('aws_','').replace('_',' ').title()})"
+                ),
+            ))
 
 
 def iter_files(repo_path: Path) -> List[Path]:
@@ -1949,8 +1956,16 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     workload_resource.parent = f"azurerm_kubernetes_cluster.{inferred_cluster_name}"
                 context.resources.append(workload_resource)
 
-                # Infer connections from API Gateway to API workloads
-                if "api" in wl.name and not "queuelistener" in wl.name and not "worker" in wl.name:
+                # Infer connections from API Gateway to API/service workloads.
+                # Match kubernetes_service workloads (API services deployed via cbi-api chart)
+                # and any workload whose name suggests it is an API backend (contains "api"
+                # but is not a background worker/listener).
+                _worker_keywords = ("queuelistener", "worker", "consumer", "subscriber", "job", "cron", "batch")
+                is_api_workload = (
+                    wl.resource_type == "kubernetes_service"
+                    or ("api" in wl.name and not any(kw in wl.name for kw in _worker_keywords))
+                )
+                if is_api_workload:
                     # Find API Gateway resources (Azure, AWS, GCP)
                     api_gateway_types = [
                         # Azure
@@ -1966,6 +1981,34 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
                     for resource in context.resources:
                         if resource.resource_type in api_gateway_types:
+                            # Only match when the APIM API name appears as a prefix of the
+                            # workload name (normalising underscores/hyphens) so that e.g.
+                            # APIM "aks_helloworld" routes to workload "aks-helloworld" but
+                            # NOT to "aks-helloworld-dr-testapp-api".  Fall back to a
+                            # broad match when no prefix match is found (avoids silently
+                            # dropping valid connections for repos with different naming).
+                            apim_clean = resource.name.replace("_", "-").lower()
+                            wl_clean = wl.name.lower()
+                            # Prefix match: workload name starts with the APIM API name
+                            # (with word-boundary check via trailing '-' or exact match).
+                            prefix_match = (
+                                wl_clean == apim_clean
+                                or wl_clean.startswith(apim_clean + "-")
+                            )
+                            # Broad fallback: if neither API matches via prefix, still
+                            # create a connection (preserves behaviour for simple repos).
+                            if not prefix_match:
+                                # Check if any other API has a better prefix match for
+                                # this workload; if so, skip the broad match here.
+                                better_match_exists = any(
+                                    (wl_clean == r2.name.replace("_", "-").lower()
+                                     or wl_clean.startswith(r2.name.replace("_", "-").lower() + "-"))
+                                    for r2 in context.resources
+                                    if r2.resource_type in api_gateway_types and r2 is not resource
+                                )
+                                if better_match_exists:
+                                    continue
+
                             # Create connection: API Gateway → Kubernetes API workload
                             conn = Connection(
                                 source=f"{resource.resource_type}.{resource.name}",
@@ -1985,7 +2028,8 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                             )
                             context.relationships.append(rel)
 
-                # Infer connections from messaging services to queue listener/worker workloads
+                # Infer connections from messaging services to queue listener/worker workloads.
+                # Direction: workload → messaging service (the workload DEPENDS ON the bus).
                 if any(keyword in wl.name for keyword in ["queuelistener", "worker", "consumer", "subscriber"]) or \
                    any(keyword in (wl.helm_chart or "") for keyword in ["background-worker", "consumer", "worker"]):
                     # Find messaging resources (Service Bus, SQS/SNS, Pub/Sub)
@@ -2008,22 +2052,24 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     
                     for resource in context.resources:
                         if resource.resource_type in messaging_types:
-                            # Create connection: Messaging → Kubernetes Worker
+                            # Direction: workload → messaging service (workload consumes the bus).
+                            # Using source=workload / target=messaging keeps the arrow in the
+                            # semantically correct direction: listener depends on the service bus.
                             conn = Connection(
-                                source=f"{resource.resource_type}.{resource.name}",
-                                target=f"{wl.resource_type}.{wl.name}",
-                                connection_type="consumed_by"
+                                source=f"{wl.resource_type}.{wl.name}",
+                                target=f"{resource.resource_type}.{resource.name}",
+                                connection_type="depends_on"
                             )
                             context.connections.append(conn)
                             
-                            # Also create relationship
+                            # Also create relationship (workload depends_on messaging service)
                             rel = Relationship(
-                                source_type=resource.resource_type,
-                                source_name=resource.name,
-                                target_type=wl.resource_type,
-                                target_name=wl.name,
+                                source_type=wl.resource_type,
+                                source_name=wl.name,
+                                target_type=resource.resource_type,
+                                target_name=resource.name,
                                 relationship_type=RelationshipType.DEPENDS_ON,
-                                notes="Inferred from messaging service and Skaffold worker workload"
+                                notes="Inferred from Skaffold worker workload and messaging service"
                             )
                             context.relationships.append(rel)
                 

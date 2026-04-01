@@ -37,6 +37,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "Persist"))
 from db_helpers import upsert_context_metadata, get_db_connection, ensure_repository_entry, update_repository_stats
 from output_paths import REPO_ROOT
 from service_auth_topology import render_service_auth_topology
+from framework_extractor import detect_tech_stack
+from extract_dependencies import extract_dependencies
 
 DETECTION_FRAMEWORKS = REPO_ROOT / "Rules" / "Detection" / "Frameworks"
 DETECTION_CODE = REPO_ROOT / "Rules" / "Detection" / "Code"
@@ -542,6 +544,34 @@ def _render_apim_auth_methods(experiment_id: str, repo_name: str) -> str:
         return f"- Error querying APIM operations: {str(e)}"
 
 
+def _persist_framework_data(
+    experiment_id: str,
+    repo_name: str,
+    repo_path: Path,
+) -> None:
+    """Extract and persist framework version, name, and IaC type to DB."""
+    try:
+        framework_version, framework_name, iac_type = detect_tech_stack(repo_path)
+        
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                UPDATE repositories
+                SET framework_version = ?, framework_name = ?, iac_type = ?
+                WHERE experiment_id = ? AND repo_name = ?
+                """,
+                (framework_version, framework_name, iac_type, experiment_id, repo_name),
+            )
+        
+        if framework_version:
+            print(f"  Framework version  : {framework_version}")
+        if framework_name:
+            print(f"  Framework name     : {framework_name}")
+        if iac_type:
+            print(f"  IaC type           : {iac_type}")
+    except Exception as e:
+        print(f"  Warning: Failed to persist framework data: {str(e)}")
+
 
 # ---------------------------------------------------------------------------
 # Summary helper (legacy; no persisted summary blobs)
@@ -954,6 +984,31 @@ def main() -> int:
         output_dir=output_dir,
     )
     print(f"  ✓ {summary_key}")
+
+    # ── 8. Persist framework and tech stack data ──────────────────────────────
+    print("\n[Phase 2] Persisting framework and IaC data ...")
+    _persist_framework_data(
+        experiment_id=args.experiment,
+        repo_name=args.repo,
+        repo_path=target,
+    )
+
+    # ── 9. Extract dependencies ───────────────────────────────────────────────
+    # Get repo_id for dependency tracking
+    conn = get_db_connection()
+    repo_row = conn.execute(
+        "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)",
+        (args.experiment, args.repo)
+    ).fetchone()
+    conn.close()
+    
+    if repo_row:
+        repo_id = str(repo_row[0])
+        extract_dependencies(
+            repo_path=target,
+            experiment_id=args.experiment,
+            repo_id=repo_id,
+        )
 
     print(f"\n[Phase 2] Complete — {len(flat)} metadata entries, summary mode: {summary_key}")
     return 0
