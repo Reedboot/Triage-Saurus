@@ -23,10 +23,12 @@
         <th>Source</th>
         <th>Resource</th>
         <th>Triage</th>
+        <th>Script</th>
+        <th>AI Review</th>
         <th>Dev</th>
         <th>Platform</th>
         <th>Security</th>
-        <th>Final</th
+        <th>Final</th>
       </tr>
     </thead>
     <tbody>
@@ -63,6 +65,28 @@
         <td style="text-align:center;">
           {% set ts = (f.triage_status or 'valid') %}
           <span class="how-badge" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">{{ ts }}</span>
+        </td>
+        <td style="text-align:center;">
+          {% if f.severity_score %}
+            <span style="font-weight:500; color:var(--text-muted);" title="Script baseline score">
+              {{ f.severity_score }}/10
+            </span>
+          {% else %}—{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% if f.ai_score %}
+            <span style="font-weight:600; color:{% if f.ai_score >= 9 %}var(--red-bright){% elif f.ai_score >= 7 %}var(--orange){% elif f.ai_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; display:flex; align-items:center; gap:4px; justify-content:center;"
+                  title="🤖 AI Review{% if f.ai_agent_used %} ({{ f.ai_agent_used }}){% endif %}{% if f.ai_reasoning %}: {{ f.ai_reasoning }}{% endif %}">
+              🤖 {{ f.ai_score }}/10
+              {% if f.severity_score and f.ai_score != f.severity_score %}
+                <span style="font-size:0.7rem; color:var(--text-muted);">
+                  ({% if f.ai_score > f.severity_score %}+{% endif %}{{ f.ai_score - f.severity_score }})
+                </span>
+              {% endif %}
+            </span>
+          {% else %}
+            <span style="color:var(--text-muted); font-size:0.75rem;">pending</span>
+          {% endif %}
         </td>
         <td style="text-align:center;">
           {% if f.dev_score %}<span title="confidence {{ f.dev_confidence or '—' }}">{{ f.dev_score }}/10</span>{% else %}—{% endif %}

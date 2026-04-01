@@ -5,10 +5,174 @@
     <button type="button" class="btn-small" id="overview-gen-rules-btn">Generate opengrep rules</button>
     <span id="overview-ai-status" class="overview-ai-status">Idle</span>
   </div>
+
   {% if overview_html %}
   <article class="overview-body">
     {{ overview_html | safe }}
   </article>
+  {% endif %}
+
+  {# Interactive module dependency mapping #}
+  {% if module_deps %}
+  <section class="module-mapping-section">
+    <div class="module-mapping-header">
+      <h3>Module Dependencies</h3>
+      <div class="module-mapping-controls">
+        <button type="button" class="btn-small" id="save-module-mappings-btn">Save Mappings</button>
+        <span id="module-mapping-status" class="module-mapping-status"></span>
+      </div>
+    </div>
+    <ul class="module-deps" id="module-mapping-list"
+        data-experiment-id="{{ experiment_id | tojson }}"
+        data-repo-name="{{ repo_name | tojson }}"
+        data-module-deps="{{ module_deps | tojson }}"
+        data-available-repos="{{ available_repos | tojson }}">
+    </ul>
+  </section>
+
+  <script>
+  (function() {
+    var list = document.getElementById('module-mapping-list');
+    if (!list) return;
+    var moduleDeps, availableRepos;
+    try {
+      moduleDeps = JSON.parse(list.dataset.moduleDeps || '[]');
+      availableRepos = JSON.parse(list.dataset.availableRepos || '[]');
+    } catch(e) { return; }
+
+    function escHtml(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function baseName(p) {
+      return String(p || '').split(/[/\\]/).filter(Boolean).pop() || String(p || '');
+    }
+    function inferRepoFromSource(source) {
+      if (!source) return null;
+      var m = source.match(/_git\/([^\/\?#]+)/);
+      if (m) return decodeURIComponent(m[1]);
+      m = source.match(/(?:github|gitlab)\.com\/[^\/]+\/([^\/\?#.]+)/);
+      if (m) return m[1];
+      return null;
+    }
+
+    moduleDeps.forEach(function(mod) {
+      var suggested = inferRepoFromSource(mod.source || '');
+      var cm = mod.current_mapping;
+      var currentRepo = null;
+      var isExternal = false;
+      if (cm && typeof cm === 'object') {
+        if (cm.external) { isExternal = true; }
+        else { currentRepo = cm.repo || null; }
+      } else if (typeof cm === 'string') {
+        currentRepo = cm;
+      }
+
+      var li = document.createElement('li');
+      li.className = 'module-dep-item';
+
+      var nameDiv = document.createElement('div');
+      nameDiv.className = 'module-dep-name';
+      nameDiv.textContent = mod.name || '';
+      li.appendChild(nameDiv);
+
+      if (mod.source) {
+        var srcDiv = document.createElement('div');
+        srcDiv.className = 'module-dep-row module-dep-row--stack';
+        srcDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(mod.source) + '</code></pre>';
+        li.appendChild(srcDiv);
+      }
+
+      if (mod.file) {
+        var fileDiv = document.createElement('div');
+        fileDiv.className = 'module-dep-row';
+        var fileHTML = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
+        if (mod.line) fileHTML += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
+        fileDiv.innerHTML = fileHTML;
+        li.appendChild(fileDiv);
+      }
+
+      var mapDiv = document.createElement('div');
+      mapDiv.className = 'module-dep-row module-dep-map-row';
+      var lbl = document.createElement('span');
+      lbl.className = 'module-dep-label';
+      lbl.textContent = 'Maps to';
+      mapDiv.appendChild(lbl);
+
+      var sel = document.createElement('select');
+      sel.className = 'module-repo-select';
+      sel.dataset.moduleName = mod.name || '';
+
+      var pleaseSelectOpt = new Option('Please Select', '');
+      pleaseSelectOpt.disabled = false;
+      sel.appendChild(pleaseSelectOpt);
+
+      if (suggested) {
+        var sugGroup = document.createElement('optgroup');
+        sugGroup.label = 'Suggested';
+        var sugOpt = new Option(suggested, suggested);
+        sugGroup.appendChild(sugOpt);
+        sel.appendChild(sugGroup);
+      }
+
+      var allGroup = document.createElement('optgroup');
+      allGroup.label = 'All repos';
+      availableRepos.forEach(function(rname) {
+        if (rname === suggested) return;
+        allGroup.appendChild(new Option(rname, rname));
+      });
+      sel.appendChild(allGroup);
+
+      sel.appendChild(new Option('External repo', '__external__'));
+
+      var valueToSet = isExternal ? '__external__' : (currentRepo || (suggested || ''));
+      if (valueToSet) {
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
+        }
+      }
+
+      mapDiv.appendChild(sel);
+      li.appendChild(mapDiv);
+      list.appendChild(li);
+    });
+
+    var saveBtn = document.getElementById('save-module-mappings-btn');
+    var statusEl = document.getElementById('module-mapping-status');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function() {
+        var experimentId = JSON.parse(list.dataset.experimentId || '""');
+        var repoName = JSON.parse(list.dataset.repoName || '""');
+        var selects = list.querySelectorAll('select.module-repo-select');
+        var mappings = {};
+        selects.forEach(function(s) {
+          var modName = s.dataset.moduleName;
+          if (!modName) return;
+          var val = s.value;
+          if (val === '__external__') {
+            mappings[modName] = {repo: null, external: true};
+          } else if (val) {
+            mappings[modName] = {repo: val};
+          }
+          // 'Please Select' (empty value) is intentionally not saved
+        });
+        if (statusEl) statusEl.textContent = 'Saving\u2026';
+        fetch('/api/module/mappings/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(repoName), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mappings: mappings})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (statusEl) statusEl.textContent = d.ok ? 'Saved!' : ('Error: ' + (d.error || 'unknown'));
+          setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
+        })
+        .catch(function(e) {
+          if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+        });
+      });
+    }
+  })();
+  </script>
   {% endif %}
 
   {# AI-detected new assets and fixed info cards #}
