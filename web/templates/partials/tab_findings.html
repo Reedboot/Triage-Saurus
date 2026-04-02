@@ -96,7 +96,7 @@
                 style="position:absolute; top:6px; right:6px; z-index:1; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
           📋 Copy
         </button>
-        <table class="code-table" style="width:100%; border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px; overflow:hidden;">
+        <table class="code-table" style="border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px;">
           {% for ln in fc.lines %}
           <tr style="{% if ln.highlight %}background:rgba(210,90,40,0.15);{% endif %}">
             <td style="width:1%; white-space:nowrap; padding:1px 10px 1px 8px; color:var(--text-muted); user-select:none; border-right:1px solid var(--border); text-align:right; font-size:0.75rem;{% if ln.highlight %} color:var(--orange); font-weight:600;{% endif %}">{{ ln.no }}</td>
