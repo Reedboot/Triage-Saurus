@@ -46,6 +46,22 @@ def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = No
             peer_lines.append(f"- {rt}: adjusted_score={adj}/10, confidence={conf}, recommendation={rec}; reasoning={reason}")
         peer_block = "Peer skeptic reviews (incorporate these):\n" + "\n".join(peer_lines) + "\n\n"
 
+    cred_block = ""
+    cred_class = row.get("credential_classification")
+    cred_note = row.get("credential_note") or ""
+    if cred_class:
+        cred_block = (
+            f"AI credential classification: {cred_class}"
+            + (f" — {cred_note}" if cred_note else "")
+            + "\n"
+        )
+        if cred_class in ("placeholder", "variable_reference", "example_value"):
+            cred_block += (
+                "The enrichment AI determined this is NOT a real credential value. "
+                "Unless the snippet clearly shows a real secret, recommend 'dismiss' or 'downgrade' "
+                "and note this as a false positive from the scanner.\n"
+            )
+
     return (
         f"{intro}\n\n"
         f"Title: {finding_title}\n"
@@ -53,7 +69,8 @@ def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = No
         f"Base/current severity score: {row.get('severity_score')}/10\n"
         f"File: {row.get('source_file')}\n"
         f"Code snippet:\n```\n{snippet}\n```\n"
-        f"Proposed fix: {row.get('proposed_fix') or ''}\n\n"
+        f"Proposed fix: {row.get('proposed_fix') or ''}\n"
+        f"{cred_block}\n"
         f"{peer_block}"
         "Return JSON only:\n"
         "{\n"
@@ -104,7 +121,8 @@ def main():
     # Fetch enriched findings
     query = """
         SELECT id, rule_id, title, description, severity_score,
-               source_file, code_snippet, proposed_fix, reason
+               source_file, code_snippet, proposed_fix, reason,
+               credential_classification, credential_note
         FROM findings
         WHERE experiment_id = ? AND llm_enriched_at IS NOT NULL
         ORDER BY severity_score DESC
