@@ -1198,6 +1198,11 @@ def _ensure_schema(conn: sqlite3.Connection):
             conn.execute("ALTER TABLE findings ADD COLUMN triage_set_by TEXT")
         if "triage_set_at" not in findings_columns:
             conn.execute("ALTER TABLE findings ADD COLUMN triage_set_at TIMESTAMP")
+        # AI credential classification (populated during LLM enrichment for credential-type findings)
+        if "credential_classification" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN credential_classification TEXT")
+        if "credential_note" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN credential_note TEXT")
 
         # Exposure analysis table columns (ensure they exist for backward compatibility)
         exposure_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}
