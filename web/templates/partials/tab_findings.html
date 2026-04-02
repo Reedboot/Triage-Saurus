@@ -14,7 +14,7 @@
   <span class="s-inline-3c88b2">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
 </div>
 
-<div id="findings-container" style="display: grid; gap: 16px;">
+<div id="findings-container" style="display: grid; gap: 16px; min-width: 0;">
   {% for f in findings %}
   {% set sev = (f.base_severity or f.severity or '') | upper %}
   {% set sev_css = sev | lower %}
@@ -22,7 +22,7 @@
        data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
        data-sev="{{ sev }}"
        data-finding-id="{{ f.id }}"
-       style="border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--bg-subtle); display: grid; gap: 12px;">
+       style="border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--bg-subtle); display: grid; gap: 12px; min-width: 0;">
     
     {# Header: Severity + Title + Rule #}
     <div style="display: grid; gap: 8px;">
@@ -76,7 +76,7 @@
     {# Code Snippet - if available #}
     {% if f.file_context or f.code_snippet %}
     {% set fc = f.file_context %}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px; min-width: 0; overflow: hidden;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
         <div style="font-weight:600; font-size:0.9rem; color:var(--text-muted);">📄 Code</div>
         {% if fc %}
@@ -91,28 +91,28 @@
       </div>
 
       {% if fc %}
-      <div class="code-snippet-wrap" style="position:relative;">
+      <div class="code-snippet-wrap">
         <button class="btn-copy-snippet" title="Copy snippet"
-                style="position:absolute; top:6px; right:6px; z-index:1; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+                style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
           📋 Copy
         </button>
         <table class="code-table" style="border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px;">
           {% for ln in fc.lines %}
           <tr style="{% if ln.highlight %}background:rgba(210,90,40,0.15);{% endif %}">
             <td style="width:1%; white-space:nowrap; padding:1px 10px 1px 8px; color:var(--text-muted); user-select:none; border-right:1px solid var(--border); text-align:right; font-size:0.75rem;{% if ln.highlight %} color:var(--orange); font-weight:600;{% endif %}">{{ ln.no }}</td>
-            <td style="padding:1px 10px; white-space:pre; overflow-x:auto; color:var(--text);{% if ln.highlight %} color:var(--text); font-weight:500;{% endif %}">{{ ln.text }}</td>
+            <td style="padding:1px 10px; white-space:pre; color:var(--text);{% if ln.highlight %} font-weight:500;{% endif %}">{{ ln.text }}</td>
           </tr>
           {% endfor %}
         </table>
       </div>
       {% else %}
       {# Fallback: plain snippet from DB #}
-      <div class="code-snippet-wrap" style="position:relative;">
+      <div class="code-snippet-wrap">
         <button class="btn-copy-snippet" title="Copy snippet"
-                style="position:absolute; top:6px; right:6px; z-index:1; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+                style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
           📋 Copy
         </button>
-        <pre style="background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px 10px 10px 10px; overflow-x:auto; font-size:0.8rem; line-height:1.5; color:var(--text); margin:0;"><code>{{ f.code_snippet }}</code></pre>
+        <pre style="background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px; overflow-x:auto; font-size:0.8rem; line-height:1.5; color:var(--text); margin:0; white-space:pre;"><code>{{ f.code_snippet }}</code></pre>
       </div>
       {% endif %}
     </div>
