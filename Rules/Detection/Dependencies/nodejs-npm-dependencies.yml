@@ -1,31 +1,15 @@
 rules:
   - id: extract-npm-dependencies
     message: |
-      npm package dependency detected.
-      Extracts package name and version from package.json.
+      npm dependencies section detected in package.json.
+      Identifies files with npm dependency declarations for further analysis.
     severity: INFO
     languages: [json]
-    patterns:
-      - pattern: |
-          {
-            ...
-            "dependencies": {
-              ...
-              "$PACKAGE": "$VERSION",
-              ...
-            },
-            ...
-          }
-      - pattern: |
-          {
-            ...
-            "devDependencies": {
-              ...
-              "$PACKAGE": "$VERSION",
-              ...
-            },
-            ...
-          }
+    paths:
+      include:
+        - "package.json"
+        - "**/package.json"
+    pattern-regex: '"(dependencies|devDependencies)"\s*:\s*\{'
     metadata:
       finding_kind: Dependency
       rule_type: dependency_discovery
