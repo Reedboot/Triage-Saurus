@@ -1,4 +1,4 @@
-{# partials/tab_findings.html — Findings table from DB #}
+{# partials/tab_findings.html — Findings detail cards with skeptic reviews #}
 {% if findings %}
 <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
   <input type="text" id="findings-search" class="assets-search" style="max-width:280px"
@@ -13,118 +13,296 @@
   </select>
   <span class="s-inline-3c88b2">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
 </div>
-<div class="section-table-wrap">
-  <table class="section-table" id="findings-table">
-    <thead>
-      <tr>
-        <th>Severity</th>
-        <th>Title / Rule</th>
-        <th>Category</th>
-        <th>Source</th>
-        <th>Resource</th>
-        <th>Triage</th>
-        <th>Script</th>
-        <th>AI Review</th>
-        <th>Dev</th>
-        <th>Platform</th>
-        <th>Security</th>
-        <th>Final</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for f in findings %}
-      {% set sev = (f.base_severity or f.severity or '') | upper %}
-      {% set sev_css = sev | lower %}
-      <tr data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
-          data-sev="{{ sev }}"
-          data-finding-id="{{ f.id }}">
-        <td><span class="severity-badge {{ sev_css }}">{{ sev or '—' }}</span></td>
-        <td class="wrap">
-          <div style="font-weight:500; color:var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
-          {% if f.rule_id and f.rule_id != f.title %}
-            <div class="s-inline-b6d566">{{ f.rule_id }}</div>
-          {% endif %}
-          {% if f.description %}
-            <div style="font-size:0.75rem; color:var(--text-muted); margin-top:3px;">{{ f.description | truncate(120) }}</div>
-          {% endif %}
-        </td>
-        <td>{{ f.category or '—' }}</td>
-        <td>
-          {% if f.source_file %}
-            <span class="file-link" title="{{ f.source_file }}">{{ f.source_file | basename }}</span>
-            {% if f.source_line_start %}
-              <span class="line-num">:{{ f.source_line_start }}</span>
-            {% endif %}
-          {% else %}—{% endif %}
-        </td>
-        <td>
-          {% if f.resource_id %}
-            <span class="asset-type-badge">#{{ f.resource_id }}</span>
-          {% else %}—{% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% set ts = (f.triage_status or 'valid') %}
-          <span class="how-badge" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">{{ ts }}</span>
-        </td>
-        <td style="text-align:center;">
-          {% if f.severity_score %}
-            <span style="font-weight:500; color:var(--text-muted);" title="Script baseline score">
-              {{ f.severity_score }}/10
-            </span>
-          {% else %}—{% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% if f.ai_score %}
-            <span style="font-weight:600; color:{% if f.ai_score >= 9 %}var(--red-bright){% elif f.ai_score >= 7 %}var(--orange){% elif f.ai_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; display:flex; align-items:center; gap:4px; justify-content:center;"
-                  title="🤖 AI Review{% if f.ai_agent_used %} ({{ f.ai_agent_used }}){% endif %}{% if f.ai_reasoning %}: {{ f.ai_reasoning }}{% endif %}">
-              🤖 {{ f.ai_score }}/10
+
+<div id="findings-container" style="display: grid; gap: 16px;">
+  {% for f in findings %}
+  {% set sev = (f.base_severity or f.severity or '') | upper %}
+  {% set sev_css = sev | lower %}
+  <div class="finding-card" 
+       data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
+       data-sev="{{ sev }}"
+       data-finding-id="{{ f.id }}"
+       style="border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--bg-subtle); display: grid; gap: 12px;">
+    
+    {# Header: Severity + Title + Rule #}
+    <div style="display: grid; gap: 8px;">
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span class="severity-badge {{ sev_css }}" style="font-weight: 600; padding: 4px 8px;">{{ sev or '—' }}</span>
+        <span style="font-size: 0.85rem; color: var(--text-muted);">Finding ID: {{ f.id }}</span>
+      </div>
+      <div style="font-size: 1.1rem; font-weight: 600; color: var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
+      {% if f.rule_id and f.rule_id != f.title %}
+        <div class="s-inline-b6d566">Rule: {{ f.rule_id }}</div>
+      {% endif %}
+      {% if f.description %}
+        <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;">{{ f.description }}</div>
+      {% endif %}
+      {% if f.category %}
+        <div style="margin-top: 4px;">
+          <span class="how-badge" style="background: var(--purple-dim, #3d1a5c); color: var(--purple-bright, #d29eff);">
+            {{ f.category }}
+          </span>
+        </div>
+      {% endif %}
+      {% if f.credential_classification and f.credential_classification != 'real_credential' and f.credential_classification != 'unknown' %}
+        {% set cred_label = {'placeholder': '🏷️ Placeholder', 'variable_reference': '🔗 Variable ref', 'example_value': '🧪 Example value'}.get(f.credential_classification, f.credential_classification) %}
+        <div style="margin-top: 4px;">
+          <span class="how-badge" style="background: var(--blue-dim, #1e3a5f); color: var(--blue-bright, #79c0ff);"
+                title="AI classified: {{ f.credential_classification }}{% if f.credential_note %} — {{ f.credential_note }}{% endif %}">
+            {{ cred_label }}
+          </span>
+        </div>
+      {% endif %}
+    </div>
+
+    {# Source Location #}
+    {% if f.source_file %}
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">📍 Source Location</div>
+      <div style="font-family: monospace; font-size: 0.85rem; color: var(--text);">
+        <span class="file-link" title="{{ f.source_file }}" style="cursor: pointer;">{{ f.source_file | basename }}</span>
+        {% if f.source_line_start %}
+          <span style="color: var(--text-muted);">:{{ f.source_line_start }}{% if f.source_line_end and f.source_line_end != f.source_line_start %}-{{ f.source_line_end }}{% endif %}</span>
+        {% endif %}
+      </div>
+      {% if f.resource_id %}
+        <div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);">
+          Resource: <span class="asset-type-badge">#{{ f.resource_id }}</span>
+        </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# Code Snippet - if available #}
+    {% if f.file_context or f.code_snippet %}
+    {% set fc = f.file_context %}
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
+        <div style="font-weight:600; font-size:0.9rem; color:var(--text-muted);">📄 Code</div>
+        {% if fc %}
+        <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
+          {{ fc.path }}
+        </div>
+        {% elif f.source_file %}
+        <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
+          {{ f.source_file }}
+        </div>
+        {% endif %}
+      </div>
+
+      {% if fc %}
+      <div class="code-snippet-wrap" style="position:relative;">
+        <button class="btn-copy-snippet" title="Copy snippet"
+                style="position:absolute; top:6px; right:6px; z-index:1; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+          📋 Copy
+        </button>
+        <table class="code-table" style="width:100%; border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px; overflow:hidden;">
+          {% for ln in fc.lines %}
+          <tr style="{% if ln.highlight %}background:rgba(210,90,40,0.15);{% endif %}">
+            <td style="width:1%; white-space:nowrap; padding:1px 10px 1px 8px; color:var(--text-muted); user-select:none; border-right:1px solid var(--border); text-align:right; font-size:0.75rem;{% if ln.highlight %} color:var(--orange); font-weight:600;{% endif %}">{{ ln.no }}</td>
+            <td style="padding:1px 10px; white-space:pre; overflow-x:auto; color:var(--text);{% if ln.highlight %} color:var(--text); font-weight:500;{% endif %}">{{ ln.text }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      {% else %}
+      {# Fallback: plain snippet from DB #}
+      <div class="code-snippet-wrap" style="position:relative;">
+        <button class="btn-copy-snippet" title="Copy snippet"
+                style="position:absolute; top:6px; right:6px; z-index:1; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+          📋 Copy
+        </button>
+        <pre style="background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px 10px 10px 10px; overflow-x:auto; font-size:0.8rem; line-height:1.5; color:var(--text); margin:0;"><code>{{ f.code_snippet }}</code></pre>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# AI Proposed Fix - if available #}
+    {% if f.proposed_fix %}
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">✅ Suggested Fix (AI)</div>
+      <pre style="background: var(--bg); border: 1px solid var(--border-success, #238636); border-radius: 4px; padding: 10px; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; color: var(--text);"><code>{{ f.proposed_fix }}</code></pre>
+    </div>
+    {% endif %}
+
+    {# Scoring & Skeptic Reviews #}
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 10px;">📊 Scoring & Reviews</div>
+      <div style="display: grid; gap: 12px;">
+        
+        {# Script/Baseline Score #}
+        {% if f.severity_score %}
+        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text);">
+            <span>🔧 Scanner Baseline</span>
+            <span style="float: right; color: var(--text-muted);">{{ f.severity_score }}/10</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {# AI Review #}
+        {% if f.ai_score %}
+        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
+            <span>🤖 AI Review{% if f.ai_agent_used %} ({{ f.ai_agent_used }}){% endif %}</span>
+            <span style="color: {% if f.ai_score >= 9 %}var(--red-bright){% elif f.ai_score >= 7 %}var(--orange){% elif f.ai_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-weight: 600;">
+              {{ f.ai_score }}/10
               {% if f.severity_score and f.ai_score != f.severity_score %}
-                <span style="font-size:0.7rem; color:var(--text-muted);">
-                  ({% if f.ai_score > f.severity_score %}+{% endif %}{{ f.ai_score - f.severity_score }})
-                </span>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">({% if f.ai_score > f.severity_score %}+{% endif %}{{ f.ai_score - f.severity_score }})</span>
               {% endif %}
             </span>
-          {% else %}
-            <span style="color:var(--text-muted); font-size:0.75rem;">pending</span>
+          </div>
+          {% if f.ai_reasoning %}
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.ai_reasoning }}</div>
           {% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% if f.dev_score %}<span title="confidence {{ f.dev_confidence or '—' }}">{{ f.dev_score }}/10</span>{% else %}—{% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% if f.platform_score %}<span title="confidence {{ f.platform_confidence or '—' }}">{{ f.platform_score }}/10</span>{% else %}—{% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% if f.security_score %}<span title="confidence {{ f.security_confidence or '—' }}">{{ f.security_score }}/10</span>{% else %}—{% endif %}
-        </td>
-        <td style="text-align:center;">
-          {% if f.severity_score %}
-            <span style="font-weight:600; color:{% if f.severity_score >= 9 %}var(--red-bright){% elif f.severity_score >= 7 %}var(--orange){% elif f.severity_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}">
+        </div>
+        {% endif %}
+
+        {# Dev Skeptic #}
+        {% if f.dev_score %}
+        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+            <span>👨‍💻 Dev Skeptic</span>
+            <span>{{ f.dev_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.dev_confidence * 100) | int }}%)</span></span>
+          </div>
+          {% if f.dev_reasoning %}
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.dev_reasoning }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {# Platform Skeptic #}
+        {% if f.platform_score %}
+        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+            <span>☁️ Platform Skeptic</span>
+            <span>{{ f.platform_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.platform_confidence * 100) | int }}%)</span></span>
+          </div>
+          {% if f.platform_reasoning %}
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.platform_reasoning }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {# Security Skeptic #}
+        {% if f.security_score %}
+        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+            <span>🔒 Security Skeptic</span>
+            <span>{{ f.security_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.security_confidence * 100) | int }}%)</span></span>
+          </div>
+          {% if f.security_reasoning %}
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.security_reasoning }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {# Final Score #}
+        {% if f.severity_score %}
+        <div style="background: linear-gradient(135deg, var(--border-subtle) 0%, var(--bg-subtle) 100%); padding: 10px; border-radius: 4px; border: 2px solid var(--border); font-weight: 700;">
+          <div style="font-size: 0.85rem; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
+            <span>🎯 Final Score</span>
+            <span style="color: {% if f.severity_score >= 9 %}var(--red-bright){% elif f.severity_score >= 7 %}var(--orange){% elif f.severity_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-size: 1.2rem;">
               {{ f.severity_score }}/10
             </span>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Triage Status & Controls #}
+    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px;">✏️ Triage</div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        {% set ts = (f.triage_status or 'valid') %}
+        <span class="how-badge" style="padding: 4px 8px;" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">
+          {{ ts }}
+        </span>
+        <div style="font-size: 0.8rem; color: var(--text-muted);">
+          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="valid" style="{% if ts == 'valid' %}font-weight: 700;{% endif %}">✓ Valid</button>
+          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="false_positive" style="{% if ts == 'false_positive' %}font-weight: 700;{% endif %}">✗ False Positive</button>
+          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="needs_context" style="{% if ts == 'needs_context' %}font-weight: 700;{% endif %}">❓ Needs Context</button>
+        </div>
+      </div>
+      {% if f.triage_reason %}
+      <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">Reason: {{ f.triage_reason }}</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
 </div>
-<div id="findings-empty" class="assets-empty s-inline-cb4589">No findings match the current filter.</div>
+
+<div id="findings-empty" class="assets-empty s-inline-cb4589" style="display: none; margin-top: 20px;">No findings match the current filter.</div>
+
+<style>
+.btn-triage {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin: 2px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-triage:hover {
+  background: var(--bg);
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+</style>
+
 <script>
 function filterFindings() {
   var q = document.getElementById('findings-search').value.toLowerCase();
   var s = document.getElementById('findings-sev-filter').value.toUpperCase();
-  var rows = document.querySelectorAll('#findings-table tbody tr');
+  var cards = document.querySelectorAll('.finding-card');
   var shown = 0;
-  rows.forEach(function(row) {
-    var matchQ = !q || row.dataset.search.includes(q);
-    var matchS = !s || row.dataset.sev === s;
-    row.style.display = (matchQ && matchS) ? '' : 'none';
+  cards.forEach(function(card) {
+    var matchQ = !q || card.dataset.search.includes(q);
+    var matchS = !s || card.dataset.sev === s;
+    card.style.display = (matchQ && matchS) ? '' : 'none';
     if (matchQ && matchS) shown++;
   });
   document.getElementById('findings-empty').style.display = shown === 0 ? '' : 'none';
 }
+
+// Triage button handling
+document.querySelectorAll('.btn-triage').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var findingId = this.dataset.findingId;
+    var status = this.dataset.status;
+    console.log('Triaging finding', findingId, 'as', status);
+    // TODO: Implement triage API call to /api/findings/{id}/triage
+  });
+});
+
+// Copy snippet buttons
+document.querySelectorAll('.btn-copy-snippet').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var wrap = this.closest('.code-snippet-wrap');
+    var table = wrap.querySelector('.code-table');
+    var pre   = wrap.querySelector('pre');
+    var text  = '';
+    if (table) {
+      table.querySelectorAll('tr').forEach(function(tr) {
+        var cells = tr.querySelectorAll('td');
+        if (cells.length >= 2) text += cells[1].textContent + '\n';
+      });
+    } else if (pre) {
+      text = pre.textContent;
+    }
+    navigator.clipboard.writeText(text.trimEnd()).then(function() {
+      btn.textContent = '✅ Copied';
+      setTimeout(function() { btn.textContent = '📋 Copy'; }, 1500);
+    }).catch(function() { btn.textContent = '❌ Failed'; });
+  });
+});
 </script>
+
 {% else %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">

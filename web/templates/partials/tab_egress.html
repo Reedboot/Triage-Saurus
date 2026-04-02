@@ -2,16 +2,16 @@
 {% if egress_connections %}
 <div class="callout info s-inline-157a9c">
   <strong>{{ egress_connections | length }}</strong>
-  outbound connection{{ 's' if egress_connections | length != 1 }}
-  detected in this experiment.
+  outbound connection{{ 's' if egress_connections | length != 1 }} detected.
 </div>
 
 <div class="section-table-wrap">
   <table class="section-table">
     <thead>
       <tr>
-        <th>From</th>
-        <th>External Target</th>
+        <th>Source (this service)</th>
+        <th>→</th>
+        <th>Target (called by this service)</th>
         <th>Protocol</th>
         <th>Port</th>
         <th>Encrypted</th>
@@ -21,9 +21,10 @@
     <tbody>
       {% for c in egress_connections %}
       <tr>
-        <td><span class="asset-name">{{ c.source_name or c.source_resource_id or '—' }}</span></td>
+        <td><span class="asset-name">{{ c.source_name or '—' }}</span></td>
+        <td style="text-align:center; color:var(--text-muted); font-size:1rem;">→</td>
         <td>
-          <span class="asset-name">{{ c.target_name or c.target_domain or c.target_external or c.target_resource_id or '—' }}</span>
+          <span class="asset-name">{{ c.target_name or c.target_domain or '—' }}</span>
           {% if c.target_domain and (c.target_domain|lower) not in (c.target_name|default('', true)|lower) %}
             <div class="s-inline-b6d566">{{ c.target_domain }}</div>
           {% endif %}
@@ -38,7 +39,7 @@
           {% else %}—{% endif %}
         </td>
         <td style="font-size:0.78rem; color:var(--text-muted);">
-          {{ c.connection_purpose or c.target_type or c.description or '—' }}
+          {{ c.connection_purpose or c.target_type or '—' }}
         </td>
       </tr>
       {% endfor %}

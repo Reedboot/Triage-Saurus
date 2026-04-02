@@ -1,4 +1,4 @@
-{# partials/tab_ingress.html — Internet-facing resources and inbound paths #}
+{# partials/tab_ingress.html — Internet-facing resources and inbound paths grouped by protocol #}
 {% if operations %}
 <div class="callout info s-inline-157a9c">
   <strong>{{ operation_count }}</strong>
@@ -6,131 +6,141 @@
   detected in this experiment.
 </div>
 
+{# Group operations by protocol #}
+{% set protocols = {} %}
+{% for op in operations %}
+  {% if op.resource_type == 'azurerm_api_management_api' %}
+    {% set protocol = op.protocol or 'HTTPS' %}
+    {% if protocol not in protocols %}
+      {% set _ = protocols.update({protocol: []}) %}
+    {% endif %}
+    {% set _ = protocols[protocol].append(op.id) %}
+  {% endif %}
+{% endfor %}
 
-{# Inline API details moved into Ingress: show API parents and operations under a collapsible section #}
-{% if operations %}
-<h3 class="s-inline-f1c952">API Endpoints</h3>
-<div class="section-table-wrap" style="margin-bottom:18px;">
-  <table class="section-table" id="section-api-details-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Source</th>
-        <th>Line</th>
-        <th>Exposed</th>
-        <th>Auth</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for op in operations %}
-        {% if op.resource_type == 'azurerm_api_management_api' %}
-        <tr class="api-parent" data-api-id="{{ op.id }}" data-search="{{ [op.operation_name, op.resource_type] | join(' ') | lower }}">
-          <td>
-            {% set child_count = children_by_parent.get(op.id, [])|length %}
-            {% if child_count > 0 %}
-              <span class="expand-toggle" data-api-id="{{ op.id }}" title="Expand/collapse operations">▶</span>
-            {% else %}
-              <span style="display:inline-block; width:16px;"></span>
-            {% endif %}
-            <span class="operation-name" style="font-weight: bold;">{{ op.operation_name }}</span>
-            {% if child_count > 0 %}<span class="child-count-badge" title="{{ child_count }} operation(s)">{{ child_count }}</span>{% endif %}
-          </td>
-          <td>
-            <span class="api-type-badge" title="API container/definition">📡 API</span>
-          </td>
-          <td>
-            <small class="muted">{{ op.source_file or '—' }}</small>
-          </td>
-          <td>
-            <small class="muted">{{ op.source_line_start or '—' }}</small>
-          </td>
-          <td>
-            {% if op.internet_access == '—' %}
-              <span class="finding-badge none">—</span>
-            {% elif op.internet_access and op.internet_access | lower == 'true' %}
-              {% if op.internet_access_signals and 'verified' in op.internet_access_signals|lower %}
-                <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
-              {% else %}
-                <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
-              {% endif %}
-            {% elif op.internet_access and op.internet_access | lower == 'false' %}
-              <span class="finding-badge none">🔒 Private</span>
-            {% else %}
-              <span class="finding-badge none">{{ op.internet_access or '—' }}</span>
-            {% endif %}
-          </td>
-          <td>
-            {% if op.is_public and op.is_public | lower == 'true' %}
-              <span class="finding-badge critical" title="No auth required at APIM level">🔓 None</span>
-            {% else %}
-              <span class="finding-badge info">🔐 Subscription Key</span>
-            {% endif %}
-          </td>
+{# Display APIs grouped by protocol #}
+{% for protocol in protocols | sort %}
+  <h3 class="s-inline-f1c952">🔌 {{ protocol }}</h3>
+  <div class="section-table-wrap" style="margin-bottom: 18px;">
+    <table class="section-table" id="section-api-details-table-{{ protocol }}">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Source</th>
+          <th>Line</th>
+          <th>Exposed</th>
+          <th>Auth</th>
         </tr>
-        {% for child_id in children_by_parent.get(op.id, []) %}
-          {% set child_op = operations_by_id.get(child_id) %}
-          {% if child_op %}
-          <tr class="api-operation child-row" data-parent-api="{{ op.id }}" style="display:none;"
-              data-search="{{ [child_op.operation_name, child_op.resource_type] | join(' ') | lower }}"
-              data-operation_name="{{ child_op.operation_name | e }}"
-              data-resource_type="{{ child_op.resource_type | e }}"
-              data-is_public="{{ child_op.is_public | lower }}"
-              data-internet_access="{{ child_op.internet_access | e }}">
+      </thead>
+      <tbody>
+        {% for op_id in protocols[protocol] %}
+          {% set op = operations_by_id.get(op_id) %}
+          {% if op %}
+          <tr class="api-parent" data-api-id="{{ op.id }}" data-search="{{ [op.operation_name, op.resource_type] | join(' ') | lower }}">
             <td>
-              <span style="display:inline-block; width:16px; margin-left:20px;"></span>
-              <span class="operation-name">{{ child_op.operation_name }}</span>
+              {% set child_count = children_by_parent.get(op.id, [])|length %}
+              {% if child_count > 0 %}
+                <span class="expand-toggle" data-api-id="{{ op.id }}" title="Expand/collapse operations">▶</span>
+              {% else %}
+                <span style="display:inline-block; width:16px;"></span>
+              {% endif %}
+              <span class="operation-name" style="font-weight: bold;">{{ op.operation_name }}</span>
+              {% if child_count > 0 %}<span class="child-count-badge" title="{{ child_count }} operation(s)">{{ child_count }}</span>{% endif %}
             </td>
             <td>
-              <span class="api-type-badge" title="Individual endpoint/method">⚙️ Operation</span>
+              <span class="api-type-badge" title="API container/definition">📡 API</span>
             </td>
             <td>
-              <small class="muted">{{ child_op.source_file or '—' }}</small>
+              <small class="muted">{{ op.source_file or '—' }}</small>
             </td>
             <td>
-              <small class="muted">{{ child_op.source_line_start or '—' }}</small>
+              <small class="muted">{{ op.source_line_start or '—' }}</small>
             </td>
             <td>
-              {% if child_op.internet_access == '—' %}
+              {% if op.internet_access == '—' %}
                 <span class="finding-badge none">—</span>
-              {% elif child_op.internet_access and child_op.internet_access | lower == 'true' %}
-                {% if child_op.internet_access_signals and 'verified' in child_op.internet_access_signals|lower %}
+              {% elif op.internet_access and op.internet_access | lower == 'true' %}
+                {% if op.internet_access_signals and 'verified' in op.internet_access_signals|lower %}
                   <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
                 {% else %}
                   <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
                 {% endif %}
-              {% elif child_op.internet_access and child_op.internet_access | lower == 'false' %}
+              {% elif op.internet_access and op.internet_access | lower == 'false' %}
                 <span class="finding-badge none">🔒 Private</span>
               {% else %}
-                <span class="finding-badge none">{{ child_op.internet_access or '—' }}</span>
+                <span class="finding-badge none">{{ op.internet_access or '—' }}</span>
               {% endif %}
             </td>
             <td>
               {% if op.is_public and op.is_public | lower == 'true' %}
-                <span class="finding-badge critical" title="No auth required - inherited by operations">🔓 None</span>
+                <span class="finding-badge critical" title="No auth required at APIM level">🔓 None</span>
               {% else %}
-                <span class="finding-badge info" title="Inherited by all operations">🔐 Subscription Key (inherited)</span>
+                <span class="finding-badge info">🔐 Subscription Key</span>
               {% endif %}
             </td>
           </tr>
+          
+          {# Render operations (children) under each API #}
+          {% for child_id in children_by_parent.get(op.id, []) %}
+            {% set child_op = operations_by_id.get(child_id) %}
+            {% if child_op %}
+            <tr class="api-operation child-row" data-parent-api="{{ op.id }}" style="display:none;"
+                data-search="{{ [child_op.operation_name, child_op.resource_type] | join(' ') | lower }}"
+                data-operation_name="{{ child_op.operation_name | e }}"
+                data-resource_type="{{ child_op.resource_type | e }}"
+                data-is_public="{{ child_op.is_public | lower }}"
+                data-internet_access="{{ child_op.internet_access | e }}">
+              <td>
+                <span style="display:inline-block; width:16px; margin-left:20px;"></span>
+                <span class="operation-name">{{ child_op.operation_name }}</span>
+              </td>
+              <td>
+                <span class="api-type-badge" title="Individual endpoint/method">⚙️ Operation</span>
+              </td>
+              <td>
+                <small class="muted">{{ child_op.source_file or '—' }}</small>
+              </td>
+              <td>
+                <small class="muted">{{ child_op.source_line_start or '—' }}</small>
+              </td>
+              <td>
+                {% if child_op.internet_access == '—' %}
+                  <span class="finding-badge none">—</span>
+                {% elif child_op.internet_access and child_op.internet_access | lower == 'true' %}
+                  {% if child_op.internet_access_signals and 'verified' in child_op.internet_access_signals|lower %}
+                    <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
+                  {% else %}
+                    <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
+                  {% endif %}
+                {% elif child_op.internet_access and child_op.internet_access | lower == 'false' %}
+                  <span class="finding-badge none">🔒 Private</span>
+                {% else %}
+                  <span class="finding-badge none">{{ child_op.internet_access or '—' }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if op.is_public and op.is_public | lower == 'true' %}
+                  <span class="finding-badge critical" title="No auth required - inherited by operations">🔓 None</span>
+                {% else %}
+                  <span class="finding-badge info" title="Inherited by all operations">🔐 Subscription Key (inherited)</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+          {% endfor %}
           {% endif %}
         {% endfor %}
-        {% endif %}
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<p style="color:var(--text-muted);">No API endpoints detected for this scan.</p>
-{% endif %}
-
-
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
 
 {% else %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
     <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
   </svg>
-  <p>No internet-facing resources detected.<br/>Ingress paths will appear here once resources<br/>with <code>is_internet_facing_capable</code> are discovered.</p>
+  <p>No API endpoints detected for this scan.<br/>API ingress configuration will appear here once<br/>API Management resources are discovered.</p>
 </div>
 {% endif %}

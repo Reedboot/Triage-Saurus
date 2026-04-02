@@ -31,6 +31,16 @@
         {% endif %}
       </header>
       <div class="container-body">
+        {% if c.ai_summary %}
+        <div class="container-ai-summary">
+          <span class="ai-summary-icon">🤖</span>
+          <div class="ai-summary-body">
+            <div class="ai-summary-text">{{ c.ai_summary.summary }}</div>
+            {% if c.ai_summary.role %}<span class="ai-role-badge">{{ c.ai_summary.role }}</span>{% endif %}
+            {% if c.ai_summary.security_note %}<div class="ai-security-note">⚠️ {{ c.ai_summary.security_note }}</div>{% endif %}
+          </div>
+        </div>
+        {% endif %}
         <div class="container-image">
           <span class="label">Image</span>
           <code>{{ c.image or 'Not specified' }}</code>
@@ -69,6 +79,16 @@
             <span class="base-stat">{{ entry.reference_count }} file{{ 's' if entry.reference_count != 1 else '' }}</span>
           </div>
         </header>
+        {% if entry.ai_summary %}
+        <div class="container-ai-summary container-ai-summary--inline">
+          <span class="ai-summary-icon">🤖</span>
+          <div class="ai-summary-body">
+            <div class="ai-summary-text">{{ entry.ai_summary.summary }}</div>
+            {% if entry.ai_summary.role %}<span class="ai-role-badge">{{ entry.ai_summary.role }}</span>{% endif %}
+            {% if entry.ai_summary.security_note %}<div class="ai-security-note">⚠️ {{ entry.ai_summary.security_note }}</div>{% endif %}
+          </div>
+        </div>
+        {% endif %}
         {% if entry.reference_preview %}
         <ul class="base-reference-list">
           {% for ref in entry.reference_preview %}

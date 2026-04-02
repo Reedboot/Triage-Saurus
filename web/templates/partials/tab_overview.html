@@ -12,167 +12,157 @@
   </article>
   {% endif %}
 
-  {# Interactive module dependency mapping #}
+  <script>
+  (function() {
+    // Render all .open-questions-widget elements on the page
+    function renderOpenQuestions() {
+      document.querySelectorAll('.open-questions-widget:not([data-oq-init])').forEach(function(widget) {
+        widget.setAttribute('data-oq-init', '1');
+        var expId = widget.dataset.experimentId;
+        var repoName = widget.dataset.repoName;
+        var scriptEl = widget.querySelector('script.oq-data');
+        if (!scriptEl) return;
+        var questions;
+        try { questions = JSON.parse(scriptEl.textContent); } catch(e) { return; }
+        scriptEl.remove();
+
+        var ANSWERS = ['yes', 'no', 'dont_know'];
+        var LABELS  = { yes: '✓ Yes', no: '✗ No', dont_know: '? Don\'t know' };
+
+        var ol = document.createElement('ol');
+        ol.className = 'oq-list';
+
+        questions.forEach(function(q, idx) {
+          var li = document.createElement('li');
+          li.className = 'oq-item' + (q.answer ? ' oq-item--answered' : '');
+          if (q.auto_answered) li.classList.add('oq-item--auto');
+
+          var textRow = document.createElement('div');
+          textRow.className = 'oq-text';
+          textRow.textContent = q.question;
+
+          if (q.asset) {
+            var badge = document.createElement('span');
+            badge.className = 'how-badge';
+            badge.style.marginLeft = '8px';
+            badge.textContent = q.asset;
+            textRow.appendChild(badge);
+          }
+          if (q.file) {
+            var fileSpan = document.createElement('span');
+            fileSpan.className = 'file-link';
+            fileSpan.style.marginLeft = '8px';
+            fileSpan.title = q.file;
+            var base = q.file.split(/[/\\]/).pop();
+            fileSpan.textContent = base + (q.line ? ':' + q.line : '');
+            textRow.appendChild(fileSpan);
+          }
+          li.appendChild(textRow);
+
+          // Auto-analysis rationale block
+          if (q.auto_answered && q.auto_rationale) {
+            var rationale = document.createElement('div');
+            rationale.className = 'oq-rationale';
+            rationale.innerHTML = '<span class="oq-auto-badge">🔍 Auto-analysed</span> ' +
+              q.auto_rationale.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            li.appendChild(rationale);
+          }
+
+          var btnRow = document.createElement('div');
+          btnRow.className = 'oq-btns';
+          if (q.auto_answered) {
+            var overrideLbl = document.createElement('span');
+            overrideLbl.className = 'oq-override-lbl';
+            overrideLbl.textContent = 'Override:';
+            btnRow.appendChild(overrideLbl);
+          }
+
+          ANSWERS.forEach(function(ans) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'oq-btn oq-btn--' + ans + (q.answer === ans ? ' oq-btn--active' : '');
+            btn.textContent = LABELS[ans];
+            btn.addEventListener('click', function() {
+              var prevAnswer = q.answer;
+              q.answer = ans;
+              q.auto_answered = false; // user override clears auto flag
+              li.classList.add('oq-item--answered');
+              li.classList.remove('oq-item--auto');
+              btnRow.querySelectorAll('.oq-btn').forEach(function(b) { b.classList.remove('oq-btn--active'); });
+              btn.classList.add('oq-btn--active');
+
+              var statusEl = li.querySelector('.oq-status');
+              statusEl.textContent = 'Saving…';
+
+              fetch('/api/subscription_context/' + encodeURIComponent(expId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                  question: q.question,
+                  answer: ans === 'dont_know' ? "Don't know" : (ans.charAt(0).toUpperCase() + ans.slice(1)),
+                  scope: 'repo',
+                  repo_name: repoName,
+                  answered_by: 'user',
+                  confidence: ans === 'yes' ? 1.0 : ans === 'no' ? 1.0 : 0.5,
+                  tags: 'open_question',
+                })
+              })
+              .then(function(r) { return r.json(); })
+              .then(function(d) {
+                statusEl.textContent = d.status === 'ok' ? '✓ Saved' : ('⚠ ' + (d.error || 'error'));
+                setTimeout(function() { statusEl.textContent = ''; }, 3000);
+              })
+              .catch(function(e) {
+                q.answer = prevAnswer;
+                statusEl.textContent = '⚠ Failed';
+                setTimeout(function() { statusEl.textContent = ''; }, 3000);
+              });
+            });
+            btnRow.appendChild(btn);
+          });
+
+          var statusEl = document.createElement('span');
+          statusEl.className = 'oq-status';
+          btnRow.appendChild(statusEl);
+          li.appendChild(btnRow);
+          ol.appendChild(li);
+        });
+
+        widget.appendChild(ol);
+      });
+    }
+
+    // Run on load and expose for dynamic re-renders
+    renderOpenQuestions();
+    window._renderOpenQuestions = renderOpenQuestions;
+
+    // Re-run if overview content is dynamically injected (e.g. after AI run)
+    var observer = new MutationObserver(function(mutations) {
+      for (var m of mutations) {
+        if (m.addedNodes.length) { renderOpenQuestions(); break; }
+      }
+    });
+    var body = document.querySelector('.overview-body');
+    if (body) observer.observe(body, { childList: true, subtree: true });
+  })();
+  </script>
+
+  {# Interactive module dependency mapping — data embedded as JSON; initialised by overview.js #}
   {% if module_deps %}
-  <section class="module-mapping-section">
+  <section class="module-mapping-section"
+           data-experiment-id="{{ experiment_id | e }}"
+           data-repo-name="{{ repo_name | e }}">
     <div class="module-mapping-header">
       <h3>Module Dependencies</h3>
       <div class="module-mapping-controls">
-        <button type="button" class="btn-small" id="save-module-mappings-btn">Save Mappings</button>
+        <button type="button" class="btn-small" id="save-module-mappings-btn">💾 Save Mappings</button>
         <span id="module-mapping-status" class="module-mapping-status"></span>
       </div>
     </div>
-    <ul class="module-deps" id="module-mapping-list"
-        data-experiment-id="{{ experiment_id | tojson }}"
-        data-repo-name="{{ repo_name | tojson }}"
-        data-module-deps="{{ module_deps | tojson }}"
-        data-available-repos="{{ available_repos | tojson }}">
-    </ul>
+    <ul class="module-deps" id="module-mapping-list"></ul>
+    <script type="application/json" class="module-mapping-data">{{ module_deps | tojson }}</script>
+    <script type="application/json" class="module-mapping-repos">{{ available_repos | tojson }}</script>
   </section>
-
-  <script>
-  (function() {
-    var list = document.getElementById('module-mapping-list');
-    if (!list) return;
-    var moduleDeps, availableRepos;
-    try {
-      moduleDeps = JSON.parse(list.dataset.moduleDeps || '[]');
-      availableRepos = JSON.parse(list.dataset.availableRepos || '[]');
-    } catch(e) { return; }
-
-    function escHtml(s) {
-      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-    function baseName(p) {
-      return String(p || '').split(/[/\\]/).filter(Boolean).pop() || String(p || '');
-    }
-    function inferRepoFromSource(source) {
-      if (!source) return null;
-      var m = source.match(/_git\/([^\/\?#]+)/);
-      if (m) return decodeURIComponent(m[1]);
-      m = source.match(/(?:github|gitlab)\.com\/[^\/]+\/([^\/\?#.]+)/);
-      if (m) return m[1];
-      return null;
-    }
-
-    moduleDeps.forEach(function(mod) {
-      var suggested = inferRepoFromSource(mod.source || '');
-      var cm = mod.current_mapping;
-      var currentRepo = null;
-      var isExternal = false;
-      if (cm && typeof cm === 'object') {
-        if (cm.external) { isExternal = true; }
-        else { currentRepo = cm.repo || null; }
-      } else if (typeof cm === 'string') {
-        currentRepo = cm;
-      }
-
-      var li = document.createElement('li');
-      li.className = 'module-dep-item';
-
-      var nameDiv = document.createElement('div');
-      nameDiv.className = 'module-dep-name';
-      nameDiv.textContent = mod.name || '';
-      li.appendChild(nameDiv);
-
-      if (mod.source) {
-        var srcDiv = document.createElement('div');
-        srcDiv.className = 'module-dep-row module-dep-row--stack';
-        srcDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(mod.source) + '</code></pre>';
-        li.appendChild(srcDiv);
-      }
-
-      if (mod.file) {
-        var fileDiv = document.createElement('div');
-        fileDiv.className = 'module-dep-row';
-        var fileHTML = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
-        if (mod.line) fileHTML += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
-        fileDiv.innerHTML = fileHTML;
-        li.appendChild(fileDiv);
-      }
-
-      var mapDiv = document.createElement('div');
-      mapDiv.className = 'module-dep-row module-dep-map-row';
-      var lbl = document.createElement('span');
-      lbl.className = 'module-dep-label';
-      lbl.textContent = 'Maps to';
-      mapDiv.appendChild(lbl);
-
-      var sel = document.createElement('select');
-      sel.className = 'module-repo-select';
-      sel.dataset.moduleName = mod.name || '';
-
-      var pleaseSelectOpt = new Option('Please Select', '');
-      pleaseSelectOpt.disabled = false;
-      sel.appendChild(pleaseSelectOpt);
-
-      if (suggested) {
-        var sugGroup = document.createElement('optgroup');
-        sugGroup.label = 'Suggested';
-        var sugOpt = new Option(suggested, suggested);
-        sugGroup.appendChild(sugOpt);
-        sel.appendChild(sugGroup);
-      }
-
-      var allGroup = document.createElement('optgroup');
-      allGroup.label = 'All repos';
-      availableRepos.forEach(function(rname) {
-        if (rname === suggested) return;
-        allGroup.appendChild(new Option(rname, rname));
-      });
-      sel.appendChild(allGroup);
-
-      sel.appendChild(new Option('External repo', '__external__'));
-
-      var valueToSet = isExternal ? '__external__' : (currentRepo || (suggested || ''));
-      if (valueToSet) {
-        for (var i = 0; i < sel.options.length; i++) {
-          if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
-        }
-      }
-
-      mapDiv.appendChild(sel);
-      li.appendChild(mapDiv);
-      list.appendChild(li);
-    });
-
-    var saveBtn = document.getElementById('save-module-mappings-btn');
-    var statusEl = document.getElementById('module-mapping-status');
-    if (saveBtn) {
-      saveBtn.addEventListener('click', function() {
-        var experimentId = JSON.parse(list.dataset.experimentId || '""');
-        var repoName = JSON.parse(list.dataset.repoName || '""');
-        var selects = list.querySelectorAll('select.module-repo-select');
-        var mappings = {};
-        selects.forEach(function(s) {
-          var modName = s.dataset.moduleName;
-          if (!modName) return;
-          var val = s.value;
-          if (val === '__external__') {
-            mappings[modName] = {repo: null, external: true};
-          } else if (val) {
-            mappings[modName] = {repo: val};
-          }
-          // 'Please Select' (empty value) is intentionally not saved
-        });
-        if (statusEl) statusEl.textContent = 'Saving\u2026';
-        fetch('/api/module/mappings/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(repoName), {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({mappings: mappings})
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-          if (statusEl) statusEl.textContent = d.ok ? 'Saved!' : ('Error: ' + (d.error || 'unknown'));
-          setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
-        })
-        .catch(function(e) {
-          if (statusEl) statusEl.textContent = 'Error: ' + e.message;
-        });
-      });
-    }
-  })();
-  </script>
   {% endif %}
 
   {# AI-detected new assets and fixed info cards #}
