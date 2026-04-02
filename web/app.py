@@ -3583,7 +3583,6 @@ def api_view_tabs(experiment_id: str, repo_name: str):
             {"key": "assets",     "label": "🗂️ Assets"},
             {"key": "findings",   "label": "🔎 Findings"},
             {"key": "containers", "label": "🐳 Containers"},
-            {"key": "ports",      "label": "🔌 Ports & Protocols"},
             {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
             {"key": "ingress",    "label": "➡️ Ingress"},
             {"key": "egress",     "label": "⬅️ Egress"},
@@ -7330,57 +7329,6 @@ def api_view_containers(experiment_id: str, repo_name: str):
         conn.close()
 
 
-
-@app.route("/api/view/ports/<experiment_id>/<repo_name>")
-def api_view_ports(experiment_id: str, repo_name: str):
-    """Render the ports tab with port/protocol inventory."""
-    conn = _get_db()
-    if conn is None:
-        return _db_render("tab_ports.html", ports=[], experiment_id=experiment_id, repo_name=repo_name)
-    
-    try:
-        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
-        if not resolved_exp_id:
-            return _db_render("tab_ports.html", ports=[], experiment_id="", repo_name=repo_name)
-        
-        # Query resource connections for port information with enhanced context
-        # Exclude ingress APIs (APIM APIs are shown in Ingress tab instead)
-        rows = conn.execute("""
-            SELECT DISTINCT
-                r_src.resource_name as source_name,
-                r_src.resource_type as source_type,
-                r_tgt.resource_name as target_name,
-                rc.port,
-                rc.protocol,
-                rc.auth_method,
-                CASE 
-                    WHEN rp.property_value LIKE '%internet%' OR rp.property_value LIKE '%0.0.0.0%' THEN 1
-                    ELSE 0
-                END as is_internet_exposed,
-                CASE
-                    WHEN rc.protocol IN ('HTTPS', 'HTTP', 'TCP', 'UDP', 'TLS') THEN 'verified'
-                    WHEN rc.protocol IN ('amqp', 'AMQP') THEN 'assumed'
-                    ELSE 'inferred'
-                END as protocol_confidence
-            FROM resource_connections rc
-            JOIN resources r_src ON rc.source_resource_id = r_src.id
-            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
-            JOIN repositories repo ON r_src.repo_id = repo.id
-            LEFT JOIN resource_properties rp ON r_src.id = rp.resource_id AND rp.property_key = 'internet_access'
-            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
-              AND (rc.port IS NOT NULL OR rc.protocol IS NOT NULL)
-              AND r_src.resource_type NOT IN ('azurerm_api_management_api', 'azurerm_api_management_api_operation')
-              AND r_tgt.resource_type NOT IN ('azurerm_api_management_api', 'azurerm_api_management_api_operation')
-            ORDER BY COALESCE(rc.port, 0), r_src.resource_name
-        """, (repo_name, resolved_exp_id)).fetchall()
-        
-        ports = [dict(row) for row in rows]
-        
-        return _db_render("tab_ports.html", ports=ports, experiment_id=resolved_exp_id, repo_name=repo_name)
-    except Exception as exc:
-        return _db_render("tab_ports.html", ports=[], error=str(exc))
-    finally:
-        conn.close()
 
 # ── Page Routes ───────────────────────────────────────────────────────────────
 
