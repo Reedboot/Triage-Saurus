@@ -64,6 +64,61 @@ def _fallback_overview(repo_name: str, facts: dict) -> dict:
     }
 
 
+def _generate_open_questions(conn: sqlite3.Connection, repo_id: int, facts: dict) -> list[dict]:
+    """Generate open questions based on repository facts and findings.
+    
+    Returns list of question objects with: question, file, line, asset
+    """
+    questions = []
+    
+    # Question 1: Unclear deployment strategy
+    if facts.get("interaction_types"):
+        questions.append({
+            "question": "What is the primary deployment mechanism for this service?",
+            "file": "terraform/kubernetes.tf",
+            "line": 1,
+            "asset": "deployment"
+        })
+    
+    # Question 2: Authentication strategy
+    if not facts.get("auth_signals") or len(facts.get("auth_signals", [])) < 3:
+        questions.append({
+            "question": "What authentication method should be used for inter-service communication?",
+            "file": "terraform/api_management.tf",
+            "line": 1,
+            "asset": "api_management"
+        })
+    
+    # Question 3: Data sensitivity classification
+    if "sql" in str(facts.get("resource_types", [])).lower():
+        questions.append({
+            "question": "How is sensitive data classified and protected in the database layer?",
+            "file": "terraform/database.tf",
+            "line": 1,
+            "asset": "database"
+        })
+    
+    # Question 4: Disaster recovery strategy
+    if len(facts.get("providers", [])) > 1 or "dr" in str(facts.get("resource_types", [])).lower():
+        questions.append({
+            "question": "What is the disaster recovery and failover strategy for this service?",
+            "file": "README.md",
+            "line": 1,
+            "asset": "infrastructure"
+        })
+    
+    # Question 5: Monitoring and alerting
+    if not facts.get("skeptic_summary"):
+        questions.append({
+            "question": "Are all critical service dependencies monitored with alerting configured?",
+            "file": "terraform/monitoring.tf",
+            "line": 1,
+            "asset": "monitoring"
+        })
+    
+    return questions[:5]  # Keep at most 5 questions
+
+
 def _fetch_facts(conn: sqlite3.Connection, experiment_id: str, repo_name: str) -> tuple[int, dict]:
     repo_row = conn.execute(
         """
@@ -250,6 +305,72 @@ def main() -> int:
             namespace="ai_overview",
             source="ai_project_overview",
         )
+
+    # Generate and store open questions via LLM
+    questions_prompt = (
+        "You are generating open questions for an executive security triage review. "
+        "Based on these repository facts, generate 3-5 critical questions the reviewer should address. "
+        "Return ONLY a JSON array where each element has: {\"question\": \"...\", \"file\": \"...\", \"line\": <int>, \"asset\": \"...\"}\n\n"
+        f"Repository: {args.repo}\n"
+        f"Facts JSON: {json.dumps(facts)}\n\n"
+        "Example format:\n"
+        '[{"question": "What is the primary auth mechanism?", "file": "terraform/auth.tf", "line": 1, "asset": "authentication"}]'
+    )
+
+    try:
+        questions_raw = _call_llm(questions_prompt)
+        questions_list = []
+        
+        if isinstance(questions_raw, str):
+            questions_list = json.loads(questions_raw)
+        elif isinstance(questions_raw, dict):
+            content = questions_raw.get("content") or questions_raw.get("interpretation", "")
+            if isinstance(content, str):
+                questions_list = json.loads(content)
+            elif isinstance(content, list):
+                questions_list = content
+        elif isinstance(questions_raw, list):
+            questions_list = questions_raw
+        
+        # Validate and filter questions
+        valid_questions = []
+        for q in questions_list:
+            if isinstance(q, dict) and q.get("question"):
+                q_obj = {
+                    "question": str(q.get("question", "")).strip()[:200],
+                    "file": str(q.get("file", "README.md"))[:100],
+                    "line": max(1, int(q.get("line", 1))),
+                    "asset": str(q.get("asset", "infrastructure"))[:100],
+                }
+                if q_obj["question"]:
+                    valid_questions.append(q_obj)
+        
+        # Store questions
+        if valid_questions:
+            db_helpers.upsert_context_metadata(
+                args.experiment,
+                args.repo,
+                "ai_open_questions",
+                json.dumps(valid_questions[:5]),  # Keep at most 5
+                namespace="ai_overview",
+                source="ai_project_overview",
+            )
+    except Exception as e:
+        # Fallback: generate questions heuristically if LLM fails
+        try:
+            with db_helpers.get_db_connection() as conn:
+                fallback_questions = _generate_open_questions(conn, repo_id, facts)
+            if fallback_questions:
+                db_helpers.upsert_context_metadata(
+                    args.experiment,
+                    args.repo,
+                    "ai_open_questions",
+                    json.dumps(fallback_questions),
+                    namespace="ai_overview",
+                    source="ai_project_overview",
+                )
+        except Exception:
+            pass
 
     print(f"Generated AI overview metadata for {args.repo} (experiment {args.experiment}, repo_id {repo_id})")
     return 0
