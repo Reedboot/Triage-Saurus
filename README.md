@@ -235,6 +235,11 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   pip install -r requirements.txt
   ```
   This installs `pycozo`, `jinja2`, `Flask`, and `PyYAML`. The virtual environment **must be located at `.venv`** in the repo root — `Scripts/run_cozo_repos.sh` will auto-activate it if it is not already active, and will print clear setup instructions if it cannot be found.
+- **Copilot CLI** — Required for the **Run AI** web UI feature (Phase 4-5 AI review):
+  - Install the standalone Copilot CLI: `npm install -g @githubnext/copilot-cli`
+  - Verify: `copilot --version`
+  - Alternatively, set the `COPILOT_COMMAND` environment variable to point to another Copilot CLI executable.
+  - **Note:** `gh copilot` (the `gh` extension) is **not** supported — it does not accept the `--model`, `--stream`, and `--allow-all-tools` flags required by the AI pipeline.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/Scan/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
