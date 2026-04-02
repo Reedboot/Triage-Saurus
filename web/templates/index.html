@@ -109,10 +109,8 @@
               {% if repo.found %}
               <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
               {% else %}
-              <option value="" disabled class="not-found">{{ repo.name }} (not found locally)</option>
-              {% endif %}
-              {% else %}
               <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
+              {% endif %}
               {% endfor %}
             </select>
           </div>
@@ -252,6 +250,7 @@
                 <button class="btn-small" id="zoom-in-btn" title="Zoom in">🔍+ Zoom</button>
                 <button class="btn-small" id="zoom-out-btn" title="Zoom out">🔍- Zoom</button>
                 <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">🎯 Fit</button>
+                <button class="btn-small" id="refresh-diagram-btn" title="Refresh / re-render diagram">🔄 Refresh</button>
                 <button class="btn-small" id="toggle-api-ops-btn" title="API operation visibility mode">🧩 API ops: Auto (&lt;10)</button>
                 <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">📜 Hide scan</button>
                 <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">📋 Copy source</button>
