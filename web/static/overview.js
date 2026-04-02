@@ -147,7 +147,6 @@
 
       list.appendChild(li);
     });
-    });
 
     var saveBtn  = section.querySelector('#save-module-mappings-btn');
     var statusEl = section.querySelector('#module-mapping-status');

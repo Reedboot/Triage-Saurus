@@ -707,15 +707,22 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .section-panel-content pre code { background: none; border: none; padding: 0; }
 
-/* Code snippet wrappers in findings — scroll the block, not the whole tab */
+/* Code snippet wrappers in findings — scrollable box, never pushes the card wider */
 .code-snippet-wrap {
+  display: block;
   overflow-x: auto;
-  max-width: 100%;
+  overflow-y: visible;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border-radius: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
 }
 .code-table {
-  min-width: max-content;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
 }
 
 /* ── Empty state ── */
