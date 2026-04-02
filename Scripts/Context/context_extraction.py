@@ -897,6 +897,75 @@ def _load_parent_type_map() -> Dict[str, str]:
         return fallback_map
 
 
+def _extract_tf_locals(files: List[Path]) -> Dict[str, str]:
+    """Parse Terraform ``locals {}`` blocks and return ``{local_name: string_value}``."""
+    result: Dict[str, str] = {}
+    assignment_re = re.compile(r'^\s+([a-z][a-z0-9_]+)\s*=\s*"([^"]*)"', re.M)
+    for f in files:
+        if not hasattr(f, "suffix") or f.suffix != ".tf":
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        for m in re.finditer(r"^\s*locals\s*\{", text, re.M):
+            start = m.end()
+            depth = 1
+            i = start
+            while i < len(text) and depth > 0:
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                i += 1
+            block = text[start : i - 1]
+            for assign in assignment_re.finditer(block):
+                result[assign.group(1)] = assign.group(2)
+    return result
+
+
+def _resolve_apim_service_name(service_url: str, locals_dict: Dict[str, str]) -> Optional[str]:
+    """Resolve an APIM ``service_url`` to the target workload's service name.
+
+    Handles Terraform interpolation patterns such as::
+
+        "https://${var.environment}-${local.app_name}.${var.domain_name}"
+
+    Steps:
+    1. Substitute ``${local.xxx}`` references with values from *locals_dict*.
+    2. Extract the hostname from the resolved URL.
+    3. Return the service-name segment (the literal part between the env prefix
+       and the domain suffix), normalised to lower-case with hyphens.
+
+    Returns ``None`` when the service name cannot be determined.
+    """
+
+    def _sub_local(m: re.Match) -> str:
+        return locals_dict.get(m.group(1), m.group(0))
+
+    resolved = re.sub(r"\$\{local\.([a-z][a-z0-9_]+)\}", _sub_local, service_url, flags=re.I)
+
+    host_m = re.search(r"https?://([^/\s]+)", resolved, re.I)
+    if not host_m:
+        return None
+    host = host_m.group(1)
+
+    # Pattern A: "...}-SERVICE_NAME.${...}" — one or more ${...} tokens remain but
+    # the service name is now a fully-resolved literal segment.
+    svc_m = re.search(r"\}-([a-z][a-z0-9\-]+)\.", host)
+    if svc_m:
+        return svc_m.group(1).lower()
+
+    # Pattern B: fully resolved host such as "prod-aks-helloworld.internal.example.com"
+    if "${" not in host:
+        stem = host.split(".")[0]          # e.g. "prod-aks-helloworld"
+        parts = stem.split("-")
+        if len(parts) > 1:
+            return "-".join(parts[1:]).lower()  # strip env prefix
+
+    return None
+
+
 def extract_context(repo_path_str: str) -> RepositoryContext:
     """
     Extracts context from the repository and returns a data model.
@@ -1931,6 +2000,25 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     line_number=1,
                 )
 
+            # Pre-compute APIM service_url → workload name mapping so that the
+            # routing logic below can use the explicit backend URL rather than
+            # relying solely on name prefix matching (which is too broad when one
+            # API name is a prefix of another, e.g. "aks-helloworld" vs
+            # "aks-helloworld-dr-testapp-api").
+            _tf_locals = _extract_tf_locals(
+                [f for f in files if hasattr(f, "suffix") and f.suffix == ".tf"]
+            )
+            _svc_url_re = re.compile(r'^\s*service_url\s*=\s*"([^"]*)"', re.M)
+            _apim_resolved_service: Dict[str, Optional[str]] = {}
+            for _res, _btext in resource_blocks:
+                if _res.resource_type == "azurerm_api_management_api":
+                    _url_m = _svc_url_re.search(_btext)
+                    _apim_resolved_service[_res.name] = (
+                        _resolve_apim_service_name(_url_m.group(1), _tf_locals)
+                        if _url_m
+                        else None
+                    )
+
             # Add workloads as resources
             for wl in skaffold_workloads:
                 # Create a resource for the AKS workload
@@ -1981,33 +2069,40 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
                     for resource in context.resources:
                         if resource.resource_type in api_gateway_types:
-                            # Only match when the APIM API name appears as a prefix of the
-                            # workload name (normalising underscores/hyphens) so that e.g.
-                            # APIM "aks_helloworld" routes to workload "aks-helloworld" but
-                            # NOT to "aks-helloworld-dr-testapp-api".  Fall back to a
-                            # broad match when no prefix match is found (avoids silently
-                            # dropping valid connections for repos with different naming).
-                            apim_clean = resource.name.replace("_", "-").lower()
                             wl_clean = wl.name.lower()
-                            # Prefix match: workload name starts with the APIM API name
-                            # (with word-boundary check via trailing '-' or exact match).
-                            prefix_match = (
-                                wl_clean == apim_clean
-                                or wl_clean.startswith(apim_clean + "-")
-                            )
-                            # Broad fallback: if neither API matches via prefix, still
-                            # create a connection (preserves behaviour for simple repos).
-                            if not prefix_match:
-                                # Check if any other API has a better prefix match for
-                                # this workload; if so, skip the broad match here.
-                                better_match_exists = any(
-                                    (wl_clean == r2.name.replace("_", "-").lower()
-                                     or wl_clean.startswith(r2.name.replace("_", "-").lower() + "-"))
-                                    for r2 in context.resources
-                                    if r2.resource_type in api_gateway_types and r2 is not resource
+                            apim_clean = resource.name.replace("_", "-").lower()
+
+                            # --- Primary: service_url-based exact matching ---
+                            # When the APIM resource has a resolvable service_url (e.g.
+                            # "https://${env}-${local.app_name}.${domain}"), use the
+                            # resolved service name for an exact match.  This is the most
+                            # accurate signal and prevents e.g. "aks_helloworld" APIM
+                            # from accidentally routing to "aks-helloworld-dr-testapp-api"
+                            # just because the workload name starts with "aks-helloworld-".
+                            resolved_svc = _apim_resolved_service.get(resource.name)
+                            if resolved_svc is not None:
+                                if wl_clean != resolved_svc:
+                                    continue  # this APIM routes to a different workload
+
+                            else:
+                                # --- Fallback: name-based prefix matching ---
+                                # Only match when the APIM API name appears as a prefix of
+                                # the workload name (normalising underscores/hyphens).
+                                prefix_match = (
+                                    wl_clean == apim_clean
+                                    or wl_clean.startswith(apim_clean + "-")
                                 )
-                                if better_match_exists:
-                                    continue
+                                if not prefix_match:
+                                    # Skip if another APIM has a better (more specific)
+                                    # prefix match for this workload.
+                                    better_match_exists = any(
+                                        (wl_clean == r2.name.replace("_", "-").lower()
+                                         or wl_clean.startswith(r2.name.replace("_", "-").lower() + "-"))
+                                        for r2 in context.resources
+                                        if r2.resource_type in api_gateway_types and r2 is not resource
+                                    )
+                                    if better_match_exists:
+                                        continue
 
                             # Create connection: API Gateway → Kubernetes API workload
                             conn = Connection(

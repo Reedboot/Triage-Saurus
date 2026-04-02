@@ -552,7 +552,7 @@ def _persist_framework_data(
     """Extract and persist framework version, name, and IaC type to DB."""
     try:
         framework_version, framework_name, iac_type = detect_tech_stack(repo_path)
-        
+
         with get_db_connection() as conn:
             conn.execute(
                 """
@@ -562,7 +562,7 @@ def _persist_framework_data(
                 """,
                 (framework_version, framework_name, iac_type, experiment_id, repo_name),
             )
-        
+
         if framework_version:
             print(f"  Framework version  : {framework_version}")
         if framework_name:
@@ -571,6 +571,179 @@ def _persist_framework_data(
             print(f"  IaC type           : {iac_type}")
     except Exception as e:
         print(f"  Warning: Failed to persist framework data: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Known external (egress) services catalogue
+# ---------------------------------------------------------------------------
+# Each entry: (canonical_name, domain, category, patterns)
+# patterns: list of regex strings matched against file content (case-insensitive)
+# A single hit in any scanned file is enough to record the egress connection.
+
+_KNOWN_EXTERNAL_SERVICES: list[tuple[str, str, str, list[str]]] = [
+    # Alerting / incident management
+    ("PagerDuty",        "events.pagerduty.com",   "alerting",       [r"pagerduty", r"PAGERDUTY", r"pd_routing_key", r"PD_API_KEY"]),
+    ("OpsGenie",         "api.opsgenie.com",        "alerting",       [r"opsgenie", r"OPSGENIE", r"opsGenie"]),
+    ("VictorOps",        "alert.victorops.com",     "alerting",       [r"victorops", r"VICTOROPS"]),
+    ("Alertmanager",     "alertmanager",            "alerting",       [r"alertmanager", r"AlertManager"]),
+    # Observability / APM
+    ("Datadog",          "app.datadoghq.com",       "observability",  [r"datadog", r"DD_API_KEY", r"DatadogMetrics", r"dataDogClient"]),
+    ("New Relic",        "collector.newrelic.com",  "observability",  [r"newrelic", r"NEW_RELIC", r"NewRelic"]),
+    ("Dynatrace",        "live.dynatrace.com",       "observability",  [r"dynatrace", r"DYNATRACE", r"DynatraceClient"]),
+    ("Elastic APM",      "apm.elastic.co",           "observability",  [r"elastic[_-]?apm", r"ElasticApm", r"ELASTIC_APM"]),
+    ("Grafana Cloud",    "grafana.net",              "observability",  [r"grafana\.net", r"GrafanaCloud"]),
+    # Log aggregation
+    ("Splunk",           "inputs.splunk.com",        "logging",        [r"splunk", r"SPLUNK", r"SplunkClient", r"SplunkLogger"]),
+    ("Loggly",           "logs.loggly.com",          "logging",        [r"loggly", r"LOGGLY"]),
+    ("Papertrail",       "logs.papertrailapp.com",   "logging",        [r"papertrail", r"PAPERTRAIL"]),
+    ("Seq",              "seq",                      "logging",        [r"Seq\.Events", r"SeqLogger", r"seq_api_key", r"SEQ_SERVER"]),
+    # Payment
+    ("Stripe",           "api.stripe.com",           "payment",        [r"stripe", r"STRIPE_", r"StripeClient", r"Stripe\."]),
+    ("Braintree",        "api.braintreegateway.com", "payment",        [r"braintree", r"BraintreeGateway"]),
+    ("PayPal",           "api.paypal.com",            "payment",        [r"paypal", r"PayPal", r"PAYPAL_"]),
+    # Communication
+    ("SendGrid",         "api.sendgrid.com",         "email",          [r"sendgrid", r"SendGrid", r"SENDGRID_"]),
+    ("Mailgun",          "api.mailgun.net",           "email",          [r"mailgun", r"Mailgun", r"MAILGUN_"]),
+    ("Twilio",           "api.twilio.com",            "sms",            [r"twilio", r"Twilio", r"TWILIO_"]),
+    ("Slack",            "hooks.slack.com",           "messaging",      [r"slack\.com/api", r"SlackClient", r"SLACK_", r"slack_webhook"]),
+    ("Teams Webhook",    "outlook.office.com",        "messaging",      [r"office\.com/webhook", r"TeamsWebhook", r"teams.*webhook"]),
+    # Auth / identity
+    ("Auth0",            "auth0.com",                 "auth",           [r"auth0\.com", r"Auth0Client", r"AUTH0_"]),
+    ("Okta",             "okta.com",                  "auth",           [r"okta\.com", r"OktaClient", r"OKTA_"]),
+    # Other SaaS
+    ("GitHub API",       "api.github.com",            "vcs",            [r"api\.github\.com", r"GitHubClient", r"GITHUB_TOKEN"]),
+    ("Jira",             "atlassian.net",             "issue_tracking", [r"atlassian\.net", r"JiraClient", r"JIRA_"]),
+    ("Snowflake",        "snowflakecomputing.com",    "data_warehouse",  [r"snowflake", r"Snowflake", r"SNOWFLAKE_"]),
+]
+
+_SCAN_EXTENSIONS = {
+    ".cs", ".csproj", ".fs", ".vb",
+    ".py", ".js", ".ts", ".go", ".java", ".rb", ".php",
+    ".json", ".yaml", ".yml", ".tf", ".tfvars",
+    ".env", ".config", ".xml", ".ini", ".toml",
+    ".sh", ".ps1", ".psm1",
+}
+
+
+def _detect_external_services(
+    repo_path: Path,
+    experiment_id: str,
+    repo_name: str,
+) -> list[dict]:
+    """
+    Scan source files for references to known external SaaS services.
+    Returns a list of hit dicts (for logging); side-effect: persists
+    resource_connections rows to the DB.
+    """
+    hits: list[dict] = []
+    compiled = [
+        (name, domain, category, [re.compile(p, re.IGNORECASE) for p in patterns])
+        for name, domain, category, patterns in _KNOWN_EXTERNAL_SERVICES
+    ]
+
+    # Track which services we've already matched so we don't flood the DB
+    matched: dict[str, dict] = {}   # domain → {file, line}
+
+    scan_files = [
+        p for p in repo_path.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() in _SCAN_EXTENSIONS
+        and ".git" not in p.parts
+        and "node_modules" not in p.parts
+        and ".terraform" not in p.parts
+        and "bin" not in p.parts
+        and "obj" not in p.parts
+    ]
+
+    for fp in scan_files:
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = str(fp.relative_to(repo_path))
+        for name, domain, category, patterns in compiled:
+            if domain in matched:
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if any(pat.search(line) for pat in patterns):
+                    matched[domain] = {"file": rel, "line": line_no, "name": name, "category": category}
+                    break
+
+    if not matched:
+        return []
+
+    # Persist to resource_connections
+    try:
+        from db_helpers import get_db_connection as _gdb, ensure_repository_entry as _ensure
+        repo_id = _ensure(experiment_id, repo_name)
+        with _gdb() as conn:
+            # Resolve the owning resource (first compute resource in this repo) as the source
+            src_row = conn.execute(
+                """
+                SELECT r.id FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
+                  AND LOWER(COALESCE(r.resource_type,'')) IN (
+                    'kubernetes_deployment','azurerm_linux_web_app','azurerm_windows_web_app',
+                    'azurerm_function_app','azurerm_container_app','compute','service'
+                  )
+                ORDER BY r.id LIMIT 1
+                """,
+                (experiment_id, repo_name),
+            ).fetchone()
+            src_id = src_row["id"] if src_row else None
+
+            for domain, info in matched.items():
+                # Skip if already recorded for this experiment/repo/domain
+                existing = conn.execute(
+                    """
+                    SELECT id FROM resource_connections
+                    WHERE experiment_id = ? AND source_repo_id = (
+                        SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                    ) AND target_external = ?
+                    LIMIT 1
+                    """,
+                    (experiment_id, experiment_id, repo_name, domain),
+                ).fetchone()
+                if existing:
+                    continue
+
+                repo_row = conn.execute(
+                    "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
+                    (experiment_id, repo_name),
+                ).fetchone()
+                if not repo_row:
+                    continue
+                repo_db_id = repo_row["id"]
+
+                conn.execute(
+                    """
+                    INSERT INTO resource_connections
+                    (experiment_id, source_resource_id, source_repo_id,
+                     target_resource_id, target_repo_id, target_external,
+                     connection_type, protocol, is_encrypted, inferred_internet,
+                     connection_metadata)
+                    VALUES (?, ?, ?, NULL, NULL, ?, 'calls', 'HTTPS', 1, 0, ?)
+                    """,
+                    (
+                        experiment_id,
+                        src_id,
+                        repo_db_id,
+                        domain,
+                        json.dumps({
+                            "service": info["name"],
+                            "category": info["category"],
+                            "detected_at": info["file"],
+                            "detected_line": info["line"],
+                        }),
+                    ),
+                )
+                conn.commit()
+                hits.append(info)
+    except Exception as exc:
+        print(f"  Warning: Could not persist external service connections: {exc}")
+
+    return hits
 
 
 # ---------------------------------------------------------------------------
@@ -995,12 +1168,11 @@ def main() -> int:
 
     # ── 9. Extract dependencies ───────────────────────────────────────────────
     # Get repo_id for dependency tracking
-    conn = get_db_connection()
-    repo_row = conn.execute(
-        "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)",
-        (args.experiment, args.repo)
-    ).fetchone()
-    conn.close()
+    with get_db_connection() as conn:
+        repo_row = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)",
+            (args.experiment, args.repo)
+        ).fetchone()
     
     if repo_row:
         repo_id = str(repo_row[0])
@@ -1009,6 +1181,15 @@ def main() -> int:
             experiment_id=args.experiment,
             repo_id=repo_id,
         )
+
+    # ── 10. Detect known external (egress) services ───────────────────────────
+    print("\n[Phase 2] Scanning for known external services (egress) ...")
+    ext_hits = _detect_external_services(target, args.experiment, args.repo)
+    if ext_hits:
+        for h in ext_hits:
+            print(f"  ✓ {h['name']} ({h['category']}) — detected in {h['file']}:{h['line']}")
+    else:
+        print("  (none detected)")
 
     print(f"\n[Phase 2] Complete — {len(flat)} metadata entries, summary mode: {summary_key}")
     return 0
