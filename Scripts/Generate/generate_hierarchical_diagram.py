@@ -396,14 +396,135 @@ class HierarchicalDiagramBuilder:
 
         _SKIP_DIRS = {'test', '.git', 'bin', 'obj', 'node_modules', '__pycache__'}
 
+        # ── Pass 0: Scan Terraform module blocks for per-workload dependencies ──
+        # Terraform ``module`` blocks for AKS workloads contain ``app_name`` (the
+        # workload name) and ``secrets``/``config`` maps that explicitly list which
+        # Azure resources each workload depends on.  Reading these gives us
+        # accurate per-workload connections for:
+        #   • ApplicationInsights__ConnectionString → App Insights
+        #   • ConnectionStrings__SqlServer          → SQL Server
+        # rather than guessing from global hiera files or appsettings.json.
+        #
+        # This pass runs FIRST so that subsequent passes can skip workloads that
+        # are already correctly wired.
+        _tf_workload_sql_linked: set = set()    # workload names already linked to SQL
+        _tf_workload_ai_linked: set = set()     # workload names already linked to App Insights
+
+        # Helpers to extract locals from .tf files (resolve app_name = local.xxx)
+        _locals_dict: Dict[str, str] = {}
+        _locals_assign_re = re.compile(r'^\s+([a-z][a-z0-9_]+)\s*=\s*"([^"]*)"', re.M)
+        for _tf in root.rglob('*.tf'):
+            if any(p in _tf.parts for p in {'.git', '.terraform'}):
+                continue
+            try:
+                _tf_text = _tf.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                continue
+            for _lm in re.finditer(r'^\s*locals\s*\{', _tf_text, re.M):
+                _ls, _ld = _lm.end(), 1
+                _li = _ls
+                while _li < len(_tf_text) and _ld > 0:
+                    if _tf_text[_li] == '{':
+                        _ld += 1
+                    elif _tf_text[_li] == '}':
+                        _ld -= 1
+                    _li += 1
+                for _am in _locals_assign_re.finditer(_tf_text[_ls:_li - 1]):
+                    _locals_dict[_am.group(1)] = _am.group(2)
+
+        # Regex patterns for module-block attribute extraction
+        _mod_block_re = re.compile(
+            r'^\s*module\s+"[^"]+"\s*\{[^}]*\}(?:\s*\{[^}]*\})*', re.M | re.S
+        )
+        _app_name_re = re.compile(
+            r'app_name\s*=\s*(?:"([^"]+)"|local\.([a-z][a-z0-9_]+))', re.I
+        )
+        _ai_secret_re = re.compile(
+            r'ApplicationInsights__ConnectionString\s*=\s*azurerm_application_insights\.([a-z][a-z0-9_\-]+)\.',
+            re.I,
+        )
+        _sql_secret_re = re.compile(
+            r'ConnectionStrings__\w*[Ss]ql\w*\s*=\s*var\.',
+            re.I,
+        )
+
+        def _extract_module_blocks(tf_text: str):
+            """Yield raw text of each top-level module { ... } block."""
+            i = 0
+            lines = tf_text.splitlines(keepends=True)
+            mod_start_re = re.compile(r'^\s*module\s+"[^"]+"\s*\{')
+            while i < len(lines):
+                if mod_start_re.match(lines[i]):
+                    depth = 0
+                    start = i
+                    while i < len(lines):
+                        depth += lines[i].count('{') - lines[i].count('}')
+                        i += 1
+                        if depth <= 0:
+                            break
+                    yield ''.join(lines[start:i])
+                else:
+                    i += 1
+
+        for _tf in root.rglob('*.tf'):
+            if any(p in _tf.parts for p in {'.git', '.terraform'}):
+                continue
+            try:
+                _tf_text = _tf.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                continue
+            _rel_tf = str(_tf.relative_to(root)).replace('\\', '/')
+            for _mod_text in _extract_module_blocks(_tf_text):
+                # Resolve the workload name from app_name (literal or local ref)
+                _an_m = _app_name_re.search(_mod_text)
+                if not _an_m:
+                    continue
+                _wl_name = _an_m.group(1) or _locals_dict.get(_an_m.group(2) or '', '')
+                if not _wl_name:
+                    continue
+
+                # Confirm this workload exists in our resource set
+                _wl_resource = next(
+                    (wl for wl in k8s_workloads if wl['resource_name'] == _wl_name),
+                    None,
+                )
+                if not _wl_resource:
+                    continue
+
+                # App Insights connection
+                _ai_m = _ai_secret_re.search(_mod_text)
+                if _ai_m:
+                    # Find the matching App Insights resource or create a synthetic one
+                    _ai_node = next(
+                        (r['resource_name'] for r in self.resources
+                         if 'application_insights' in (r.get('resource_type') or '').lower()),
+                        None,
+                    )
+                    if _ai_node is None:
+                        _ai_node = _find_or_add_monitoring_node(_rel_tf)
+                    if _ai_node:
+                        _add_edge(_wl_name, _ai_node)
+                        _tf_workload_ai_linked.add(_wl_name)
+
+                # SQL connection
+                if _sql_secret_re.search(_mod_text):
+                    _sql_node = _any_sql_node_exists()
+                    if _sql_node:
+                        _add_edge(_wl_name, _sql_node)
+                        _tf_workload_sql_linked.add(_wl_name)
+
         # ── Pass 1: Scan hiera / values YAML for SQL connection strings ────────
         # These contain actual server addresses (even if templated) so we get
         # meaningful database names. Process these BEFORE appsettings so that
         # subsequent passes can link to real SQL nodes rather than creating
         # key-name-derived placeholder nodes.
+        #
+        # When a hiera variable has a workload-specific prefix (e.g.
+        # ``aks_helloworld_drtestapp_connectionstring``), only link workloads
+        # whose name tokens overlap with that prefix — not all API workloads.
         _HIERA_SQL_RE = re.compile(
-            r'Server=tcp:[^;"\s]*\.database\.windows\.net[^;"\s]*;[^"\n]*Database=([^;"\n"\']+)',
-            re.IGNORECASE,
+            r'^([a-z][a-z0-9_]*):\s*"?Server=tcp:[^;"\s]*\.database\.windows\.net[^;"\s]*;[^"\n]*Database=([^;"\n"\']+)',
+            re.IGNORECASE | re.M,
         )
         for yaml_file in root.rglob('*.yaml'):
             if any(p in yaml_file.parts for p in {'.git', '__pycache__', 'node_modules'}):
@@ -419,17 +540,48 @@ class HierarchicalDiagramBuilder:
             except Exception:
                 continue
             for m in _HIERA_SQL_RE.finditer(text):
-                db_name = m.group(1).strip().strip('"\'')
-                # Hiera SQL = infrastructure config → link to API workloads (not workers)
-                api_workloads = [
-                    wl for wl in k8s_workloads
-                    if wl.get('resource_type') == 'kubernetes_service'
-                    or 'api' in wl['resource_name'].lower()
-                ]
-                target_wls = api_workloads if api_workloads else k8s_workloads
+                var_name = m.group(1)
+                db_name = m.group(2).strip().strip('"\'')
                 rel_path = str(yaml_file.relative_to(root)).replace('\\', '/')
                 sql_node = _ensure_sql_node(db_name, '*.database.windows.net (hiera)', rel_path)
-                for wl in target_wls:
+
+                # Derive a workload-discriminating stub from the variable name by
+                # stripping common connection-string suffixes.
+                var_stub = re.sub(
+                    r'[_-]?(connection[_-]?string|conn[_-]?str|connectionstring)[_-]?.*$',
+                    '',
+                    var_name,
+                    flags=re.IGNORECASE,
+                ).rstrip('_-')
+                var_tokens = _name_tokens(var_stub)  # e.g. {"aks", "helloworld", "drtestapp"}
+
+                # Find workloads whose name tokens overlap with the variable stub.
+                # Require at least 2 token matches to avoid spurious connections.
+                # Skip workloads already linked via Terraform module analysis (Pass 0).
+                targeted = [
+                    wl for wl in k8s_workloads
+                    if wl['resource_name'] not in _tf_workload_sql_linked
+                    and len(var_tokens & _name_tokens(wl['resource_name'])) >= 2
+                ]
+                # When Pass 0 already wired at least one workload to SQL via Terraform
+                # module analysis, the remaining workloads almost certainly don't need
+                # this SQL connection — they just share common name tokens (e.g. "aks",
+                # "helloworld") with the hiera variable.  Only proceed with the hiera
+                # fallback if Pass 0 produced no SQL links at all.
+                if _tf_workload_sql_linked:
+                    targeted = []   # Pass 0 has authoritative SQL wiring; skip hiera
+                if not targeted:
+                    # Fallback: link to api-type workloads that aren't already wired
+                    targeted = [
+                        wl for wl in k8s_workloads
+                        if wl['resource_name'] not in _tf_workload_sql_linked
+                        and (wl.get('resource_type') == 'kubernetes_service'
+                             or 'api' in wl['resource_name'].lower())
+                    ]
+                if not targeted:
+                    targeted = [wl for wl in k8s_workloads
+                                if wl['resource_name'] not in _tf_workload_sql_linked]
+                for wl in targeted:
                     _add_edge(wl['resource_name'], sql_node)
 
         # ── Pass 2: Scan appsettings*.json ────────────────────────────────────
@@ -682,6 +834,91 @@ class HierarchicalDiagramBuilder:
             return True
 
         return any(tok in rtype for tok in ['deployment', 'service', 'container'])
+
+    def _tokenize_match_name(self, value: str) -> List[str]:
+        """Split a resource name into lowercase alphanumeric tokens for fuzzy matching."""
+        return [tok for tok in re.split(r'[^a-z0-9]+', str(value or '').lower()) if tok]
+
+    def _candidate_name_forms(self, value: str) -> List[str]:
+        """Return progressively more generic normalized forms of a resource name."""
+        tokens = self._tokenize_match_name(value)
+        if not tokens:
+            return []
+
+        generic_suffixes = {'sql', 'api', 'svc', 'service', 'app', 'web', 'http', 'https'}
+        forms: List[str] = []
+
+        def _add_form(parts: List[str]) -> None:
+            candidate = ''.join(parts)
+            if candidate and candidate not in forms:
+                forms.append(candidate)
+
+        _add_form(tokens)
+
+        trimmed = list(tokens)
+        while trimmed and (trimmed[-1] in generic_suffixes or re.fullmatch(r'v\d+', trimmed[-1])):
+            trimmed = trimmed[:-1]
+        _add_form(trimmed)
+
+        return forms
+
+    def _match_rank_api_to_workload(self, api_name: str, workload_name: str, workload_type: str) -> Tuple[int, int, int, int, int]:
+        """Score an API→workload match, preferring exact service names over broad prefixes."""
+        service_tokens = self._tokenize_match_name(workload_name)
+        if not service_tokens:
+            return (0, 0, 0, 0, 0)
+
+        service_joined = ''.join(service_tokens)
+        best = (0, 0, 0, 0, 0)
+
+        for candidate in self._candidate_name_forms(api_name):
+            if not candidate:
+                continue
+
+            if candidate == service_joined:
+                rank = 5
+                extra_chars = 0
+            else:
+                rank = 0
+                extra_chars = len(service_joined) - len(candidate)
+
+                prefix_window = ''.join(service_tokens[:len(service_tokens)])
+                if service_joined.startswith(candidate):
+                    rank = 4
+                else:
+                    for start in range(len(service_tokens)):
+                        for end in range(start + 1, len(service_tokens) + 1):
+                            segment = ''.join(service_tokens[start:end])
+                            if segment != candidate:
+                                continue
+                            rank = 3 if start > 0 else 4
+                            break
+                        if rank:
+                            break
+
+                if rank == 0 and candidate in service_joined:
+                    rank = 2
+
+                if rank == 0:
+                    api_tokens = set(self._tokenize_match_name(api_name))
+                    overlap = len(api_tokens & set(service_tokens))
+                    if overlap:
+                        score = (1, overlap, -len(service_tokens), 1 if workload_type == 'kubernetes_service' else 0, 1 if 'api' in workload_name.lower() else 0)
+                        if score > best:
+                            best = score
+                    continue
+
+            score = (
+                rank,
+                len(candidate),
+                -max(extra_chars, 0),
+                1 if workload_type == 'kubernetes_service' else 0,
+                1 if 'api' in workload_name.lower() else 0,
+            )
+            if score > best:
+                best = score
+
+        return best
 
     def _ensure_synthetic_sql_server_node(self, server_name: Optional[str] = None) -> str:
         """Ensure an explicit SQL Server node exists for architecture dependency views."""
@@ -1281,12 +1518,37 @@ class HierarchicalDiagramBuilder:
         return lines
 
     def render_monitoring(self, monitoring_resources: List[dict]) -> List[str]:
-        """Render observability resources (App Insights, Log Analytics, monitors, alerts) as a subgraph."""
+        """Render observability resources (App Insights, Log Analytics, monitors, alerts) as a subgraph.
+        
+        Only include resources that have incoming or outgoing arrows (connections).
+        """
         if not monitoring_resources:
             return []
 
+        # Build set of all connected resource names (excluding administrative edge types)
+        SKIP_EDGE_TYPES = frozenset({
+            'contains', 'grants_access_to', 'parent_of', 'child_of',
+            'resource_group_member', 'has_role',
+        })
+        connected_resources = set()
+        for conn in self.connections:
+            if (conn.get('connection_type') or '').lower() not in SKIP_EDGE_TYPES:
+                src = conn.get('source')
+                tgt = conn.get('target')
+                if src:
+                    connected_resources.add(src)
+                if tgt:
+                    connected_resources.add(tgt)
+        
+        # Filter monitoring resources to only those with connections
+        resources_to_render = [r for r in monitoring_resources 
+                              if r['resource_name'] in connected_resources]
+        
+        if not resources_to_render:
+            return []
+
         lines = ["  subgraph monitoring[Monitoring & Logging]"]
-        for res in monitoring_resources:
+        for res in resources_to_render:
             node_id = sanitize_id(res['resource_name'])
             rtype = (res.get('resource_type') or '').lower()
             if 'application_insights' in rtype or 'appinsights' in rtype:
@@ -1386,9 +1648,36 @@ class HierarchicalDiagramBuilder:
             else:
                 lines.append(f"  {src_id} {arrow} {tgt_id}")
 
+        # Add red styling for unconfirmed connections (Internet connections)
+        link_index = 0
+        for i, conn in enumerate(self.connections):
+            src = conn.get('source')
+            tgt = conn.get('target')
+            
+            if not src or not tgt:
+                continue
+            if (conn.get('connection_type') or '').lower() in SKIP_EDGE_TYPES:
+                continue
+            if src == tgt or sanitize_id(src) == sanitize_id(tgt):
+                continue
+            if tgt == '__apim_subgraph__':
+                link_index += 1
+                continue
+            if src != 'Internet' and src not in self.emitted_nodes:
+                continue
+            if tgt != 'Internet' and tgt not in self.emitted_nodes:
+                continue
+            
+            # Color unconfirmed Internet connections red
+            is_confirmed = conn.get('confirmed', True)
+            if not is_confirmed and src == 'Internet':
+                lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
+            
+            link_index += 1
+
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
-            lines.insert(0, '  internet[/"🌐 Internet/Client"/]')
+            lines.insert(0, '  internet[/"🌐 Internet"/]')
 
         return lines
     
@@ -1579,6 +1868,32 @@ class HierarchicalDiagramBuilder:
                 })
                 connected_pairs.add(pair_key)
         
+        # Add unconfirmed Internet → AKS cluster connections when visibility is unknown
+        k8s_clusters = [r for r in self.resources if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()]
+        for cluster in k8s_clusters:
+            cluster_name = cluster['resource_name']
+            pair_key = ('Internet', cluster_name)
+            
+            # Only add if not already connected and if cluster doesn't have explicit internet_access=false
+            if pair_key not in connected_pairs:
+                has_explicit_private = False
+                # Check if this cluster has an explicit private setting
+                for conn in self.connections:
+                    if conn.get('target') == cluster_name and (conn.get('connection_type') or '').lower() in ['vnet_only', 'private']:
+                        has_explicit_private = True
+                        break
+                
+                if not has_explicit_private:
+                    self.connections.append({
+                        'source': 'Internet',
+                        'target': cluster_name,
+                        'connection_type': 'unconfirmed_k8s_access',
+                        'protocol': 'https',
+                        'confirmed': False
+                    })
+                    connected_pairs.add(pair_key)
+                    has_internet = True
+        
         return has_internet
     
     def generate(self) -> str:
@@ -1693,8 +2008,6 @@ class HierarchicalDiagramBuilder:
         # ── Fallback APIM→K8s routing for APIs with no explicit routes_ingress_to ──
         _routed_apis = {c['source'] for c in self.connections if c.get('connection_type') == 'routes_ingress_to'}
         _k8s_svcs = [r for r in self.resources if r.get('resource_type') in ('kubernetes_service', 'kubernetes_deployment')]
-        # Common technology/type suffixes that should be stripped before matching
-        _API_STRIP = re.compile(r'(sql|api|svc|service|app|web|http|https|v\d+)$')
         # Only route actual API resources (not policies, operations, products, etc.)
         _APIM_API_TYPES = {'azurerm_api_management_api', 'apim_api', 'api_management_api'}
         for _api_r in apim_apis:
@@ -1704,34 +2017,17 @@ class HierarchicalDiagramBuilder:
                 continue
             if _api_r['resource_name'] in _routed_apis:
                 continue
-            _api_norm = re.sub(r'[^a-z0-9]', '', _api_r['resource_name'].lower())
-            # Try progressively shorter prefixes (strip trailing tech tokens)
-            _api_candidates = [_api_norm]
-            _stripped = _API_STRIP.sub('', _api_norm)
-            if _stripped and _stripped != _api_norm:
-                _api_candidates.append(_stripped)
-            _best, _best_score = None, 0
+            _best = None
+            _best_score = (0, 0, 0, 0, 0)
             for _svc in _k8s_svcs:
-                _svc_norm = re.sub(r'[^a-z0-9]', '', _svc['resource_name'].lower())
-                # Prefer substring containment (any candidate prefix)
-                _score = 0
-                for _cand in _api_candidates:
-                    if _cand and _cand in _svc_norm:
-                        _score = max(_score, len(_cand))
-                if _score == 0:
-                    # Fall back to token overlap
-                    _at = set(re.split(r'[_\-]+', _api_r['resource_name'].lower()))
-                    _st = set(re.split(r'[_\-]+', _svc['resource_name'].lower()))
-                    _score = len(_at & _st) * 3
-                # Tie-break: prefer kubernetes_service and names containing 'api' over workers/jobs
-                if _score == _best_score and _score > 0 and _best is not None:
-                    _prefer = (_svc.get('resource_type') == 'kubernetes_service' or 'api' in _svc['resource_name'].lower())
-                    _prev_prefer = (_best.get('resource_type') == 'kubernetes_service' or 'api' in _best['resource_name'].lower())
-                    if _prefer and not _prev_prefer:
-                        _best = _svc
-                elif _score > _best_score:
+                _score = self._match_rank_api_to_workload(
+                    _api_r['resource_name'],
+                    _svc['resource_name'],
+                    _svc.get('resource_type') or '',
+                )
+                if _score > _best_score:
                     _best_score, _best = _score, _svc
-            if _best and _best_score > 0:
+            if _best and _best_score[0] > 0:
                 self.connections.append({
                     'source': _api_r['resource_name'],
                     'target': _best['resource_name'],
