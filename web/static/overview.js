@@ -1,5 +1,298 @@
 // overview.js - handles AI analysis controls in Overview and TLDR tabs
 (function () {
+  function initModuleMapping(container) {
+    var section = (container || document).querySelector('.module-mapping-section');
+    if (!section) return;
+
+    var list = section.querySelector('#module-mapping-list');
+    if (!list || list.children.length) return; // already populated
+
+    var depsEl  = section.querySelector('script.module-mapping-data');
+    var reposEl = section.querySelector('script.module-mapping-repos');
+    if (!depsEl) return;
+
+    var moduleDeps, availableRepos;
+    try {
+      moduleDeps     = JSON.parse(depsEl.textContent);
+      availableRepos = reposEl ? JSON.parse(reposEl.textContent) : [];
+    } catch (e) {
+      console.warn('Module mapping data parse error:', e);
+      return;
+    }
+
+    var experimentId = (section.dataset.experimentId || '').trim();
+    var repoName     = (section.dataset.repoName || '').trim();
+
+    function escHtml(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function baseName(p) {
+      return String(p || '').split(/[/\\]/).filter(Boolean).pop() || String(p || '');
+    }
+    function inferRepoFromSource(source) {
+      if (!source) return null;
+      var m = source.match(/_git\/([^\/\?#]+)/);
+      if (m) return decodeURIComponent(m[1]);
+      m = source.match(/(?:github|gitlab)\.com\/[^\/]+\/([^\/\?#.]+)/);
+      if (m) return m[1];
+      return null;
+    }
+    function repoMatchScore(rName, suggested) {
+      if (!rName || !suggested) return 0;
+      var r = rName.toLowerCase(), s = suggested.toLowerCase();
+      if (r === s) return 3;
+      if (r.includes(s) || s.includes(r)) return 2;
+      var rWords = r.split(/[-_]+/), sWords = s.split(/[-_]+/);
+      var overlap = rWords.filter(function(w) { return sWords.includes(w) && w.length > 2; }).length;
+      return overlap > 0 ? 1 : 0;
+    }
+
+    moduleDeps.forEach(function(sourceGroup) {
+      // New grouped structure: {source, modules: []}
+      if (sourceGroup.modules && Array.isArray(sourceGroup.modules)) {
+        // Group header
+        var groupHeader = document.createElement('li');
+        groupHeader.className = 'module-dep-group-header';
+        
+        var sourceDiv = document.createElement('div');
+        sourceDiv.className = 'module-dep-row module-dep-row--stack';
+        sourceDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(sourceGroup.source || '') + '</code></pre>';
+        groupHeader.appendChild(sourceDiv);
+        list.appendChild(groupHeader);
+        
+        // Render each module in this source group
+        sourceGroup.modules.forEach(function(mod) {
+          var suggested = inferRepoFromSource(sourceGroup.source || '');
+          var cm = mod.current_mapping;
+          var currentRepo = null, isExternal = false;
+          if (cm && typeof cm === 'object') {
+            if (cm.external) isExternal = true;
+            else currentRepo = cm.repo || null;
+          } else if (typeof cm === 'string') {
+            currentRepo = cm;
+          }
+
+          var li = document.createElement('li');
+          li.className = 'module-dep-item module-dep-item--indented';
+          if (currentRepo || isExternal) li.classList.add('module-dep-item--mapped');
+
+          var nameDiv = document.createElement('div');
+          nameDiv.className = 'module-dep-name';
+          nameDiv.textContent = mod.name || '';
+          if (currentRepo) {
+            var b1 = document.createElement('span');
+            b1.className = 'module-dep-badge';
+            b1.textContent = '✓ ' + currentRepo;
+            nameDiv.appendChild(b1);
+          } else if (isExternal) {
+            var b2 = document.createElement('span');
+            b2.className = 'module-dep-badge module-dep-badge--external';
+            b2.textContent = '↗ External';
+            nameDiv.appendChild(b2);
+          }
+          li.appendChild(nameDiv);
+
+          if (mod.file) {
+            var fileDiv = document.createElement('div');
+            fileDiv.className = 'module-dep-row';
+            var fh = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
+            if (mod.line) fh += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
+            fileDiv.innerHTML = fh;
+            li.appendChild(fileDiv);
+          }
+
+          var mapDiv = document.createElement('div');
+          mapDiv.className = 'module-dep-row module-dep-map-row';
+          var lbl = document.createElement('span');
+          lbl.className = 'module-dep-label';
+          lbl.textContent = 'Maps to';
+          mapDiv.appendChild(lbl);
+
+          var sel = document.createElement('select');
+          sel.className = 'module-repo-select';
+          sel.dataset.moduleName = mod.name || '';
+          sel.appendChild(new Option('— Please Select —', ''));
+
+          var ranked = availableRepos
+            .map(function(r) { return { name: r, score: repoMatchScore(r, suggested) }; })
+            .filter(function(r) { return r.score > 0; })
+            .sort(function(a, b) { return b.score - a.score; });
+
+          if (ranked.length) {
+            var sugGroup = document.createElement('optgroup');
+            sugGroup.label = 'Suggested';
+            ranked.forEach(function(r) { sugGroup.appendChild(new Option(r.name, r.name)); });
+            sel.appendChild(sugGroup);
+          }
+          var sugNames = new Set(ranked.map(function(r) { return r.name; }));
+          var remaining = availableRepos.filter(function(r) { return !sugNames.has(r); });
+          if (remaining.length) {
+            var allGroup = document.createElement('optgroup');
+            allGroup.label = 'All repos';
+            remaining.forEach(function(r) { allGroup.appendChild(new Option(r, r)); });
+            sel.appendChild(allGroup);
+          }
+          sel.appendChild(new Option('↗ External / Third-party', '__external__'));
+
+          var valueToSet = isExternal ? '__external__' : (currentRepo || (ranked.length === 1 ? ranked[0].name : ''));
+          if (valueToSet) {
+            for (var i = 0; i < sel.options.length; i++) {
+              if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
+            }
+          }
+          mapDiv.appendChild(sel);
+          li.appendChild(mapDiv);
+          list.appendChild(li);
+        });
+      } else {
+        // Fallback for old flat format (backward compatibility)
+        var mod = sourceGroup;
+        var suggested = inferRepoFromSource(mod.source || '');
+        var cm = mod.current_mapping;
+        var currentRepo = null, isExternal = false;
+        if (cm && typeof cm === 'object') {
+          if (cm.external) isExternal = true;
+          else currentRepo = cm.repo || null;
+        } else if (typeof cm === 'string') {
+          currentRepo = cm;
+        }
+
+        var li = document.createElement('li');
+        li.className = 'module-dep-item';
+        if (currentRepo || isExternal) li.classList.add('module-dep-item--mapped');
+
+        var nameDiv = document.createElement('div');
+        nameDiv.className = 'module-dep-name';
+        nameDiv.textContent = mod.name || '';
+        if (currentRepo) {
+          var b1 = document.createElement('span');
+          b1.className = 'module-dep-badge';
+          b1.textContent = '✓ ' + currentRepo;
+          nameDiv.appendChild(b1);
+        } else if (isExternal) {
+          var b2 = document.createElement('span');
+          b2.className = 'module-dep-badge module-dep-badge--external';
+          b2.textContent = '↗ External';
+          nameDiv.appendChild(b2);
+        }
+        li.appendChild(nameDiv);
+
+        if (mod.source) {
+          var srcDiv = document.createElement('div');
+          srcDiv.className = 'module-dep-row module-dep-row--stack';
+          srcDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(mod.source) + '</code></pre>';
+          li.appendChild(srcDiv);
+        }
+        if (mod.file) {
+          var fileDiv = document.createElement('div');
+          fileDiv.className = 'module-dep-row';
+          var fh = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
+          if (mod.line) fh += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
+          fileDiv.innerHTML = fh;
+          li.appendChild(fileDiv);
+        }
+
+        var mapDiv = document.createElement('div');
+        mapDiv.className = 'module-dep-row module-dep-map-row';
+        var lbl = document.createElement('span');
+        lbl.className = 'module-dep-label';
+        lbl.textContent = 'Maps to';
+        mapDiv.appendChild(lbl);
+
+        var sel = document.createElement('select');
+        sel.className = 'module-repo-select';
+        sel.dataset.moduleName = mod.name || '';
+        sel.appendChild(new Option('— Please Select —', ''));
+
+        var ranked = availableRepos
+          .map(function(r) { return { name: r, score: repoMatchScore(r, suggested) }; })
+          .filter(function(r) { return r.score > 0; })
+          .sort(function(a, b) { return b.score - a.score; });
+
+        if (ranked.length) {
+          var sugGroup = document.createElement('optgroup');
+          sugGroup.label = 'Suggested';
+          ranked.forEach(function(r) { sugGroup.appendChild(new Option(r.name, r.name)); });
+          sel.appendChild(sugGroup);
+        }
+        var sugNames = new Set(ranked.map(function(r) { return r.name; }));
+        var remaining = availableRepos.filter(function(r) { return !sugNames.has(r); });
+        if (remaining.length) {
+          var allGroup = document.createElement('optgroup');
+          allGroup.label = 'All repos';
+          remaining.forEach(function(r) { allGroup.appendChild(new Option(r, r)); });
+          sel.appendChild(allGroup);
+        }
+        sel.appendChild(new Option('↗ External / Third-party', '__external__'));
+
+        var valueToSet = isExternal ? '__external__' : (currentRepo || (ranked.length === 1 ? ranked[0].name : ''));
+        if (valueToSet) {
+          for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
+          }
+        }
+        mapDiv.appendChild(sel);
+        li.appendChild(mapDiv);
+        list.appendChild(li);
+      }
+    });
+
+    var saveBtn  = section.querySelector('#save-module-mappings-btn');
+    var statusEl = section.querySelector('#module-mapping-status');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function() {
+        var selects = list.querySelectorAll('select.module-repo-select');
+        var mappings = {};
+        selects.forEach(function(s) {
+          var modName = s.dataset.moduleName;
+          if (!modName || !s.value) return;
+          mappings[modName] = s.value === '__external__' ? { repo: null, external: true } : { repo: s.value };
+        });
+        if (!Object.keys(mappings).length) {
+          if (statusEl) statusEl.textContent = 'Nothing to save — select at least one mapping.';
+          setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
+          return;
+        }
+        saveBtn.disabled = true;
+        if (statusEl) statusEl.textContent = 'Saving…';
+        fetch('/api/module/mappings/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(repoName), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mappings: mappings })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          saveBtn.disabled = false;
+          if (d.ok) {
+            if (statusEl) statusEl.textContent = '✓ Saved ' + (d.saved || Object.keys(mappings).length) + ' mapping(s)';
+            selects.forEach(function(s) {
+              if (!s.value) return;
+              var item = s.closest('.module-dep-item');
+              if (!item) return;
+              var nd = item.querySelector('.module-dep-name');
+              var eb = nd && nd.querySelector('.module-dep-badge');
+              if (eb) eb.remove();
+              if (nd && s.value) {
+                var nb = document.createElement('span');
+                nb.className = s.value === '__external__' ? 'module-dep-badge module-dep-badge--external' : 'module-dep-badge';
+                nb.textContent = s.value === '__external__' ? '↗ External' : '✓ ' + s.value;
+                nd.appendChild(nb);
+                item.classList.add('module-dep-item--mapped');
+              }
+            });
+          } else {
+            if (statusEl) statusEl.textContent = 'Error: ' + (d.error || 'unknown');
+          }
+          setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 4000);
+        })
+        .catch(function(e) {
+          saveBtn.disabled = false;
+          if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+        });
+      });
+    }
+  }
+
   function initOverview(container) {
     if (!container) container = document;
 
@@ -361,6 +654,7 @@
     }
 
     pollStatus();
+    initModuleMapping(container);
   }
 
   window.initOverview = initOverview;

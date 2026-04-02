@@ -78,6 +78,7 @@
   const zoomInBtn       = document.getElementById('zoom-in-btn');
   const zoomOutBtn      = document.getElementById('zoom-out-btn');
   const zoomResetBtn    = document.getElementById('zoom-reset-btn');
+  const refreshDiagramBtn = document.getElementById('refresh-diagram-btn');
   const toggleApiOpsBtn = document.getElementById('toggle-api-ops-btn');
   const toggleLogBtn    = document.getElementById('toggle-log-btn');
   const diagramWrap     = document.getElementById('diagram-zoom-wrap');
@@ -143,6 +144,7 @@
   let scanInProgress  = false;
   let toolbarStopHandler = null;
   let toolbarStopEnabled = false;
+  let pastScansFilteredRepoName = ''; // Track which repo the past scans dropdown is filtered for
   let toolbarStopVisible = false;
 
   function getToolbarStopLabel(stateLabel) {
@@ -291,6 +293,7 @@
   if (zoomInBtn)    zoomInBtn.addEventListener('click',    () => { zoomLevel = Math.min(ZOOM_MAX, +(zoomLevel + ZOOM_STEP).toFixed(3)); applyTransform(); });
   if (zoomOutBtn)   zoomOutBtn.addEventListener('click',   () => { zoomLevel = Math.max(ZOOM_MIN, +(zoomLevel - ZOOM_STEP).toFixed(3)); applyTransform(); });
   if (zoomResetBtn) zoomResetBtn.addEventListener('click', () => fitDiagram());
+  if (refreshDiagramBtn) refreshDiagramBtn.addEventListener('click', () => refreshCurrentDiagram());
 
   // Wheel zoom on diagram
   if (diagramWrap) {
@@ -710,6 +713,39 @@
     await _runMermaid(nodes);
   }
 
+  async function refreshCurrentDiagram() {
+    const activeView = viewsEl && viewsEl.querySelector('.diagram-view.active');
+    if (!activeView) return;
+    
+    const mermaidEl = activeView.querySelector('.mermaid');
+    if (!mermaidEl) return;
+    
+    // Remove all SVG elements to force complete re-rendering
+    activeView.querySelectorAll('svg').forEach(svg => svg.remove());
+    
+    // Clear mermaid's internal rendering markers (both formats for compatibility)
+    delete mermaidEl.dataset.mermaidRendered;  // Clears data-mermaid-rendered attribute
+    mermaidEl.removeAttribute('data-processed');
+    
+    // Clear any mermaid internal state for this element
+    if (typeof mermaid !== 'undefined') {
+      try {
+        // Reset mermaid to allow re-processing
+        await mermaid.contentLoaded();
+      } catch (e) {
+        // contentLoaded might not work in all versions, continue anyway
+      }
+    }
+    
+    // Re-render the Mermaid diagram
+    try {
+      await renderMermaidInView(activeView);
+      scheduleFitDiagram(200);
+    } catch (e) {
+      console.warn('Mermaid refresh failed:', e);
+    }
+  }
+
   // Sanitize Mermaid source to fix common issues emitted by generator
   function sanitizeMermaid(src) {
     if (!src || typeof src !== 'string') return src;
@@ -1074,9 +1110,12 @@
     return `Scan ${scan.experiment_id}${dt ? ' - ' + dt : ''}${flag}`;
   }
 
-  function _populateScanSelects(scans) {
+  function _populateScanSelects(scans, repoName = '') {
     if (pastScanSelect) {
       pastScanSelect.innerHTML = '<option value="" disabled selected>— select —</option>';
+      // Store the repo name this dropdown is filtered for
+      pastScanSelect.dataset.filteredRepo = repoName;
+      pastScansFilteredRepoName = repoName;
       for (const s of scans) {
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
@@ -1119,7 +1158,7 @@
       const data = await resp.json();
       const scans = data.scans || [];
       if (scans.length > 0) {
-        _populateScanSelects(scans);
+        _populateScanSelects(scans, repoName);
         // Select the most recent scan by default
         const last = scans[scans.length - 1];
         if (pastScanSelect && last && last.experiment_id) {
@@ -1254,6 +1293,16 @@
   if (pastScanSelect) pastScanSelect.addEventListener('change', async () => {
     const expId = pastScanSelect.value;
     if (!expId) return;
+    
+    // Ensure the selected scan is from the currently selected repo
+    const currentlyFilteredRepo = pastScanSelect.dataset.filteredRepo || pastScansFilteredRepoName;
+    const selectedRepo = currentRepoName || resolveSelectedRepoName();
+    if (currentlyFilteredRepo && selectedRepo && currentlyFilteredRepo.toLowerCase() !== selectedRepo.toLowerCase()) {
+      // Dropdown is stale; reload it for the current repo
+      await loadPastScans(selectedRepo);
+      return;
+    }
+    
     // Mirror the Load button behavior
     if (loadScanBtn) loadScanBtn.disabled = true;
     setStatus(`Loading scan ${expId}…`);
@@ -1582,6 +1631,177 @@
     registerToolbarStop,
     setToolbarStopState,
     activateSectionKey,
+  };
+
+  // ── Overview section initializer ─────────────────────────────────────────────
+  window.initOverview = function initOverview(container) {
+    const actionsEl  = container.querySelector('.overview-actions');
+    if (!actionsEl) return;
+    const expId      = actionsEl.dataset.experimentId;
+    const repoName   = actionsEl.dataset.repoName;
+    const runAiBtn   = container.querySelector('#overview-run-ai-btn');
+    const genRulesBtn = container.querySelector('#overview-gen-rules-btn');
+    const statusEl   = container.querySelector('#overview-ai-status');
+
+    function setOvStatus(msg, type) {
+      if (!statusEl) return;
+      statusEl.textContent = msg;
+      statusEl.className = 'overview-ai-status' + (type ? ' overview-ai-status--' + type : '');
+    }
+
+    // Poll the analysis status endpoint until done/failed
+    function pollUntilDone(suffix, onDone) {
+      let attempts = 0;
+      const MAX = 180; // ~6 min
+      const suffixParam = suffix ? `&suffix=${encodeURIComponent(suffix)}` : '';
+      const timer = setInterval(async () => {
+        attempts++;
+        if (attempts > MAX) { clearInterval(timer); setOvStatus('Timed out', 'error'); return; }
+        try {
+          const r = await fetch(`/api/analysis/status/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}?_=${Date.now()}${suffixParam}`);
+          const d = await r.json();
+          if (d.status === 'completed') {
+            clearInterval(timer);
+            onDone(null);
+          } else if (d.status === 'failed') {
+            clearInterval(timer);
+            onDone(d.error || 'Unknown error');
+          }
+          // still 'running' — keep polling
+        } catch (e) { /* network hiccup, keep trying */ }
+      }, 2000);
+    }
+
+    if (runAiBtn) {
+      runAiBtn.addEventListener('click', async () => {
+        if (!expId || !repoName) { setOvStatus('No experiment selected', 'error'); return; }
+        runAiBtn.disabled = true;
+        if (genRulesBtn) genRulesBtn.disabled = true;
+        setOvStatus('⏳ Starting AI analysis…', 'busy');
+        try {
+          const r = await fetch(`/api/analysis/start/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`, { method: 'POST' });
+          const d = await r.json();
+          if (d.status === 'running' || d.status === 'started') {
+            setOvStatus('🤖 AI analysis running…', 'busy');
+            pollUntilDone('', (err) => {
+              runAiBtn.disabled = false;
+              if (genRulesBtn) genRulesBtn.disabled = false;
+              if (err) {
+                setOvStatus('⚠ Failed: ' + err, 'error');
+              } else {
+                setOvStatus('✅ Done — reloading…', 'ok');
+                setTimeout(() => {
+                  // Reload the overview tab to show fresh AI content
+                  try { window._triage.activateSectionKey('overview', expId, repoName); } catch (e) {}
+                }, 800);
+              }
+            });
+          } else if (d.status === 'already_running') {
+            setOvStatus('Already running…', 'busy');
+            runAiBtn.disabled = false;
+            if (genRulesBtn) genRulesBtn.disabled = false;
+          } else {
+            setOvStatus(d.error || 'Unexpected response', 'error');
+            runAiBtn.disabled = false;
+            if (genRulesBtn) genRulesBtn.disabled = false;
+          }
+        } catch (e) {
+          setOvStatus('⚠ ' + e.message, 'error');
+          runAiBtn.disabled = false;
+          if (genRulesBtn) genRulesBtn.disabled = false;
+        }
+      });
+    }
+
+    if (genRulesBtn) {
+      genRulesBtn.addEventListener('click', async () => {
+        if (!expId || !repoName) { setOvStatus('No experiment selected', 'error'); return; }
+        genRulesBtn.disabled = true;
+        if (runAiBtn) runAiBtn.disabled = true;
+        setOvStatus('⏳ Generating rules…', 'busy');
+        try {
+          const r = await fetch(`/api/analysis/generate_rules/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`, { method: 'POST' });
+          const d = await r.json();
+          if (d.status === 'running' || d.status === 'started') {
+            setOvStatus('⚙️ Generating opengrep rules…', 'busy');
+            const rulesKey = 'generate_rules';
+            pollUntilDone(rulesKey, (err) => {
+              genRulesBtn.disabled = false;
+              if (runAiBtn) runAiBtn.disabled = false;
+              if (err) {
+                setOvStatus('⚠ Rules failed: ' + err, 'error');
+              } else {
+                setOvStatus('✅ Rules generated', 'ok');
+                setTimeout(() => setOvStatus('Idle'), 4000);
+              }
+            });
+          } else {
+            setOvStatus(d.error || d.message || 'Error', 'error');
+            genRulesBtn.disabled = false;
+            if (runAiBtn) runAiBtn.disabled = false;
+          }
+        } catch (e) {
+          setOvStatus('⚠ ' + e.message, 'error');
+          genRulesBtn.disabled = false;
+          if (runAiBtn) runAiBtn.disabled = false;
+        }
+      });
+    }
+
+    // Re-render open questions widget if present
+    if (window._renderOpenQuestions) window._renderOpenQuestions();
+
+    // Wire up Finding Theme hypothesis confirmation buttons
+    (container || document).querySelectorAll('.theme-cards:not([data-themes-init])').forEach(function(cardsEl) {
+      cardsEl.setAttribute('data-themes-init', '1');
+      var thExpId    = cardsEl.dataset.experimentId;
+      var thRepoName = cardsEl.dataset.repoName;
+
+      cardsEl.querySelectorAll('.theme-card').forEach(function(card) {
+        var dataEl = card.querySelector('script.theme-data');
+        if (!dataEl) return;
+        var themeData;
+        try { themeData = JSON.parse(dataEl.textContent); } catch(e) { return; }
+
+        card.querySelectorAll('.theme-btns .oq-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var ans = btn.dataset.ans;
+            themeData.answer = ans;
+            card.classList.add('theme-card--answered');
+            card.querySelectorAll('.theme-btns .oq-btn').forEach(function(b) { b.classList.remove('oq-btn--active'); });
+            btn.classList.add('oq-btn--active');
+
+            var statusEl = card.querySelector('.oq-status');
+            if (statusEl) statusEl.textContent = 'Saving…';
+
+            var answerText = ans === 'yes' ? 'Yes' : ans === 'no' ? 'No' : "Don't know";
+            fetch('/api/subscription_context/' + encodeURIComponent(thExpId), {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                question: themeData.question,
+                answer: answerText,
+                scope: 'repo',
+                repo_name: thRepoName,
+                answered_by: 'user',
+                confidence: ans === 'dont_know' ? 0.5 : 1.0,
+                tags: 'finding_theme',
+              })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (statusEl) {
+                statusEl.textContent = d.status === 'ok' ? '✓ Saved' : ('⚠ ' + (d.error || 'error'));
+                setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
+              }
+            })
+            .catch(function() {
+              if (statusEl) { statusEl.textContent = '⚠ Failed'; setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000); }
+            });
+          });
+        });
+      });
+    });
   };
 
 })();
