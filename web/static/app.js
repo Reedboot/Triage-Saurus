@@ -385,27 +385,31 @@
 
   function initIngressApiDetails(sectionContent) {
     if (!sectionContent) return;
-    const table = sectionContent.querySelector('#section-api-details-table');
-    if (!table) return;
 
-    // Initialize toggle glyph state
-    table.querySelectorAll('.expand-toggle').forEach(toggle => {
-      toggle.dataset.iconCollapsed = toggle.dataset.iconCollapsed || '▶';
-      toggle.dataset.iconExpanded = toggle.dataset.iconExpanded || '▼';
-      toggle.textContent = toggle.dataset.iconCollapsed;
-    });
+    // Tables use id="section-api-details-table-<protocol>" — select all of them
+    const tables = sectionContent.querySelectorAll('table[id^="section-api-details-table"]');
+    if (!tables.length) return;
 
-    table.addEventListener('click', (event) => {
-      const toggle = event.target.closest('.expand-toggle');
-      if (!toggle || !table.contains(toggle)) return;
-      event.preventDefault();
-      const apiId = toggle.dataset.apiId;
-      if (!apiId) return;
-      const expanded = toggle.classList.toggle('expanded');
-      toggle.textContent = expanded ? (toggle.dataset.iconExpanded || '▼') : (toggle.dataset.iconCollapsed || '▶');
-      const childRows = table.querySelectorAll(`tr[data-parent-api="${apiId.replace(/"/g, '\\"')}"]`);
-      childRows.forEach(row => {
-        row.style.display = expanded ? '' : 'none';
+    tables.forEach(table => {
+      // Initialize toggle glyph state
+      table.querySelectorAll('.expand-toggle').forEach(toggle => {
+        toggle.dataset.iconCollapsed = toggle.dataset.iconCollapsed || '▶';
+        toggle.dataset.iconExpanded  = toggle.dataset.iconExpanded  || '▼';
+        toggle.textContent = toggle.dataset.iconCollapsed;
+      });
+
+      table.addEventListener('click', (event) => {
+        const toggle = event.target.closest('.expand-toggle');
+        if (!toggle || !table.contains(toggle)) return;
+        event.preventDefault();
+        const apiId = toggle.dataset.apiId;
+        if (!apiId) return;
+        const expanded = toggle.classList.toggle('expanded');
+        toggle.textContent = expanded ? (toggle.dataset.iconExpanded || '▼') : (toggle.dataset.iconCollapsed || '▶');
+        const childRows = table.querySelectorAll(`tr[data-parent-api="${apiId.replace(/"/g, '\\"')}"]`);
+        childRows.forEach(row => {
+          row.style.display = expanded ? '' : 'none';
+        });
       });
     });
   }

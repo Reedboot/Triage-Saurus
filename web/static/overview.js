@@ -48,193 +48,105 @@
     }
 
     moduleDeps.forEach(function(sourceGroup) {
-      // New grouped structure: {source, modules: []}
-      if (sourceGroup.modules && Array.isArray(sourceGroup.modules)) {
-        // Group header
-        var groupHeader = document.createElement('li');
-        groupHeader.className = 'module-dep-group-header';
-        
-        var sourceDiv = document.createElement('div');
-        sourceDiv.className = 'module-dep-row module-dep-row--stack';
-        sourceDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(sourceGroup.source || '') + '</code></pre>';
-        groupHeader.appendChild(sourceDiv);
-        list.appendChild(groupHeader);
-        
-        // Render each module in this source group
-        sourceGroup.modules.forEach(function(mod) {
-          var suggested = inferRepoFromSource(sourceGroup.source || '');
-          var cm = mod.current_mapping;
-          var currentRepo = null, isExternal = false;
-          if (cm && typeof cm === 'object') {
-            if (cm.external) isExternal = true;
-            else currentRepo = cm.repo || null;
-          } else if (typeof cm === 'string') {
-            currentRepo = cm;
-          }
+      var modules  = (sourceGroup.modules && Array.isArray(sourceGroup.modules)) ? sourceGroup.modules : [sourceGroup];
+      var source   = sourceGroup.source || (modules[0] && modules[0].source) || '';
+      var suggested = inferRepoFromSource(source);
 
-          var li = document.createElement('li');
-          li.className = 'module-dep-item module-dep-item--indented';
-          if (currentRepo || isExternal) li.classList.add('module-dep-item--mapped');
-
-          var nameDiv = document.createElement('div');
-          nameDiv.className = 'module-dep-name';
-          nameDiv.textContent = mod.name || '';
-          if (currentRepo) {
-            var b1 = document.createElement('span');
-            b1.className = 'module-dep-badge';
-            b1.textContent = '✓ ' + currentRepo;
-            nameDiv.appendChild(b1);
-          } else if (isExternal) {
-            var b2 = document.createElement('span');
-            b2.className = 'module-dep-badge module-dep-badge--external';
-            b2.textContent = '↗ External';
-            nameDiv.appendChild(b2);
-          }
-          li.appendChild(nameDiv);
-
-          if (mod.file) {
-            var fileDiv = document.createElement('div');
-            fileDiv.className = 'module-dep-row';
-            var fh = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
-            if (mod.line) fh += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
-            fileDiv.innerHTML = fh;
-            li.appendChild(fileDiv);
-          }
-
-          var mapDiv = document.createElement('div');
-          mapDiv.className = 'module-dep-row module-dep-map-row';
-          var lbl = document.createElement('span');
-          lbl.className = 'module-dep-label';
-          lbl.textContent = 'Maps to';
-          mapDiv.appendChild(lbl);
-
-          var sel = document.createElement('select');
-          sel.className = 'module-repo-select';
-          sel.dataset.moduleName = mod.name || '';
-          sel.appendChild(new Option('— Please Select —', ''));
-
-          var ranked = availableRepos
-            .map(function(r) { return { name: r, score: repoMatchScore(r, suggested) }; })
-            .filter(function(r) { return r.score > 0; })
-            .sort(function(a, b) { return b.score - a.score; });
-
-          if (ranked.length) {
-            var sugGroup = document.createElement('optgroup');
-            sugGroup.label = 'Suggested';
-            ranked.forEach(function(r) { sugGroup.appendChild(new Option(r.name, r.name)); });
-            sel.appendChild(sugGroup);
-          }
-          var sugNames = new Set(ranked.map(function(r) { return r.name; }));
-          var remaining = availableRepos.filter(function(r) { return !sugNames.has(r); });
-          if (remaining.length) {
-            var allGroup = document.createElement('optgroup');
-            allGroup.label = 'All repos';
-            remaining.forEach(function(r) { allGroup.appendChild(new Option(r, r)); });
-            sel.appendChild(allGroup);
-          }
-          sel.appendChild(new Option('↗ External / Third-party', '__external__'));
-
-          var valueToSet = isExternal ? '__external__' : (currentRepo || (ranked.length === 1 ? ranked[0].name : ''));
-          if (valueToSet) {
-            for (var i = 0; i < sel.options.length; i++) {
-              if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
-            }
-          }
-          mapDiv.appendChild(sel);
-          li.appendChild(mapDiv);
-          list.appendChild(li);
-        });
-      } else {
-        // Fallback for old flat format (backward compatibility)
-        var mod = sourceGroup;
-        var suggested = inferRepoFromSource(mod.source || '');
-        var cm = mod.current_mapping;
-        var currentRepo = null, isExternal = false;
+      // Determine current mapping from the first module that has one
+      // (all modules in a source group share the same target repo)
+      var currentRepo = null, isExternal = false;
+      for (var mi = 0; mi < modules.length; mi++) {
+        var cm = modules[mi].current_mapping;
         if (cm && typeof cm === 'object') {
-          if (cm.external) isExternal = true;
-          else currentRepo = cm.repo || null;
-        } else if (typeof cm === 'string') {
-          currentRepo = cm;
+          if (cm.external) { isExternal = true; currentRepo = null; break; }
+          if (cm.repo)     { currentRepo = cm.repo; break; }
+        } else if (typeof cm === 'string' && cm) {
+          currentRepo = cm; break;
         }
-
-        var li = document.createElement('li');
-        li.className = 'module-dep-item';
-        if (currentRepo || isExternal) li.classList.add('module-dep-item--mapped');
-
-        var nameDiv = document.createElement('div');
-        nameDiv.className = 'module-dep-name';
-        nameDiv.textContent = mod.name || '';
-        if (currentRepo) {
-          var b1 = document.createElement('span');
-          b1.className = 'module-dep-badge';
-          b1.textContent = '✓ ' + currentRepo;
-          nameDiv.appendChild(b1);
-        } else if (isExternal) {
-          var b2 = document.createElement('span');
-          b2.className = 'module-dep-badge module-dep-badge--external';
-          b2.textContent = '↗ External';
-          nameDiv.appendChild(b2);
-        }
-        li.appendChild(nameDiv);
-
-        if (mod.source) {
-          var srcDiv = document.createElement('div');
-          srcDiv.className = 'module-dep-row module-dep-row--stack';
-          srcDiv.innerHTML = '<span class="module-dep-label">Module source</span><pre class="md-code"><code>' + escHtml(mod.source) + '</code></pre>';
-          li.appendChild(srcDiv);
-        }
-        if (mod.file) {
-          var fileDiv = document.createElement('div');
-          fileDiv.className = 'module-dep-row';
-          var fh = '<span class="module-dep-label">Detected</span> <span class="file-link" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
-          if (mod.line) fh += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
-          fileDiv.innerHTML = fh;
-          li.appendChild(fileDiv);
-        }
-
-        var mapDiv = document.createElement('div');
-        mapDiv.className = 'module-dep-row module-dep-map-row';
-        var lbl = document.createElement('span');
-        lbl.className = 'module-dep-label';
-        lbl.textContent = 'Maps to';
-        mapDiv.appendChild(lbl);
-
-        var sel = document.createElement('select');
-        sel.className = 'module-repo-select';
-        sel.dataset.moduleName = mod.name || '';
-        sel.appendChild(new Option('— Please Select —', ''));
-
-        var ranked = availableRepos
-          .map(function(r) { return { name: r, score: repoMatchScore(r, suggested) }; })
-          .filter(function(r) { return r.score > 0; })
-          .sort(function(a, b) { return b.score - a.score; });
-
-        if (ranked.length) {
-          var sugGroup = document.createElement('optgroup');
-          sugGroup.label = 'Suggested';
-          ranked.forEach(function(r) { sugGroup.appendChild(new Option(r.name, r.name)); });
-          sel.appendChild(sugGroup);
-        }
-        var sugNames = new Set(ranked.map(function(r) { return r.name; }));
-        var remaining = availableRepos.filter(function(r) { return !sugNames.has(r); });
-        if (remaining.length) {
-          var allGroup = document.createElement('optgroup');
-          allGroup.label = 'All repos';
-          remaining.forEach(function(r) { allGroup.appendChild(new Option(r, r)); });
-          sel.appendChild(allGroup);
-        }
-        sel.appendChild(new Option('↗ External / Third-party', '__external__'));
-
-        var valueToSet = isExternal ? '__external__' : (currentRepo || (ranked.length === 1 ? ranked[0].name : ''));
-        if (valueToSet) {
-          for (var i = 0; i < sel.options.length; i++) {
-            if (sel.options[i].value === valueToSet) { sel.options[i].selected = true; break; }
-          }
-        }
-        mapDiv.appendChild(sel);
-        li.appendChild(mapDiv);
-        list.appendChild(li);
       }
+
+      // ── Card ──
+      var li = document.createElement('li');
+      li.className = 'module-dep-item' + (currentRepo || isExternal ? ' module-dep-item--mapped' : '');
+
+      // 1. "Module Source" label + URL
+      var srcLabel = document.createElement('div');
+      srcLabel.className = 'module-dep-label';
+      srcLabel.textContent = 'Module Source';
+      li.appendChild(srcLabel);
+
+      var srcPre = document.createElement('pre');
+      srcPre.className = 'md-code';
+      srcPre.style.margin = '4px 0 10px';
+      srcPre.innerHTML = '<code>' + escHtml(source || '(unknown source)') + '</code>';
+      li.appendChild(srcPre);
+
+      // 2. "Maps to" label + dropdown
+      var mapsLabel = document.createElement('div');
+      mapsLabel.className = 'module-dep-label';
+      mapsLabel.textContent = 'Maps to';
+      li.appendChild(mapsLabel);
+
+      var sel = document.createElement('select');
+      sel.className = 'module-repo-select';
+      // Store all module names comma-separated so save picks them all up
+      sel.dataset.moduleName   = modules.map(function(m) { return m.name || ''; }).join(',');
+      sel.dataset.moduleSource = source;
+      sel.style.margin = '4px 0 12px';
+      sel.appendChild(new Option('— Please Select —', ''));
+
+      var ranked = availableRepos
+        .map(function(r) { return { name: r, score: repoMatchScore(r, suggested) }; })
+        .filter(function(r) { return r.score > 0; })
+        .sort(function(a, b) { return b.score - a.score; });
+
+      if (ranked.length) {
+        var sugGroup = document.createElement('optgroup');
+        sugGroup.label = 'Suggested';
+        ranked.forEach(function(r) { sugGroup.appendChild(new Option(r.name, r.name)); });
+        sel.appendChild(sugGroup);
+      }
+      var sugNames = new Set(ranked.map(function(r) { return r.name; }));
+      var remaining = availableRepos.filter(function(r) { return !sugNames.has(r); });
+      if (remaining.length) {
+        var allGroup = document.createElement('optgroup');
+        allGroup.label = 'All repos';
+        remaining.forEach(function(r) { allGroup.appendChild(new Option(r, r)); });
+        sel.appendChild(allGroup);
+      }
+      sel.appendChild(new Option('↗ External / Third-party', '__external__'));
+
+      var valueToSet = isExternal ? '__external__' : (currentRepo || (ranked.length === 1 ? ranked[0].name : ''));
+      if (valueToSet) {
+        for (var oi = 0; oi < sel.options.length; oi++) {
+          if (sel.options[oi].value === valueToSet) { sel.options[oi].selected = true; break; }
+        }
+      }
+      li.appendChild(sel);
+
+      // 3. References list
+      var refsLabel = document.createElement('div');
+      refsLabel.className = 'module-dep-label';
+      refsLabel.textContent = 'References';
+      li.appendChild(refsLabel);
+
+      var refUl = document.createElement('ul');
+      refUl.style.cssText = 'margin:4px 0 0; padding-left:16px; list-style:disc;';
+      modules.forEach(function(mod) {
+        var refLi = document.createElement('li');
+        refLi.style.cssText = 'font-size:0.82rem; color:var(--text); line-height:1.6;';
+        var html = '<strong>' + escHtml(mod.name || '') + '</strong>';
+        if (mod.file) {
+          html += ' — <span class="file-link" style="color:var(--text-muted)" title="' + escHtml(mod.file) + '">' + escHtml(baseName(mod.file)) + '</span>';
+          if (mod.line) html += '<span class="line-num">:' + escHtml(String(mod.line)) + '</span>';
+        }
+        refLi.innerHTML = html;
+        refUl.appendChild(refLi);
+      });
+      li.appendChild(refUl);
+
+      list.appendChild(li);
+    });
     });
 
     var saveBtn  = section.querySelector('#save-module-mappings-btn');
@@ -244,9 +156,11 @@
         var selects = list.querySelectorAll('select.module-repo-select');
         var mappings = {};
         selects.forEach(function(s) {
-          var modName = s.dataset.moduleName;
-          if (!modName || !s.value) return;
-          mappings[modName] = s.value === '__external__' ? { repo: null, external: true } : { repo: s.value };
+          if (!s.value) return;
+          var val = s.value === '__external__' ? { repo: null, external: true } : { repo: s.value };
+          // data-module-name may be comma-separated (one select per source group)
+          var names = (s.dataset.moduleName || '').split(',').map(function(n) { return n.trim(); }).filter(Boolean);
+          names.forEach(function(n) { mappings[n] = val; });
         });
         if (!Object.keys(mappings).length) {
           if (statusEl) statusEl.textContent = 'Nothing to save — select at least one mapping.';
@@ -265,20 +179,11 @@
           saveBtn.disabled = false;
           if (d.ok) {
             if (statusEl) statusEl.textContent = '✓ Saved ' + (d.saved || Object.keys(mappings).length) + ' mapping(s)';
+            // Add a mapped badge beside each select on success
             selects.forEach(function(s) {
               if (!s.value) return;
               var item = s.closest('.module-dep-item');
-              if (!item) return;
-              var nd = item.querySelector('.module-dep-name');
-              var eb = nd && nd.querySelector('.module-dep-badge');
-              if (eb) eb.remove();
-              if (nd && s.value) {
-                var nb = document.createElement('span');
-                nb.className = s.value === '__external__' ? 'module-dep-badge module-dep-badge--external' : 'module-dep-badge';
-                nb.textContent = s.value === '__external__' ? '↗ External' : '✓ ' + s.value;
-                nd.appendChild(nb);
-                item.classList.add('module-dep-item--mapped');
-              }
+              if (item) item.classList.add('module-dep-item--mapped');
             });
           } else {
             if (statusEl) statusEl.textContent = 'Error: ' + (d.error || 'unknown');

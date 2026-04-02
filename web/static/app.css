@@ -667,7 +667,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   box-sizing: border-box;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   padding: 14px;
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
@@ -703,8 +703,20 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   padding: 10px 12px;
   overflow-x: auto;
   margin-bottom: 10px;
+  white-space: pre;
 }
 .section-panel-content pre code { background: none; border: none; padding: 0; }
+
+/* Code snippet wrappers in findings — scroll the block, not the whole tab */
+.code-snippet-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: 4px;
+}
+.code-table {
+  min-width: max-content;
+  width: 100%;
+}
 
 /* ── Empty state ── */
 .empty-state {
@@ -1133,7 +1145,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   border-top: 1px solid var(--border);
 }
 .module-dep-group-header:first-child { border-top: none; margin-top: 0; }
-.module-dep-name { font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.module-dep-content-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.module-dep-name { font-weight: 600; color: var(--text); margin-bottom: 0; }
 .module-dep-row { font-size: 0.78rem; color: var(--text-muted); margin: 6px 0; }
 .module-dep-label { display:inline-block; min-width: 90px; color: var(--text-muted); vertical-align: top; }
 .module-dep-row--stack .module-dep-label { display: block; min-width: 0; margin-bottom: 6px; }
