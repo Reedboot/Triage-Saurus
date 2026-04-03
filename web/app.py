@@ -1602,8 +1602,12 @@ def api_analysis_status(experiment_id: str, repo_name: str):
             proc_alive = proc is not None and proc.poll() is None
             # For pure SSE-generator jobs (no subprocess), use a short 60 s timeout because
             # a client disconnect can kill the generator before the completion block runs.
-            # For subprocess-backed jobs, keep the longer 900 s window.
-            stale_threshold = 60 if proc is None else 900
+            # For subprocess-backed jobs, use a configurable timeout (seconds). Default: 3600s (1 hour).
+            try:
+                stale_threshold = 60 if proc is None else int(os.environ.get('AI_JOB_TIMEOUT', '3600'))
+            except Exception:
+                stale_threshold = 60 if proc is None else 3600
+
             if not proc_alive and age_secs > stale_threshold:
                 db_status = _get_db_job_status(resolved_exp_id, repo_name)
                 if db_status and db_status.get("status") in ("completed", "failed"):
