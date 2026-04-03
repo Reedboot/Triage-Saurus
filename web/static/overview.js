@@ -553,8 +553,56 @@
       });
     }
 
-    if (genRulesBtn) {
+    if (genRulesBtn && !genRulesBtn.__overview_rules_bound) {
+      genRulesBtn.__overview_rules_bound = true;
       genRulesBtn.disabled = false;
+      genRulesBtn.addEventListener('click', async () => {
+        genRulesBtn.disabled = true;
+        setStatus('Generating rules...', false);
+
+        try {
+          const resp = await fetch(
+            `/api/analysis/generate_rules/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`,
+            { method: 'POST' }
+          );
+
+          const data = await resp.json().catch(() => ({}));
+
+          if (!resp.ok) {
+            setStatus(data.error || 'Failed to generate rules', true);
+            genRulesBtn.disabled = false;
+            return;
+          }
+
+          if (data.status === 'running') {
+            setStatus('Rule generation already in progress', false);
+            genRulesBtn.disabled = false;
+            return;
+          }
+
+          if (data.status !== 'started') {
+            setStatus(data.error || 'Failed to start rule generation', true);
+            genRulesBtn.disabled = false;
+            return;
+          }
+
+          setStatus('Rule generation started', false);
+          if (window._triage && typeof window._triage.appendLog === 'function') {
+            window._triage.appendLog('[Copilot] OpenGrep rule generation started');
+          }
+
+          setTimeout(() => {
+            genRulesBtn.disabled = false;
+            setStatus('Idle', false);
+          }, 2000);
+        } catch (err) {
+          setStatus('Error generating rules', true);
+          if (window._triage && typeof window._triage.appendLog === 'function') {
+            window._triage.appendLog('[Copilot] Error generating rules: ' + err.message);
+          }
+          genRulesBtn.disabled = false;
+        }
+      });
     }
 
     pollStatus();

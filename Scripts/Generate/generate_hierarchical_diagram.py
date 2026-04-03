@@ -368,7 +368,7 @@ class HierarchicalDiagramBuilder:
                 },
             }
             self.resources.append(synth)
-            self.resource_by_name[rname] = synth
+            self._assign_resource_by_name(rname, synth)
             self.resource_by_id[synth['id']] = synth
             synth_added[key] = rname
             return rname
@@ -391,7 +391,7 @@ class HierarchicalDiagramBuilder:
                 'properties': {'source_file': source_file, 'inferred': 'true'},
             }
             self.resources.append(synth)
-            self.resource_by_name[rname] = synth
+            self._assign_resource_by_name(rname, synth)
             self.resource_by_id[synth['id']] = synth
             synth_added[key] = rname
             return rname
@@ -1873,7 +1873,7 @@ class HierarchicalDiagramBuilder:
             self.sql_hints = dict(sql_hints)
             sql_node_name = self._ensure_synthetic_sql_server_node(sql_hints.get('server'))
 
-            sql_resource = self.resource_by_name.get(sql_node_name)
+            sql_resource = self._get_primary_resource(sql_node_name)
             if sql_resource is not None:
                 props = dict(sql_resource.get('properties') or {})
                 if sql_hints.get('database'):
