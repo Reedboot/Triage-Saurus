@@ -91,6 +91,24 @@ class HierarchicalDiagramBuilder:
         # generated instead so Mermaid doesn't collapse distinct nodes into one.
         self._emitted_mermaid_ids: Set[str] = set()
 
+    def _assign_resource_by_name(self, name: str, resource: dict) -> None:
+        """Assign a resource into resource_by_name; preserve duplicates as lists."""
+        existing = self.resource_by_name.get(name)
+        if existing is None:
+            self.resource_by_name[name] = resource
+        elif isinstance(existing, list):
+            existing.append(resource)
+        else:
+            self.resource_by_name[name] = [existing, resource]
+
+    def _get_primary_resource(self, name: str):
+        """Return primary resource dict for a resource name (first entry if duplicated)."""
+        existing = self.resource_by_name.get(name)
+        if isinstance(existing, list):
+            return existing[0]
+        return existing
+
+
     def _is_connected_name(self, name: str) -> bool:
         """Return True when a resource should be rendered based on connection participation.
 
@@ -121,12 +139,8 @@ class HierarchicalDiagramBuilder:
         # Build lookup maps
         self.resource_by_name = {}
         for r in self.resources:
-            # For duplicates by name, keep the one with more specific type
-            if r['resource_name'] not in self.resource_by_name:
-                self.resource_by_name[r['resource_name']] = r
-            elif 'operation' in r.get('resource_type', '').lower():
-                # Prefer operations over products
-                self.resource_by_name[r['resource_name']] = r
+            # Assign into mapping, preserving duplicates as lists when necessary.
+            self._assign_resource_by_name(r['resource_name'], r)
         
         self.resource_by_id = {r['id']: r for r in self.resources}
         
@@ -249,7 +263,7 @@ class HierarchicalDiagramBuilder:
                     'properties': {},
                 }
                 self.resources.append(op_resource)
-                self.resource_by_name[op_name] = op_resource
+                self._assign_resource_by_name(op_name, op_resource)
                 self.resource_by_id[s_id] = op_resource
                 self.children_by_parent[api['id']].append(op_resource)
 
@@ -935,7 +949,10 @@ class HierarchicalDiagramBuilder:
         sql_node_name = candidate
         existing = self.resource_by_name.get(fallback_name)
         if existing and candidate != fallback_name:
-            existing['resource_name'] = candidate
+            # existing may be a list of duplicates; pick the primary entry to rename
+            existing_primary = existing[0] if isinstance(existing, list) else existing
+            existing_primary['resource_name'] = candidate
+            # Replace the key mapping (preserve list if it was a list)
             self.resource_by_name.pop(fallback_name, None)
             self.resource_by_name[candidate] = existing
             return candidate
@@ -956,7 +973,8 @@ class HierarchicalDiagramBuilder:
             'properties': {'synthetic': True},
         }
         self.resources.append(synthetic_resource)
-        self.resource_by_name[sql_node_name] = synthetic_resource
+        # Use assign helper to preserve any existing duplicates
+        self._assign_resource_by_name(sql_node_name, synthetic_resource)
         self.resource_by_id[synthetic_id] = synthetic_resource
         return sql_node_name
 
