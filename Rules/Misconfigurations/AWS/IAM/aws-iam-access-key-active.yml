@@ -1,0 +1,20 @@
+rules:
+  - id: aws-iam-access-key-active
+    message: |
+      IAM access key is active. Long-lived access keys are a risk. Rotate keys and
+      consider using temporary credentials (IAM Roles) instead of long-lived keys.
+    severity: MEDIUM
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_iam_access_key" $NAME {
+            ...
+          }
+      - pattern-not: |
+          status = "Inactive"
+    metadata:
+      category: identity
+      subcategory: [secrets]
+      cwe: CWE-522
+      confidence: MEDIUM
+      technology: [terraform, aws, iam]

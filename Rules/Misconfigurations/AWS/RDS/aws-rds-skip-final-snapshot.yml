@@ -1,0 +1,23 @@
+rules:
+  - id: aws-rds-skip-final-snapshot
+    message: |
+      RDS instance has skip_final_snapshot = true. Skipping the final snapshot may lead to
+      data loss if the instance is accidentally deleted. Set skip_final_snapshot = false
+      or ensure backups are exported prior to deletion.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_db_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          skip_final_snapshot = true
+    metadata:
+      category: resilience
+      subcategory: [backup]
+      cwe: CWE-347
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, aws, rds]

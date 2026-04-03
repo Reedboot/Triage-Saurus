@@ -1,0 +1,20 @@
+rules:
+  - id: alicloud-actiontrail-logging-disabled
+    message: |
+      ActionTrail (Audit) is not enabled or logging is disabled. Without audit logs,
+      user activity and configuration changes are not recorded. Enable ActionTrail
+      with appropriate trails for security auditing.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "alicloud_actiontrail" $NAME {
+            ...
+          }
+      - pattern-not: |
+          is_show = true
+    metadata:
+      category: audit
+      subcategory: [logging]
+      confidence: MEDIUM
+      technology: [terraform, alicloud]

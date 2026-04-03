@@ -1,0 +1,23 @@
+rules:
+  - id: aws-rds-no-multi-az
+    message: |
+      RDS instance is not configured for Multi-AZ (multi_az = false). Without Multi-AZ
+      deployment, the database may be unavailable during AZ failures. Consider enabling
+      multi_az = true for production workloads.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_db_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          multi_az = false
+    metadata:
+      category: availability
+      subcategory: [high-availability]
+      cwe: CWE-346
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, aws, rds]
