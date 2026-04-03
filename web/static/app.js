@@ -128,12 +128,14 @@
   const pastScansRow    = document.getElementById('past-scans-row');
   const pastScanSelect  = document.getElementById('past-scan-select');
   const loadScanBtn     = null; // load button removed - dropdown auto-loads
-  // Compare UI temporarily removed
-  const compareToggle   = null;
-  const compareRow      = null;
-  const compareFrom     = null;
-  const compareTo       = null;
-  const runCompareBtn   = null;
+  // Compare UI elements
+  const compareToggle   = document.getElementById('compare-toggle');
+  const compareRow      = document.getElementById('compare-row');
+  const compareFrom     = document.getElementById('compare-from-select');
+  const compareTo       = document.getElementById('compare-to-select');
+  const runCompareBtn   = document.getElementById('run-compare-btn');
+  // default disabled until scans are evaluated
+  try { if (runCompareBtn) runCompareBtn.disabled = true; } catch (e) {};
 
   // Diagram state
   let diagrams = [];
@@ -1124,6 +1126,8 @@
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
         opt.textContent = _scanOptionLabel(s);
+        // preserve scanned_at for client-side checks
+        if (s.scanned_at) opt.dataset.scannedAt = s.scanned_at;
         pastScanSelect.appendChild(opt);
       }
     }
@@ -1131,12 +1135,15 @@
     // Also populate compare dropdowns when present
     const compareFrom = document.getElementById('compare-from-select');
     const compareTo = document.getElementById('compare-to-select');
+    const runCompareBtn = document.getElementById('run-compare-btn');
+
     if (compareFrom) {
       compareFrom.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
       for (const s of scans) {
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
         opt.textContent = _scanOptionLabel(s);
+        if (s.scanned_at) opt.dataset.scannedAt = s.scanned_at;
         compareFrom.appendChild(opt);
       }
       // default to oldest scan for "from"
@@ -1148,10 +1155,50 @@
         const opt = document.createElement('option');
         opt.value = s.experiment_id;
         opt.textContent = _scanOptionLabel(s);
+        if (s.scanned_at) opt.dataset.scannedAt = s.scanned_at;
         compareTo.appendChild(opt);
       }
       // default to most recent scan for "to"
       if (scans.length) compareTo.value = scans[scans.length - 1].experiment_id;
+    }
+
+    // Enable/disable the Run Compare button based on available scans and dates.
+    try {
+      if (!runCompareBtn) return;
+      // Must have more than one recorded scan to compare
+      const hasMultiple = Array.isArray(scans) && scans.length > 1;
+      if (!hasMultiple) {
+        runCompareBtn.disabled = true;
+        return;
+      }
+
+      // Determine the "to" scan (use selected value if present, otherwise most recent)
+      let toScan = null;
+      if (compareTo && compareTo.value) {
+        toScan = scans.find(s => s.experiment_id === compareTo.value) || null;
+      }
+      if (!toScan && Array.isArray(scans) && scans.length) toScan = scans[scans.length - 1];
+
+      // Disable if the target scan has no scanned_at timestamp
+      runCompareBtn.disabled = !(toScan && toScan.scanned_at);
+
+      // Wire up onchange handlers so manual selection updates state
+      if (compareTo) {
+        compareTo.onchange = () => {
+          const sel = compareTo.options[compareTo.selectedIndex];
+          runCompareBtn.disabled = !(sel && sel.dataset && sel.dataset.scannedAt);
+        };
+      }
+      if (compareFrom) {
+        // Ensure "from" selection doesn't allow enabling compare on its own
+        compareFrom.onchange = () => {
+          const selTo = compareTo && compareTo.options[compareTo.selectedIndex];
+          runCompareBtn.disabled = !(selTo && selTo.dataset && selTo.dataset.scannedAt) || !(Array.isArray(scans) && scans.length > 1);
+        };
+      }
+    } catch (e) {
+      // Non-fatal — leave button state alone if something unexpected happens
+      console.warn('Failed to update Run Compare button state:', e);
     }
   }
 
