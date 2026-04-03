@@ -3084,56 +3084,68 @@ def api_diagrams(experiment_id: str):
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
 
-        # Repo-scoped diagram requests should be regenerated from current topology,
-        # especially when the UI requests explicit API operation visibility.
+        # For repo-scoped requests, prefer returning per-provider diagrams.
         if repo_name:
             try:
-                from Scripts.Generate.generate_hierarchical_diagram import HierarchicalDiagramBuilder  # type: ignore
+                # First, check for persisted per-provider diagrams for this repo/experiment.
+                db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name)
+                if db_diagrams:
+                    return jsonify(_response_payload(db_diagrams))
 
-                # Resolve repository path so the builder can discover OpenAPI specs.
-                repo_path: Optional[str] = None
-                try:
-                    for ent in _resolve_repos():
-                        if (ent.get('name') or '').lower() == repo_name.lower() and ent.get('found'):
-                            repo_path = ent.get('path')
-                            break
-                except Exception:
-                    pass
+                # No persisted diagrams — regenerate per-provider from DB topology.
+                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+                from Scripts.Persist.db_helpers import get_db_connection as _get_conn  # type: ignore
 
-                builder = HierarchicalDiagramBuilder(
-                    experiment_id,
-                    repo_name=repo_name,
-                    include_api_operations=include_api_operations_override,
-                    repo_path=repo_path,
-                )
-                code = builder.generate()
-                provider = builder.detect_cloud_provider()
+                with _get_conn() as conn:
+                    prov_rows = conn.execute(
+                        """
+                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                        FROM resources r
+                        JOIN repositories repo ON repo.id = r.repo_id
+                        WHERE r.experiment_id = ?
+                          AND LOWER(repo.repo_name) = LOWER(?)
+                          AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                        ORDER BY provider
+                        """,
+                        (experiment_id, repo_name),
+                    ).fetchall()
+                    providers = [str(row['provider']).strip() for row in prov_rows if row['provider']]
 
                 generated: list[dict] = []
-                if code and "No resources found" not in code:
-                    generated.append({
-                        "provider": provider.capitalize(),
-                        "diagram_title": f"{provider.capitalize()} Architecture",
-                        "mermaid_code": code,
-                        "display_order": 0,
-                    })
-                    # Persist only default-mode diagrams (no explicit override)
-                    # so toggle interactions do not overwrite canonical stored views.
-                    if include_api_operations_override is None:
-                        try:
-                            db_helpers.upsert_cloud_diagram(
-                                experiment_id=experiment_id,
-                                provider=provider,
-                                diagram_title=f"{provider.capitalize()} Architecture",
-                                mermaid_code=code,
-                                display_order=0,
-                            )
-                        except Exception:
-                            pass
+                for provider in providers:
+                    try:
+                        code = generate_architecture_diagram(
+                            experiment_id,
+                            repo_name=repo_name,
+                            provider=provider,
+                            include_operation_resources=include_api_operations_override,
+                        )
+                    except Exception:
+                        code = None
+                    if code and "No resources found" not in code:
+                        generated.append({
+                            "provider": provider.capitalize(),
+                            "diagram_title": f"{provider.capitalize()} Architecture",
+                            "mermaid_code": code,
+                            "display_order": 0,
+                        })
+                        # Persist the regenerated diagrams for faster subsequent responses
+                        if include_api_operations_override is None:
+                            try:
+                                db_helpers.upsert_cloud_diagram(
+                                    experiment_id=experiment_id,
+                                    provider=provider,
+                                    diagram_title=f"{provider.capitalize()} Architecture",
+                                    mermaid_code=code,
+                                    display_order=0,
+                                )
+                            except Exception:
+                                pass
 
                 if generated:
                     return jsonify(_response_payload(generated))
             except Exception:
+                # Fall back to legacy behaviour below
                 pass
 
         db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name or None)
