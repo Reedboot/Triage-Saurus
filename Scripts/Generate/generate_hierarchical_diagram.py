@@ -85,6 +85,11 @@ class HierarchicalDiagramBuilder:
         # Maps resource_name → Mermaid node ID; populated by render_* methods so that
         # render_connections can use the correct (potentially prefixed) ID for edges.
         self.node_id_override: Dict[str, str] = {}
+        # Tracks Mermaid node IDs that have already been emitted to detect duplicates.
+        # When the same sanitized name appears for multiple resources (e.g. many Azure
+        # resources named "example"), a qualified ID using the resource_type prefix is
+        # generated instead so Mermaid doesn't collapse distinct nodes into one.
+        self._emitted_mermaid_ids: Set[str] = set()
 
     def _is_connected_name(self, name: str) -> bool:
         """Return True when a resource should be rendered based on connection participation.
@@ -1145,15 +1150,36 @@ class HierarchicalDiagramBuilder:
         return lines
     
     def render_node(self, resource: dict, indent: str = "  ") -> str:
-        """Render a single node."""
-        node_id = sanitize_id(resource['resource_name'])
+        """Render a single node.
+
+        When multiple resources share the same sanitized name (e.g. dozens of Azure
+        resources all named "example"), a qualified node ID is generated using a short
+        resource-type prefix so Mermaid does not collapse distinct nodes into one.
+        The mapping is stored in node_id_override so render_connections uses the
+        correct ID.
+        """
         name = resource['resource_name']
-        # Truncate long names to fit in box
-        if len(name) > 50:
-            name = name[:47] + "..."
-        
-        label = name
-        self.emitted_nodes.add(resource['resource_name'])
+        base_node_id = sanitize_id(name)
+
+        # Detect ID collision: if this sanitized name was already emitted for a
+        # *different* resource, qualify it with a resource-type prefix.
+        if base_node_id in self._emitted_mermaid_ids and name not in self.emitted_nodes:
+            # Build a short prefix from the resource type (strip provider prefix)
+            rtype = resource.get('resource_type') or ''
+            type_short = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+            node_id = sanitize_id(f"{type_short}_{name}")
+            # If that's still a collision, append the DB id to guarantee uniqueness
+            if node_id in self._emitted_mermaid_ids:
+                node_id = sanitize_id(f"{rtype}_{name}_{resource.get('id', '')}")
+            self.node_id_override[name] = node_id
+        else:
+            node_id = base_node_id
+
+        # Truncate long labels to fit in box
+        label = name if len(name) <= 50 else name[:47] + "..."
+
+        self._emitted_mermaid_ids.add(node_id)
+        self.emitted_nodes.add(name)
         return f"{indent}{node_id}[\"{label}\"]"
     
     def render_subgraph(self, title: str, resources: List[dict], indent: str = "  ") -> List[str]:
@@ -1562,8 +1588,10 @@ class HierarchicalDiagramBuilder:
             else:
                 icon = "📈"
             label = f"{icon} {res['resource_name']}"
-            lines.append(f"    {node_id}[\"{label}\"]")
-            self.emitted_nodes.add(res['resource_name'])
+            # Use render_node for consistent collision-aware ID generation
+            node_line = self.render_node(res, indent="    ")
+            # Replace the plain label with the icon-prefixed label
+            lines.append(node_line.replace(f'["{res["resource_name"]}"]', f'["{label}"]', 1))
         lines.append("  end")
         return lines
 

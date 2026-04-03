@@ -1,0 +1,36 @@
+rules:
+  - id: aws-ebs-volume-unencrypted
+    message: |
+      EBS volume does not have encryption enabled. Data on unencrypted EBS volumes
+      (including OS disks, data disks, and snapshots derived from them) is stored in
+      plaintext. If a snapshot is accidentally shared or an AWS employee with physical
+      access to storage hardware obtains the volume, data is directly readable.
+      Set encrypted = true and optionally specify a kms_key_id. Consider enabling
+      account-level EBS default encryption (aws_ebs_encryption_by_default) to prevent
+      future accidental creation of unencrypted volumes.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_ebs_volume" $NAME {
+                ...
+              }
+          - pattern: |
+              encrypted = false
+      - patterns:
+          - pattern-inside: |
+              resource "aws_ebs_volume" $NAME {
+                ...
+              }
+          - pattern-not: |
+              encrypted = true
+    metadata:
+      category: security
+      subcategory: [encryption, storage, data-at-rest]
+      cwe: CWE-311
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, ebs, ec2]
+      five_pillars: Pillar 5 (Data Protection)

@@ -1,0 +1,102 @@
+rules:
+  - id: gcp-cloudsql-backup-disabled
+    message: |
+      Cloud SQL instance has backup_configuration.enabled = false. Without automated
+      backups, recovery from accidental deletion, data corruption, or ransomware is
+      not possible within Cloud SQL's managed restore flow.
+      Set enabled = true in the backup_configuration block. For production databases
+      also enable point_in_time_recovery = true (PostgreSQL/MySQL 8.0+).
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_sql_database_instance" $NAME {
+            ...
+            settings {
+              ...
+              backup_configuration {
+                ...
+              }
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          enabled = false
+    metadata:
+      category: security
+      subcategory: [resilience, database, backup]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, cloud-sql]
+      five_pillars: Pillar 5 (Data Protection)
+
+  - id: gcp-cloudsql-postgres-log-flags-missing
+    message: |
+      Cloud SQL PostgreSQL instance is missing recommended database_flags for audit logging.
+      Without these flags, failed authentication attempts, connection events, and query
+      activity are not logged, making forensic investigation and compliance reporting
+      difficult.
+      Add the following database_flags:
+        - log_checkpoints = on
+        - log_connections = on
+        - log_disconnections = on
+        - log_lock_waits = on
+        - log_min_messages = WARNING
+        - connection_throttling = on (for PostgreSQL 9.6+)
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_sql_database_instance" $NAME {
+            ...
+          }
+      - pattern-regex: 'database_version\s*=\s*"POSTGRES'
+      - pattern-not: |
+          database_flags {
+            name  = "log_checkpoints"
+            value = "on"
+          }
+    metadata:
+      category: security
+      subcategory: [logging, audit, database]
+      cwe: CWE-778
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, gcp, cloud-sql, postgresql]
+      five_pillars: Pillar 6 (Monitoring & Logging)
+
+  - id: gcp-bigquery-dataset-public-access
+    message: |
+      BigQuery dataset grants access to allAuthenticatedUsers or allUsers, exposing data
+      to all Google-authenticated users or the entire internet respectively.
+      Remove the special_group access blocks granting these roles. Use specific
+      service accounts, Google groups, or domain restrictions instead.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_bigquery_dataset" $NAME {
+            ...
+            access {
+              ...
+            }
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              special_group = "allAuthenticatedUsers"
+          - pattern: |
+              special_group = "allUsers"
+    metadata:
+      category: security
+      subcategory: [access-control, data-exposure, bigquery]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, bigquery]
+      five_pillars: Pillar 2 (Identity & Access)

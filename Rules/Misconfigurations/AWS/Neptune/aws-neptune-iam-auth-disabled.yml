@@ -1,0 +1,27 @@
+rules:
+  - id: aws-neptune-iam-auth-disabled
+    message: |
+      Neptune cluster has iam_database_authentication_enabled = false. Without IAM
+      authentication, connections rely on username/password credentials that may be
+      weak, shared, or stored insecurely. IAM database authentication uses short-lived
+      tokens instead of static credentials, integrates with IAM policies, and is auditable
+      via CloudTrail.
+      Set iam_database_authentication_enabled = true.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_neptune_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          iam_database_authentication_enabled = false
+    metadata:
+      category: security
+      subcategory: [authentication, database, iam]
+      cwe: CWE-287
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, aws, neptune]
+      five_pillars: Pillar 2 (Identity & Access)

@@ -1,0 +1,34 @@
+rules:
+  - id: aws-rds-storage-not-encrypted
+    message: |
+      RDS instance has storage_encrypted = false, meaning data at rest is unencrypted.
+      Any compromise of the underlying storage media or snapshot leakage exposes raw data.
+      Set storage_encrypted = true and specify a kms_key_id (defaults to AWS-managed key
+      if omitted). Note: encryption cannot be enabled on an existing unencrypted instance —
+      a snapshot-restore cycle is required.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_db_instance" $NAME {
+                ...
+              }
+          - pattern: |
+              storage_encrypted = false
+      - patterns:
+          - pattern-inside: |
+              resource "aws_db_instance" $NAME {
+                ...
+              }
+          - pattern-not: |
+              storage_encrypted = true
+    metadata:
+      category: security
+      subcategory: [encryption, database, data-at-rest]
+      cwe: CWE-311
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, rds]
+      five_pillars: Pillar 5 (Data Protection)

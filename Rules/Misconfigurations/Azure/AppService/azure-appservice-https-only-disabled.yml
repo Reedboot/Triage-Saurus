@@ -1,0 +1,25 @@
+rules:
+  - id: azure-appservice-https-only-disabled
+    message: |
+      Azure App Service has https_only = false, allowing unencrypted HTTP traffic.
+      HTTP requests expose session tokens, authentication credentials, and application data
+      to network-level eavesdropping. Setting https_only = true forces all HTTP requests
+      to redirect to HTTPS (HTTP 301) at the platform level, before reaching application code.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_app_service" $NAME {
+            ...
+          }
+      - pattern: |
+          https_only = false
+    metadata:
+      category: security
+      subcategory: [tls, web, transport-security]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, azure, app-service]
+      five_pillars: Pillar 4 (Encryption in Transit)

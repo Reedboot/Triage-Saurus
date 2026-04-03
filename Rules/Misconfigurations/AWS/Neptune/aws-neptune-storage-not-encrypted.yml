@@ -1,0 +1,26 @@
+rules:
+  - id: aws-neptune-storage-not-encrypted
+    message: |
+      Neptune cluster has storage_encrypted = false, leaving graph database data at rest
+      unencrypted. Neptune snapshots and cluster storage are stored unencrypted, which may
+      violate compliance requirements (PCI-DSS, HIPAA, GDPR).
+      Set storage_encrypted = true. Note: encryption must be set at cluster creation time;
+      existing unencrypted clusters cannot be modified in-place.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_neptune_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          storage_encrypted = false
+    metadata:
+      category: security
+      subcategory: [encryption, database, data-at-rest]
+      cwe: CWE-311
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, neptune]
+      five_pillars: Pillar 5 (Data Protection)

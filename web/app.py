@@ -6018,6 +6018,25 @@ def api_view_findings(experiment_id: str, repo_name: str):
         ).fetchall()
         findings = [dict(r) for r in rows]
 
+        # Deduplicate same-rule / same-file findings: group them and attach a
+        # hit_count so the template can show a "×N" badge instead of N identical rows.
+        # The first occurrence in each group is kept as the representative row; the
+        # remaining rows are discarded from the rendered list.
+        _seen_rule_file: dict[tuple, int] = {}
+        deduped_findings = []
+        for f in findings:
+            key = (f.get('rule_id') or '', f.get('source_file') or '')
+            if key in _seen_rule_file:
+                # Increment the hit count on the representative row
+                deduped_findings[_seen_rule_file[key]]['hit_count'] = (
+                    deduped_findings[_seen_rule_file[key]].get('hit_count', 1) + 1
+                )
+            else:
+                _seen_rule_file[key] = len(deduped_findings)
+                f['hit_count'] = 1
+                deduped_findings.append(f)
+        findings = deduped_findings
+
         # Enrich each finding with surrounding file context (±4 lines)
         CONTEXT_LINES = 4
         for f in findings:
@@ -6426,6 +6445,43 @@ def api_view_ingress(experiment_id: str, repo_name: str):
         )
 
         ingress_resources = [dict(r) for r in res_rows]
+
+        # Fallback: when no ingress resources were found from exposure_analysis or
+        # finding_context, surface resources that have internet_access=true in
+        # resource_properties. These are set during Phase 1 context extraction and
+        # represent the best available internet-exposure signal before Phase 2 runs.
+        if not ingress_resources:
+            try:
+                prop_rows = conn.execute(
+                    """
+                    SELECT DISTINCT
+                        r.id,
+                        r.resource_name,
+                        r.resource_type,
+                        r.provider,
+                        r.region,
+                        r.source_file,
+                        r.source_line_start,
+                        'internet_access_property' AS exposure_type,
+                        COALESCE(
+                            (SELECT property_value FROM resource_properties
+                             WHERE resource_id = r.id AND property_key = 'internet_access_signals' LIMIT 1),
+                            'internet_access = true'
+                        ) AS exposure_value,
+                        0 AS is_confirmed
+                    FROM resource_properties rp
+                    JOIN resources r ON rp.resource_id = r.id
+                    JOIN repositories repo ON r.repo_id = repo.id
+                    WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                      AND rp.property_key = 'internet_access'
+                      AND LOWER(COALESCE(rp.property_value, '')) = 'true'
+                    ORDER BY r.resource_type, r.resource_name
+                    """,
+                    (repo_name, target_exp),
+                ).fetchall()
+                ingress_resources = [dict(r) for r in prop_rows]
+            except Exception as e:
+                print(f"Warning: Could not fetch internet_access properties for ingress fallback: {e}")
 
         # Build inbound connections showing the data flow path from Internet into the system
         # Try to build the full chain: Internet → APIM → API → K8s → Service

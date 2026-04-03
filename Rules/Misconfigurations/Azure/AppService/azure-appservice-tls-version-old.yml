@@ -1,0 +1,33 @@
+rules:
+  - id: azure-appservice-tls-version-old
+    message: |
+      Azure App Service is configured with a minimum TLS version below 1.2.
+      TLS 1.0 and 1.1 have known vulnerabilities (POODLE, BEAST, SWEET32) and are
+      deprecated by PCI-DSS, Microsoft, and most compliance frameworks.
+      Set min_tls_version = "1.2" in the site_config block. TLS 1.3 is preferred
+      where supported.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_app_service" $NAME {
+            ...
+            site_config {
+              ...
+            }
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              min_tls_version = "1.0"
+          - pattern: |
+              min_tls_version = "1.1"
+    metadata:
+      category: security
+      subcategory: [tls, web, transport-security]
+      cwe: CWE-326
+      confidence: HIGH
+      likelihood: HIGH
+      impact: MEDIUM
+      technology: [terraform, azure, app-service, tls]
+      five_pillars: Pillar 4 (Encryption in Transit)

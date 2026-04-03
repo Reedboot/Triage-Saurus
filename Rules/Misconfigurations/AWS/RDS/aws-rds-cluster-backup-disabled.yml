@@ -1,0 +1,24 @@
+rules:
+  - id: aws-rds-cluster-backup-disabled
+    message: |
+      RDS Aurora cluster has backup_retention_period = 0, which disables automated backups.
+      Without backups, data recovery from accidental deletion or corruption is impossible.
+      Set backup_retention_period to at least 7 days (35 days max recommended for production).
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_rds_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          backup_retention_period = 0
+    metadata:
+      category: security
+      subcategory: [resilience, database, backup]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, rds, aurora]
+      five_pillars: Pillar 5 (Data Protection)

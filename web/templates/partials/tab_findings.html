@@ -11,7 +11,11 @@
     <option value="LOW">Low</option>
     <option value="INFO">Info</option>
   </select>
-  <span class="s-inline-3c88b2">{{ findings | length }} finding{{ 's' if findings | length != 1 }}</span>
+  <span class="s-inline-3c88b2">
+    {{ findings | length }} finding{{ 's' if findings | length != 1 }}
+    {%- set total_hits = findings | sum(attribute='hit_count') %}
+    {%- if total_hits > findings | length %} ({{ total_hits }} total hits){% endif %}
+  </span>
 </div>
 
 <div id="findings-container" style="display: grid; gap: 16px; min-width: 0;">
@@ -29,6 +33,10 @@
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="severity-badge {{ sev_css }}" style="font-weight: 600; padding: 4px 8px;">{{ sev or '—' }}</span>
         <span style="font-size: 0.85rem; color: var(--text-muted);">Finding ID: {{ f.id }}</span>
+        {% if f.hit_count and f.hit_count > 1 %}
+        <span title="{{ f.hit_count }} occurrences of this rule in the same file"
+              style="font-size:0.75rem; font-weight:600; background:var(--orange-dim,#3d2800); color:var(--orange-bright,#f0a030); border-radius:999px; padding:2px 8px;">×{{ f.hit_count }}</span>
+        {% endif %}
       </div>
       <div style="font-size: 1.1rem; font-weight: 600; color: var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
       {% if f.rule_id and f.rule_id != f.title %}
