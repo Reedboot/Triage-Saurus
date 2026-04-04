@@ -1,0 +1,397 @@
+"""
+Internet Exposure Detection for Architecture Diagrams
+
+Detects resources that are internet-exposed using multiple methods:
+1. Explicit findings (internet_exposure context)
+2. Firewall rules open to 0.0.0.0
+3. Resource properties (public_access_enabled, publicly_accessible)
+4. Resource type heuristics (API Gateway, Load Balancer, etc)
+
+Returns: List of (resource_name, exposure_type, confidence, reason, color)
+"""
+
+import json
+from typing import Dict, List, Tuple, Optional, Set
+from dataclasses import dataclass
+import re
+
+
+@dataclass
+class ExposureDetail:
+    """Information about a resource's internet exposure."""
+    resource_name: str
+    resource_id: int
+    exposure_type: str  # 'finding', 'firewall_rule', 'property', 'heuristic'
+    confidence: str    # 'high', 'medium', 'low'
+    reason: str        # Human-readable explanation
+    color: str         # Hex color code
+    detection_methods: List[str] = None  # Multiple detections can apply
+
+    def __post_init__(self):
+        if self.detection_methods is None:
+            self.detection_methods = []
+
+
+class InternetExposureDetector:
+    """Detects internet-exposed resources for threat model visualization."""
+
+    # Color codes by detection method
+    COLORS = {
+        'finding': '#ff0000',           # Red - explicit security finding
+        'firewall_rule': '#ff9900',     # Orange - open firewall rule
+        'property': '#ffff00',          # Yellow - public property
+        'heuristic': '#ffff00',         # Yellow - resource type heuristic
+    }
+
+    # Public-by-design resource types (per provider)
+    PUBLIC_BY_DESIGN = {
+        'aws': {
+            'aws_lb', 'aws_alb', 'aws_nlb',  # Load balancers (modern names)
+            'apigateway', 'api_gateway', 'api_gateway_stage', 'aws_apigateway',
+            'elb', 'alb', 'nlb', 'elastic_load_balancing',  # Load balancers (legacy names)
+            'application_load_balancer', 'network_load_balancer',
+            'cloudfront', 'aws_cloudfront',
+        },
+        'azure': {
+            'api_management_api', 'api_management_product',
+            'app_service', 'app_service_plan',
+            'function_app', 'app_gateway', 'application_gateway',
+            'front_door', 'cdn_profile',
+            'api_management', 'apim',
+            'azurerm_app_service', 'azurerm_function_app',  # Full resource type names
+            'azurerm_application_gateway',
+            'azurerm_api_management',
+        },
+        'gcp': {
+            'compute_backend_service', 'compute_url_map',
+            'compute_target_http_proxy', 'compute_target_https_proxy',
+            'https_load_balancer', 'http_load_balancer',
+            'cloud_load_balancing',
+            'api_gateway', 'google_compute_backend_service',
+        },
+        'oci': {
+            'load_balancer', 'oci_load_balancer',
+            'api_gateway', 'oci_api_gateway',
+            'cdn',
+        },
+    }
+
+    # Resource types that should NOT be marked as public even if matched
+    PRIVATE_OVERRIDE = {
+        'azurerm_api_management': True,  # May not be public if behind APIM
+    }
+
+    # Properties indicating public access
+    PUBLIC_PROPERTIES = {
+        'public_access_enabled',
+        'public_network_access_enabled',
+        'publicly_accessible',
+        'has_public_ip',
+        'public_ip_assigned',
+        'enable_public_network_access',
+        'public_endpoint_enabled',
+    }
+
+    def __init__(self, provider: str):
+        """
+        Initialize detector for a specific provider.
+        
+        Args:
+            provider: Cloud provider ('aws', 'azure', 'gcp', 'oci', 'alicloud')
+        """
+        self.provider = provider.lower()
+
+    def detect_exposed_resources(
+        self,
+        resources: List[Dict],
+        connections: List[Dict],
+        findings: List[Dict] = None,
+        properties: Dict[int, Dict[str, str]] = None,
+    ) -> Dict[str, ExposureDetail]:
+        """
+        Detect internet-exposed resources using all detection methods.
+        
+        Args:
+            resources: List of resource dicts with id, resource_name, resource_type, provider
+            connections: List of connection dicts (may contain 'Internet' source)
+            findings: List of finding dicts with resource_id, context fields
+            properties: Dict mapping resource_id → {property_key: property_value}
+        
+        Returns:
+            Dict mapping resource_name → ExposureDetail
+        """
+        exposed = {}
+
+        # Method 1: Explicit findings
+        if findings:
+            exposed.update(self._detect_by_findings(resources, findings))
+
+        # Method 2: Firewall rules open to 0.0.0.0
+        exposed.update(self._detect_by_firewall_rules(resources, properties))
+
+        # Method 3: Resource properties indicating public access
+        if properties:
+            exposed.update(self._detect_by_resource_properties(resources, properties))
+
+        # Method 4: Resource type heuristics
+        exposed.update(self._detect_by_heuristics(resources))
+
+        return exposed
+
+    def _detect_by_findings(
+        self,
+        resources: List[Dict],
+        findings: List[Dict],
+    ) -> Dict[str, ExposureDetail]:
+        """Detect resources with explicit internet_exposure findings."""
+        exposed = {}
+
+        # Build resource_id → resource map
+        resource_by_id = {r['id']: r for r in resources}
+
+        for finding in findings:
+            resource_id = finding.get('resource_id')
+            if not resource_id or resource_id not in resource_by_id:
+                continue
+
+            # Check for internet_exposure context
+            context = finding.get('context', [])
+            if not isinstance(context, list):
+                context = []
+
+            is_exposed = False
+            for ctx in context:
+                if (ctx.get('context_key') == 'internet_exposure' and
+                    ctx.get('context_value') == 'true'):
+                    is_exposed = True
+                    break
+
+            if is_exposed:
+                resource = resource_by_id[resource_id]
+                resource_name = resource.get('resource_name')
+                if resource_name:
+                    exposed[resource_name] = ExposureDetail(
+                        resource_name=resource_name,
+                        resource_id=resource_id,
+                        exposure_type='finding',
+                        confidence='high',
+                        reason='Explicit security finding: internet exposure detected',
+                        color=self.COLORS['finding'],
+                        detection_methods=['Finding'],
+                    )
+
+        return exposed
+
+    def _detect_by_firewall_rules(
+        self,
+        resources: List[Dict],
+        properties: Optional[Dict[int, Dict[str, str]]],
+    ) -> Dict[str, ExposureDetail]:
+        """Detect resources with firewall rules open to 0.0.0.0."""
+        exposed = {}
+
+        if not properties:
+            return exposed
+
+        for resource in resources:
+            resource_id = resource.get('id')
+            resource_name = resource.get('resource_name')
+            resource_type = (resource.get('resource_type') or '').lower()
+
+            if not resource_name or resource_id not in properties:
+                continue
+
+            props = properties[resource_id]
+            reason_parts = []
+
+            # Check for explicit firewall rule properties
+            for prop_key in ['firewall_rules', 'security_rules', 'inbound_rules', 
+                            'ingress_rules', 'network_rules']:
+                if prop_key in props:
+                    prop_value = props[prop_key]
+                    if self._contains_open_rules(prop_value):
+                        reason_parts.append(f'{prop_key}: allows 0.0.0.0/0')
+
+            # Check for explicit start_ip or start_ip_address
+            if props.get('start_ip_address') == '0.0.0.0':
+                reason_parts.append('Firewall rule: 0.0.0.0/0 allowed')
+            if props.get('start_ip') == '0.0.0.0':
+                reason_parts.append('Firewall rule: 0.0.0.0/0 allowed')
+
+            # SQL Server: Check for public network access
+            if 'sql' in resource_type and props.get('public_network_access_enabled') == 'true':
+                reason_parts.append('SQL: public_network_access_enabled')
+
+            if reason_parts:
+                exposed[resource_name] = ExposureDetail(
+                    resource_name=resource_name,
+                    resource_id=resource_id,
+                    exposure_type='firewall_rule',
+                    confidence='high',
+                    reason=' | '.join(reason_parts),
+                    color=self.COLORS['firewall_rule'],
+                    detection_methods=['Firewall Rule'],
+                )
+
+        return exposed
+
+    def _detect_by_resource_properties(
+        self,
+        resources: List[Dict],
+        properties: Optional[Dict[int, Dict[str, str]]],
+    ) -> Dict[str, ExposureDetail]:
+        """Detect resources with properties indicating public access."""
+        exposed = {}
+
+        if not properties:
+            return exposed
+
+        for resource in resources:
+            resource_id = resource.get('id')
+            resource_name = resource.get('resource_name')
+
+            if not resource_name or resource_id not in properties:
+                continue
+
+            props = properties[resource_id]
+            reason_parts = []
+
+            # Check for public access properties
+            for prop_key, prop_value in props.items():
+                if prop_key in self.PUBLIC_PROPERTIES:
+                    # Normalize boolean values
+                    if prop_value and str(prop_value).lower() in ('true', '1', 'yes'):
+                        reason_parts.append(f'{prop_key}=true')
+
+            if reason_parts:
+                # Skip if this resource has private override
+                if (resource.get('resource_type') or '').lower() in self.PRIVATE_OVERRIDE:
+                    continue
+
+                exposed[resource_name] = ExposureDetail(
+                    resource_name=resource_name,
+                    resource_id=resource_id,
+                    exposure_type='property',
+                    confidence='medium',
+                    reason=' | '.join(reason_parts),
+                    color=self.COLORS['property'],
+                    detection_methods=['Property'],
+                )
+
+        return exposed
+
+    def _detect_by_heuristics(
+        self,
+        resources: List[Dict],
+    ) -> Dict[str, ExposureDetail]:
+        """Detect resources by type heuristics (inherently public types)."""
+        exposed = {}
+
+        public_types = self.PUBLIC_BY_DESIGN.get(self.provider, set())
+
+        for resource in resources:
+            resource_name = resource.get('resource_name')
+            resource_type = (resource.get('resource_type') or '').lower()
+
+            if not resource_name:
+                continue
+
+            # Skip if already detected by higher-confidence method
+            if resource_name in exposed:
+                continue
+
+            # Check if resource type is inherently public
+            matches_public_type = False
+            matched_type = None
+
+            for public_type in public_types:
+                if public_type in resource_type or resource_type in public_type:
+                    matches_public_type = True
+                    matched_type = public_type
+                    break
+
+            if matches_public_type:
+                # Additional heuristic: skip resources with "private" in name
+                if 'private' in resource_name.lower():
+                    continue
+
+                exposed[resource_name] = ExposureDetail(
+                    resource_name=resource_name,
+                    resource_id=resource.get('id'),
+                    exposure_type='heuristic',
+                    confidence='medium',
+                    reason=f'Resource type {matched_type} is inherently public-facing',
+                    color=self.COLORS['heuristic'],
+                    detection_methods=['Heuristic'],
+                )
+
+        return exposed
+
+    @staticmethod
+    def _contains_open_rules(rules_str: str) -> bool:
+        """
+        Check if a rules JSON string contains rules open to 0.0.0.0/0.
+        
+        Args:
+            rules_str: JSON string or plain text containing rules
+        
+        Returns:
+            True if any rule allows 0.0.0.0
+        """
+        if not rules_str:
+            return False
+
+        # Try parsing as JSON
+        try:
+            rules = json.loads(rules_str)
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, dict):
+                        # Check source_ip, source_address, cidr, etc.
+                        for key in ['source_ip', 'source_address', 'source_cidr', 
+                                   'cidr', 'start_ip_address', 'start_ip']:
+                            if rule.get(key) == '0.0.0.0' or rule.get(key) == '0.0.0.0/0':
+                                return True
+            elif isinstance(rules, dict):
+                # Single rule dict
+                for key in ['source_ip', 'source_address', 'source_cidr', 
+                           'cidr', 'start_ip_address', 'start_ip']:
+                    if rules.get(key) == '0.0.0.0' or rules.get(key) == '0.0.0.0/0':
+                        return True
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Fallback: check string contains 0.0.0.0
+        return '0.0.0.0' in rules_str.upper()
+
+
+def merge_exposure_detections(
+    exposures: List[Dict[str, ExposureDetail]]
+) -> Dict[str, ExposureDetail]:
+    """
+    Merge multiple exposure detection results, keeping highest-confidence detections.
+    
+    Args:
+        exposures: List of exposure dicts from multiple detectors
+    
+    Returns:
+        Merged dict with deduplicated resources (highest confidence wins)
+    """
+    merged = {}
+    confidence_rank = {'high': 3, 'medium': 2, 'low': 1}
+
+    for exposure_dict in exposures:
+        for resource_name, detail in exposure_dict.items():
+            if resource_name not in merged:
+                merged[resource_name] = detail
+            else:
+                # Keep higher confidence detection
+                existing = merged[resource_name]
+                if confidence_rank.get(detail.confidence, 0) > confidence_rank.get(existing.confidence, 0):
+                    merged[resource_name] = detail
+                elif detail.confidence == existing.confidence:
+                    # Same confidence, combine methods
+                    if detail.detection_methods:
+                        existing.detection_methods.extend(detail.detection_methods)
+
+    return merged
