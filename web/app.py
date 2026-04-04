@@ -6077,9 +6077,12 @@ def api_view_findings(experiment_id: str, repo_name: str):
                    sec.adjusted_score AS security_score, sec.confidence AS security_confidence,
                    sec.reasoning AS security_reasoning, sec.key_concerns AS security_key_concerns,
                    ai.adjusted_score AS ai_score, ai.confidence AS ai_confidence,
-                   ai.reasoning AS ai_reasoning, ai.reviewer_type AS ai_agent_used
+                   ai.reasoning AS ai_reasoning, ai.reviewer_type AS ai_agent_used,
+                   COALESCE(r.provider, 'Unknown') AS provider,
+                   r.resource_type
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
+            LEFT JOIN resources r ON f.resource_id = r.id
             LEFT JOIN skeptic_reviews dev ON dev.finding_id = f.id AND dev.reviewer_type = 'dev'
             LEFT JOIN skeptic_reviews plat ON plat.finding_id = f.id AND plat.reviewer_type = 'platform'
             LEFT JOIN skeptic_reviews sec ON sec.finding_id = f.id AND sec.reviewer_type = 'security'
@@ -6087,6 +6090,13 @@ def api_view_findings(experiment_id: str, repo_name: str):
                 AND ai.reviewer_type IN ('DevSkeptic', 'PlatformSkeptic', 'SecurityAgent', 'ai_copilot')
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             ORDER BY
+                CASE LOWER(COALESCE(r.provider, '')) 
+                  WHEN 'aws' THEN 1 
+                  WHEN 'azure' THEN 2 
+                  WHEN 'gcp' THEN 3 
+                  WHEN 'oci' THEN 4
+                  WHEN 'alicloud' THEN 5
+                  ELSE 6 END,
                 CASE f.base_severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
                                 WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4
                                 WHEN 'INFO' THEN 5 ELSE 6 END,

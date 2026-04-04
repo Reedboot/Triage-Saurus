@@ -337,12 +337,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   font-size: 0.78rem; line-height: 1.6;
   white-space: pre-wrap; word-break: break-all;
   color: var(--text-muted);
-  scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-base);
+  scrollbar-width: auto;
+  scrollbar-color: var(--accent) var(--bg-secondary);
 }
-#log-output::-webkit-scrollbar { width: 12px; height: 12px; }
-#log-output::-webkit-scrollbar-track { background: transparent; }
-#log-output::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
-#log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb66; }
+#log-output::-webkit-scrollbar { width: 14px; height: 14px; }
+#log-output::-webkit-scrollbar-track { background: var(--bg-secondary); border-radius: 6px; }
+#log-output::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 6px; border: 2px solid var(--bg-secondary); background-clip: padding-box; }
+#log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb; }
 
 #log-output .line-ok     { color: var(--green); }
 #log-output .line-warn   { color: var(--yellow); }
