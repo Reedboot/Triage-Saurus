@@ -10,6 +10,7 @@ Creates cloud-agnostic architecture diagrams showing:
 
 import sys
 import re
+import json
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict
@@ -20,6 +21,25 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
+
+
+def load_architecture_diagram_exclusions() -> Set[str]:
+    """Load resource types that should be excluded from architecture diagrams."""
+    exclusions_file = Path(__file__).parent / "architecture_diagram_exclusions.json"
+    if not exclusions_file.exists():
+        return set()
+    
+    try:
+        with open(exclusions_file) as f:
+            data = json.load(f)
+            return set(rt.lower() for rt in data.get('excluded_resource_types', []))
+    except Exception as e:
+        print(f"Warning: Failed to load exclusions: {e}", file=sys.stderr)
+        return set()
+
+
+# Load exclusions at module level
+_ARCHITECTURE_DIAGRAM_EXCLUSIONS = load_architecture_diagram_exclusions()
 
 
 def sanitize_id(name: str) -> str:
@@ -133,6 +153,12 @@ class HierarchicalDiagramBuilder:
         # Filter to specific provider if requested
         if self.provider_filter:
             self.resources = [r for r in self.resources if (r.get('provider') or '').lower() == self.provider_filter.lower()]
+        
+        # Filter out resource types that shouldn't appear in diagrams
+        self.resources = [
+            r for r in self.resources
+            if (r.get('resource_type') or '').lower() not in _ARCHITECTURE_DIAGRAM_EXCLUSIONS
+        ]
         
         # Remove duplicates (keep first occurrence based on ID)
         seen_ids = set()

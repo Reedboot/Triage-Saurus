@@ -1,0 +1,38 @@
+{
+  "description": "Resource types that should be excluded from architecture diagrams",
+  "excluded_resource_types": [
+    "google_compute_zones",
+    "oci_objectstorage_namespace",
+    "oci_identity_compartment",
+    "azurerm_client_config",
+    "aws_caller_identity",
+    "random_string",
+    "random_integer",
+    "null_resource",
+    "azurerm_security_center_subscription_pricing",
+    "azurerm_security_center_contact",
+    "azurerm_resource_group",
+    "azurerm_policy_definition",
+    "azurerm_policy_assignment",
+    "azurerm_network_watcher",
+    "azurerm_monitor_log_profile",
+    "aws_iam_policy_document",
+    "aws_iam_access_key",
+    "aws_db_parameter_group",
+    "aws_db_option_group",
+    "aws_db_subnet_group",
+    "aws_iam_instance_profile",
+    "aws_iam_user_policy",
+    "azurerm_storage_account_network_rules",
+    "azurerm_sql_firewall_rule",
+    "azurerm_postgresql_configuration",
+    "azurerm_key_vault_secret",
+    "azurerm_key_vault_key",
+    "aws_kms_alias"
+  ],
+  "notes": [
+    "These are typically configuration objects, metadata, or data sources",
+    "They don't represent actual infrastructure components",
+    "During AI scans, new types can be added to this list"
+  ]
+}
