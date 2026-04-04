@@ -297,6 +297,43 @@ def _auto_resolve_open_questions(
     return resolved
 
 
+def _detect_resume_state(experiment_id: str, repo_name: str, key: str) -> dict:
+    """
+    Detect which steps have already been completed for a run.
+    
+    Returns dict with:
+    - resume_from_step: 1, 2, or 3 (which step to start from)
+    - has_raw_output: bool (whether Step 2 output exists)
+    - parsed_content: dict or None (parsed results if Step 3 already done)
+    """
+    from pathlib import Path
+    
+    resume_state = {
+        "resume_from_step": 1,
+        "has_raw_output": False,
+        "parsed_content": None,
+    }
+    
+    # Check if raw output exists (indicates Step 2 was done)
+    safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
+    raw_file = REPO_ROOT / 'Output' / 'AILogs' / f"{safe_key}-raw.txt"
+    
+    if raw_file.exists():
+        resume_state["has_raw_output"] = True
+        resume_state["resume_from_step"] = 3  # Skip to parsing step
+        
+        # Try to parse it
+        try:
+            content = raw_file.read_text(encoding='utf-8', errors='replace')
+            parsed = _extract_json_object(content)
+            if parsed:
+                resume_state["parsed_content"] = parsed
+        except Exception:
+            pass
+    
+    return resume_state
+
+
 def _get_db_job_status(experiment_id: str, repo_name: str) -> dict | None:
     """Check context_metadata for a persisted job completion record (survives server restarts)."""
     try:
@@ -1585,7 +1622,11 @@ def api_scans(repo_name: str):
 
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_start(experiment_id: str, repo_name: str):
-    """Start AI analysis job for findings in an experiment."""
+    """Start AI analysis job for findings in an experiment.
+    
+    Smart resume: If a previous run completed successfully, returns that status
+    instead of restarting. User can force re-run via force_restart=true query param.
+    """
     conn = _get_db()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
@@ -1598,10 +1639,25 @@ def api_analysis_start(experiment_id: str, repo_name: str):
         conn.close()
 
     key = _ai_job_key(resolved_exp_id, repo_name)
+    force_restart = request.args.get("force_restart", "false").lower() == "true"
+    
     with _AI_ANALYSIS_LOCK:
         existing = _AI_ANALYSIS_JOBS.get(key)
         if existing and existing.get("status") == "running":
             return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
+
+        # Check if previous run already completed (unless force_restart)
+        if not force_restart:
+            db_status = _get_db_job_status(resolved_exp_id, repo_name)
+            if db_status and db_status.get("status") == "completed":
+                # Already completed — no need to re-run
+                return jsonify({
+                    "status": "already_completed",
+                    "experiment_id": resolved_exp_id,
+                    "repo_name": repo_name,
+                    "message": "AI analysis already completed. Use ?force_restart=true to re-run.",
+                    "completed_at": db_status.get("completed_at")
+                }), 200
 
         thread = threading.Thread(
             target=_run_ai_analysis_job,
@@ -1772,23 +1828,53 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             }
 
         _append_ai_job_log(key, "Copilot streaming job started")
-        yield _sse("log", "Step 1/3: Collecting repository facts from DB...")
+        
+        # ═══ RESUME DETECTION ═══
+        # Check if we can skip steps based on previous work
+        resume_state = _detect_resume_state(resolved_exp_id, repo_name, key)
+        
+        if resume_state["resume_from_step"] == 3:
+            yield _sse("log", "⚡ Resume detected: Skipping Steps 1-2, jumping to parsing & persisting...")
+            _append_ai_job_log(key, f"Resume from Step 3: raw output found ({len(resume_state.get('parsed_content') or {})} keys)")
+            combined = raw_file.read_text(encoding='utf-8', errors='replace') if resume_state["has_raw_output"] else ""
+        else:
+            combined = None
+        
+        if resume_state["resume_from_step"] <= 1:
+            yield _sse("log", "Step 1/3: Collecting repository facts from DB...")
 
-        facts = _fetch_overview_facts(resolved_exp_id, repo_name)
-        if not facts:
-            err = "Repo facts unavailable (missing DB rows)"
-            _append_ai_job_log(key, err)
-            with _AI_ANALYSIS_LOCK:
-                job = _AI_ANALYSIS_JOBS.get(key, {})
-                job["status"] = "failed"
-                job["error"] = err
-                job["completed_at"] = time.time()
-                job.pop("process", None)
-                _AI_ANALYSIS_JOBS[key] = job
-            yield _sse("error", err)
-            return
+            facts = _fetch_overview_facts(resolved_exp_id, repo_name)
+            if not facts:
+                err = "Repo facts unavailable (missing DB rows)"
+                _append_ai_job_log(key, err)
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["status"] = "failed"
+                    job["error"] = err
+                    job["completed_at"] = time.time()
+                    job.pop("process", None)
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("error", err)
+                return
 
-        yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
+            yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
+        else:
+            # Resuming, need to fetch facts for context but skip the AI review
+            facts = _fetch_overview_facts(resolved_exp_id, repo_name)
+            if not facts:
+                err = "Repo facts unavailable for resume (missing DB rows)"
+                _append_ai_job_log(key, err)
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["status"] = "failed"
+                    job["error"] = err
+                    job["completed_at"] = time.time()
+                    job.pop("process", None)
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("error", err)
+                return
+            
+            _append_ai_job_log(key, "Resume: Skipping Step 2 (AI review), using cached Copilot output")
 
         _, fact_json = facts
         # Gather recent skeptic reviews for prompt enrichment (if present)
@@ -1820,9 +1906,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             "skeptic_reviews": skeptic_rows,
         }
 
-        # ContextDiscoveryAgent runs first to enrich architecture context before
-        # the reviewer agents.  Each agent gets only its own instructions so
-        # individual prompts stay well within the model's context window.
+        # ═══ STEP 2: Run AI Agents (or Skip if Resuming) ═══
         REVIEWER_AGENTS = [
             ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
             ("SecurityAgent",         "🔒 Security",           "security_review"),
@@ -1830,78 +1914,81 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             ("PlatformSkeptic",       "☁️ Platform",           "platform_review"),
         ]
 
-        # Initialise per-agent status in the job dict
-        with _AI_ANALYSIS_LOCK:
-            job = _AI_ANALYSIS_JOBS.get(key, {})
-            job["agent_steps"] = {name: "pending" for name, _, _ in REVIEWER_AGENTS}
-            _AI_ANALYSIS_JOBS[key] = job
-
-        # We stream *progress* + a compact formatted result, not the raw token stream.
-        model = os.environ.get("COPILOT_MODEL", "gpt-5-mini")
-
-        # Set up a single working copy of the repo that all three agents share.
-        repo_cwd = str(REPO_ROOT)
+        per_agent_combined: dict[str, str] = {}
         temp_copy_dir = None
-        try:
-            conn2 = _get_db()
-            if conn2:
-                try:
-                    row = conn2.execute(
-                        "SELECT COALESCE(path, '') AS path FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
-                        (resolved_exp_id, repo_name),
-                    ).fetchone()
-                    if row and row["path"]:
-                        p = Path(row["path"]).expanduser().resolve()
-                        if p.exists() and p.is_dir():
-                            # Create a temporary copy inside the server's Output/WorkingCopies folder
-                            wc_root = REPO_ROOT / "Output" / "WorkingCopies"
-                            wc_root.mkdir(parents=True, exist_ok=True)
-                            dest = wc_root / f"{resolved_exp_id}_{repo_name}"
-                            # Remove any stale copy first
-                            if dest.exists():
+        
+        if resume_state["resume_from_step"] <= 2:
+            # Normal path: Run all agents
+            # Initialise per-agent status in the job dict
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key, {})
+                job["agent_steps"] = {name: "pending" for name, _, _ in REVIEWER_AGENTS}
+                _AI_ANALYSIS_JOBS[key] = job
+
+            # We stream *progress* + a compact formatted result, not the raw token stream.
+            model = os.environ.get("COPILOT_MODEL", "gpt-5-mini")
+
+            # Set up a single working copy of the repo that all three agents share.
+            repo_cwd = str(REPO_ROOT)
+            try:
+                conn2 = _get_db()
+                if conn2:
+                    try:
+                        row = conn2.execute(
+                            "SELECT COALESCE(path, '') AS path FROM repositories WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1",
+                            (resolved_exp_id, repo_name),
+                        ).fetchone()
+                        if row and row["path"]:
+                            p = Path(row["path"]).expanduser().resolve()
+                            if p.exists() and p.is_dir():
+                                # Create a temporary copy inside the server's Output/WorkingCopies folder
+                                wc_root = REPO_ROOT / "Output" / "WorkingCopies"
+                                wc_root.mkdir(parents=True, exist_ok=True)
+                                dest = wc_root / f"{resolved_exp_id}_{repo_name}"
+                                # Remove any stale copy first
+                                if dest.exists():
+                                    try:
+                                        import shutil
+
+                                        shutil.rmtree(dest)
+                                    except Exception:
+                                        pass
                                 try:
                                     import shutil
 
-                                    shutil.rmtree(dest)
+                                    shutil.copytree(p, dest, dirs_exist_ok=True)
+                                    temp_copy_dir = dest
+                                    repo_cwd = str(dest)
                                 except Exception:
-                                    pass
-                            try:
-                                import shutil
+                                    # Fall back to original repo path if copy fails
+                                    repo_cwd = str(p)
+                    finally:
+                        conn2.close()
+            except Exception:
+                # Best-effort: fall back to REPO_ROOT when DB lookup fails
+                pass
 
-                                shutil.copytree(p, dest, dirs_exist_ok=True)
-                                temp_copy_dir = dest
-                                repo_cwd = str(dest)
-                            except Exception:
-                                # Fall back to original repo path if copy fails
-                                repo_cwd = str(p)
-                finally:
-                    conn2.close()
-        except Exception:
-            # Best-effort: fall back to REPO_ROOT when DB lookup fails
-            pass
+            copilot_cmd, copilot_err = _resolve_copilot_command()
+            if copilot_err:
+                _append_ai_job_log(key, copilot_err)
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["status"] = "failed"
+                    job["error"] = copilot_err
+                    job["completed_at"] = time.time()
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("error", copilot_err)
+                if temp_copy_dir:
+                    try:
+                        import shutil
 
-        copilot_cmd, copilot_err = _resolve_copilot_command()
-        if copilot_err:
-            _append_ai_job_log(key, copilot_err)
-            with _AI_ANALYSIS_LOCK:
-                job = _AI_ANALYSIS_JOBS.get(key, {})
-                job["status"] = "failed"
-                job["error"] = copilot_err
-                job["completed_at"] = time.time()
-                _AI_ANALYSIS_JOBS[key] = job
-            yield _sse("error", copilot_err)
-            if temp_copy_dir:
-                try:
-                    import shutil
+                        shutil.rmtree(temp_copy_dir)
+                    except Exception:
+                        pass
+                return
 
-                    shutil.rmtree(temp_copy_dir)
-                except Exception:
-                    pass
-            return
-
-        # Run one focused Copilot job per reviewer agent.
-        # SecurityAgent's output drives the main TL;DR parse; all results are saved.
-        per_agent_combined: dict[str, str] = {}
+            # Run one focused Copilot job per reviewer agent.
+            # SecurityAgent's output drives the main TL;DR parse; all results are saved.
         rc = 0  # aggregate exit code — set to non-zero if any agent fails
 
         for agent_idx, (agent_name, agent_label, agent_section_key) in enumerate(REVIEWER_AGENTS, 1):
@@ -2165,17 +2252,21 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             yield _sse("log", f"  ✓ {agent_label} complete in {elapsed_total}s")
 
         # SecurityAgent output drives the main parse; fall back to whichever ran.
-        combined_source = (
-            per_agent_combined.get("SecurityAgent")
-            or per_agent_combined.get("DevSkeptic")
-            or per_agent_combined.get("PlatformSkeptic")
-            or ""
-        )
+        # (or use cached output if resuming from Step 3)
+        if resume_state["resume_from_step"] <= 2:
+            combined_source = (
+                per_agent_combined.get("SecurityAgent")
+                or per_agent_combined.get("DevSkeptic")
+                or per_agent_combined.get("PlatformSkeptic")
+                or ""
+            )
+            combined = combined_source
+        else:
+            # Already have combined from resume detection
+            pass
 
         yield _sse("log", f"")
         yield _sse("log", f"▶ STEP 3/3 — Parsing & persisting results")
-
-        combined = combined_source
         # Persist raw Copilot output for diagnostics
         try:
             safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
