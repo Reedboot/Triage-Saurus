@@ -1,8 +1,49 @@
-{# partials/tab_findings.html — Findings detail cards with skeptic reviews #}
+{# partials/tab_findings.html — Findings detail cards grouped by cloud provider #}
 {% if findings %}
+
+{# Calculate provider groups #}
+{% set provider_groups = {} %}
+{% for f in findings %}
+  {% set provider = f.get('provider') or 'Unknown' %}
+  {% if provider not in provider_groups %}
+    {% set _ = provider_groups.update({provider: []}) %}
+  {% endif %}
+  {% set _ = provider_groups[provider].append(f) %}
+{% endfor %}
+
+{# Helper function to get provider display name #}
+{% set provider_names = {
+  'aws': '☁️ AWS',
+  'azure': '☁️ Azure', 
+  'gcp': '☁️ Google Cloud',
+  'oci': '☁️ Oracle Cloud',
+  'alicloud': '☁️ Alibaba Cloud',
+  'Unknown': '❓ Unknown Provider'
+} %}
+
+{# Helper function to count findings by severity in a provider group #}
+{% macro severity_counts(findings_list) %}
+  {% set critical = findings_list | selectattr('base_severity', 'equalto', 'CRITICAL') | list | length %}
+  {% set high = findings_list | selectattr('base_severity', 'equalto', 'HIGH') | list | length %}
+  {% set medium = findings_list | selectattr('base_severity', 'equalto', 'MEDIUM') | list | length %}
+  {% set low = findings_list | selectattr('base_severity', 'equalto', 'LOW') | list | length %}
+  {% if critical > 0 %}<span style="color: #ff0000; font-weight: 600;">{{critical}} Critical</span>{% endif %}
+  {%- if high > 0 %}<span style="color: #ff9900;">{{high}} High</span>{% endif %}
+  {%- if medium > 0 %}<span style="color: #ffb800;">{{medium}} Medium</span>{% endif %}
+  {%- if low > 0 %}<span style="color: #00cc00;">{{low}} Low</span>{% endif %}
+{% endmacro %}
+
 <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
   <input type="text" id="findings-search" class="assets-search" style="max-width:280px"
          placeholder="Filter findings…" autocomplete="off" oninput="filterFindings()" />
+  <select id="findings-provider-filter" class="assets-provider-filter" onchange="filterFindings()">
+    <option value="">All providers</option>
+    {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'Unknown'] %}
+      {% if provider in provider_groups %}
+        <option value="{{ provider }}">{{ provider_names.get(provider, provider) }}</option>
+      {% endif %}
+    {% endfor %}
+  </select>
   <select id="findings-sev-filter" class="assets-provider-filter" onchange="filterFindings()">
     <option value="">All severities</option>
     <option value="CRITICAL">Critical</option>
@@ -18,227 +59,255 @@
   </span>
 </div>
 
-<div id="findings-container" style="display: grid; gap: 16px; min-width: 0;">
-  {% for f in findings %}
-  {% set sev = (f.base_severity or f.severity or '') | upper %}
-  {% set sev_css = sev | lower %}
-  <div class="finding-card" 
-       data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
-       data-sev="{{ sev }}"
-       data-finding-id="{{ f.id }}"
-       style="border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--bg-subtle); display: grid; gap: 12px; min-width: 0;">
-    
-    {# Header: Severity + Title + Rule #}
-    <div style="display: grid; gap: 8px;">
-      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-        <span class="severity-badge {{ sev_css }}" style="font-weight: 600; padding: 4px 8px;">{{ sev or '—' }}</span>
-        <span style="font-size: 0.85rem; color: var(--text-muted);">Finding ID: {{ f.id }}</span>
-        {% if f.hit_count and f.hit_count > 1 %}
-        <span title="{{ f.hit_count }} occurrences of this rule in the same file"
-              style="font-size:0.75rem; font-weight:600; background:var(--orange-dim,#3d2800); color:var(--orange-bright,#f0a030); border-radius:999px; padding:2px 8px;">×{{ f.hit_count }}</span>
-        {% endif %}
-      </div>
-      <div style="font-size: 1.1rem; font-weight: 600; color: var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
-      {% if f.rule_id and f.rule_id != f.title %}
-        <div class="s-inline-b6d566">Rule: {{ f.rule_id }}</div>
-      {% endif %}
-      {% if f.description %}
-        <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;">{{ f.description }}</div>
-      {% endif %}
-      {% if f.category %}
-        <div style="margin-top: 4px;">
-          <span class="how-badge" style="background: var(--purple-dim, #3d1a5c); color: var(--purple-bright, #d29eff);">
-            {{ f.category }}
-          </span>
-        </div>
-      {% endif %}
-      {% if f.credential_classification and f.credential_classification != 'real_credential' and f.credential_classification != 'unknown' %}
-        {% set cred_label = {'placeholder': '🏷️ Placeholder', 'variable_reference': '🔗 Variable ref', 'example_value': '🧪 Example value'}.get(f.credential_classification, f.credential_classification) %}
-        <div style="margin-top: 4px;">
-          <span class="how-badge" style="background: var(--blue-dim, #1e3a5f); color: var(--blue-bright, #79c0ff);"
-                title="AI classified: {{ f.credential_classification }}{% if f.credential_note %} — {{ f.credential_note }}{% endif %}">
-            {{ cred_label }}
-          </span>
-        </div>
-      {% endif %}
-    </div>
-
-    {# Source Location #}
-    {% if f.source_file %}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">📍 Source Location</div>
-      <div style="font-family: monospace; font-size: 0.85rem; color: var(--text);">
-        <span class="file-link" title="{{ f.source_file }}" style="cursor: pointer;">{{ f.source_file | basename }}</span>
-        {% if f.source_line_start %}
-          <span style="color: var(--text-muted);">:{{ f.source_line_start }}{% if f.source_line_end and f.source_line_end != f.source_line_start %}-{{ f.source_line_end }}{% endif %}</span>
-        {% endif %}
-      </div>
-      {% if f.resource_id %}
-        <div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);">
-          Resource: <span class="asset-type-badge">#{{ f.resource_id }}</span>
-        </div>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {# Code Snippet - if available #}
-    {% if f.file_context or f.code_snippet %}
-    {% set fc = f.file_context %}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px; min-width: 0; overflow: hidden;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
-        <div style="font-weight:600; font-size:0.9rem; color:var(--text-muted);">📄 Code</div>
-        {% if fc %}
-        <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
-          {{ fc.path }}
-        </div>
-        {% elif f.source_file %}
-        <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
-          {{ f.source_file }}
-        </div>
-        {% endif %}
-      </div>
-
-      {% if fc %}
-      <div class="code-snippet-wrap">
-        <button class="btn-copy-snippet" title="Copy snippet"
-                style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
-          📋 Copy
-        </button>
-        <table class="code-table" style="border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px;">
-          {% for ln in fc.lines %}
-          <tr style="{% if ln.highlight %}background:rgba(210,90,40,0.15);{% endif %}">
-            <td style="width:1%; white-space:nowrap; padding:1px 10px 1px 8px; color:var(--text-muted); user-select:none; border-right:1px solid var(--border); text-align:right; font-size:0.75rem;{% if ln.highlight %} color:var(--orange); font-weight:600;{% endif %}">{{ ln.no }}</td>
-            <td style="padding:1px 10px; white-space:pre; color:var(--text);{% if ln.highlight %} font-weight:500;{% endif %}">{{ ln.text }}</td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
-      {% else %}
-      {# Fallback: plain snippet from DB #}
-      <div class="code-snippet-wrap">
-        <button class="btn-copy-snippet" title="Copy snippet"
-                style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
-          📋 Copy
-        </button>
-        <pre style="background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px; overflow-x:auto; font-size:0.8rem; line-height:1.5; color:var(--text); margin:0; white-space:pre;"><code>{{ f.code_snippet }}</code></pre>
-      </div>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {# AI Proposed Fix - if available #}
-    {% if f.proposed_fix %}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">✅ Suggested Fix (AI)</div>
-      <pre style="background: var(--bg); border: 1px solid var(--border-success, #238636); border-radius: 4px; padding: 10px; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; color: var(--text);"><code>{{ f.proposed_fix }}</code></pre>
-    </div>
-    {% endif %}
-
-    {# Scoring & Skeptic Reviews #}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 10px;">📊 Scoring & Reviews</div>
-      <div style="display: grid; gap: 12px;">
-        
-        {# Script/Baseline Score #}
-        {% if f.severity_score %}
-        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text);">
-            <span>🔧 Scanner Baseline</span>
-            <span style="float: right; color: var(--text-muted);">{{ f.severity_score }}/10</span>
-          </div>
-        </div>
-        {% endif %}
-
-        {# AI Review #}
-        {% if f.ai_score %}
-        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
-            <span>🤖 AI Review{% if f.ai_agent_used %} ({{ f.ai_agent_used }}){% endif %}</span>
-            <span style="color: {% if f.ai_score >= 9 %}var(--red-bright){% elif f.ai_score >= 7 %}var(--orange){% elif f.ai_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-weight: 600;">
-              {{ f.ai_score }}/10
-              {% if f.severity_score and f.ai_score != f.severity_score %}
-                <span style="font-size: 0.75rem; color: var(--text-muted);">({% if f.ai_score > f.severity_score %}+{% endif %}{{ f.ai_score - f.severity_score }})</span>
-              {% endif %}
-            </span>
-          </div>
-          {% if f.ai_reasoning %}
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.ai_reasoning }}</div>
-          {% endif %}
-        </div>
-        {% endif %}
-
-        {# Dev Skeptic #}
-        {% if f.dev_score %}
-        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
-            <span>👨‍💻 Dev Skeptic</span>
-            <span>{{ f.dev_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.dev_confidence * 100) | int }}%)</span></span>
-          </div>
-          {% if f.dev_reasoning %}
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.dev_reasoning }}</div>
-          {% endif %}
-        </div>
-        {% endif %}
-
-        {# Platform Skeptic #}
-        {% if f.platform_score %}
-        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
-            <span>☁️ Platform Skeptic</span>
-            <span>{{ f.platform_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.platform_confidence * 100) | int }}%)</span></span>
-          </div>
-          {% if f.platform_reasoning %}
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.platform_reasoning }}</div>
-          {% endif %}
-        </div>
-        {% endif %}
-
-        {# Security Skeptic #}
-        {% if f.security_score %}
-        <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
-            <span>🔒 Security Skeptic</span>
-            <span>{{ f.security_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.security_confidence * 100) | int }}%)</span></span>
-          </div>
-          {% if f.security_reasoning %}
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.security_reasoning }}</div>
-          {% endif %}
-        </div>
-        {% endif %}
-
-        {# Final Score #}
-        {% if f.severity_score %}
-        <div style="background: linear-gradient(135deg, var(--border-subtle) 0%, var(--bg-subtle) 100%); padding: 10px; border-radius: 4px; border: 2px solid var(--border); font-weight: 700;">
-          <div style="font-size: 0.85rem; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
-            <span>🎯 Final Score</span>
-            <span style="color: {% if f.severity_score >= 9 %}var(--red-bright){% elif f.severity_score >= 7 %}var(--orange){% elif f.severity_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-size: 1.2rem;">
-              {{ f.severity_score }}/10
-            </span>
-          </div>
-        </div>
-        {% endif %}
-      </div>
-    </div>
-
-    {# Triage Status & Controls #}
-    <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-      <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px;">✏️ Triage</div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-        {% set ts = (f.triage_status or 'valid') %}
-        <span class="how-badge" style="padding: 4px 8px;" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">
-          {{ ts }}
+{# Render findings grouped by provider #}
+<div id="findings-container" style="display: grid; gap: 24px; min-width: 0;">
+  {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'Unknown'] %}
+    {% if provider in provider_groups %}
+    <div class="provider-group" data-provider="{{ provider }}" style="border: 2px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-subtle);">
+      {# Provider header with counts #}
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;" 
+           onclick="toggleProviderGroup('{{ provider }}')">
+        <span style="font-size: 1.3rem;">▼</span>
+        <span style="font-size: 1.1rem; font-weight: 700; flex: 1;">{{ provider_names.get(provider, provider) }}</span>
+        <span style="font-size: 0.9rem; color: var(--text-muted);">
+          {{ provider_groups[provider] | length }} finding{{ 's' if provider_groups[provider] | length != 1 }}
         </span>
-        <div style="font-size: 0.8rem; color: var(--text-muted);">
-          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="valid" style="{% if ts == 'valid' %}font-weight: 700;{% endif %}">✓ Valid</button>
-          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="false_positive" style="{% if ts == 'false_positive' %}font-weight: 700;{% endif %}">✗ False Positive</button>
-          <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="needs_context" style="{% if ts == 'needs_context' %}font-weight: 700;{% endif %}">❓ Needs Context</button>
-        </div>
+        <span style="font-size: 0.85rem; color: var(--text-muted); display: flex; gap: 8px;">
+          {{ severity_counts(provider_groups[provider]) }}
+        </span>
       </div>
-      {% if f.triage_reason %}
-      <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">Reason: {{ f.triage_reason }}</div>
-      {% endif %}
+
+      {# Provider findings #}
+      <div class="provider-findings" style="display: grid; gap: 16px; min-width: 0;">
+        {% for f in provider_groups[provider] %}
+        {% set sev = (f.base_severity or f.severity or '') | upper %}
+        {% set sev_css = sev | lower %}
+        <div class="finding-card" 
+             data-search="{{ [f.title, f.rule_id, f.category, f.source_file, f.description] | join(' ') | lower }}"
+             data-sev="{{ sev }}"
+             data-provider="{{ f.get('provider') or 'Unknown' }}"
+             data-finding-id="{{ f.id }}"
+             style="border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--bg); display: grid; gap: 12px; min-width: 0;">
+          
+          {# Header: Severity + Title + Rule #}
+          <div style="display: grid; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span class="severity-badge {{ sev_css }}" style="font-weight: 600; padding: 4px 8px;">{{ sev or '—' }}</span>
+              <span style="font-size: 0.85rem; color: var(--text-muted);">Finding ID: {{ f.id }}</span>
+              {% if f.hit_count and f.hit_count > 1 %}
+              <span title="{{ f.hit_count }} occurrences of this rule in the same file"
+                    style="font-size:0.75rem; font-weight:600; background:var(--orange-dim,#3d2800); color:var(--orange-bright,#f0a030); border-radius:999px; padding:2px 8px;">×{{ f.hit_count }}</span>
+              {% endif %}
+            </div>
+            <div style="font-size: 1.1rem; font-weight: 600; color: var(--text);">{{ f.title or f.rule_id or 'Untitled' }}</div>
+            {% if f.rule_id and f.rule_id != f.title %}
+              <div class="s-inline-b6d566">Rule: {{ f.rule_id }}</div>
+            {% endif %}
+            {% if f.description %}
+              <div style="font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;">{{ f.description }}</div>
+            {% endif %}
+            {% if f.category %}
+              <div style="margin-top: 4px;">
+                <span class="how-badge" style="background: var(--purple-dim, #3d1a5c); color: var(--purple-bright, #d29eff);">
+                  {{ f.category }}
+                </span>
+              </div>
+            {% endif %}
+            {% if f.credential_classification and f.credential_classification != 'real_credential' and f.credential_classification != 'unknown' %}
+              {% set cred_label = {'placeholder': '🏷️ Placeholder', 'variable_reference': '🔗 Variable ref', 'example_value': '🧪 Example value'}.get(f.credential_classification, f.credential_classification) %}
+              <div style="margin-top: 4px;">
+                <span class="how-badge" style="background: var(--blue-dim, #1e3a5f); color: var(--blue-bright, #79c0ff);"
+                      title="AI classified: {{ f.credential_classification }}{% if f.credential_note %} — {{ f.credential_note }}{% endif %}">
+                  {{ cred_label }}
+                </span>
+              </div>
+            {% endif %}
+          </div>
+
+          {# Source Location #}
+          {% if f.source_file %}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">📍 Source Location</div>
+            <div style="font-family: monospace; font-size: 0.85rem; color: var(--text);">
+              <span class="file-link" title="{{ f.source_file }}" style="cursor: pointer;">{{ f.source_file | basename }}</span>
+              {% if f.source_line_start %}
+                <span style="color: var(--text-muted);">:{{ f.source_line_start }}{% if f.source_line_end and f.source_line_end != f.source_line_start %}-{{ f.source_line_end }}{% endif %}</span>
+              {% endif %}
+            </div>
+            {% if f.resource_id %}
+              <div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);">
+                Resource: <span class="asset-type-badge">#{{ f.resource_id }}</span>
+              </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          {# Code Snippet - if available #}
+          {% if f.file_context or f.code_snippet %}
+          {% set fc = f.file_context %}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px; min-width: 0; overflow: hidden;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:6px;">
+              <div style="font-weight:600; font-size:0.9rem; color:var(--text-muted);">📄 Code</div>
+              {% if fc %}
+              <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
+                {{ fc.path }}
+              </div>
+              {% elif f.source_file %}
+              <div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted); word-break:break-all;">
+                {{ f.source_file }}
+              </div>
+              {% endif %}
+            </div>
+
+            {% if fc %}
+            <div class="code-snippet-wrap">
+              <button class="btn-copy-snippet" title="Copy snippet"
+                      style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+                📋 Copy
+              </button>
+              <table class="code-table" style="border-collapse:collapse; font-family:monospace; font-size:0.8rem; line-height:1.5; background:var(--bg); border:1px solid var(--border); border-radius:4px;">
+                {% for ln in fc.lines %}
+                <tr style="{% if ln.highlight %}background:rgba(210,90,40,0.15);{% endif %}">
+                  <td style="width:1%; white-space:nowrap; padding:1px 10px 1px 8px; color:var(--text-muted); user-select:none; border-right:1px solid var(--border); text-align:right; font-size:0.75rem;{% if ln.highlight %} color:var(--orange); font-weight:600;{% endif %}">{{ ln.no }}</td>
+                  <td style="padding:1px 10px; white-space:pre; color:var(--text);{% if ln.highlight %} font-weight:500;{% endif %}">{{ ln.text }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+            </div>
+            {% else %}
+            {# Fallback: plain snippet from DB #}
+            <div class="code-snippet-wrap">
+              <button class="btn-copy-snippet" title="Copy snippet"
+                      style="float:right; margin:0 0 4px 8px; background:var(--bg-subtle); border:1px solid var(--border); border-radius:4px; padding:2px 8px; font-size:0.75rem; color:var(--text-muted); cursor:pointer;">
+                📋 Copy
+              </button>
+              <pre style="background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px; overflow-x:auto; font-size:0.8rem; line-height:1.5; color:var(--text); margin:0; white-space:pre;"><code>{{ f.code_snippet }}</code></pre>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          {# AI Proposed Fix - if available #}
+          {% if f.proposed_fix %}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px;">✅ Suggested Fix (AI)</div>
+            <pre style="background: var(--bg); border: 1px solid var(--border-success, #238636); border-radius: 4px; padding: 10px; overflow-x: auto; font-size: 0.8rem; line-height: 1.4; color: var(--text);"><code>{{ f.proposed_fix }}</code></pre>
+          </div>
+          {% endif %}
+
+          {# Scoring & Skeptic Reviews #}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 10px;">📊 Scoring & Reviews</div>
+            <div style="display: grid; gap: 12px;">
+              
+              {# Script/Baseline Score #}
+              {% if f.severity_score %}
+              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text);">
+                  <span>🔧 Scanner Baseline</span>
+                  <span style="float: right; color: var(--text-muted);">{{ f.severity_score }}/10</span>
+                </div>
+              </div>
+              {% endif %}
+
+              {# AI Review #}
+              {% if f.ai_score %}
+              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
+                  <span>🤖 AI Review{% if f.ai_agent_used %} ({{ f.ai_agent_used }}){% endif %}</span>
+                  <span style="color: {% if f.ai_score >= 9 %}var(--red-bright){% elif f.ai_score >= 7 %}var(--orange){% elif f.ai_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-weight: 600;">
+                    {{ f.ai_score }}/10
+                    {% if f.severity_score and f.ai_score != f.severity_score %}
+                      <span style="font-size: 0.75rem; color: var(--text-muted);">({% if f.ai_score > f.severity_score %}+{% endif %}{{ f.ai_score - f.severity_score }})</span>
+                    {% endif %}
+                  </span>
+                </div>
+                {% if f.ai_reasoning %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.ai_reasoning }}</div>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {# Dev Skeptic #}
+              {% if f.dev_score %}
+              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+                  <span>👨‍💻 Dev Skeptic</span>
+                  <span>{{ f.dev_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.dev_confidence * 100) | int }}%)</span></span>
+                </div>
+                {% if f.dev_reasoning %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.dev_reasoning }}</div>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {# Platform Skeptic #}
+              {% if f.platform_score %}
+              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+                  <span>☁️ Platform Skeptic</span>
+                  <span>{{ f.platform_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.platform_confidence * 100) | int }}%)</span></span>
+                </div>
+                {% if f.platform_reasoning %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.platform_reasoning }}</div>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {# Security Skeptic #}
+              {% if f.security_score %}
+              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+                  <span>🔒 Security Skeptic</span>
+                  <span>{{ f.security_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.security_confidence * 100) | int }}%)</span></span>
+                </div>
+                {% if f.security_reasoning %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.security_reasoning }}</div>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {# Final Score #}
+              {% if f.severity_score %}
+              <div style="background: linear-gradient(135deg, var(--border-subtle) 0%, var(--bg-subtle) 100%); padding: 10px; border-radius: 4px; border: 2px solid var(--border); font-weight: 700;">
+                <div style="font-size: 0.85rem; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
+                  <span>🎯 Final Score</span>
+                  <span style="color: {% if f.severity_score >= 9 %}var(--red-bright){% elif f.severity_score >= 7 %}var(--orange){% elif f.severity_score >= 4 %}var(--yellow){% else %}var(--text-muted){% endif %}; font-size: 1.2rem;">
+                    {{ f.severity_score }}/10
+                  </span>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {# Triage Status & Controls #}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px;">✏️ Triage</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+              {% set ts = (f.triage_status or 'valid') %}
+              <span class="how-badge" style="padding: 4px 8px;" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">
+                {{ ts }}
+              </span>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="valid" style="{% if ts == 'valid' %}font-weight: 700;{% endif %}">✓ Valid</button>
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="false_positive" style="{% if ts == 'false_positive' %}font-weight: 700;{% endif %}">✗ False Positive</button>
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="needs_context" style="{% if ts == 'needs_context' %}font-weight: 700;{% endif %}">❓ Needs Context</button>
+              </div>
+            </div>
+            {% if f.triage_reason %}
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">Reason: {{ f.triage_reason }}</div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="provider-empty" style="display: none; margin-top: 20px; text-align: center; color: var(--text-muted);">
+        No findings match the current filter for this provider.
+      </div>
     </div>
-  </div>
+    {% endif %}
   {% endfor %}
 </div>
 
@@ -261,21 +330,51 @@
   border-color: var(--text-muted);
   color: var(--text);
 }
+.provider-group {
+  transition: all 0.2s ease;
+}
+.provider-group.collapsed .provider-findings {
+  display: none !important;
+}
 </style>
 
 <script>
+function toggleProviderGroup(provider) {
+  var group = document.querySelector(`.provider-group[data-provider="${provider}"]`);
+  group.classList.toggle('collapsed');
+}
+
 function filterFindings() {
   var q = document.getElementById('findings-search').value.toLowerCase();
+  var p = document.getElementById('findings-provider-filter').value.toLowerCase();
   var s = document.getElementById('findings-sev-filter').value.toUpperCase();
+  
+  var anyVisible = false;
   var cards = document.querySelectorAll('.finding-card');
-  var shown = 0;
+  
   cards.forEach(function(card) {
     var matchQ = !q || card.dataset.search.includes(q);
+    var matchP = !p || card.dataset.provider.toLowerCase() === p;
     var matchS = !s || card.dataset.sev === s;
-    card.style.display = (matchQ && matchS) ? '' : 'none';
-    if (matchQ && matchS) shown++;
+    var show = (matchQ && matchP && matchS);
+    card.style.display = show ? '' : 'none';
+    if (show) anyVisible = true;
   });
-  document.getElementById('findings-empty').style.display = shown === 0 ? '' : 'none';
+  
+  // Check each provider group for visible cards
+  document.querySelectorAll('.provider-group').forEach(function(group) {
+    var provider = group.dataset.provider;
+    var visibleCards = group.querySelectorAll('.finding-card:not([style*="display: none"])').length;
+    var emptyMsg = group.querySelector('.provider-empty');
+    
+    if (visibleCards === 0) {
+      emptyMsg.style.display = '';
+    } else {
+      emptyMsg.style.display = 'none';
+    }
+  });
+  
+  document.getElementById('findings-empty').style.display = anyVisible ? 'none' : '';
 }
 
 // Triage button handling

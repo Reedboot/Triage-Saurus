@@ -55,6 +55,7 @@ class RiskRow:
     business_impact: str
     validation_status: str  # "✅ Validated" or "⚠️ Draft - Needs Triage"
     file_reference: str
+    provider: str = "Unknown"  # Cloud provider (AWS, Azure, GCP, etc.)
 
 
 def xml_escape(text: str) -> str:
@@ -505,6 +506,25 @@ def resource_type_from_path(path: Path, title: str, issue: str = "", evidence: s
     return "Cloud"
 
 
+def _extract_provider_from_path(path: Path) -> str:
+    """Extract cloud provider from file path."""
+    path_lower = str(path).lower()
+    
+    # Check for provider in file path
+    if 'azure' in path_lower or 'azurerm' in path_lower:
+        return 'azure'
+    elif 'aws' in path_lower:
+        return 'aws'
+    elif 'gcp' in path_lower or 'google' in path_lower:
+        return 'gcp'
+    elif 'oci' in path_lower or 'oracle' in path_lower:
+        return 'oci'
+    elif 'alicloud' in path_lower or 'aliyun' in path_lower:
+        return 'alicloud'
+    
+    return 'Unknown'
+
+
 def _normalise_issue_key(issue: str) -> str:
     s = issue.strip().lower()
 
@@ -649,11 +669,12 @@ def build_rows_from_database() -> list[RiskRow]:
               f.llm_enriched_at,
               r.resource_name,
               r.resource_type,
+              r.provider,
               repo.repo_name
             FROM findings f
             LEFT JOIN resources r ON f.resource_id = r.id
             LEFT JOIN repositories repo ON f.repo_id = repo.id
-            ORDER BY COALESCE(f.severity_score, f.score, 0) DESC, f.base_severity DESC
+            ORDER BY COALESCE(r.provider, 'Unknown'), COALESCE(f.severity_score, f.score, 0) DESC, f.base_severity DESC
         """)
         
         for row in cursor.fetchall():
@@ -678,6 +699,9 @@ def build_rows_from_database() -> list[RiskRow]:
             elif validation not in ("✅ Validated", "⚠️ Draft - Needs Triage"):
                 validation = "✅ Validated"
             
+            # Get provider
+            provider = row['provider'] or 'Unknown'
+            
             rows.append(
                 RiskRow(
                     priority=0,
@@ -688,6 +712,7 @@ def build_rows_from_database() -> list[RiskRow]:
                     business_impact=impact,
                     validation_status=validation,
                     file_reference=file_ref,
+                    provider=provider,
                 )
             )
     
@@ -756,6 +781,7 @@ def build_rows_from_markdown() -> list[RiskRow]:
                 business_impact=impact,
                 validation_status=validation_status,
                 file_reference=str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
+                provider=_extract_provider_from_path(path),
             )
         )
 
@@ -831,6 +857,7 @@ def number_cell(value: int, style: int | None = None) -> str:
 def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
     headers = [
         "Priority",
+        "Cloud Provider",
         "Resource Type",
         "Issue",
         "Risk Score",
@@ -847,6 +874,7 @@ def build_sheet_xml(rows: list[RiskRow], shared_index: dict[str, int]) -> str:
     for idx, row in enumerate(rows, start=2):
         cells = [
             number_cell(row.priority),
+            cell(shared_index, row.provider),
             cell(shared_index, row.resource_type),
             cell(shared_index, row.issue),
             number_cell(row.risk_score),
@@ -996,6 +1024,7 @@ def build_workbook_rels_xml() -> str:
 def write_xlsx(rows: list[RiskRow], output_path: Path) -> None:
     headers = [
         "Priority",
+        "Cloud Provider",
         "Resource Type",
         "Issue",
         "Risk Score",
