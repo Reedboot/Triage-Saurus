@@ -3192,7 +3192,7 @@ def api_diagrams(experiment_id: str):
                             JOIN repositories repo ON repo.id = r.repo_id
                             WHERE r.experiment_id = ?
                               AND LOWER(repo.repo_name) = LOWER(?)
-                              AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown')
+                              AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
                             ORDER BY provider
                             """,
                             (experiment_id, repo_name),

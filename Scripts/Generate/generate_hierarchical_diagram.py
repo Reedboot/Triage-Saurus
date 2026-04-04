@@ -2350,7 +2350,7 @@ def main():
     if args.provider:
         providers_to_process = [args.provider]
     else:
-        # Get all providers from database
+        # Get all providers from database, excluding meta-providers like terraform/kubernetes
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
             from db_helpers import get_db_connection
@@ -2358,7 +2358,8 @@ def main():
             with get_db_connection() as conn:
                 providers = conn.execute(
                     """SELECT DISTINCT provider FROM resources 
-                       WHERE provider IS NOT NULL AND provider != 'unknown'
+                       WHERE provider IS NOT NULL 
+                         AND provider NOT IN ('unknown', 'terraform', 'kubernetes')
                        ORDER BY provider"""
                 ).fetchall()
                 providers_to_process = [p['provider'] for p in providers]
