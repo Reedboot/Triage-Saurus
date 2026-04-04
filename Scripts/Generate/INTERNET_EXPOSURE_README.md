@@ -4,6 +4,12 @@
 
 Internet exposure detection automatically identifies resources that are accessible from the internet and visualizes them in architecture diagrams as connected to an "Internet" node. This transforms diagrams into **threat models** highlighting the attack surface.
 
+The detection is **automatic** - you don't need to specify provider filters. The system:
+- Auto-detects the cloud provider from resources in the diagram
+- Runs detection for single-provider diagrams (AWS, Azure, GCP, OCI)
+- Gracefully skips detection for mixed-provider or terraform-only diagrams
+- Renders Internet nodes only when exposed resources are found
+
 ## What's Included
 
 ### Core Module: `internet_exposure_detector.py`
@@ -42,19 +48,22 @@ The `InternetExposureDetector` class uses **four detection methods** to identify
 ### How It Works
 
 1. **During `load_data()`**: `_detect_internet_exposure()` is called to analyze loaded resources
-2. **Queries database** for findings and resource properties for the experiment
-3. **Runs detector** for the current provider
-4. **Stores results** in `self.exposed_resources` dict
-5. **During rendering**: `render_connections()` creates Internet → exposed_resource edges
-6. **Color coding**: Connections styled by detection method confidence
-7. **Conditional rendering**: Internet node only appears if exposed resources exist
+2. **Auto-detects provider** from the resources in the diagram
+3. **Skips detection** if resources are from multiple providers or terraform-only
+4. **Queries database** for findings and resource properties for the experiment
+5. **Runs detector** for the detected provider
+6. **Stores results** in `self.exposed_resources` dict
+7. **During rendering**: `render_connections()` creates Internet → exposed_resource edges
+8. **Color coding**: Connections styled by detection method confidence
+9. **Conditional rendering**: Internet node only appears if exposed resources exist
 
 ### Key Features
 
 - **Per-provider isolation**: Each provider (AWS, Azure, GCP, OCI) has its own Internet node in diagrams
-- **Graceful degradation**: If detection fails, diagram still generates without Internet node
+- **Auto-detection**: No need to specify provider filters - system detects automatically
+- **Graceful degradation**: Works with or without provider filter, handles mixed-provider diagrams
+- **If detection fails**: Diagram still generates without Internet node (doesn't crash)
 - **No breaking changes**: Works alongside existing connection detection
-- **Informative labels**: Connection labels show detection method (e.g., "Firewall: 0.0.0.0/0")
 
 ## Visualization Examples
 
