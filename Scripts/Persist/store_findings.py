@@ -69,16 +69,60 @@ def _detect_languages(scanned_paths: list[str]) -> tuple[str, list[str]]:
     return primary, ordered
 
 
+def _normalize_path(path: str) -> str:
+    """Normalize a file path to match format in resources table.
+    
+    - Removes leading repo/project prefix
+    - Handles both absolute and relative paths
+    - Returns path relative to repo root
+    """
+    if not path:
+        return ""
+    
+    # Remove common prefixes
+    path = path.replace("\\", "/")  # Normalize separators
+    for prefix in ["/home/neil/code/terragoat/", "/home/neil/code/"]:
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            break
+    
+    return path.lstrip("/")
+
+
 def _find_resource_id(conn, experiment_id: str, path: str, start_line: int):
-    """Try to match a resource by source file + line range."""
+    """Try to match a resource by source file + line range.
+    
+    This uses a three-tier strategy:
+    1. Exact match: resource's source_line_end is set and contains the finding
+    2. Fallback 1: resource's source_line_end is NULL, use closest resource before finding
+    3. Fallback 2: Try with normalized path if direct match failed
+    """
+    # Normalize the path to match what's in the resources table
+    norm_path = _normalize_path(path)
+    
+    # First, try exact match with source_line_end (handles properly parsed resources)
     row = conn.execute("""
         SELECT id FROM resources
         WHERE experiment_id = ?
-          AND source_file = ?
+          AND (source_file = ? OR source_file = ?)
           AND source_line_start <= ?
+          AND source_line_end IS NOT NULL
           AND source_line_end >= ?
         LIMIT 1
-    """, (experiment_id, path, start_line, start_line)).fetchone()
+    """, (experiment_id, path, norm_path, start_line, start_line)).fetchone()
+    if row:
+        return row[0]
+    
+    # Fallback: If source_line_end is missing, find closest resource at or before this line
+    # Try both original and normalized path
+    row = conn.execute("""
+        SELECT id FROM resources
+        WHERE experiment_id = ?
+          AND (source_file = ? OR source_file = ?)
+          AND source_line_start <= ?
+        ORDER BY source_line_start DESC
+        LIMIT 1
+    """, (experiment_id, path, norm_path, start_line)).fetchone()
     return row[0] if row else None
 
 
