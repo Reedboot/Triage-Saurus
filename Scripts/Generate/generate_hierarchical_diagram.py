@@ -876,6 +876,25 @@ class HierarchicalDiagramBuilder:
 
         return any(tok in rtype for tok in ['deployment', 'service', 'container'])
 
+    def is_test_placeholder_resource(self, resource: dict) -> bool:
+        """Check if resource is a generic test/placeholder resource (e.g., 'example', 'default', 'test').
+        
+        These are typically created as minimal examples in test IaC and shouldn't clutter the diagram.
+        """
+        name = (resource.get('resource_name') or '').lower()
+        # Generic placeholder names that indicate test/example resources
+        placeholder_names = {'example', 'default', 'test', 'current', 'temp', 'tmp', 'demo', 'sample'}
+        
+        # Exact match placeholders
+        if name in placeholder_names:
+            return True
+        
+        # Names that are purely generic without meaningful context
+        if name in {'a', 'b', 'c', 'value', 'resource', 'data', 'service', 'app', 'api', 'web'}:
+            return True
+        
+        return False
+
     def _tokenize_match_name(self, value: str) -> List[str]:
         """Split a resource name into lowercase alphanumeric tokens for fuzzy matching."""
         return [tok for tok in re.split(r'[^a-z0-9]+', str(value or '').lower()) if tok]
@@ -2238,6 +2257,10 @@ class HierarchicalDiagramBuilder:
                 self.is_identity_principal_like(r)
                 and r.get('resource_name') not in connected_resource_names
             )
+            and not (
+                self.is_test_placeholder_resource(r)
+                and r.get('resource_name') not in connected_resource_names
+            )  # Exclude test/placeholder resources unless they're connected
             and self._is_connected_name(r.get('resource_name', ''))
         ]
         
