@@ -6286,7 +6286,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
                    ai.adjusted_score AS ai_score, ai.confidence AS ai_confidence,
                    ai.reasoning AS ai_reasoning, ai.reviewer_type AS ai_agent_used,
                    COALESCE(r.provider, '') AS provider,
-                   r.resource_type, f.rule_id
+                   r.resource_type, r.resource_name, f.rule_id
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
             LEFT JOIN resources r ON f.resource_id = r.id

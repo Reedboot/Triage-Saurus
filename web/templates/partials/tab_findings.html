@@ -135,8 +135,14 @@
               {% endif %}
             </div>
             {% if f.resource_id %}
-              <div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-muted);">
-                Resource: <span class="asset-type-badge">#{{ f.resource_id }}</span>
+              <div style="margin-top: 6px; font-size: 0.85rem;">
+                <span style="color: var(--text-muted);">🔗 Resource:</span>
+                {% if f.resource_name %}
+                  <span style="font-weight: 500;">{{ f.resource_name }}</span>
+                  {% if f.resource_type %}<span style="color: var(--text-muted);">({{ f.resource_type }})</span>{% endif %}
+                {% else %}
+                  <span class="asset-type-badge">#{{ f.resource_id }}</span>
+                {% endif %}
               </div>
             {% endif %}
           </div>
