@@ -851,6 +851,13 @@ class HierarchicalDiagramBuilder:
         name_tokens = ['mssql', 'sqlserver']
         return any(tok in name for tok in name_tokens) and not ('subscription' in rtype or 'apim' in rtype or 'api_management' in rtype)
 
+    def is_compute_resource(self, resource: dict) -> bool:
+        """Check if resource is a compute/VM resource that can have network interfaces as children."""
+        rtype = (resource.get('resource_type') or '').lower()
+        vm_tokens = ['virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine', 
+                     'instance', 'ec2', 'compute_instance']
+        return any(tok in rtype for tok in vm_tokens)
+
     def is_application_service(self, resource: dict) -> bool:
         """Heuristic for application workloads that may connect to data stores."""
         if not self.is_kubernetes(resource):
@@ -1180,6 +1187,37 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"  {server_id}[\"{server_name}\"]")
                 self.emitted_nodes.add(server_name)
 
+        return lines
+    
+    def render_compute_hierarchy(self, compute_resources: List[dict]) -> List[str]:
+        """Render VM/compute resources with their network interfaces nested as subgraphs."""
+        if not compute_resources:
+            return []
+        
+        lines: List[str] = []
+        
+        for vm in compute_resources:
+            vm_name = vm['resource_name']
+            vm_id = sanitize_id(vm_name)
+            
+            # Get child resources (NICs, disks, etc.)
+            children = self.children_by_parent.get(vm['id'], [])
+            
+            if children:
+                # Render VM as subgraph with children
+                lines.append(f"  subgraph {vm_id}[\"{vm_name}\"]")
+                for child in children:
+                    child_name = child['resource_name']
+                    child_node_id = sanitize_id(child_name)
+                    lines.append(f"    {child_node_id}[\"{child_name}\"]")
+                    self.emitted_nodes.add(child_name)
+                lines.append("  end")
+            else:
+                # No children, render as regular node
+                lines.append(self.render_node(vm))
+            
+            self.emitted_nodes.add(vm_name)
+        
         return lines
     
     def render_node(self, resource: dict, indent: str = "  ") -> str:
@@ -2135,9 +2173,10 @@ class HierarchicalDiagramBuilder:
         # Render other resources not in above categories (exclude subscriptions which are metadata)
         connected_resource_names = set(self.connected_resource_names)
 
-        sql_resources = [
+        # Collect compute/VM IDs
+        compute_resources = [
             r for r in self.resources
-            if self.is_database_resource(r)
+            if self.is_compute_resource(r)
             and r['id'] not in all_children
             and r['id'] not in apim_related_ids
             and r['id'] not in sb_related_ids
@@ -2146,6 +2185,30 @@ class HierarchicalDiagramBuilder:
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
         ]
+        compute_related_ids = {r['id'] for r in compute_resources}
+        # Also add children of compute resources
+        for vm in compute_resources:
+            for child in self.children_by_parent.get(vm['id'], []):
+                compute_related_ids.add(child['id'])
+
+        sql_resources = [
+            r for r in self.resources
+            if self.is_database_resource(r)
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
+            and r['id'] not in compute_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+
+        # Render compute hierarchy
+        compute_lines = self.render_compute_hierarchy(compute_resources)
+        if compute_lines:
+            lines.extend(compute_lines)
+            lines.append("")
 
         sql_lines = self.render_sql_hierarchy(sql_resources)
         if sql_lines:
@@ -2159,6 +2222,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
             and r['id'] not in monitoring_related_ids
+            and r['id'] not in compute_related_ids
             and r not in sql_resources
             and not self.is_api_gateway(r)
             and not self.is_kubernetes(r)
