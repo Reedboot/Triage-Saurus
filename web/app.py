@@ -1622,10 +1622,41 @@ def api_scans(repo_name: str):
 
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_start(experiment_id: str, repo_name: str):
-    """Start AI analysis job for findings in an experiment.
+    """Start a fresh AI analysis job (Steps 1, 2, 3 from the beginning)."""
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return jsonify({"error": f"No completed scan found for {repo_name}."}), 404
+    finally:
+        conn.close()
+
+    key = _ai_job_key(resolved_exp_id, repo_name)
     
-    Smart resume: If a previous run completed successfully, returns that status
-    instead of restarting. User can force re-run via force_restart=true query param.
+    with _AI_ANALYSIS_LOCK:
+        existing = _AI_ANALYSIS_JOBS.get(key)
+        if existing and existing.get("status") == "running":
+            return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
+
+        thread = threading.Thread(
+            target=_run_ai_analysis_job,
+            args=(resolved_exp_id, repo_name),
+            daemon=True,
+        )
+        thread.start()
+
+    return jsonify({"status": "started", "experiment_id": resolved_exp_id, "repo_name": repo_name})
+
+
+@app.route("/api/analysis/resume/<experiment_id>/<repo_name>", methods=["POST"])
+def api_analysis_resume(experiment_id: str, repo_name: str):
+    """Resume a failed/interrupted AI analysis from where it left off.
+    
+    If raw Copilot output exists, skips Step 2 (expensive agents) and resumes Step 3.
+    If no raw output, starts from Step 1 (same as /start endpoint).
     """
     conn = _get_db()
     if conn is None:
@@ -1639,25 +1670,14 @@ def api_analysis_start(experiment_id: str, repo_name: str):
         conn.close()
 
     key = _ai_job_key(resolved_exp_id, repo_name)
-    force_restart = request.args.get("force_restart", "false").lower() == "true"
+    
+    # Check what can be resumed
+    resume_state = _detect_resume_state(resolved_exp_id, repo_name, key)
     
     with _AI_ANALYSIS_LOCK:
         existing = _AI_ANALYSIS_JOBS.get(key)
         if existing and existing.get("status") == "running":
             return jsonify({"status": "running", "experiment_id": resolved_exp_id, "repo_name": repo_name}), 202
-
-        # Check if previous run already completed (unless force_restart)
-        if not force_restart:
-            db_status = _get_db_job_status(resolved_exp_id, repo_name)
-            if db_status and db_status.get("status") == "completed":
-                # Already completed — no need to re-run
-                return jsonify({
-                    "status": "already_completed",
-                    "experiment_id": resolved_exp_id,
-                    "repo_name": repo_name,
-                    "message": "AI analysis already completed. Use ?force_restart=true to re-run.",
-                    "completed_at": db_status.get("completed_at")
-                }), 200
 
         thread = threading.Thread(
             target=_run_ai_analysis_job,
@@ -1666,7 +1686,13 @@ def api_analysis_start(experiment_id: str, repo_name: str):
         )
         thread.start()
 
-    return jsonify({"status": "started", "experiment_id": resolved_exp_id, "repo_name": repo_name})
+    return jsonify({
+        "status": "started",
+        "experiment_id": resolved_exp_id,
+        "repo_name": repo_name,
+        "resume_from_step": resume_state["resume_from_step"],
+        "message": f"Resuming from step {resume_state['resume_from_step']}" if resume_state["resume_from_step"] > 1 else "Starting fresh"
+    })
 
 
 @app.route("/api/analysis/status/<experiment_id>/<repo_name>")
