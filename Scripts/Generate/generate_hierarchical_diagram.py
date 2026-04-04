@@ -207,11 +207,31 @@ class HierarchicalDiagramBuilder:
     
     def _detect_internet_exposure(self) -> None:
         """Detect internet-exposed resources using multiple detection methods."""
-        if not self.provider_filter:
-            return  # Only detect for specific provider
+        # Detection runs for specific providers only (aws, azure, gcp, oci)
+        # For mixed-provider or terraform diagrams, detection is skipped
+        valid_providers = {'aws', 'azure', 'gcp', 'oci', 'alicloud'}
+        
+        # Get the provider from resources if provider_filter not set
+        provider_to_detect = None
+        if self.provider_filter:
+            provider_to_detect = self.provider_filter.lower()
+        elif self.resources:
+            # Auto-detect provider from resources
+            providers_in_diagram = set()
+            for r in self.resources:
+                prov = (r.get('provider') or '').lower()
+                if prov in valid_providers:
+                    providers_in_diagram.add(prov)
+            
+            # Only auto-detect if all resources are from same provider
+            if len(providers_in_diagram) == 1:
+                provider_to_detect = providers_in_diagram.pop()
+        
+        if not provider_to_detect or provider_to_detect not in valid_providers:
+            return  # Skip detection for mixed providers, terraform, kubernetes
         
         try:
-            detector = InternetExposureDetector(self.provider_filter)
+            detector = InternetExposureDetector(provider_to_detect)
             
             # Load findings for this experiment
             findings = []
@@ -1844,6 +1864,7 @@ class HierarchicalDiagramBuilder:
 
         # Add red styling for unconfirmed connections (Internet connections)
         link_index = 0
+        style_lines = []
         for i, conn in enumerate(self.connections):
             src = conn.get('source')
             tgt = conn.get('target')
@@ -1865,7 +1886,7 @@ class HierarchicalDiagramBuilder:
             # Color unconfirmed Internet connections red
             is_confirmed = conn.get('confirmed', True)
             if not is_confirmed and src == 'Internet':
-                lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
+                style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
             
             link_index += 1
         
@@ -1885,12 +1906,15 @@ class HierarchicalDiagramBuilder:
                 # Create the connection line
                 lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
                 
-                # Add color styling for this link (count all previous lines to know the index)
-                # Need to count non-empty, non-comment lines before this one
-                connection_lines = [l for l in lines if l.strip() and not l.strip().startswith('//')]
-                link_idx = len(connection_lines) - 1  # -1 because we just added the connection
+                # Track the link index for this new connection
+                current_link_idx = link_index
+                link_index += 1
                 
-                lines.append(f"  linkStyle {link_idx} stroke:{exposure_detail.color},stroke-width:2px")
+                # Add color styling for this link
+                style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
+        
+        # Add all style lines at the end
+        lines.extend(style_lines)
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
