@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
+from internet_exposure_detector import InternetExposureDetector, ExposureDetail
 
 
 def load_architecture_diagram_exclusions() -> Set[str]:
@@ -113,6 +114,8 @@ class HierarchicalDiagramBuilder:
         # resources named "example"), a qualified ID using the resource_type prefix is
         # generated instead so Mermaid doesn't collapse distinct nodes into one.
         self._emitted_mermaid_ids: Set[str] = set()
+        # Internet exposure detection: map of resource_name → ExposureDetail
+        self.exposed_resources: Dict[str, ExposureDetail] = {}
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -198,6 +201,72 @@ class HierarchicalDiagramBuilder:
                 child_id = row['child_id']
                 if child_id in self.resource_by_id:
                     self.children_by_parent[parent_id].append(self.resource_by_id[child_id])
+        
+        # Detect internet-exposed resources
+        self._detect_internet_exposure()
+    
+    def _detect_internet_exposure(self) -> None:
+        """Detect internet-exposed resources using multiple detection methods."""
+        if not self.provider_filter:
+            return  # Only detect for specific provider
+        
+        try:
+            detector = InternetExposureDetector(self.provider_filter)
+            
+            # Load findings for this experiment
+            findings = []
+            with get_db_connection() as conn:
+                rows = conn.execute("""
+                    SELECT f.id, f.resource_id, f.finding_type, f.finding_context
+                    FROM findings f
+                    WHERE f.experiment_id = ? AND f.finding_context IS NOT NULL
+                """, [self.experiment_id]).fetchall()
+                
+                for row in rows:
+                    finding = {
+                        'id': row['id'],
+                        'resource_id': row['resource_id'],
+                        'finding_type': row['finding_type'],
+                        'context': [],
+                    }
+                    # Parse context JSON
+                    try:
+                        if row['finding_context']:
+                            context = json.loads(row['finding_context'])
+                            if isinstance(context, list):
+                                finding['context'] = context
+                            elif isinstance(context, dict):
+                                finding['context'] = [context]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    findings.append(finding)
+            
+            # Load resource properties for this experiment
+            properties = {}
+            with get_db_connection() as conn:
+                rows = conn.execute("""
+                    SELECT resource_id, property_key, property_value
+                    FROM resource_properties
+                    WHERE resource_id IN (SELECT id FROM resources WHERE experiment_id = ?)
+                """, [self.experiment_id]).fetchall()
+                
+                for row in rows:
+                    resource_id = row['resource_id']
+                    if resource_id not in properties:
+                        properties[resource_id] = {}
+                    properties[resource_id][row['property_key']] = row['property_value']
+            
+            # Run detector
+            self.exposed_resources = detector.detect_exposed_resources(
+                self.resources,
+                self.connections,
+                findings=findings,
+                properties=properties if properties else None,
+            )
+        except Exception as e:
+            # Graceful degradation - log but don't crash
+            print(f"Warning: Internet exposure detection failed: {e}", file=sys.stderr)
+            self.exposed_resources = {}
     
     def _load_openapi_operations(self) -> None:
         """Discover OpenAPI spec files in the repo and inject synthetic operation resources
@@ -1799,6 +1868,29 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
             
             link_index += 1
+        
+        # Add Internet connections for detected exposed resources
+        if self.exposed_resources:
+            for resource_name, exposure_detail in self.exposed_resources.items():
+                if resource_name not in self.emitted_nodes:
+                    continue
+                
+                has_internet = True
+                src_id = 'internet'
+                tgt_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                
+                # Build label from exposure detail
+                label = f"{exposure_detail.reason}"
+                
+                # Create the connection line
+                lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
+                
+                # Add color styling for this link (count all previous lines to know the index)
+                # Need to count non-empty, non-comment lines before this one
+                connection_lines = [l for l in lines if l.strip() and not l.strip().startswith('//')]
+                link_idx = len(connection_lines) - 1  # -1 because we just added the connection
+                
+                lines.append(f"  linkStyle {link_idx} stroke:{exposure_detail.color},stroke-width:2px")
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
