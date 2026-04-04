@@ -121,20 +121,37 @@ class InternetExposureDetector:
             Dict mapping resource_name → ExposureDetail
         """
         exposed = {}
+        confidence_rank = {'high': 3, 'medium': 2, 'low': 1}
 
-        # Method 1: Explicit findings
+        # Method 1: Explicit findings (highest confidence)
         if findings:
-            exposed.update(self._detect_by_findings(resources, findings))
+            findings_results = self._detect_by_findings(resources, findings)
+            exposed.update(findings_results)
 
-        # Method 2: Firewall rules open to 0.0.0.0
-        exposed.update(self._detect_by_firewall_rules(resources, properties))
+        # Method 2: Firewall rules open to 0.0.0.0 (high confidence)
+        firewall_results = self._detect_by_firewall_rules(resources, properties)
+        for resource_name, detail in firewall_results.items():
+            if resource_name not in exposed:
+                exposed[resource_name] = detail
+            elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
+                exposed[resource_name] = detail
 
-        # Method 3: Resource properties indicating public access
+        # Method 3: Resource properties indicating public access (medium confidence)
         if properties:
-            exposed.update(self._detect_by_resource_properties(resources, properties))
+            property_results = self._detect_by_resource_properties(resources, properties)
+            for resource_name, detail in property_results.items():
+                if resource_name not in exposed:
+                    exposed[resource_name] = detail
+                elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
+                    exposed[resource_name] = detail
 
-        # Method 4: Resource type heuristics
-        exposed.update(self._detect_by_heuristics(resources))
+        # Method 4: Resource type heuristics (medium confidence)
+        heuristic_results = self._detect_by_heuristics(resources)
+        for resource_name, detail in heuristic_results.items():
+            if resource_name not in exposed:
+                exposed[resource_name] = detail
+            elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
+                exposed[resource_name] = detail
 
         return exposed
 
