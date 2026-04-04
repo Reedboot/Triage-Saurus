@@ -6,6 +6,10 @@
     <span id="overview-ai-status" class="overview-ai-status">Idle</span>
   </div>
 
+  <div style="padding:8px 12px;background:var(--bg-secondary);border-left:3px solid var(--border-color);margin:8px 0;font-size:0.85rem;border-radius:4px;">
+    <strong>Repo-specific questions below.</strong> For cross-repo context and platform-wide Q&A, see <a href="#subscription" style="color:var(--link-color);">Global Knowledge Q&A tab →</a>
+  </div>
+
   {% if overview_html %}
   <article class="overview-body">
     {{ overview_html | safe }}
