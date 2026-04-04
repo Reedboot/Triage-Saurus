@@ -1599,7 +1599,7 @@
 
       const scans = await loadPastScans(name);
 
-      // Auto-load the most recent scan that has a diagram (silently, no spinner/status in the scan card)
+      // Auto-load the most recent scan that has a diagram
       if (scans && scans.length > 0) {
         let latest = null;
         for (let i = scans.length - 1; i >= 0; i--) {
@@ -1607,8 +1607,12 @@
         }
         if (!latest) latest = scans[scans.length -1];
         if (latest && latest.experiment_id) {
+          // Show loading feedback
+          setStatus(`Loading diagrams for ${name}…`);
+          spinner.style.display = '';
+          statusBar.classList.add('visible');
           try {
-            await _loadDiagrams(latest.experiment_id, { silent: true });
+            await _loadDiagrams(latest.experiment_id, { silent: false });
             // Also load section tabs (Assets, TLDR, etc.) and auto-activate Assets so sections populate
             try {
               await loadSectionTabs(latest.experiment_id, currentRepoName);
@@ -1619,6 +1623,8 @@
             scheduleFitDiagram(500);
           } catch (err) {
             console.warn('Auto-load diagrams failed:', err);
+          } finally {
+            spinner.style.display = 'none';
           }
         }
       }

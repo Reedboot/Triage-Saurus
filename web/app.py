@@ -3154,17 +3154,13 @@ def api_diagrams(experiment_id: str):
 
         db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name or None)
 
-        # For repo-scoped requests, legacy rows may be experiment-scoped only.
-        # Prefer legacy diagrams that contain meaningful edges; if none have edges,
-        # fall back to returning any legacy diagrams so the UI can at least render nodes.
+        # For repo-scoped requests, also fetch experiment-scoped diagrams 
+        # (these may have been persisted from the initial scan before repo-filtering was added)
         if repo_name and not db_diagrams:
-            legacy = get_cloud_diagrams(experiment_id)
-            db_diagrams = [d for d in legacy if _edge_count(d.get("mermaid_code") or "") > 0]
-            if not db_diagrams and legacy:
-                # No edged legacy diagrams found; fall back to any legacy diagrams so UI can render nodes
-                db_diagrams = legacy
-            if not db_diagrams and legacy:
-                db_diagrams = legacy
+            db_diagrams = get_cloud_diagrams(experiment_id)
+        
+        # If still no diagrams found and repo_name was provided, fall back to regenerating
+        # (diagrams may not have been persisted yet)
 
         # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
         if repo_name and (not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
