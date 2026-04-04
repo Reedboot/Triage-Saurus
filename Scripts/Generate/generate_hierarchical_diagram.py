@@ -66,7 +66,8 @@ class HierarchicalDiagramBuilder:
     
     def __init__(self, experiment_id: str, repo_name: Optional[str] = None,
                  include_api_operations: Optional[bool] = None,
-                 repo_path: Optional[str] = None):
+                 repo_path: Optional[str] = None,
+                 provider_filter: Optional[str] = None):
         self.experiment_id = experiment_id
         self.repo_name = repo_name
         # When True, parse OpenAPI specs and add operation nodes under APIM APIs.
@@ -74,6 +75,8 @@ class HierarchicalDiagramBuilder:
         self.include_api_operations = include_api_operations
         # Filesystem path to the repository root (needed for OpenAPI spec discovery).
         self.repo_path = repo_path
+        # Filter to a specific cloud provider (lowercase)
+        self.provider_filter = provider_filter
         self.resources = []
         self.connections = []
         self.sql_hints: Dict[str, Optional[str]] = {}
@@ -127,6 +130,10 @@ class HierarchicalDiagramBuilder:
         if self.repo_name:
             self.resources = [r for r in self.resources if r.get('repo_name') == self.repo_name]
         
+        # Filter to specific provider if requested
+        if self.provider_filter:
+            self.resources = [r for r in self.resources if (r.get('provider') or '').lower() == self.provider_filter.lower()]
+        
         # Remove duplicates (keep first occurrence based on ID)
         seen_ids = set()
         unique_resources = []
@@ -143,6 +150,14 @@ class HierarchicalDiagramBuilder:
             self._assign_resource_by_name(r['resource_name'], r)
         
         self.resource_by_id = {r['id']: r for r in self.resources}
+        
+        # Filter connections to only include those between resources in this provider/repo
+        if self.provider_filter or self.repo_name:
+            valid_names = set(r['resource_name'] for r in self.resources)
+            self.connections = [
+                c for c in self.connections
+                if c.get('source') in valid_names and c.get('target') in valid_names
+            ]
         
         # Build parent-child relationships from database
         with get_db_connection() as conn:
@@ -2224,7 +2239,7 @@ class HierarchicalDiagramBuilder:
             if resource_name.startswith('__inferred__'):
                 continue
             
-            resource = self.resource_by_name.get(resource_name)
+            resource = self._get_primary_resource(resource_name)
             if not resource:
                 continue
             
@@ -2326,15 +2341,67 @@ def main():
     parser.add_argument("--repo", help="Filter to specific repository")
     parser.add_argument("--output", type=Path, help="Output file path")
     parser.add_argument("--persist-db", action="store_true", help="Persist diagram to cloud_diagrams table")
+    parser.add_argument("--provider", help="Filter to specific cloud provider")
     
     args = parser.parse_args()
     
-    builder = HierarchicalDiagramBuilder(args.experiment_id, repo_name=args.repo)
-    diagram = builder.generate()
+    # Get list of providers to generate diagrams for
+    providers_to_process = []
+    if args.provider:
+        providers_to_process = [args.provider]
+    else:
+        # Get all providers from database
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
+            from db_helpers import get_db_connection
+            
+            with get_db_connection() as conn:
+                providers = conn.execute(
+                    """SELECT DISTINCT provider FROM resources 
+                       WHERE provider IS NOT NULL AND provider != 'unknown'
+                       ORDER BY provider"""
+                ).fetchall()
+                providers_to_process = [p['provider'] for p in providers]
+        except Exception as e:
+            print(f"Warning: Could not detect providers: {e}", file=sys.stderr)
+            providers_to_process = []
     
-    # Detect cloud provider for title
-    provider = builder.detect_cloud_provider()
-    diagram_title = f"{provider} Architecture"
+    if not providers_to_process:
+        # Fallback to single diagram
+        builder = HierarchicalDiagramBuilder(args.experiment_id, repo_name=args.repo)
+        diagram = builder.generate()
+        provider = builder.detect_cloud_provider()
+        diagram_title = f"{provider} Architecture"
+        diagrams = [(provider.lower(), diagram_title, diagram)]
+    else:
+        diagrams = []
+        for provider in providers_to_process:
+            # Create builder with provider filter
+            builder = HierarchicalDiagramBuilder(
+                args.experiment_id,
+                repo_name=args.repo,
+                provider_filter=provider
+            )
+            
+            # Load data with provider filtering
+            builder.load_data()
+            
+            if builder.resources:
+                diagram = builder.generate()
+                # Capitalize provider for display
+                provider_map = {
+                    'azure': 'Azure',
+                    'aws': 'AWS',
+                    'gcp': 'GCP',
+                    'google': 'GCP',
+                    'kubernetes': 'Kubernetes',
+                    'terraform': 'Terraform',
+                    'alicloud': 'Alicloud',
+                    'oracle': 'Oracle',
+                }
+                provider_display = provider_map.get(provider.lower(), provider.title())
+                diagram_title = f"{provider_display} Architecture"
+                diagrams.append((provider.lower(), diagram_title, diagram))
     
     # Persist to database if requested
     if args.persist_db:
@@ -2343,35 +2410,52 @@ def main():
             from db_helpers import get_db_connection
             
             with get_db_connection() as conn:
-                # Check if diagram already exists
-                existing = conn.execute(
-                    "SELECT id FROM cloud_diagrams WHERE experiment_id = ? AND provider = ?",
-                    [args.experiment_id, provider.lower()]
-                ).fetchone()
-                
-                if existing:
-                    # Update existing
-                    conn.execute(
-                        "UPDATE cloud_diagrams SET mermaid_code = ?, diagram_title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        [diagram, diagram_title, existing['id']]
-                    )
-                else:
-                    # Insert new
-                    conn.execute(
-                        """INSERT INTO cloud_diagrams (experiment_id, provider, diagram_title, mermaid_code, display_order)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        [args.experiment_id, provider.lower(), diagram_title, diagram, 0]
-                    )
+                display_order = 0
+                for provider_key, diagram_title, diagram in diagrams:
+                    # Check if diagram already exists
+                    existing = conn.execute(
+                        "SELECT id FROM cloud_diagrams WHERE experiment_id = ? AND provider = ?",
+                        [args.experiment_id, provider_key]
+                    ).fetchone()
+                    
+                    if existing:
+                        # Update existing
+                        conn.execute(
+                            "UPDATE cloud_diagrams SET mermaid_code = ?, diagram_title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            [diagram, diagram_title, existing['id']]
+                        )
+                    else:
+                        # Insert new
+                        conn.execute(
+                            """INSERT INTO cloud_diagrams (experiment_id, provider, diagram_title, mermaid_code, display_order)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            [args.experiment_id, provider_key, diagram_title, diagram, display_order]
+                        )
+                    display_order += 1
                 conn.commit()
-                print(f"Diagram persisted to cloud_diagrams table as '{diagram_title}'")
+                print(f"Persisted {len(diagrams)} diagram(s) to cloud_diagrams table")
+                for _, diagram_title, _ in diagrams:
+                    print(f"  - {diagram_title}")
         except Exception as e:
             print(f"Warning: Failed to persist diagram to DB: {e}", file=sys.stderr)
     
     if args.output:
-        args.output.write_text(diagram)
-        print(f"Diagram written to {args.output}")
+        # If single output file, write first diagram
+        if len(diagrams) == 1:
+            args.output.write_text(diagrams[0][2])
+            print(f"Diagram written to {args.output}")
+        else:
+            # Write diagrams to separate files with provider suffix
+            for provider_key, _, diagram in diagrams:
+                output_path = args.output.parent / f"{args.output.stem}_{provider_key}{args.output.suffix}"
+                output_path.write_text(diagram)
+                print(f"Diagram written to {output_path}")
     else:
-        print(diagram)
+        for _, diagram_title, diagram in diagrams:
+            print(f"\n{'='*60}")
+            print(f"{diagram_title}")
+            print(f"{'='*60}\n")
+            print(diagram)
 
 
 if __name__ == "__main__":

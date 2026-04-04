@@ -3180,32 +3180,98 @@ def api_diagrams(experiment_id: str):
                 except Exception:
                     pass
 
-                _builder = HierarchicalDiagramBuilder(
-                    experiment_id,
-                    repo_name=repo_name,
-                    repo_path=_repo_path,
-                )
-                _code = _builder.generate()
-                _provider = _builder.detect_cloud_provider()
+                # Get list of providers to generate diagrams for
+                providers: list[str] = []
+                try:
+                    from Scripts.Persist.db_helpers import get_db_connection as _get_conn  # type: ignore
+                    with _get_conn() as conn:
+                        prov_rows = conn.execute(
+                            """
+                            SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                            FROM resources r
+                            JOIN repositories repo ON repo.id = r.repo_id
+                            WHERE r.experiment_id = ?
+                              AND LOWER(repo.repo_name) = LOWER(?)
+                              AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown')
+                            ORDER BY provider
+                            """,
+                            (experiment_id, repo_name),
+                        ).fetchall()
+                        providers = [str(row['provider']).strip() for row in prov_rows if row['provider']]
+                except Exception:
+                    pass
 
                 generated: list[dict] = []
-                if _code and "No resources found" not in _code:
-                    generated.append({
-                        "provider": _provider.capitalize(),
-                        "diagram_title": f"{_provider.capitalize()} Architecture",
-                        "mermaid_code": _code,
-                        "display_order": 0,
-                    })
-                    try:
-                        db_helpers.upsert_cloud_diagram(
-                            experiment_id=experiment_id,
-                            provider=_provider,
-                            diagram_title=f"{_provider.capitalize()} Architecture",
-                            mermaid_code=_code,
-                            display_order=0,
-                        )
-                    except Exception:
-                        pass
+                if providers:
+                    # Generate per-provider diagrams
+                    for provider in providers:
+                        try:
+                            _builder = HierarchicalDiagramBuilder(
+                                experiment_id,
+                                repo_name=repo_name,
+                                repo_path=_repo_path,
+                                provider_filter=provider,
+                            )
+                            _builder.load_data()
+                            if _builder.resources:
+                                _code = _builder.generate()
+                                provider_map = {
+                                    'azure': 'Azure',
+                                    'aws': 'AWS',
+                                    'gcp': 'GCP',
+                                    'google': 'GCP',
+                                    'kubernetes': 'Kubernetes',
+                                    'terraform': 'Terraform',
+                                    'alicloud': 'Alicloud',
+                                    'oracle': 'Oracle',
+                                }
+                                provider_display = provider_map.get(provider.lower(), provider.title())
+                                if _code and "No resources found" not in _code:
+                                    generated.append({
+                                        "provider": provider,
+                                        "diagram_title": f"{provider_display} Architecture",
+                                        "mermaid_code": _code,
+                                        "display_order": len(generated),
+                                    })
+                                    try:
+                                        db_helpers.upsert_cloud_diagram(
+                                            experiment_id=experiment_id,
+                                            provider=provider,
+                                            diagram_title=f"{provider_display} Architecture",
+                                            mermaid_code=_code,
+                                            display_order=len(generated) - 1,
+                                        )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                else:
+                    # Fallback to single diagram if no providers detected
+                    _builder = HierarchicalDiagramBuilder(
+                        experiment_id,
+                        repo_name=repo_name,
+                        repo_path=_repo_path,
+                    )
+                    _code = _builder.generate()
+                    _provider = _builder.detect_cloud_provider()
+
+                    if _code and "No resources found" not in _code:
+                        generated.append({
+                            "provider": _provider.capitalize(),
+                            "diagram_title": f"{_provider.capitalize()} Architecture",
+                            "mermaid_code": _code,
+                            "display_order": 0,
+                        })
+                        try:
+                            db_helpers.upsert_cloud_diagram(
+                                experiment_id=experiment_id,
+                                provider=_provider,
+                                diagram_title=f"{_provider.capitalize()} Architecture",
+                                mermaid_code=_code,
+                                display_order=0,
+                            )
+                        except Exception:
+                            pass
 
                 if generated:
                     return jsonify(_response_payload(generated))
