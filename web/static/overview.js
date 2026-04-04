@@ -560,6 +560,17 @@
         genRulesBtn.disabled = true;
         setStatus('Generating rules...', false);
 
+        // Show the log output panel
+        if (window._triage && typeof window._triage.showLog === 'function') {
+          window._triage.showLog();
+        }
+
+        // Scroll to log output
+        const logOutput = document.getElementById('log-output');
+        if (logOutput) {
+          logOutput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
         try {
           const resp = await fetch(
             `/api/analysis/generate_rules/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`,
@@ -571,24 +582,33 @@
           if (!resp.ok) {
             setStatus(data.error || 'Failed to generate rules', true);
             genRulesBtn.disabled = false;
+            if (window._triage && typeof window._triage.appendLog === 'function') {
+              window._triage.appendLog('[Copilot] Error: ' + (data.error || 'Failed to generate rules'));
+            }
             return;
           }
 
           if (data.status === 'running') {
             setStatus('Rule generation already in progress', false);
             genRulesBtn.disabled = false;
+            if (window._triage && typeof window._triage.appendLog === 'function') {
+              window._triage.appendLog('[Copilot] Rule generation already in progress');
+            }
             return;
           }
 
           if (data.status !== 'started') {
             setStatus(data.error || 'Failed to start rule generation', true);
             genRulesBtn.disabled = false;
+            if (window._triage && typeof window._triage.appendLog === 'function') {
+              window._triage.appendLog('[Copilot] Error: ' + (data.error || 'Failed to start rule generation'));
+            }
             return;
           }
 
           setStatus('Rule generation started', false);
           if (window._triage && typeof window._triage.appendLog === 'function') {
-            window._triage.appendLog('[Copilot] OpenGrep rule generation started');
+            window._triage.appendLog('[Copilot] 🔄 Rule generation started...');
           }
 
           setTimeout(() => {

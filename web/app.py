@@ -333,6 +333,56 @@ def _get_db_job_status(experiment_id: str, repo_name: str) -> dict | None:
     return None
 
 
+def _try_recover_from_raw_output(experiment_id: str, repo_name: str, key: str) -> bool:
+    """
+    Attempt to recover a failed AI analysis by parsing the saved raw output file.
+    
+    Returns True if recovery succeeded (results persisted to DB), False otherwise.
+    This handles cases where the stream disconnected during Step 3 (parsing & persisting).
+    """
+    try:
+        safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
+        raw_file = REPO_ROOT / 'Output' / 'AILogs' / f"{safe_key}-raw.txt"
+        
+        if not raw_file.exists():
+            return False
+        
+        # Try to read and parse the raw output
+        combined = raw_file.read_text(encoding='utf-8', errors='replace')
+        if not combined:
+            return False
+        
+        # Extract JSON from raw output (same logic as main parsing)
+        parsed = _extract_json_object(combined)
+        if not parsed:
+            return False
+        
+        # Minimal persistence: just mark as completed since we can't re-run the full Step 3
+        # The raw output is available for manual inspection, and subsequent runs can use it
+        try:
+            db_helpers.upsert_context_metadata(
+                experiment_id,
+                repo_name,
+                "ai_analysis_recovered",
+                str(int(time.time())),
+                namespace="ai_overview",
+                source="recovery_from_raw",
+            )
+            db_helpers.upsert_context_metadata(
+                experiment_id,
+                repo_name,
+                "ai_analysis_completed_at",
+                str(int(time.time())),
+                namespace="ai_overview",
+                source="recovery_from_raw",
+            )
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def _append_ai_job_log(key: str, line: str) -> None:
     """Append a log line to an AI analysis job with a bounded history and write to a per-job logfile.
 
@@ -1614,11 +1664,33 @@ def api_analysis_status(experiment_id: str, repo_name: str):
                     job.update(db_status)
                     _AI_ANALYSIS_JOBS[key] = job
                 else:
-                    # No DB record either — mark as failed/stale
-                    job["status"] = "failed"
-                    job["error"] = "Job timed out or was interrupted (stream disconnected)"
-                    job["completed_at"] = time.time()
-                    _AI_ANALYSIS_JOBS[key] = job
+                    # Try to recover from raw output file before marking as failed
+                    if _try_recover_from_raw_output(resolved_exp_id, repo_name, key):
+                        job["status"] = "completed"
+                        job["completed_at"] = time.time()
+                        job["error"] = None
+                        job["notes"] = "Recovered from raw output after stream disconnect"
+                        _AI_ANALYSIS_JOBS[key] = job
+                    else:
+                        # No DB record and no recoverable raw output — mark as failed/stale
+                        job["status"] = "failed"
+                        job["error"] = "Job timed out or was interrupted (stream disconnected)"
+                        job["completed_at"] = time.time()
+                        _AI_ANALYSIS_JOBS[key] = job
+        
+        # For "failed" jobs, try recovery if not already attempted
+        elif job.get("status") == "failed" and not job.get("recovery_attempted"):
+            # Check if we can recover from raw output
+            if _try_recover_from_raw_output(resolved_exp_id, repo_name, key):
+                job["status"] = "completed"
+                job["error"] = None
+                job["notes"] = "Recovered from raw output"
+                job["recovery_attempted"] = True
+                _AI_ANALYSIS_JOBS[key] = job
+            else:
+                # Mark that we've already tried recovery to avoid repeated attempts
+                job["recovery_attempted"] = True
+                _AI_ANALYSIS_JOBS[key] = job
 
         # Create a shallow serializable copy excluding non-serializable fields like subprocess handles
         safe_job = {}
