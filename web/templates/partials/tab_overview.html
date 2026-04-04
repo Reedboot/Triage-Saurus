@@ -168,12 +168,20 @@
   {# AI-detected new assets and fixed info cards #}
   {% if ai_new_assets %}
   <section class="ai-cards">
-    <h4>AI-detected new assets</h4>
+    <h4>AI-detected new assets ({{ ai_new_assets | length }} found)</h4>
     <div class="ai-card-list">
       {% for a in ai_new_assets %}
       <div class="ai-card">
-        <div class="ai-card-title">{{ a.label or a.name or ('Asset ' ~ loop.index) }}</div>
-        <div class="ai-card-body">{{ (a.description or a.details) | default(a | tojson) }}</div>
+        {% if 'candidate' in a and a['candidate'] %}
+          <div class="ai-card-title">{{ a['candidate']['name'] or ('Asset ' ~ loop.index) }} <span style="font-size:0.8em;color:var(--text-muted)">({{ a['candidate'].get('type', 'unknown') }}){% if a['candidate'].get('confidence') %} - {{ a['candidate']['confidence'] }}{% endif %}</span></div>
+          <div class="ai-card-body">
+            {% if a['candidate'].get('how_discovered') %}<div>{{ a['candidate']['how_discovered'] }}</div>{% endif %}
+            {% if a.get('matched_resource_id') %}<div style="color:var(--text-success);font-size:0.9em">✓ Matched to resource ID {{ a['matched_resource_id'] }}</div>{% endif %}
+          </div>
+        {% else %}
+          <div class="ai-card-title">{{ a.get('label') or a.get('name') or ('Asset ' ~ loop.index) }}</div>
+          <div class="ai-card-body">{{ (a.get('description') or a.get('details')) | default(a | tojson) }}</div>
+        {% endif %}
       </div>
       {% endfor %}
     </div>

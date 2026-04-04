@@ -1455,6 +1455,28 @@ def upsert_context_metadata(
         """, (experiment_id, repo_id, namespace, key, value, source))
 
 
+def get_context_metadata(
+    experiment_id: str,
+    repo_name: str,
+    key: str,
+    *,
+    namespace: str = "phase2"
+) -> Optional[str]:
+    """Retrieve context metadata value by key. Returns None if not found."""
+    try:
+        repo_id = ensure_repository_entry(experiment_id, repo_name)
+        with get_db_connection() as conn:
+            row = conn.execute("""
+                SELECT value FROM context_metadata
+                WHERE experiment_id = ? AND repo_id = ? AND namespace = ? AND key = ?
+                ORDER BY id DESC
+                LIMIT 1
+            """, (experiment_id, repo_id, namespace, key)).fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
 # ============================================================================
 # RESOURCE OPERATIONS
 # ============================================================================
