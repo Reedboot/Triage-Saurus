@@ -6239,6 +6239,24 @@ def api_finding_triage(experiment_id: str, finding_id: str):
         conn.close()
 
 
+
+def _infer_provider_from_rule(rule_id: str) -> str:
+    """Infer cloud provider from rule_id prefix."""
+    if not rule_id:
+        return 'Unknown'
+    rule_lower = str(rule_id).lower()
+    if rule_lower.startswith('aws-'):
+        return 'AWS'
+    elif rule_lower.startswith('azure-'):
+        return 'Azure'
+    elif rule_lower.startswith('gcp-') or rule_lower.startswith('google-'):
+        return 'GCP'
+    elif rule_lower.startswith('oci-'):
+        return 'OCI'
+    elif rule_lower.startswith('alicloud-'):
+        return 'Alibaba Cloud'
+    return 'Unknown'
+
 @app.route("/api/view/findings/<experiment_id>/<repo_name>")
 def api_view_findings(experiment_id: str, repo_name: str):
     """Render the findings tab HTML."""
@@ -6267,8 +6285,8 @@ def api_view_findings(experiment_id: str, repo_name: str):
                    sec.reasoning AS security_reasoning, sec.key_concerns AS security_key_concerns,
                    ai.adjusted_score AS ai_score, ai.confidence AS ai_confidence,
                    ai.reasoning AS ai_reasoning, ai.reviewer_type AS ai_agent_used,
-                   COALESCE(r.provider, 'Unknown') AS provider,
-                   r.resource_type
+                   COALESCE(r.provider, '') AS provider,
+                   r.resource_type, f.rule_id
             FROM findings f
             JOIN repositories repo ON f.repo_id = repo.id
             LEFT JOIN resources r ON f.resource_id = r.id
@@ -6279,21 +6297,25 @@ def api_view_findings(experiment_id: str, repo_name: str):
                 AND ai.reviewer_type IN ('DevSkeptic', 'PlatformSkeptic', 'SecurityAgent', 'ai_copilot')
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             ORDER BY
-                CASE LOWER(COALESCE(r.provider, '')) 
-                  WHEN 'aws' THEN 1 
-                  WHEN 'azure' THEN 2 
-                  WHEN 'gcp' THEN 3 
-                  WHEN 'oci' THEN 4
-                  WHEN 'alicloud' THEN 5
-                  ELSE 6 END,
-                CASE f.base_severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
-                                WHEN 'MEDIUM' THEN 3 WHEN 'LOW' THEN 4
-                                WHEN 'INFO' THEN 5 ELSE 6 END,
-                f.severity_score DESC
+                f.rule_id, f.source_file
             """,
             (repo_name, target_exp),
         ).fetchall()
         findings = [dict(r) for r in rows]
+        
+        # Infer provider from rule_id if not set
+        for f in findings:
+            if not f.get('provider'):
+                f['provider'] = _infer_provider_from_rule(f.get('rule_id', ''))
+        
+        # Sort by provider, then severity
+        provider_order = {'AWS': 1, 'Azure': 2, 'GCP': 3, 'OCI': 4, 'Alibaba Cloud': 5, 'Unknown': 6}
+        severity_order = {'CRITICAL': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4, 'INFO': 5}
+        findings.sort(key=lambda f: (
+            provider_order.get(f.get('provider', 'Unknown'), 6),
+            severity_order.get(f.get('base_severity', 'INFO'), 6),
+            -(f.get('severity_score', 0) or 0)
+        ))
 
         # Deduplicate same-rule / same-file findings: group them and attach a
         # hit_count so the template can show a "×N" badge instead of N identical rows.

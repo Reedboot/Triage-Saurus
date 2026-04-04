@@ -467,10 +467,10 @@ def generate_architecture_diagram(
     paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     other          = [r for r in filtered_roots if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
     
-    # Add Internet node if we have internet connections
+    # Always add Internet node to show request flow from Internet to services
+    # (even if no explicit internet-exposure findings exist)
+    lines.append("  internet[Internet]")
     has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
-    if has_internet_connections:
-        lines.append("  internet[Internet]")
     
     # VNet subgraph (VMs, AKS, NSG)
     if vms or aks or nsgs:
@@ -554,7 +554,7 @@ def generate_architecture_diagram(
         }
 
     # Track which resource nodes have been emitted so we can create missing endpoints
-    node_names_present = {r['resource_name'] for r in resources}
+    node_names_present = {'Internet'} | {r['resource_name'] for r in resources}
 
     # Helper to ensure a resource node exists in the diagram for a given resource name
     def _ensure_node_exists(resource_name: str):
