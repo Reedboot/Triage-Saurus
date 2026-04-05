@@ -1,4 +1,44 @@
 {# partials/tab_ingress.html — Internet-facing resources and inbound paths grouped by protocol #}
+{% if network_ingress %}
+<div class="callout info s-inline-157a9c" style="margin-bottom:12px;">
+  <strong>{{ network_ingress | length }}</strong>
+  network ingress point{{ 's' if network_ingress | length != 1 }}
+  detected (load balancers, gateways, internet-facing resources).
+</div>
+<div class="section-table-wrap" style="margin-bottom:24px;">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Resource</th>
+        <th>Type</th>
+        <th>Provider</th>
+        <th>Source File</th>
+        <th>Internet Access</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in network_ingress %}
+      <tr>
+        <td><span class="asset-name">{{ r.resource_name }}</span></td>
+        <td><small class="muted">{{ r.resource_type }}</small></td>
+        <td><span class="provider-badge provider-{{ r.provider | lower }}">{{ r.provider | upper }}</span></td>
+        <td><small class="muted">{{ r.source_file or '—' }}</small></td>
+        <td>
+          {% if r.resource_type in ['aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb',
+              'azurerm_application_gateway', 'azurerm_frontdoor', 'google_compute_forwarding_rule',
+              'google_compute_global_forwarding_rule', 'alicloud_slb', 'oci_load_balancer'] %}
+            <span class="finding-badge critical" title="Internet-facing by resource type">🌐 Internet-facing</span>
+          {% else %}
+            <span class="finding-badge warning">⚠️ Exposed (inferred)</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if operations %}
 <div class="callout info s-inline-157a9c">
   <strong>{{ operation_count }}</strong>
@@ -136,7 +176,7 @@
   </div>
 {% endfor %}
 
-{% else %}
+{% elif not network_ingress %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
     <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>

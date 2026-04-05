@@ -1,4 +1,47 @@
 {# partials/tab_egress.html — Outbound connections and external targets #}
+
+{% if internet_egress %}
+<div class="callout warning" style="margin-bottom:12px; display:flex; align-items:flex-start; gap:10px;">
+  <span style="font-size:1.4rem;">🌐</span>
+  <div>
+    <strong>{{ internet_egress | length }} internet egress path{{ 's' if internet_egress | length != 1 }}</strong>
+    detected — these resources can send traffic directly to the internet (0.0.0.0/0 routes or permissive security group rules).
+    Verify data-exfiltration controls are in place.
+  </div>
+</div>
+<div class="section-table-wrap" style="margin-bottom:20px;">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Source Resource</th>
+        <th>→</th>
+        <th>Destination</th>
+        <th>Protocol</th>
+        <th>Port</th>
+        <th>Provider</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in internet_egress %}
+      <tr>
+        <td>
+          <span class="asset-name">{{ c.source_name }}</span>
+          {% if c.source_file %}<div><small class="muted">{{ c.source_file }}</small></div>{% endif %}
+        </td>
+        <td style="text-align:center; color:var(--text-muted);">→</td>
+        <td><span class="finding-badge critical">{{ c.target_name }}</span></td>
+        <td>{{ c.protocol or '—' }}</td>
+        <td>{{ c.port or '*' }}</td>
+        <td><span class="provider-badge provider-{{ (c.provider or '') | lower }}">{{ (c.provider or '—') | upper }}</span></td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">{{ c.connection_purpose or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if egress_connections %}
 <div class="callout info s-inline-157a9c">
   <strong>{{ egress_connections | length }}</strong>
@@ -46,7 +89,7 @@
     </tbody>
   </table>
 </div>
-{% else %}
+{% elif not internet_egress %}
 <div class="empty-state">
   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
     <path d="M5 12h14M12 5l7 7-7 7"/>

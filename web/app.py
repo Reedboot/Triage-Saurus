@@ -6786,6 +6786,36 @@ def api_view_ingress(experiment_id: str, repo_name: str):
 
         ingress_resources = [dict(r) for r in res_rows]
 
+        # Network ingress: always query for well-known internet-facing resource types
+        # regardless of exposure_analysis results (since exposure analysis may be incomplete)
+        network_ingress: list[dict] = []
+        _NETWORK_INGRESS_TYPES = (
+            'aws_elb', 'aws_alb', 'aws_lb',
+            'aws_internet_gateway',
+            'azurerm_application_gateway', 'azurerm_frontdoor',
+            'google_compute_forwarding_rule', 'google_compute_global_forwarding_rule',
+            'google_compute_target_https_proxy', 'google_compute_target_http_proxy',
+            'alicloud_slb', 'alicloud_slb_listener',
+            'oci_load_balancer', 'oci_network_load_balancer',
+        )
+        try:
+            ni_rows = conn.execute(
+                f"""
+                SELECT DISTINCT
+                    r.id, r.resource_name, r.resource_type,
+                    r.provider, r.region, r.source_file, r.source_line_start
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN ({','.join('?' * len(_NETWORK_INGRESS_TYPES))})
+                ORDER BY r.provider, r.resource_type, r.resource_name
+                """,
+                (repo_name, target_exp) + _NETWORK_INGRESS_TYPES,
+            ).fetchall()
+            network_ingress = [dict(r) for r in ni_rows]
+        except Exception as e:
+            print(f"Warning: Could not fetch network ingress resources: {e}")
+
         # Fallback: when no ingress resources were found from exposure_analysis or
         # finding_context, surface resources that have internet_access=true in
         # resource_properties. These are set during Phase 1 context extraction and
@@ -6900,6 +6930,7 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             children_by_parent=children_by_parent,
             operations_by_id=operations_by_id,
             operation_count=operation_count,
+            network_ingress=network_ingress,
         )
     except Exception as exc:
         return _db_render(
@@ -6910,6 +6941,7 @@ def api_view_ingress(experiment_id: str, repo_name: str):
             children_by_parent={},
             operations_by_id={},
             operation_count=0,
+            network_ingress=[],
             error=str(exc),
         )
     finally:
@@ -7123,7 +7155,8 @@ def api_view_egress(experiment_id: str, repo_name: str):
                 WHERE LOWER(repo_src.repo_name) = LOWER(?)
                   AND repo_src.experiment_id = ?
                   AND COALESCE(rc.connection_type, '') NOT IN (
-                    'contains', 'orchestrates', 'composed_of', 'parent_child', 'routes_ingress_to'
+                    'contains', 'orchestrates', 'composed_of', 'parent_child',
+                    'routes_ingress_to', 'restricts_access'
                   )
                   AND (rc.inferred_internet IS NULL OR rc.inferred_internet = 0)
                 ORDER BY source_name, target_name
@@ -7255,9 +7288,102 @@ def api_view_egress(experiment_id: str, repo_name: str):
             except Exception as e:
                 print(f"Warning: Could not fetch finding_context: {e}")
         
-        return _db_render("tab_egress.html", egress_connections=egress_connections)
+        # D3: Detect actual internet egress via topology inference.
+        # Note: resource_properties only stores terraform_block=resource for most types;
+        # attribute-level properties (cidr_blocks, gateway_id) are not extracted.
+        # Instead we use topology heuristics based on resource types present.
+        internet_egress: list[dict] = []
+        try:
+            # Heuristic 1: aws_route alongside aws_internet_gateway in same VPC = internet egress.
+            # Look for aws_route resources connected to (or near) an aws_internet_gateway.
+            igw_routes = conn.execute(
+                """
+                SELECT DISTINCT
+                    route_r.resource_name AS route_name,
+                    route_r.resource_type,
+                    route_r.provider,
+                    route_r.source_file,
+                    igw.resource_name AS igw_name,
+                    subnet_r.resource_name AS subnet_name
+                FROM resources route_r
+                JOIN repositories repo ON route_r.repo_id = repo.id
+                -- Find IGW in same repo+experiment
+                JOIN resources igw ON igw.repo_id = route_r.repo_id
+                    AND igw.resource_type = 'aws_internet_gateway'
+                -- Optionally join to subnet via route_table → subnet connection
+                LEFT JOIN resource_connections rc_rtb ON rc_rtb.source_resource_id = route_r.id
+                LEFT JOIN resource_connections rc_sub ON rc_sub.source_resource_id = rc_rtb.target_resource_id
+                LEFT JOIN resources subnet_r ON subnet_r.id = rc_sub.target_resource_id
+                    AND subnet_r.resource_type = 'aws_subnet'
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND route_r.resource_type = 'aws_route'
+                ORDER BY route_r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in igw_routes:
+                rd = dict(row)
+                internet_egress.append({
+                    'source_name': rd.get('subnet_name') or rd['route_name'],
+                    'source_type': rd['resource_type'],
+                    'target_name': f"Internet via {rd['igw_name']} (0.0.0.0/0)",
+                    'target_type': 'internet',
+                    'protocol': 'Any',
+                    'port': '*',
+                    'is_encrypted': None,
+                    'connection_purpose': f"Internet egress — aws_route {rd['route_name']} routes via Internet Gateway {rd['igw_name']}",
+                    'provider': rd['provider'],
+                    'source_file': rd['source_file'],
+                })
+        except Exception as e:
+            print(f"Warning: Could not query IGW routes for internet egress: {e}")
+
+        try:
+            # Heuristic 2: Security group / firewall rule resources named 'egress' or 'allow_all'.
+            # Resource name strongly indicates open egress (e.g. terragoat's 'egress' sg rule,
+            # GCP's 'allow_all' firewall).
+            sg_egress_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.resource_name, r.resource_type, r.provider, r.source_file,
+                    parent.resource_name AS sg_name
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN ('aws_security_group_rule', 'azurerm_network_security_rule',
+                                          'google_compute_firewall', 'alicloud_security_group_rule')
+                  AND (
+                    LOWER(r.resource_name) LIKE '%egress%'
+                    OR LOWER(r.resource_name) LIKE '%allow_all%'
+                    OR LOWER(r.resource_name) LIKE '%allow-all%'
+                    OR LOWER(r.resource_name) LIKE '%outbound%'
+                  )
+                ORDER BY r.provider, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in sg_egress_rows:
+                rd = dict(row)
+                internet_egress.append({
+                    'source_name': rd.get('sg_name') or rd['resource_name'],
+                    'source_type': rd['resource_type'],
+                    'target_name': 'Internet (0.0.0.0/0)',
+                    'target_type': 'internet',
+                    'protocol': 'Any',
+                    'port': '*',
+                    'is_encrypted': None,
+                    'connection_purpose': f"Security group rule '{rd['resource_name']}' permits outbound internet traffic",
+                    'provider': rd['provider'],
+                    'source_file': rd['source_file'],
+                })
+        except Exception as e:
+            print(f"Warning: Could not query SG egress rules: {e}")
+
+        return _db_render("tab_egress.html", egress_connections=egress_connections,
+                          internet_egress=internet_egress)
     except Exception as exc:
-        return _db_render("tab_egress.html", egress_connections=[], error=str(exc))
+        return _db_render("tab_egress.html", egress_connections=[], internet_egress=[], error=str(exc))
     finally:
         conn.close()
 

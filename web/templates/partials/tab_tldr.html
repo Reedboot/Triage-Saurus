@@ -10,6 +10,16 @@
       {% endif %}
     </div>
   {% endif %}
+  {% if ai_status == 'pending' %}
+    <div class="callout warning" style="margin-bottom:14px; display:flex; align-items:flex-start; gap:10px;">
+      <span style="font-size:1.4rem;">⚠️</span>
+      <div>
+        <strong>AI analysis not yet run</strong> — findings currently lack business context, risk prioritisation,
+        and remediation guidance. Severity scores may be inflated (no exposure weighting applied).
+        Click <strong>Run AI Scan</strong> above to complete the analysis.
+      </div>
+    </div>
+  {% endif %}
   {% if error %}
     <div class="overview-empty">
       <div class="overview-empty-icon">⚠️</div>
