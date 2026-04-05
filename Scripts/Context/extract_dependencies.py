@@ -174,6 +174,69 @@ def _extract_maven_dependencies(pom_xml: Path) -> List[Dict]:
     return deps
 
 
+def _extract_terraform_providers(tf_file: Path) -> list[dict]:
+    """Extract Terraform provider dependencies from .tf files.
+    
+    Handles two formats:
+    - required_providers blocks: terraform { required_providers { aws = { source = "hashicorp/aws" version = "~> 4.0" } } }
+    - provider blocks: provider "aws" { version = ">= 3.0" }
+    """
+    deps = []
+    try:
+        content = tf_file.read_text(encoding='utf-8', errors='replace')
+
+        # Parse required_providers block (new format)
+        req_prov_match = re.search(
+            r'required_providers\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}',
+            content, re.DOTALL
+        )
+        if req_prov_match:
+            block = req_prov_match.group(1)
+            # Each provider entry: name = { source = "..." version = "..." }
+            for m in re.finditer(
+                r'(\w+)\s*=\s*\{([^}]*)\}', block, re.DOTALL
+            ):
+                provider_alias = m.group(1)
+                inner = m.group(2)
+                source_m = re.search(r'source\s*=\s*"([^"]+)"', inner)
+                version_m = re.search(r'version\s*=\s*"([^"]+)"', inner)
+                source = source_m.group(1) if source_m else f"hashicorp/{provider_alias}"
+                version = version_m.group(1) if version_m else 'unspecified'
+                # Use source as package_name (e.g. 'hashicorp/aws')
+                deps.append({
+                    'package_name': source,
+                    'version': version,
+                    'package_manager': 'terraform',
+                    'language': 'Terraform',
+                    'source_file': str(tf_file),
+                    'project_path': str(tf_file.parent),
+                })
+
+        # Also pick up top-level provider blocks (old format) if not already found
+        known_names = {d['package_name'].split('/')[-1] for d in deps}
+        for m in re.finditer(
+            r'^provider\s+"(\w+)"\s*\{([^}]*)\}',
+            content, re.MULTILINE | re.DOTALL
+        ):
+            provider_alias = m.group(1)
+            if provider_alias in known_names:
+                continue  # already captured from required_providers
+            inner = m.group(2)
+            version_m = re.search(r'version\s*=\s*"([^"]+)"', inner)
+            version = version_m.group(1) if version_m else 'unspecified'
+            deps.append({
+                'package_name': f"hashicorp/{provider_alias}",
+                'version': version,
+                'package_manager': 'terraform',
+                'language': 'Terraform',
+                'source_file': str(tf_file),
+                'project_path': str(tf_file.parent),
+            })
+    except Exception as e:
+        print(f"  Warning: Failed to parse Terraform providers from {tf_file}: {e}")
+    return deps
+
+
 def extract_dependencies(
     repo_path: Path, 
     experiment_id: str, 
@@ -208,6 +271,28 @@ def extract_dependencies(
     
     for pom_xml in repo_path.rglob('pom.xml'):
         all_dependencies.extend(_extract_maven_dependencies(pom_xml))
+
+    # Terraform provider dependencies — parse provider.tf, versions.tf, and any .tf with required_providers
+    _tf_provider_files_seen: set[str] = set()
+    for tf_file in repo_path.rglob('*.tf'):
+        # Only parse files likely to contain provider declarations to avoid re-scanning all .tf files
+        fname = tf_file.name.lower()
+        if fname in ('provider.tf', 'providers.tf', 'versions.tf', 'main.tf', 'terraform.tf'):
+            pass  # always check these
+        else:
+            # Quick check: skip files that don't mention 'provider' or 'required_providers'
+            try:
+                snippet = tf_file.read_text(encoding='utf-8', errors='replace')[:4096]
+                if 'required_providers' not in snippet and 'provider "' not in snippet:
+                    continue
+            except Exception:
+                continue
+        tf_deps = _extract_terraform_providers(tf_file)
+        for dep in tf_deps:
+            key = f"{dep['package_name']}:{dep['version']}:{dep['source_file']}"
+            if key not in _tf_provider_files_seen:
+                _tf_provider_files_seen.add(key)
+                all_dependencies.append(dep)
     
     if not all_dependencies:
         print(f"  No dependencies detected")

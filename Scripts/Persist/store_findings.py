@@ -241,7 +241,7 @@ def main():
                 'resource_id': resource_id,
                 'finding_name': finding_name,
                 'title': title,
-                'description': None,
+                'description': message.strip() or None,
                 'category': category,
                 'severity_score': sev_score,
                 'base_severity': base_sev,
