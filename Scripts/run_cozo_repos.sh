@@ -388,6 +388,29 @@ else:
 PY
 
   log_ok "  ✅ Scan + Cozo import complete for $repo_name"
+
+  # C1 fix: relink findings to resources so resource_id is populated for provider filtering + risk scoring
+  RELINK_SCRIPT="$REPO_ROOT/Scripts/Persist/relink_findings_to_resources.py"
+  if [ -f "$RELINK_SCRIPT" ]; then
+    "$PYTHON_BIN" -u "$RELINK_SCRIPT" --experiment "$scan_id" > /dev/null 2>&1 && \
+      log "  🔗 Findings linked to resources" || \
+      log_warn "  ⚠️  Findings relink step failed (non-fatal)"
+  fi
+
+  # Run exposure analysis + infer data flows
+  EXPOSURE_SCRIPT="$REPO_ROOT/Scripts/Analyze/exposure_analyzer.py"
+  INFER_SCRIPT="$REPO_ROOT/Scripts/Analyze/infer_semantic_connections.py"
+  if [ -f "$EXPOSURE_SCRIPT" ]; then
+    "$PYTHON_BIN" -u "$EXPOSURE_SCRIPT" --experiment "$scan_id" > /dev/null 2>&1 && \
+      log "  🔍 Exposure analysis complete" || \
+      log_warn "  ⚠️  Exposure analysis failed (non-fatal)"
+  fi
+  if [ -f "$INFER_SCRIPT" ]; then
+    "$PYTHON_BIN" -u "$INFER_SCRIPT" --experiment "$scan_id" > /dev/null 2>&1 && \
+      log "  🔗 Data flows inferred" || \
+      log_warn "  ⚠️  Data flow inference failed (non-fatal)"
+  fi
+
   # G1 fix: mark experiment as complete in DB
   "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" 2>/dev/null || true
 import sys, sqlite3
