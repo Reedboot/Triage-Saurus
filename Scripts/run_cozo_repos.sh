@@ -244,17 +244,31 @@ while IFS= read -r line || [ -n "$line" ]; do
     continue
   fi
 
+  timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
+  json_output="$OUTPUT_DIR/opengrep_${repo_name}_${timestamp}.json"
+  scan_id="${repo_name}_${timestamp}"
+
+  # Create the experiment row before the scan so all steps share the same ID
+  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name" 2>/dev/null || true
+import sys, sqlite3, json
+from datetime import datetime
+db_path, exp_id, repo_name = sys.argv[1], sys.argv[2], sys.argv[3]
+conn = sqlite3.connect(db_path)
+conn.execute(
+    "INSERT OR IGNORE INTO experiments (id, name, repos, status, started_at) VALUES (?, ?, ?, 'running', ?)",
+    (exp_id, f"Scan {repo_name}", json.dumps([repo_name]), datetime.now().isoformat()),
+)
+conn.commit()
+conn.close()
+PY
+
   log_step "  Phase 1-2: Context discovery (learning DB: $ANALYTICS_DB)"
-  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Context/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB"; then
+  if ! "$PYTHON_BIN" "$REPO_ROOT/Scripts/Context/discover_repo_context.py" "$repo_path" --database "$ANALYTICS_DB" --experiment-id "$scan_id"; then
     log_err "  ❌ Context discovery failed for $repo_name"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (context discovery)" >> "$AUDIT_LOG"
     continue
   fi
-
-  timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
-  json_output="$OUTPUT_DIR/opengrep_${repo_name}_${timestamp}.json"
-  scan_id="${repo_name}_${timestamp}"
 
   if ! opengrep scan --config "$RULES_DIR" "$repo_path" --json --output "$json_output"; then
     log_err "  ❌ opengrep scan failed for $repo_name (see $json_output)"
@@ -325,6 +339,14 @@ PY
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (Cozo import)" >> "$AUDIT_LOG"
     continue
+  fi
+
+  # Also store findings to SQLite findings table (used by web UI) via store_findings.py
+  if "$PYTHON_BIN" -u "$REPO_ROOT/Scripts/Persist/store_findings.py" "$json_output" \
+      --experiment "$scan_id" --repo "$repo_name" > /dev/null 2>&1; then
+    log "  📋 Findings stored to SQLite"
+  else
+    log_warn "  ⚠️  SQLite findings store failed (non-fatal)"
   fi
 
   # remove the opengrep json after successful import
