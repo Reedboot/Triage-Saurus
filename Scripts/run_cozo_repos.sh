@@ -336,8 +336,7 @@ PY
 
   echo -e "${CYAN}Resources detected for ${BOLD}$repo_name${RESET}${CYAN} (scan $scan_id):${RESET}"
   "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" "$repo_name" "$repo_path" || log_warn "  ⚠️  Failed to display findings summary for $repo_name"
-from pycozo import Client
-import json, sys
+import sqlite3, sys
 
 ORANGE = "\033[38;5;208m"
 GREEN  = "\033[0;32m"
@@ -348,97 +347,44 @@ RESET  = "\033[0m"
 
 cozo_db, scan_id_arg, repo_arg, repo_path_arg = sys.argv[1:5]
 
-
-def shorten_rule(rule_id):
-    """Strip the full dotted path prefix, keep only Rules-relative portion.
-
-    e.g. home.neil.code.Triage-Saurus.Rules.Misconfigurations.Azure.SQL.azure-sql-tls
-         → Misconfigurations/Azure/SQL/azure-sql-tls
-    """
-    marker = "Rules."
-    idx = rule_id.find(marker)
-    if idx != -1:
-        return rule_id[idx + len(marker):].replace(".", "/")
-    return rule_id
-
-
-def classify_from_metadata(metadata_json):
-    """Use the rule's own metadata fields to determine finding kind.
-
-    Returns ('detection' | 'misconfiguration', meta_dict).
-    Prefers finding_kind / rule_type over path heuristics.
-    """
-    try:
-        meta = json.loads(metadata_json) if metadata_json else {}
-    except Exception:
-        meta = {}
-    finding_kind = meta.get("finding_kind", "")
-    rule_type    = meta.get("rule_type", "")
-    if finding_kind == "Asset" or rule_type == "context_discovery":
-        return "detection", meta
-    return "misconfiguration", meta
-
-
 def shorten_source(source):
     prefix = repo_path_arg.rstrip("/") + "/"
     return source[len(prefix):] if source.startswith(prefix) else source
 
-
-client = Client(engine="sqlite", path=cozo_db, dataframe=False)
 try:
-    data = client.export_relations(["findings"])
-finally:
-    client.close()
-
-label_map = {col: idx for idx, col in enumerate(data["findings"]["headers"])}
-rows = [
-    row for row in data["findings"]["rows"]
-    if row[label_map["scan_id"]] == scan_id_arg
-]
+    conn = sqlite3.connect(cozo_db)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT f.rule_id, f.title, f.base_severity, f.source_file, f.source_line_start,
+               COALESCE(r.provider, '') AS provider
+        FROM findings f
+        JOIN repositories repo ON f.repo_id = repo.id
+        LEFT JOIN resources r ON f.resource_id = r.id
+        WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
+        ORDER BY f.base_severity DESC, f.rule_id
+        """,
+        (scan_id_arg, repo_arg),
+    ).fetchall()
+    conn.close()
+except Exception as e:
+    print(f"  {DIM}(could not display findings summary: {e}){RESET}")
+    sys.exit(0)
 
 if not rows:
     print(f"  {DIM}(no findings stored for scan {scan_id_arg}){RESET}")
 else:
-    misconfig_count = 0
-    asset_count = 0
+    sev_counts = {}
     for row in rows:
-        provider      = row[label_map["provider"]] or "unknown"
-        rule_id       = row[label_map["rule_id"]]
-        source        = row[label_map["source_file"]]
-        line          = row[label_map["start_line"]]
-        metadata_json = row[label_map["metadata_json"]]
-
-        short_rule = shorten_rule(rule_id)
-        rel_source = shorten_source(source)
-        kind, meta = classify_from_metadata(metadata_json)
-
-        if kind == "detection":
-            asset_count += 1
-            subcategory = meta.get("subcategory", "")
-            sub_str = f"  {DIM}[{subcategory}]{RESET}" if subcategory else ""
-            print(f"  {GREEN}🔍 Asset   {RESET}{BOLD}{short_rule}{RESET}{sub_str}  {DIM}{rel_source}:{line}{RESET}  ({provider})")
-        else:
-            misconfig_count += 1
-            confidence = meta.get("confidence", "")
-            impact     = meta.get("impact", "")
-            subcategory = meta.get("subcategory", "")
-            # Build a compact badge string from available metadata
-            badges = "  ".join(filter(None, [
-                f"confidence:{confidence}" if confidence else "",
-                f"impact:{impact}"         if impact     else "",
-                f"[{subcategory}]"         if subcategory and not isinstance(subcategory, list)
-                    else (f"[{', '.join(subcategory)}]" if isinstance(subcategory, list) else ""),
-            ]))
-            badge_str = f"  {DIM}{badges}{RESET}" if badges else ""
-            print(f"  {ORANGE}🔥 Miscfg  {RESET}{BOLD}{short_rule}{RESET}{badge_str}  {DIM}{rel_source}:{line}{RESET}  ({provider})")
-
-    parts = []
-    if asset_count:
-        parts.append(f"{GREEN}{asset_count} asset(s) detected{RESET}")
-    if misconfig_count:
-        parts.append(f"{ORANGE}{misconfig_count} misconfiguration(s){RESET}")
-    if parts:
-        print(f"  {'  '.join(parts)}")
+        sev = row["base_severity"] or "Unknown"
+        sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        provider = row["provider"] or "unknown"
+        rel_source = shorten_source(row["source_file"] or "")
+        line = row["source_line_start"] or ""
+        rule_id = row["rule_id"] or ""
+        print(f"  {ORANGE}🔥 {RESET}{BOLD}{rule_id}{RESET}  {DIM}{rel_source}:{line}{RESET}  ({provider}  {sev})")
+    parts = [f"{v} {k.lower()}" for k, v in sorted(sev_counts.items(), key=lambda x: ['Critical','High','Medium','Low','Unknown'].index(x[0]) if x[0] in ['Critical','High','Medium','Low','Unknown'] else 9)]
+    print(f"  {ORANGE}{len(rows)} finding(s): {', '.join(parts)}{RESET}")
 PY
 
   log_ok "  ✅ Scan + Cozo import complete for $repo_name"

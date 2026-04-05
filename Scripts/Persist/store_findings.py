@@ -289,6 +289,18 @@ def main():
         print(f"  Primary language : {primary_lang or '(none)'}")
         print(f"  Languages detected: {', '.join(all_langs) or '(none)'}")
 
+    # Mark experiment as complete now that findings are stored
+    with db_helpers.get_db_connection() as conn:
+        conn.execute(
+            """
+            UPDATE experiments
+            SET status = 'complete',
+                completed_at = COALESCE(completed_at, datetime('now'))
+            WHERE id = ?
+            """,
+            (args.experiment,),
+        )
+
 
 if __name__ == "__main__":
     main()

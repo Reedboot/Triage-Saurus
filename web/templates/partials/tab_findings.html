@@ -16,6 +16,7 @@
   'aws': '☁️ AWS',
   'azure': '☁️ Azure', 
   'gcp': '☁️ Google Cloud',
+  'oracle': '☁️ Oracle Cloud',
   'oci': '☁️ Oracle Cloud',
   'alicloud': '☁️ Alibaba Cloud',
   'Unknown': '❓ Unknown Provider'
@@ -33,12 +34,13 @@
   {%- if low > 0 %}<span style="color: #00cc00;">{{low}} Low</span>{% endif %}
 {% endmacro %}
 
-<div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+<div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;"
+     {% if experiment_id %}data-experiment-id="{{ experiment_id }}"{% endif %}>
   <input type="text" id="findings-search" class="assets-search" style="max-width:280px"
          placeholder="Filter findings…" autocomplete="off" oninput="filterFindings()" />
   <select id="findings-provider-filter" class="assets-provider-filter" onchange="filterFindings()">
     <option value="">All providers</option>
-    {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'Unknown'] %}
+    {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'oci', 'alicloud', 'Unknown'] %}
       {% if provider in provider_groups %}
         <option value="{{ provider }}">{{ provider_names.get(provider, provider) }}</option>
       {% endif %}
@@ -388,8 +390,39 @@ document.querySelectorAll('.btn-triage').forEach(function(btn) {
   btn.addEventListener('click', function() {
     var findingId = this.dataset.findingId;
     var status = this.dataset.status;
-    console.log('Triaging finding', findingId, 'as', status);
-    // TODO: Implement triage API call to /api/findings/{id}/triage
+    var experimentId = document.querySelector('[data-experiment-id]') && document.querySelector('[data-experiment-id]').dataset.experimentId;
+    // Fallback: read from meta tag or URL if available
+    if (!experimentId) {
+      var metaExp = document.querySelector('meta[name="experiment-id"]');
+      if (metaExp) experimentId = metaExp.content;
+    }
+    if (!experimentId || !findingId) {
+      try { window._triage && window._triage.setStatus && window._triage.setStatus('Cannot triage: missing experiment or finding ID', 'error'); } catch(e) {}
+      return;
+    }
+    var reason = prompt('Reason (optional, press Cancel to abort):');
+    if (reason === null) return; // User cancelled
+    var self = this;
+    self.disabled = true;
+    fetch('/api/finding/triage/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(findingId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ triage_status: status, triage_reason: reason || '' })
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      // Update button styles on the row to reflect new status
+      var row = self.closest('.finding-card');
+      if (row) {
+        row.querySelectorAll('.btn-triage').forEach(function(b) {
+          b.style.fontWeight = b.dataset.status === status ? '700' : '';
+        });
+      }
+      try { window._triage && window._triage.setStatus && window._triage.setStatus('Triage status saved', 'success'); } catch(e) {}
+    }).catch(function(err) {
+      try { window._triage && window._triage.setStatus && window._triage.setStatus('Failed to save triage: ' + err.message, 'error'); } catch(e) {}
+    }).finally(function() {
+      self.disabled = false;
+    });
   });
 });
 

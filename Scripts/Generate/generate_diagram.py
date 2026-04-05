@@ -247,23 +247,24 @@ def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
     return f"|{'; '.join(details)}|"
 
 
-def _add_internet_connections(connections: list, experiment_id: str, repo_name: str | None = None) -> list:
+def _add_internet_connections(connections: list, experiment_id: str, repo_name: str | None = None, provider: str | None = None) -> list:
     """Synthesise Internet→resource edges from internet-exposure findings.
 
     Looks for findings whose rules carry internet_exposure=true metadata,
     plus legacy context keys for backward compatibility.
+    Also adds edges for well-known internet-facing resource types (IGW, ELB, App Gateway, etc.)
     """
     existing_internet_targets = {c['target'] for c in connections if c.get('source') == 'Internet'}
 
-    try:
-        with get_db_connection() as conn:
-            repo_filter = ""
-            params_base = [experiment_id]
-            if repo_name:
-                repo_filter = "AND LOWER(repo.repo_name) = LOWER(?)"
-                params_base.append(repo_name)
+    repo_filter = ""
+    params_base = [experiment_id]
+    if repo_name:
+        repo_filter = "AND LOWER(repo.repo_name) = LOWER(?)"
+        params_base.append(repo_name)
 
-            # Primary: metadata.internet_exposure = true
+    with get_db_connection() as conn:
+        # Primary: metadata.internet_exposure = true (requires finding_context table)
+        try:
             rows = conn.execute(f"""
                 SELECT DISTINCT
                     COALESCE(parent.resource_name, r.resource_name) AS target_name,
@@ -278,7 +279,6 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                   AND LOWER(fc.context_value) = 'true'
                   {repo_filter}
             """, params_base).fetchall()
-
             for row in rows:
                 name = row['target_name']
                 if name and name not in existing_internet_targets:
@@ -288,8 +288,11 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                         'is_cross_repo': 0
                     })
                     existing_internet_targets.add(name)
+        except Exception:
+            pass
 
-            # Fallback: start_ip_address = 0.0.0.0 (legacy / firewall rule direct)
+        # Fallback: start_ip_address = 0.0.0.0 (requires finding_context table)
+        try:
             rows2 = conn.execute(f"""
                 SELECT DISTINCT COALESCE(parent.resource_name, r.resource_name) AS target_name
                 FROM findings f
@@ -311,9 +314,56 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                         'is_cross_repo': 0
                     })
                     existing_internet_targets.add(name)
+        except Exception:
+            pass
 
-    except Exception:
-        pass
+        # Type-based fallback: well-known internet-facing resource types
+        try:
+            INTERNET_FACING_TYPES = (
+                'aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb',
+                'aws_api_gateway_rest_api', 'aws_apigatewayv2_api',
+                'aws_cloudfront_distribution',
+                'azurerm_application_gateway', 'azurerm_frontdoor',
+                'azurerm_api_management', 'azurerm_public_ip',
+                'azurerm_lb', 'azurerm_application_load_balancer',
+                'google_compute_forwarding_rule', 'google_compute_global_forwarding_rule',
+                'google_compute_url_map', 'google_compute_backend_service',
+                'google_api_gateway_api',
+            )
+            placeholder = ','.join('?' * len(INTERNET_FACING_TYPES))
+            type_params = [experiment_id] + list(INTERNET_FACING_TYPES)
+            repo_join3 = ""
+            repo_where3 = ""
+            prov_where3 = ""
+            if repo_name:
+                repo_join3 = "JOIN repositories rp3 ON r.repo_id = rp3.id"
+                repo_where3 = "AND LOWER(rp3.repo_name) = LOWER(?)"
+                type_params.append(repo_name)
+            if provider:
+                prov_where3 = "AND LOWER(r.provider) = LOWER(?)"
+                type_params.append(provider)
+            rows3 = conn.execute(f"""
+                SELECT DISTINCT r.resource_name, r.resource_type
+                FROM resources r
+                {repo_join3}
+                WHERE r.experiment_id = ?
+                  AND r.resource_type IN ({placeholder})
+                  {repo_where3}
+                  {prov_where3}
+            """, type_params).fetchall()
+            for row in rows3:
+                name = row['resource_name']
+                rt = row['resource_type']
+                if name and name not in existing_internet_targets:
+                    label = 'internet gateway' if 'gateway' in rt.lower() else 'internet facing'
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': label, 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+        except Exception:
+            pass
 
     return connections
 
@@ -404,7 +454,7 @@ def generate_architecture_diagram(
 
     # Append synthetic Internet connections based on finding_context evidence.
     # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
-    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name)
+    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
 
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
@@ -433,7 +483,55 @@ def generate_architecture_diagram(
             parent_children[parent_id] = []
         parent_children[parent_id].append(h)
         child_ids.add(h['child_id'])
-    
+
+    # Promote orphaned children: resources whose DIRECT parent has display_on_architecture_chart=False
+    # (e.g. children of azurerm_resource_group). We only promote one level — children of promoted
+    # resources remain as children (rendered inside the promoted parent's subgraph).
+    display_filtered_ids = {r['id'] for r in resources}
+    parent_id_of_child = {h['child_id']: h['parent_id'] for h in hierarchies}
+
+    # Build map from resource.id -> resource_type for all raw resources (before filtering)
+    with get_db_connection() as _pconn:
+        all_raw = _pconn.execute(
+            "SELECT id, resource_name, resource_type, provider, repo_id FROM resources WHERE experiment_id = ?",
+            [experiment_id]
+        ).fetchall()
+    all_raw_map = {r['id']: dict(r) for r in all_raw}
+
+    def _parent_is_hidden(child_id: int) -> bool:
+        """Return True if child's direct parent is filtered out (display=False or resource_group)."""
+        parent_id = parent_id_of_child.get(child_id)
+        if parent_id is None:
+            return False  # no parent, already a root
+        if parent_id in display_filtered_ids:
+            return False  # parent visible — stay as child
+        parent_r = all_raw_map.get(parent_id)
+        if not parent_r:
+            return True  # orphaned
+        prt = (parent_r.get('resource_type') or '').strip()
+        prt_info = _rtdb.get_resource_type(None, prt)
+        return (
+            not prt_info.get('display_on_architecture_chart', True)
+            or 'resource_group' in prt.lower()
+        )
+
+    promoted_child_ids = {cid for cid in child_ids if _parent_is_hidden(cid)}
+    child_ids = child_ids - promoted_child_ids
+
+    # Add promoted resources to the resources list (only if same provider when filtering)
+    current_ids = {r['id'] for r in resources}
+    prov_filter = provider.lower() if provider else None
+    for promoted_id in promoted_child_ids:
+        promoted_r = all_raw_map.get(promoted_id)
+        if not promoted_r or promoted_r['id'] in current_ids:
+            continue
+        if prov_filter and (promoted_r.get('provider') or '').lower() != prov_filter:
+            continue
+        rt_info = _rtdb.get_resource_type(None, (promoted_r.get('resource_type') or '').strip())
+        if rt_info.get('display_on_architecture_chart', True):
+            resources.append(promoted_r)
+            current_ids.add(promoted_r['id'])
+
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
 
@@ -496,12 +594,11 @@ def generate_architecture_diagram(
     for sa in storage_accounts:
         _render_resource_subgraph(sa, parent_children, lines, indent="  ")
     
-    # PaaS subgraph
+    # PaaS/Identity subgraph — use subgraph rendering to show children (e.g. OCI compartments with buckets)
     if paas:
         lines.append(f"  subgraph paas[PaaS / Identity]")
         for p in paas:
-            node_id = sanitize_id(p['resource_name'])
-            lines.append(f"    {node_id}[{_display_label(p)}]")
+            _render_resource_subgraph(p, parent_children, lines, indent="    ")
         lines.append("  end")
     
     # Try to group API Management / API resources and render operations when available
@@ -522,11 +619,14 @@ def generate_architecture_diagram(
     except Exception:
         pass
 
-    # Other resources (outside subgraphs)
+    # Other resources (outside subgraphs) — use subgraph rendering when resource has children
     for res in other:
         if res['resource_name'] not in ('Internet', 'NSG'):
-            node_id = sanitize_id(res['resource_name'])
-            lines.append(f"  {node_id}[{_display_label(res)}]")
+            if res['id'] in parent_children:
+                _render_resource_subgraph(res, parent_children, lines, indent="  ")
+            else:
+                node_id = sanitize_id(res['resource_name'])
+                lines.append(f"  {node_id}[{_display_label(res)}]")
     
     lines.append("")
     

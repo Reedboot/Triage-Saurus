@@ -4028,7 +4028,11 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                     SUM(CASE WHEN category = 'Identity' THEN 1 ELSE 0 END) AS identity_count,
                     SUM(CASE WHEN category = 'Network' THEN 1 ELSE 0 END) AS network_count,
                     SUM(CASE WHEN category = 'Storage' THEN 1 ELSE 0 END) AS storage_count,
-                    SUM(CASE WHEN category = 'Database' THEN 1 ELSE 0 END) AS database_count
+                    SUM(CASE WHEN category = 'Database' THEN 1 ELSE 0 END) AS database_count,
+                    SUM(CASE WHEN category = 'Compute' THEN 1 ELSE 0 END) AS compute_count,
+                    SUM(CASE WHEN category = 'Container' THEN 1 ELSE 0 END) AS container_count,
+                    SUM(CASE WHEN category = 'Monitoring' THEN 1 ELSE 0 END) AS monitoring_count,
+                    SUM(CASE WHEN category NOT IN ('Identity','Network','Storage','Database','Compute','Container','Monitoring') THEN 1 ELSE 0 END) AS other_count
                 FROM (
                     SELECT r.id,
                            COALESCE(rt.category, 'Other') AS category
@@ -4046,6 +4050,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         network_count = counts["network_count"] if counts else 0
         storage_count = counts["storage_count"] if counts else 0
         database_count = counts["database_count"] if counts else 0
+        compute_count = counts["compute_count"] if counts else 0
+        container_count = counts["container_count"] if counts else 0
+        monitoring_count = counts["monitoring_count"] if counts else 0
+        other_count = counts["other_count"] if counts else 0
 
         # Findings summary
         findings_summary = None
@@ -4058,7 +4066,11 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                 SELECT
                     COUNT(*) AS total_findings,
                     SUM(CASE WHEN {sev_score_expr} >= 7 THEN 1 ELSE 0 END) AS high_or_above,
-                    SUM(CASE WHEN {base_sev_expr} IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high
+                    SUM(CASE WHEN {base_sev_expr} IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high,
+                    SUM(CASE WHEN {base_sev_expr} = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_count,
+                    SUM(CASE WHEN {base_sev_expr} = 'HIGH' THEN 1 ELSE 0 END) AS high_count,
+                    SUM(CASE WHEN {base_sev_expr} = 'MEDIUM' THEN 1 ELSE 0 END) AS medium_count,
+                    SUM(CASE WHEN {base_sev_expr} = 'LOW' THEN 1 ELSE 0 END) AS low_count
                 FROM findings f
                 JOIN repositories repo ON f.repo_id = repo.id
                 WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
@@ -4069,6 +4081,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         total_findings = findings_summary["total_findings"] if findings_summary else 0
         high_or_above = findings_summary["high_or_above"] if findings_summary else 0
         critical_high = findings_summary["critical_high"] if findings_summary else 0
+        critical_count = findings_summary["critical_count"] if findings_summary else 0
+        high_count = findings_summary["high_count"] if findings_summary else 0
+        medium_count = findings_summary["medium_count"] if findings_summary else 0
+        low_count = findings_summary["low_count"] if findings_summary else 0
 
         # CI/CD enrichment via context metadata
         if not cicd_tool and _table_exists(conn, "context_metadata"):
@@ -4263,6 +4279,8 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         add_row("Resources discovered", str(total_resources))
         if total_resources:
             details = []
+            if compute_count:
+                details.append(f"Compute: {compute_count}")
             if identity_count:
                 details.append(f"Identity: {identity_count}")
             if network_count:
@@ -4271,11 +4289,26 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                 details.append(f"Storage: {storage_count}")
             if database_count:
                 details.append(f"Database: {database_count}")
+            if container_count:
+                details.append(f"Container: {container_count}")
+            if monitoring_count:
+                details.append(f"Monitoring: {monitoring_count}")
+            if other_count:
+                details.append(f"Other: {other_count}")
             if details:
                 add_row("Breakdown", ", ".join(details))
         add_row("Findings discovered", str(total_findings))
         if total_findings:
-            add_row("High/Critical findings", f"{critical_high} critical/high · {high_or_above} sev ≥ 7")
+            sev_parts = []
+            if critical_count:
+                sev_parts.append(f"{critical_count} critical")
+            if high_count:
+                sev_parts.append(f"{high_count} high")
+            if medium_count:
+                sev_parts.append(f"{medium_count} medium")
+            if low_count:
+                sev_parts.append(f"{low_count} low")
+            add_row("Severity breakdown", " · ".join(sev_parts) if sev_parts else "0 findings")
 
         # Scan status heuristics
         ai_ready = False
@@ -6241,20 +6274,20 @@ def api_finding_triage(experiment_id: str, finding_id: str):
 
 
 def _infer_provider_from_rule(rule_id: str) -> str:
-    """Infer cloud provider from rule_id prefix."""
+    """Infer cloud provider from rule_id prefix. Returns lowercase to match resources table."""
     if not rule_id:
         return 'Unknown'
     rule_lower = str(rule_id).lower()
-    if rule_lower.startswith('aws-'):
-        return 'AWS'
-    elif rule_lower.startswith('azure-'):
-        return 'Azure'
+    if rule_lower.startswith('aws-') or rule_lower.startswith('terraform-'):
+        return 'aws'
+    elif rule_lower.startswith('azure-') or rule_lower.startswith('azurerm-'):
+        return 'azure'
     elif rule_lower.startswith('gcp-') or rule_lower.startswith('google-'):
-        return 'GCP'
+        return 'gcp'
     elif rule_lower.startswith('oci-'):
-        return 'OCI'
+        return 'oracle'
     elif rule_lower.startswith('alicloud-'):
-        return 'Alibaba Cloud'
+        return 'alicloud'
     return 'Unknown'
 
 @app.route("/api/view/findings/<experiment_id>/<repo_name>")
@@ -6297,6 +6330,14 @@ def api_view_findings(experiment_id: str, repo_name: str):
                 AND ai.reviewer_type IN ('DevSkeptic', 'PlatformSkeptic', 'SecurityAgent', 'ai_copilot')
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             ORDER BY
+                CASE UPPER(f.base_severity)
+                    WHEN 'CRITICAL' THEN 1
+                    WHEN 'HIGH' THEN 2
+                    WHEN 'MEDIUM' THEN 3
+                    WHEN 'LOW' THEN 4
+                    ELSE 5
+                END,
+                f.severity_score DESC,
                 f.rule_id, f.source_file
             """,
             (repo_name, target_exp),
@@ -6308,13 +6349,13 @@ def api_view_findings(experiment_id: str, repo_name: str):
             if not f.get('provider'):
                 f['provider'] = _infer_provider_from_rule(f.get('rule_id', ''))
         
-        # Sort by provider, then severity
-        provider_order = {'AWS': 1, 'Azure': 2, 'GCP': 3, 'OCI': 4, 'Alibaba Cloud': 5, 'Unknown': 6}
+        # Sort by severity first (Critical → High → Medium → Low), then provider, then score desc
+        provider_order = {'aws': 1, 'azure': 2, 'gcp': 3, 'oracle': 4, 'alicloud': 5, 'Unknown': 6}
         severity_order = {'CRITICAL': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4, 'INFO': 5}
         findings.sort(key=lambda f: (
+            severity_order.get((f.get('base_severity') or 'INFO').upper(), 6),
+            -(f.get('severity_score', 0) or 0),
             provider_order.get(f.get('provider', 'Unknown'), 6),
-            severity_order.get(f.get('base_severity', 'INFO'), 6),
-            -(f.get('severity_score', 0) or 0)
         ))
 
         # Deduplicate same-rule / same-file findings: group them and attach a
@@ -6367,7 +6408,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
             except Exception:
                 pass
 
-        return _db_render("tab_findings.html", findings=findings)
+        return _db_render("tab_findings.html", findings=findings, experiment_id=resolved_exp_id)
     except Exception as exc:
         return _db_render("tab_findings.html", findings=[], error=str(exc))
     finally:
