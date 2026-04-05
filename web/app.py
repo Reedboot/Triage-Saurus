@@ -7611,6 +7611,54 @@ def api_view_roles(experiment_id: str, repo_name: str):
         except Exception as e:
             print(f"Warning: Could not fetch API keys/subscriptions: {e}")
         
+        # E3: Add aws_iam_access_key resources — these are static credentials and a critical concern
+        try:
+            access_key_rows = conn.execute(
+                """
+                SELECT r.id, r.resource_name AS identity_name, r.resource_type AS role_type,
+                       r.provider, r.source_file, parent.resource_name AS parent_name
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type = 'aws_iam_access_key'
+                ORDER BY r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for r in access_key_rows:
+                rd = dict(r)
+                iam_user = rd.get('parent_name') or rd['identity_name']
+                roles.append({
+                    'id': rd['id'],
+                    'identity_name': rd['identity_name'],
+                    'role_type': rd['role_type'],
+                    'provider': rd['provider'],
+                    'source_file': rd['source_file'],
+                    'resource_name': iam_user,
+                    'permissions': '⚠️ Static credential',
+                    'permission_details': [
+                        f"⚠️ Static AWS access key for IAM user: {iam_user}",
+                        "Static access keys are a critical security risk — they never expire and can be leaked",
+                        "Prefer IAM roles with temporary credentials (STS AssumeRole) instead",
+                    ],
+                    'permission_summary': '⚠️ Static AWS access key',
+                    'is_excessive': 1,
+                })
+        except Exception as e:
+            print(f"Warning: Could not fetch IAM access keys: {e}")
+
+        # E1/E2: Flag IAM policies with names indicating broad access
+        # (actual policy content not extracted to DB — note this limitation)
+        _BROAD_POLICY_NAMES = ('excess_policy', 'admin', 'full_access', 'allow_all', 'root')
+        for role in roles:
+            role_name = (role.get('identity_name') or '').lower()
+            if role.get('is_excessive') is None and any(p in role_name for p in _BROAD_POLICY_NAMES):
+                role['is_excessive'] = 1
+                role['permission_details'] = list(role.get('permission_details') or []) + [
+                    "⚠️ Policy name suggests broad permissions — verify actions and resource scope",
+                ]
+
         # Convert is_excessive to integer if stored as string
         for role in roles:
             val = role.get("is_excessive")
@@ -7658,6 +7706,16 @@ def api_view_containers(experiment_id: str, repo_name: str):
                                      OR LOWER(r.resource_type) LIKE '%image%'
                                      OR LOWER(r.resource_type) LIKE '%helm%'
                                      OR LOWER(r.resource_name) LIKE '%dockerfile%'
+                                     OR r.resource_type IN (
+                                         'aws_ecr_repository', 'aws_ecr_registry',
+                                         'google_artifact_registry_repository',
+                                         'azurerm_container_registry',
+                                         'azurerm_kubernetes_cluster',
+                                         'google_container_cluster', 'google_container_node_pool',
+                                         'aws_eks_cluster', 'aws_eks_node_group',
+                                         'aws_ecs_cluster', 'aws_ecs_task_definition',
+                                         'aws_ecs_service'
+                                     )
                    OR EXISTS (
                        SELECT 1 FROM resource_properties rp_d
                                              WHERE rp_d.resource_id = r.id
@@ -7668,12 +7726,34 @@ def api_view_containers(experiment_id: str, repo_name: str):
             ORDER BY r.provider, r.resource_name
         """, (repo_name, resolved_exp_id)).fetchall()
         
+        _ORCHESTRATOR_TYPES = {
+            'google_container_cluster', 'google_container_node_pool',
+            'azurerm_kubernetes_cluster', 'aws_eks_cluster', 'aws_eks_node_group',
+            'aws_ecs_cluster',
+        }
+        _REGISTRY_TYPES = {
+            'aws_ecr_repository', 'aws_ecr_registry',
+            'google_artifact_registry_repository', 'azurerm_container_registry',
+        }
+        _WORKLOAD_TYPES = {
+            'aws_ecs_task_definition', 'aws_ecs_service',
+        }
+
         containers = []
         providers = set()
         for row in rows:
             container = dict(row)
-            container_type = "Dockerfile" if "dockerfile" in container.get("resource_type", "").lower() else "Container"
-            container["container_type"] = container_type
+            rt = (container.get("resource_type") or "").lower()
+            if rt in _ORCHESTRATOR_TYPES:
+                container["container_type"] = "Orchestrator"
+            elif rt in _REGISTRY_TYPES:
+                container["container_type"] = "Registry"
+            elif rt in _WORKLOAD_TYPES:
+                container["container_type"] = "Workload"
+            elif "dockerfile" in rt:
+                container["container_type"] = "Dockerfile"
+            else:
+                container["container_type"] = "Container"
             providers.add(container.get("provider", "unknown") or "unknown")
             container["dockerfile_ref"] = container.get("dockerfile") or container.get("source_file")
             containers.append(container)
