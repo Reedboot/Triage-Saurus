@@ -66,19 +66,53 @@ def get_node_style(resource: dict) -> Optional[str]:
 
 
 def _display_label(resource: dict) -> str:
-    """Return diagram node label using real name + friendly type."""
+    """Return diagram node label using real name + friendly type + emoji icon."""
     conn = _get_lookup_db()
     name = resource['resource_name']
     rtype = resource.get('resource_type', '')
-    
+
     # Truncate long resource names to prevent diagram overflow
     MAX_NAME_LENGTH = 28
     display_name = name if len(name) <= MAX_NAME_LENGTH else f"{name[:MAX_NAME_LENGTH-3]}..."
-    
+
+    # Emoji icon based on resource type
+    icon = _resource_icon(rtype)
+    label_name = f"{icon} {display_name}" if icon else display_name
+
     if conn and rtype:
         friendly = _rtdb.get_friendly_name(conn, rtype)
-        return f"{display_name}<br/>{friendly}"
-    return display_name
+        return f"{label_name}<br/>{friendly}"
+    return label_name
+
+
+# Resource type keyword → emoji icon mapping
+_RESOURCE_ICONS: list[tuple[list[str], str]] = [
+    (["internet_gateway", "eip", "public_ip", "front_door", "cloudfront"], "🌐"),
+    (["lb", "alb", "elb", "nlb", "load_balancer", "application_gateway", "cdn"], "⚖️"),
+    (["waf", "firewall", "security_group", "network_acl", "nsg"], "🛡️"),
+    (["instance", "vm", "virtual_machine", "ec2", "compute_instance"], "🖥️"),
+    (["function", "lambda", "function_app"], "⚙️"),
+    (["eks_cluster", "aks", "gke", "kubernetes_cluster", "ecs_cluster"], "☸️"),
+    (["ecr", "container_registry", "acr"], "📦"),
+    (["db_instance", "database", "sql", "mysql", "postgresql", "cosmos", "rds", "neptune", "dynamodb", "bigtable"], "🗄️"),
+    (["s3_bucket", "storage_account", "gcs", "blob", "bucket", "oss_bucket"], "🪣"),
+    (["iam_role", "iam_user", "iam_policy", "service_account", "managed_identity", "access_key"], "🔑"),
+    (["vpc", "vnet", "virtual_network", "subnet"], "🔷"),
+    (["route_table", "route", "peering"], "🔀"),
+    (["sns", "sqs", "eventgrid", "pubsub", "kinesis", "mq"], "📨"),
+    (["monitoring", "log_analytics", "cloudwatch", "diagnostic"], "📊"),
+    (["key_vault", "kms", "secrets", "certificate"], "🔐"),
+    (["api_gateway", "api_management", "apim"], "🔌"),
+]
+
+
+def _resource_icon(resource_type: str) -> str:
+    """Return an emoji icon for a resource type."""
+    rtype = (resource_type or "").lower()
+    for keywords, emoji in _RESOURCE_ICONS:
+        if any(kw in rtype for kw in keywords):
+            return emoji
+    return ""
 
 
 def _category(resource: dict) -> str:
@@ -564,43 +598,75 @@ def generate_architecture_diagram(
     nsgs           = [r for r in filtered_roots if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
     paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     other          = [r for r in filtered_roots if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
-    
-    # Always add Internet node to show request flow from Internet to services
-    # (even if no explicit internet-exposure findings exist)
-    lines.append("  internet[Internet]")
-    has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
-    
-    # VNet subgraph (VMs, AKS, NSG)
+
+    # Classify "other" into internet-facing vs remaining
+    _INTERNET_FACING_TYPES = {
+        'aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb', 'aws_nlb',
+        'azurerm_application_gateway', 'azurerm_lb', 'azurerm_front_door',
+        'google_compute_global_forwarding_rule', 'google_compute_forwarding_rule',
+        'aws_api_gateway_rest_api', 'aws_apigatewayv2_api', 'aws_cloudfront_distribution',
+        'oci_load_balancer', 'alicloud_slb',
+    }
+    # Pull internet-facing resources out of ALL categories (they should appear in zone_internet)
+    internet_facing_ids = {
+        r['id'] for r in filtered_roots
+        if (r.get('resource_type') or '').lower() in _INTERNET_FACING_TYPES
+    }
+    internet_facing = [r for r in filtered_roots if r['id'] in internet_facing_ids]
+    # Remove internet-facing resources from their other category lists
+    vms              = [r for r in vms if r['id'] not in internet_facing_ids]
+    aks              = [r for r in aks if r['id'] not in internet_facing_ids]
+    nsgs             = [r for r in nsgs if r['id'] not in internet_facing_ids]
+    other_remaining  = [r for r in other if r['id'] not in internet_facing_ids]
+
+    # ── Internet-Facing Zone ──
+    lines.append("  subgraph zone_internet[\"🌐 Internet-Facing\"]")
+    lines.append("    internet[🌐 Internet]")
+    for res in internet_facing:
+        if res['id'] in parent_children:
+            _render_resource_subgraph(res, parent_children, lines, indent="    ")
+        else:
+            node_id = sanitize_id(res['resource_name'])
+            lines.append(f"    {node_id}[{_display_label(res)}]")
+    lines.append("  end")
+
+    # ── Internal Zone (Compute, Containers, Network Security) ──
     if vms or aks or nsgs:
-        lines.append("  subgraph vnet[VNet]")
-        
+        lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
+        # VNet/VPC subgraph nested inside
+        lines.append("    subgraph vnet[VNet]")
         for vm in vms:
-            _render_resource_subgraph(vm, parent_children, lines, indent="    ")
-        
+            _render_resource_subgraph(vm, parent_children, lines, indent="      ")
         for aks_cluster in aks:
-            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="    ")
-        
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="      ")
         for nsg in nsgs:
             node_id = sanitize_id(nsg['resource_name'])
-            lines.append(f"    {node_id}[{_display_label(nsg)}]")
-        
+            lines.append(f"      {node_id}[{_display_label(nsg)}]")
+        lines.append("    end")
         lines.append("  end")
-    
-    # Database hierarchies (any DB type with children)
-    for db in sql_servers:
-        _render_resource_subgraph(db, parent_children, lines, indent="  ")
-    
-    # Storage hierarchies (any storage type with children)
-    for sa in storage_accounts:
-        _render_resource_subgraph(sa, parent_children, lines, indent="  ")
-    
+
+    # ── Data Tier Zone ──
+    if sql_servers or storage_accounts:
+        lines.append("  subgraph zone_data[\"🗄️ Data Tier\"]")
+        for db in sql_servers:
+            _render_resource_subgraph(db, parent_children, lines, indent="    ")
+        for sa in storage_accounts:
+            _render_resource_subgraph(sa, parent_children, lines, indent="    ")
+        lines.append("  end")
+    elif sql_servers or storage_accounts:
+        # Fallback: render without zone wrapper
+        for db in sql_servers:
+            _render_resource_subgraph(db, parent_children, lines, indent="  ")
+        for sa in storage_accounts:
+            _render_resource_subgraph(sa, parent_children, lines, indent="  ")
+
     # PaaS/Identity subgraph — use subgraph rendering to show children (e.g. OCI compartments with buckets)
     if paas:
         lines.append(f"  subgraph paas[PaaS / Identity]")
         for p in paas:
             _render_resource_subgraph(p, parent_children, lines, indent="    ")
         lines.append("  end")
-    
+
     # Try to group API Management / API resources and render operations when available
     try:
         api_resources = [r for r in resources if 'api' in (r.get('resource_type') or '').lower() or 'apim' in (r.get('resource_name') or '').lower()]
@@ -620,14 +686,14 @@ def generate_architecture_diagram(
         pass
 
     # Other resources (outside subgraphs) — use subgraph rendering when resource has children
-    for res in other:
+    for res in other_remaining:
         if res['resource_name'] not in ('Internet', 'NSG'):
             if res['id'] in parent_children:
                 _render_resource_subgraph(res, parent_children, lines, indent="  ")
             else:
                 node_id = sanitize_id(res['resource_name'])
                 lines.append(f"  {node_id}[{_display_label(res)}]")
-    
+
     lines.append("")
     
     # Add connections
@@ -792,10 +858,16 @@ def generate_architecture_diagram(
 
         label = _connection_label(conn, ip_restricted=ip_restricted)
 
-        # Cross-repo connections use dashed line; safe access for is_cross_repo
+        # Cross-repo or semantic data_access connections use dashed lines
         is_cross = conn.get('is_cross_repo') if isinstance(conn, dict) else conn['is_cross_repo']
-        if is_cross:
-            lines.append(f"  {src} -.{label}.> {tgt}")
+        conn_type = str(conn.get("connection_type") or "").strip()
+        if is_cross or conn_type == "data_access":
+            # Mermaid dashed arrow with label: A -. label .-> B (no pipe characters)
+            inner = label.strip('|') if label else ''
+            if inner:
+                lines.append(f"  {src} -. {inner} .-> {tgt}")
+            else:
+                lines.append(f"  {src} -.-> {tgt}")
         else:
             lines.append(f"  {src} -->{label} {tgt}")
     
@@ -806,10 +878,16 @@ def generate_architecture_diagram(
         style = get_node_style(r)
         if style:
             lines.append(f"  {style}")
-    
+
+    has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
     if has_internet_connections:
         lines.append("  style internet stroke:#ff0000, stroke-width:3px")
-    
+
+    # Style security zone subgraphs
+    lines.append("  style zone_internet fill:#1a0a0a,stroke:#ff4444,stroke-width:2px")
+    lines.append("  style zone_internal fill:#0a0a1a,stroke:#4444ff,stroke-width:1px")
+    lines.append("  style zone_data fill:#0a1a0a,stroke:#44aa44,stroke-width:1px")
+
     return "\n".join(lines)
 
 

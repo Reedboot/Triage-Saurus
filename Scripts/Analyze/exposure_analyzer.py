@@ -78,7 +78,7 @@ class InternetExposureAnalyzer:
         conn = self.connect()
         cursor = conn.execute(
             """
-            SELECT id, source_resource_id, target_resource_id
+            SELECT id, source_resource_id, target_resource_id, connection_type
             FROM resource_connections
             WHERE experiment_id = ?
             """,
@@ -145,6 +145,14 @@ class InternetExposureAnalyzer:
         print("[*] Persisting exposure analysis to database...")
         self._persist_exposure_analysis(resources, classifications, findings)
 
+        # Persist internet exposure paths (B2)
+        print("[*] Persisting internet exposure paths...")
+        self._persist_internet_exposure_paths(classifications)
+
+        # Populate trust boundaries (B3)
+        print("[*] Populating trust boundaries...")
+        self._populate_trust_boundaries(resources, classifications)
+
         # Generate summary
         directly_exposed = sum(1 for c in classifications.values() if c.exposure_level == "direct_exposure")
         mitigated = sum(1 for c in classifications.values() if c.exposure_level == "mitigated")
@@ -174,6 +182,10 @@ class InternetExposureAnalyzer:
         """Persist exposure analysis results to database."""
         conn = self.connect()
         cursor = conn.cursor()
+
+        # Clear existing records for this experiment so re-runs get fresh scores
+        cursor.execute("DELETE FROM exposure_analysis WHERE experiment_id = ?", (self.experiment_id,))
+        cursor.execute("DELETE FROM exposure_risk_scoring WHERE experiment_id = ?", (self.experiment_id,))
 
         # Build resource map for quick lookup
         resource_map = {r["id"]: r for r in resources}
@@ -232,7 +244,7 @@ class InternetExposureAnalyzer:
                 for finding in resource_findings:
                     cursor.execute(
                         """
-                        INSERT OR IGNORE INTO exposure_risk_scoring
+                        INSERT OR REPLACE INTO exposure_risk_scoring
                         (experiment_id, resource_id, opengrep_rule_id, rule_severity,
                          severity_score, exposure_multiplier, final_risk_score,
                          exposure_factor, vulnerability_factor, scoring_method, computed_at)
@@ -261,6 +273,162 @@ class InternetExposureAnalyzer:
                     )
 
         conn.commit()
+
+    def _persist_internet_exposure_paths(
+        self,
+        classifications: Dict[int, any],
+    ) -> None:
+        """Persist internet exposure paths to the internet_exposure_paths table (B2)."""
+        conn = self.connect()
+        cursor = conn.cursor()
+
+        # Clear existing paths for this experiment
+        cursor.execute(
+            "DELETE FROM internet_exposure_paths WHERE experiment_id = ?",
+            (self.experiment_id,),
+        )
+
+        path_counter = 0
+        for resource_id, classification in classifications.items():
+            if not classification.has_internet_path:
+                continue
+            for entry_point_id in (classification.entry_points_reached or []):
+                if entry_point_id == resource_id:
+                    continue  # Skip self-references (entry points)
+                path_counter += 1
+                path_id = f"{self.experiment_id}-{entry_point_id}-{resource_id}-{path_counter}"
+                paths = [p for p in classification.traversal_paths if p.source_id == entry_point_id]
+                best_path = paths[0] if paths else None
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO internet_exposure_paths
+                    (experiment_id, path_id, source_resource_id, target_resource_id,
+                     path_length, path_nodes, has_countermeasure, countermeasures_in_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.experiment_id,
+                        path_id,
+                        entry_point_id,
+                        resource_id,
+                        best_path.path_length if best_path else 1,
+                        json.dumps(best_path.path_nodes if best_path else [entry_point_id, resource_id]),
+                        1 if (best_path and best_path.has_countermeasure) else 0,
+                        json.dumps(best_path.countermeasures if best_path else []),
+                    ),
+                )
+
+        conn.commit()
+        print(f"[+] Persisted {path_counter} internet exposure paths")
+
+    def _populate_trust_boundaries(
+        self,
+        resources: List[dict],
+        classifications: Dict[int, any],
+    ) -> None:
+        """Populate trust boundaries from VPC/subnet/exposure topology (B3)."""
+        conn = self.connect()
+        cursor = conn.cursor()
+
+        # Clear existing trust boundaries for this experiment
+        cursor.execute(
+            "DELETE FROM trust_boundaries WHERE experiment_id = ?",
+            (self.experiment_id,),
+        )
+
+        # Fetch VPC/VNet containers from resource_connections (parent containers)
+        vpc_types = ("aws_vpc", "azurerm_virtual_network", "google_compute_network", "oci_core_vcn", "alicloud_vpc")
+        vpc_rows = conn.execute(
+            "SELECT id, resource_name, resource_type, provider FROM resources WHERE experiment_id = ? AND resource_type IN ({})".format(
+                ",".join("?" * len(vpc_types))
+            ),
+            (self.experiment_id, *vpc_types),
+        ).fetchall()
+
+        boundary_count = 0
+
+        # Internet-Facing boundary
+        internet_facing_ids = [
+            r_id for r_id, c in classifications.items()
+            if c.exposure_level in ("direct_exposure",) and c.has_internet_path
+        ]
+        if internet_facing_ids:
+            cursor.execute(
+                """INSERT INTO trust_boundaries
+                   (experiment_id, name, boundary_type, description)
+                   VALUES (?, ?, ?, ?)""",
+                (self.experiment_id, "Internet-Facing", "internet",
+                 "Resources directly accessible from the public internet"),
+            )
+            tb_id = cursor.lastrowid
+            for r_id in internet_facing_ids:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO trust_boundary_members (trust_boundary_id, resource_id) VALUES (?,?)",
+                    (tb_id, r_id),
+                )
+            boundary_count += 1
+
+        # Per-VPC boundary
+        for vpc in vpc_rows:
+            vpc_dict = dict(vpc)
+            # Get resources contained within this VPC (direct and indirect children)
+            children = conn.execute(
+                """WITH RECURSIVE contained(rid) AS (
+                     SELECT target_resource_id FROM resource_connections
+                     WHERE source_resource_id = ? AND experiment_id = ?
+                     UNION
+                     SELECT rc.target_resource_id FROM resource_connections rc
+                     JOIN contained c ON rc.source_resource_id = c.rid
+                     WHERE rc.experiment_id = ?
+                   )
+                   SELECT rid FROM contained""",
+                (vpc_dict["id"], self.experiment_id, self.experiment_id),
+            ).fetchall()
+            child_ids = [row[0] for row in children]
+            if not child_ids:
+                continue
+
+            provider = vpc_dict.get("provider", "unknown")
+            friendly_type = {"aws": "VPC", "azure": "VNet", "gcp": "VPC Network", "oracle": "VCN", "alicloud": "VPC"}.get(provider, "VPC")
+            cursor.execute(
+                """INSERT INTO trust_boundaries
+                   (experiment_id, name, boundary_type, provider, description)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (self.experiment_id, f"{friendly_type}: {vpc_dict['resource_name']}", "network_boundary",
+                 provider, f"Network isolation boundary: {vpc_dict['resource_name']}"),
+            )
+            tb_id = cursor.lastrowid
+            for child_id in child_ids:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO trust_boundary_members (trust_boundary_id, resource_id) VALUES (?,?)",
+                    (tb_id, child_id),
+                )
+            boundary_count += 1
+
+        # Data Tier boundary (isolated databases/storage)
+        data_tier_ids = [
+            r_id for r_id, c in classifications.items()
+            if c.exposure_level == "isolated"
+            and c.normalized_role in ("data", "DataRole.DATA", "DATA", "data_store")
+        ]
+        if data_tier_ids:
+            cursor.execute(
+                """INSERT INTO trust_boundaries
+                   (experiment_id, name, boundary_type, description)
+                   VALUES (?, ?, ?, ?)""",
+                (self.experiment_id, "Data Tier", "data_tier",
+                 "Isolated data stores (databases, storage) with no direct internet path"),
+            )
+            tb_id = cursor.lastrowid
+            for r_id in data_tier_ids:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO trust_boundary_members (trust_boundary_id, resource_id) VALUES (?,?)",
+                    (tb_id, r_id),
+                )
+            boundary_count += 1
+
+        conn.commit()
+        print(f"[+] Populated {boundary_count} trust boundaries")
 
 
 def main():

@@ -88,17 +88,37 @@ class GraphTraversal:
 
         Args:
             resources: List of dicts with id, resource_name, resource_type, provider
-            connections: List of dicts with source_resource_id, target_resource_id
+            connections: List of dicts with source_resource_id, target_resource_id,
+                         and optionally connection_type
         """
         self.resource_map = {r["id"]: r for r in resources}
         self.adjacency = {r["id"]: [] for r in resources}
+
+        # Track containment: parent_id → [child_ids] and child_id → [parent_ids]
+        children_of: Dict[int, List[int]] = {}
 
         # Add edges from connections
         for conn in connections:
             src_id = conn.get("source_resource_id")
             tgt_id = conn.get("target_resource_id")
-            if src_id and tgt_id and src_id in self.adjacency:
+            conn_type = conn.get("connection_type", "")
+            if not (src_id and tgt_id):
+                continue
+            if src_id in self.adjacency:
                 self.adjacency[src_id].append(tgt_id)
+            if conn_type == "contains":
+                children_of.setdefault(src_id, []).append(tgt_id)
+
+        # Build containment peer edges: resources in the same parent container
+        # are network-adjacent (e.g. all resources in the same VPC can reach each other).
+        # This allows BFS from an IGW to reach subnets and compute within the same VPC.
+        for parent_id, children in children_of.items():
+            for child_id in children:
+                if child_id not in self.adjacency:
+                    self.adjacency[child_id] = []
+                for sibling_id in children:
+                    if sibling_id != child_id and sibling_id not in self.adjacency[child_id]:
+                        self.adjacency[child_id].append(sibling_id)
 
         # Classify resources by role
         for resource_id, resource in self.resource_map.items():
@@ -110,6 +130,9 @@ class GraphTraversal:
             resource["normalized_role"] = normalized.normalized_role.value
 
             if normalized.normalized_role == UnifiedRole.ENTRY_POINT:
+                self.entry_points.add(resource_id)
+            elif normalized.normalized_role == UnifiedRole.LOAD_BALANCER:
+                # Load balancers are internet-facing entry points for exposure analysis
                 self.entry_points.add(resource_id)
             elif normalized.normalized_role == UnifiedRole.COUNTERMEASURE:
                 self.countermeasures.add(resource_id)

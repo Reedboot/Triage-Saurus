@@ -3245,6 +3245,20 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
     return jsonify({"status": "started"})
 
 
+@app.route("/api/diagrams/blast_radius/<experiment_id>/<resource_name>")
+def api_blast_radius(experiment_id: str, resource_name: str):
+    """Return a Mermaid blast radius diagram for a specific resource."""
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Generate.generate_diagram import generate_blast_radius_diagram  # type: ignore
+
+        code = generate_blast_radius_diagram(experiment_id, resource_name)
+        return jsonify({"code": code})
+    except Exception as exc:
+        app.logger.exception("blast_radius error for %s/%s", experiment_id, resource_name)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/diagrams/<experiment_id>")
 def api_diagrams(experiment_id: str):
     """Return Mermaid diagrams for a past experiment.
@@ -4309,6 +4323,56 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             if low_count:
                 sev_parts.append(f"{low_count} low")
             add_row("Severity breakdown", " · ".join(sev_parts) if sev_parts else "0 findings")
+
+        # Exposure analysis summary
+        try:
+            exp_row = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN exposure_level='direct_exposure' THEN 1 ELSE 0 END) as direct_cnt,
+                  SUM(CASE WHEN exposure_level='mitigated' THEN 1 ELSE 0 END) as mitigated_cnt,
+                  SUM(CASE WHEN exposure_level='isolated' THEN 1 ELSE 0 END) as isolated_cnt
+                FROM exposure_analysis WHERE experiment_id=?
+                """,
+                (resolved_exp_id,),
+            ).fetchone()
+            if exp_row and (exp_row["direct_cnt"] or exp_row["mitigated_cnt"]):
+                direct = exp_row["direct_cnt"] or 0
+                mitigated = exp_row["mitigated_cnt"] or 0
+                exp_parts = []
+                if direct:
+                    exp_parts.append(f'<span style="color:#ff4444;">{direct} directly exposed</span>')
+                if mitigated:
+                    exp_parts.append(f'<span style="color:#ff9900;">{mitigated} behind controls</span>')
+                add_row("Internet exposure", " · ".join(exp_parts))
+        except Exception:
+            pass
+
+        # Trust boundary summary
+        try:
+            tb_rows = conn.execute(
+                """SELECT name, boundary_type, COUNT(tbm.resource_id) as members
+                   FROM trust_boundaries tb
+                   LEFT JOIN trust_boundary_members tbm ON tb.id=tbm.trust_boundary_id
+                   WHERE tb.experiment_id=?
+                   GROUP BY tb.id, tb.name, tb.boundary_type
+                   ORDER BY tb.boundary_type""",
+                (resolved_exp_id,),
+            ).fetchall()
+            if tb_rows:
+                tb_html = "<div style='display:flex; flex-wrap:wrap; gap:6px;'>"
+                icons = {"internet": "🌐", "network_boundary": "🔷", "data_tier": "🗄️"}
+                for tb in tb_rows:
+                    icon = icons.get(tb["boundary_type"], "🔶")
+                    tb_html += (
+                        f"<span style='font-size:0.8rem; padding:2px 8px; border-radius:4px; "
+                        f"background:var(--surface-2); border:1px solid var(--border-subtle);'>"
+                        f"{icon} {tb['name']} ({tb['members']})</span>"
+                    )
+                tb_html += "</div>"
+                add_row("Trust boundaries", tb_html)
+        except Exception:
+            pass
 
         # Scan status heuristics
         ai_ready = False

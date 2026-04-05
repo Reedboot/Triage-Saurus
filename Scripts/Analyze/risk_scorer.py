@@ -26,18 +26,14 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass
 
 
-# OpenGrep severity to score mapping
+# OpenGrep severity to score mapping (keys are always uppercase via severity_to_score)
 _SEVERITY_SCORES = {
     "CRITICAL": 10,
-    "critical": 10,
     "HIGH": 8,
-    "high": 8,
     "MEDIUM": 6,
-    "medium": 6,
     "LOW": 3,
-    "low": 3,
     "INFO": 1,
-    "info": 1,
+    "NONE": 0,
 }
 
 
@@ -76,7 +72,7 @@ class RiskScorer:
         """Convert OpenGrep severity string to numeric score."""
         if not severity:
             return 0
-        return _SEVERITY_SCORES.get(severity.strip(), 3)  # Default to medium if unknown
+        return _SEVERITY_SCORES.get(severity.strip().upper(), 3)  # normalize case
 
     @staticmethod
     def get_exposure_multiplier(exposure_level: str, has_countermeasure: bool = False) -> float:
