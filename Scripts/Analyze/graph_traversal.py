@@ -97,13 +97,16 @@ class GraphTraversal:
         # Track containment: parent_id → [child_ids] and child_id → [parent_ids]
         children_of: Dict[int, List[int]] = {}
 
-        # Add edges from connections
+        # Add edges from connections — only network-layer connections for reachability
+        # Skip data_access (application-layer) edges; they show data flows but not network exposure
         for conn in connections:
             src_id = conn.get("source_resource_id")
             tgt_id = conn.get("target_resource_id")
             conn_type = conn.get("connection_type", "")
             if not (src_id and tgt_id):
                 continue
+            if conn_type == "data_access":
+                continue  # Application-layer only; not used for network reachability BFS
             if src_id in self.adjacency:
                 self.adjacency[src_id].append(tgt_id)
             if conn_type == "contains":

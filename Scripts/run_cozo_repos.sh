@@ -388,6 +388,15 @@ else:
 PY
 
   log_ok "  ✅ Scan + Cozo import complete for $repo_name"
+  # G1 fix: mark experiment as complete in DB
+  "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" 2>/dev/null || true
+import sys, sqlite3
+db_path, scan_id = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE experiments SET status='complete', completed_at=datetime('now') WHERE id=? AND status='running'", [scan_id])
+conn.commit()
+conn.close()
+PY
   SUCCESS=$((SUCCESS + 1))
   echo "### $(date '+%H:%M:%S') - Repo $repo_name — COMPLETE (scan_id: $scan_id)" >> "$AUDIT_LOG"
 done < "$REPOS_FILE"
