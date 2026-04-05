@@ -4080,11 +4080,11 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                 SELECT
                     COUNT(*) AS total_findings,
                     SUM(CASE WHEN {sev_score_expr} >= 7 THEN 1 ELSE 0 END) AS high_or_above,
-                    SUM(CASE WHEN {base_sev_expr} IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high,
-                    SUM(CASE WHEN {base_sev_expr} = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_count,
-                    SUM(CASE WHEN {base_sev_expr} = 'HIGH' THEN 1 ELSE 0 END) AS high_count,
-                    SUM(CASE WHEN {base_sev_expr} = 'MEDIUM' THEN 1 ELSE 0 END) AS medium_count,
-                    SUM(CASE WHEN {base_sev_expr} = 'LOW' THEN 1 ELSE 0 END) AS low_count
+                    SUM(CASE WHEN UPPER({base_sev_expr}) IN ('CRITICAL','HIGH') THEN 1 ELSE 0 END) AS critical_high,
+                    SUM(CASE WHEN UPPER({base_sev_expr}) = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_count,
+                    SUM(CASE WHEN UPPER({base_sev_expr}) = 'HIGH' THEN 1 ELSE 0 END) AS high_count,
+                    SUM(CASE WHEN UPPER({base_sev_expr}) = 'MEDIUM' THEN 1 ELSE 0 END) AS medium_count,
+                    SUM(CASE WHEN UPPER({base_sev_expr}) = 'LOW' THEN 1 ELSE 0 END) AS low_count
                 FROM findings f
                 JOIN repositories repo ON f.repo_id = repo.id
                 WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)

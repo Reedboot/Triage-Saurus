@@ -330,7 +330,14 @@ class InternetExposureAnalyzer:
         conn = self.connect()
         cursor = conn.cursor()
 
-        # Clear existing trust boundaries for this experiment
+        # Clear existing trust boundaries for this experiment (members first, no FK cascade)
+        cursor.execute(
+            """DELETE FROM trust_boundary_members
+               WHERE trust_boundary_id IN (
+                   SELECT id FROM trust_boundaries WHERE experiment_id = ?
+               )""",
+            (self.experiment_id,),
+        )
         cursor.execute(
             "DELETE FROM trust_boundaries WHERE experiment_id = ?",
             (self.experiment_id,),
