@@ -1535,6 +1535,9 @@
     spinner.style.display = '';
     setStatus('Connecting…');
 
+    // Ensure the scan sidebar/log is visible when starting a scan (even if previously hidden)
+    try { setSidebarCollapsed(false, { persist: false }); } catch (e) {}
+
     // Keep the raw log visible during the scan
     scanInProgress = true;
     showRawLog();
