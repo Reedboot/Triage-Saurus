@@ -3992,9 +3992,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         def _guess_hosting() -> str:
             if not _table_exists(conn, "resources"):
                 return ""
+            # Gather all declared providers for the repo
             rows = conn.execute(
                 """
-                SELECT DISTINCT LOWER(COALESCE(TRIM(provider), '')) AS p
+                SELECT DISTINCT LOWER(COALESCE(TRIM(provider), '')) AS p, LOWER(COALESCE(resource_type, '')) AS rt, LOWER(COALESCE(resource_name, '')) AS rn
                 FROM resources res
                 JOIN repositories repo ON res.repo_id = repo.id
                 WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
@@ -4003,18 +4004,44 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                 (resolved_exp_id, repo_name),
             ).fetchall()
             raw = {r["p"] for r in rows if r["p"]}
-            # If Kubernetes is the runtime, that's the hosting model
+
+            # If Kubernetes is the runtime, try to infer the underlying cloud(s) more precisely
             if "kubernetes" in raw or iac_type == "Kubernetes":
-                # Try to add the underlying cloud (AKS/EKS/GKE)
-                cloud_names = [
-                    _PROVIDER_DISPLAY.get(p, p.capitalize())
-                    for p in raw
-                    if p not in _NON_CLOUD_PROVIDERS and p != "kubernetes"
-                ]
+                try:
+                    cluster_rows = conn.execute(
+                        """
+                        SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS p, LOWER(COALESCE(r.resource_type, '')) AS rt, LOWER(COALESCE(r.resource_name, '')) AS rn
+                        FROM resources r
+                        JOIN repositories repo ON r.repo_id = repo.id
+                        WHERE repo.experiment_id = ? AND LOWER(repo.repo_name) = LOWER(?)
+                          AND (
+                                LOWER(r.resource_type) IN (
+                                    'azurerm_kubernetes_cluster', 'aws_eks_cluster', 'google_container_cluster',
+                                    'alicloud_cs_kubernetes_cluster', 'oci_containerengine_cluster'
+                                )
+                                OR LOWER(r.resource_type) LIKE '%kubernetes_cluster%'
+                                OR LOWER(r.resource_type) LIKE '%eks_cluster%'
+                                OR LOWER(r.resource_type) LIKE '%aks_cluster%'
+                                OR LOWER(r.resource_type) LIKE '%gke_cluster%'
+                              )
+                        """,
+                        (resolved_exp_id, repo_name),
+                    ).fetchall()
+                    cloud_names = [
+                        _PROVIDER_DISPLAY.get(r['p'], r['p'].capitalize())
+                        for r in cluster_rows
+                        if r.get('p') and r.get('p') not in _NON_CLOUD_PROVIDERS and r.get('p') != 'kubernetes'
+                    ]
+                    cloud_names = sorted(set([n for n in cloud_names if n]))
+                except Exception:
+                    cloud_names = []
+
                 if cloud_names:
-                    return f"Kubernetes ({', '.join(sorted(set(cloud_names)))})"
+                    return f"Kubernetes ({', '.join(cloud_names)})"
+                # Fallback: if no clear cluster/provider mapping found, keep generic Kubernetes
                 return "Kubernetes"
-            # Real cloud providers only
+
+            # Non-Kubernetes: report real cloud provider when obvious
             cloud = [p for p in raw if p not in _NON_CLOUD_PROVIDERS]
             if len(cloud) > 1:
                 return "Multi-cloud"
