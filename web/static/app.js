@@ -382,6 +382,17 @@
     } catch (e) {}
   });
 
+  // Attach handler for collapse/hide of the scan (log panel)
+  if (toggleLogBtn) {
+    try {
+      toggleLogBtn.addEventListener('click', () => {
+        const lp = document.getElementById('log-panel');
+        const currentlyCollapsed = lp ? (lp.style.display === 'none' || workspaceEl.classList.contains('collapsed')) : workspaceEl.classList.contains('collapsed');
+        setSidebarCollapsed(!currentlyCollapsed);
+      });
+    } catch (e) {}
+  }
+
   // -- Section tabs (left panel) --
   let activeSection = '';
 
