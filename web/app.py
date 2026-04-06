@@ -645,8 +645,9 @@ def _extract_json_object(text: str) -> dict | None:
         pass
 
     # As a last resort, attempt to convert smart-quoted multiline JSON by
-    # replacing imbalanced newlines inside arrays/strings.
-    simple_norm = re.sub(r"\n\s+", ' ', candidate)
+    # replacing ALL bare newlines (with optional leading whitespace) with a space.
+    # This handles embedded file paths like "foo\nbar.tf" where no indent follows.
+    simple_norm = re.sub(r"\n\s*", ' ', candidate)
     try:
         return json.loads(simple_norm)
     except Exception:
@@ -2962,7 +2963,9 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             if parse_error:
                 job["status"] = "failed"
                 job["error"] = parse_error
-            elif rc == 0:
+            elif rc == 0 or bool(parsed):
+                # Mark completed if Copilot produced valid JSON even when it exited non-zero
+                # (API stream-close returns non-zero but output was successfully captured).
                 job["status"] = "completed"
             else:
                 job["status"] = "failed"
