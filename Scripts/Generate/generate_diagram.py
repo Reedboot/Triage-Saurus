@@ -46,21 +46,33 @@ _CATEGORY_COLOURS: dict[str, str] = {
 
 
 def get_node_style(resource: dict) -> Optional[str]:
-    """Return Mermaid style string for a resource based on finding score or category."""
+    """Return Mermaid style string for a resource based on finding score or category.
+
+    Severity thresholds (aligned with risk_scorer._SEVERITY_SCORES):
+      CRITICAL >= 10 → red (#ff0000), thick border
+      HIGH     >= 8  → red (#ff0000), medium border
+      MEDIUM   >= 5  → orange (#ff9900), medium border
+      LOW      >= 2  → yellow (#ffcc00), thin border
+      clean    == 0  → category colour
+    """
     node_id = sanitize_id(resource['resource_name'])
     score = resource.get('max_finding_score', 0)
 
-    if score >= 9:
-        return f"style {node_id} stroke:#ff0000, stroke-width:4px"
-    if score >= 7:
-        return f"style {node_id} stroke:#ff6b00, stroke-width:3px"
+    if score >= 10:
+        return f"style {node_id} stroke:#ff0000,stroke-width:5px,color:#ffffff"
+    if score >= 8:
+        return f"style {node_id} stroke:#ff0000,stroke-width:3px"
+    if score >= 5:
+        return f"style {node_id} stroke:#ff9900,stroke-width:3px"
+    if score >= 2:
+        return f"style {node_id} stroke:#ffcc00,stroke-width:2px"
 
     conn = _get_lookup_db()
     if conn:
         category = _rtdb.get_category(conn, resource.get('resource_type', ''))
         colour = _CATEGORY_COLOURS.get(category)
         if colour:
-            return f"style {node_id} stroke:{colour}, stroke-width:2px"
+            return f"style {node_id} stroke:{colour},stroke-width:2px"
 
     return None
 

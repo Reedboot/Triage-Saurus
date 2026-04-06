@@ -433,6 +433,16 @@ PY
       log_warn "  ⚠️  Data flow inference failed (non-fatal)"
   fi
 
+  # Generate architecture diagrams (one per provider) and persist to cloud_diagrams table
+  DIAGRAM_SCRIPT="$REPO_ROOT/Scripts/Generate/generate_diagram.py"
+  DIAGRAM_OUT_DIR="$REPO_ROOT/Output/Data/diagrams/$scan_id"
+  if [ -f "$DIAGRAM_SCRIPT" ]; then
+    PYTHONPATH="$REPO_ROOT/Scripts/Persist:$REPO_ROOT/Scripts/Utils:$REPO_ROOT/Scripts/Generate" \
+      "$PYTHON_BIN" -u "$DIAGRAM_SCRIPT" "$scan_id" --split-by-provider --output "$DIAGRAM_OUT_DIR" > /dev/null 2>&1 && \
+      log "  🗺️  Architecture diagrams generated" || \
+      log_warn "  ⚠️  Diagram generation failed (non-fatal)"
+  fi
+
   # G1 fix: mark experiment as complete in DB
   "$PYTHON_BIN" -u - <<'PY' "$COZO_DB_PATH" "$scan_id" 2>/dev/null || true
 import sys, sqlite3
