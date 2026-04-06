@@ -175,6 +175,87 @@ class HierarchicalDiagramBuilder:
                 seen_ids.add(r['id'])
                 unique_resources.append(r)
         self.resources = unique_resources
+
+        # ── Test-variant dedup ──────────────────────────────────────────────
+        # When a resource type has many variants (rule-test repos create 2–13
+        # per service), collapse them to a single primary representative and
+        # annotate it with a "(+N test variants)" badge.  This prevents the
+        # N×M ALL×ALL fan-out that makes diagrams unreadable.
+        #
+        # Priority order for "primary" selection:
+        #   1. Resource whose source_file contains "architecture" (coherent ref arch)
+        #   2. Resource with the most connections (most connected = most contextual)
+        #   3. Resource with the highest max_finding_score (most security-relevant)
+        #   4. First alphabetically as stable tiebreak
+        #
+        # Only collapse when ≥3 resources of the same type exist in the same
+        # provider — small sets (1–2) are kept as-is.
+        _DEDUP_THRESHOLD = 3
+
+        # Build connection count per resource_name for scoring
+        all_conn_names: dict[str, int] = {}
+        for c in self.connections:
+            for nm in (c.get('source'), c.get('target')):
+                if nm:
+                    all_conn_names[nm] = all_conn_names.get(nm, 0) + 1
+
+        from collections import defaultdict
+        type_provider_groups: dict[tuple, list] = defaultdict(list)
+        for r in self.resources:
+            key = (r.get('resource_type', ''), (r.get('provider') or '').lower())
+            type_provider_groups[key].append(r)
+
+        suppressed_ids: set = set()
+        variant_counts: dict[int, int] = {}  # primary_id → suppressed count
+
+        for (rtype, prov), group in type_provider_groups.items():
+            if len(group) < _DEDUP_THRESHOLD:
+                continue  # Small groups are fine as-is
+
+            def _score(r: dict) -> tuple:
+                src = (r.get('source_file') or '').lower()
+                arch_bonus = 2 if 'architecture' in src else 0
+                conn_cnt = all_conn_names.get(r.get('resource_name', ''), 0)
+                finding_score = r.get('max_finding_score', 0) or 0
+                name = r.get('resource_name', '')
+                return (arch_bonus, conn_cnt, finding_score, name)
+
+            sorted_group = sorted(group, key=_score, reverse=True)
+            primary = sorted_group[0]
+            to_suppress = sorted_group[1:]
+
+            # Redirect connections from suppressed variants to the primary
+            primary_name = primary['resource_name']
+            suppressed_names = {r['resource_name'] for r in to_suppress}
+            updated_connections = []
+            for c in self.connections:
+                src = c.get('source')
+                tgt = c.get('target')
+                if src in suppressed_names:
+                    c = dict(c)
+                    c['source'] = primary_name
+                if tgt in suppressed_names:
+                    c = dict(c)
+                    c['target'] = primary_name
+                # Drop self-loops created by the redirect
+                if c.get('source') != c.get('target'):
+                    updated_connections.append(c)
+            self.connections = updated_connections
+
+            for r in to_suppress:
+                suppressed_ids.add(r['id'])
+
+            variant_counts[primary['id']] = variant_counts.get(primary['id'], 0) + len(to_suppress)
+
+        # Remove suppressed resources
+        if suppressed_ids:
+            self.resources = [r for r in self.resources if r['id'] not in suppressed_ids]
+            # Annotate primaries with badge
+            for r in self.resources:
+                if r['id'] in variant_counts:
+                    n = variant_counts[r['id']]
+                    r['_variant_badge'] = f"+{n} test variants"
+        # ── End test-variant dedup ──────────────────────────────────────────
         
         # Build lookup maps
         self.resource_by_name = {}
@@ -1379,6 +1460,11 @@ class HierarchicalDiagramBuilder:
 
         # Truncate long labels to fit in box
         label = name if len(name) <= 50 else name[:47] + "..."
+
+        # Append test-variant badge if this node is the primary representative
+        badge = resource.get('_variant_badge')
+        if badge:
+            label = f"{label} [{badge}]"
 
         self._emitted_mermaid_ids.add(node_id)
         if node_id not in self._node_id_first_owner:

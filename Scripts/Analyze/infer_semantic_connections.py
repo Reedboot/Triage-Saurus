@@ -7,34 +7,43 @@ Adds data_access / calls / depends_on edges to resource_connections table
 so they appear in architecture diagrams and data flow analysis.
 
 Rules:
-1. ELB/ALB → EC2 instances in the same VPC (routes traffic)
-2. EC2/App Service/Lambda → RDS/SQL Server in same VPC/region (likely DB client)
-3. EKS/AKS/GKE cluster → ECR/ACR/container registry in same account
-4. Lambda → S3 buckets in same account (common serverless pattern)
-5. EC2 instances → S3 buckets in same account (storage client)
+1. LB/AppGateway/APIM → Compute/K8s in the same VPC (routes traffic)
+2. Compute → DB in same VPC/provider
+3. Compute/K8s → Storage in same provider
+4. K8s → Container Registry (same provider)
+5. Compute/K8s → Key Vault / Secrets (same provider, depends_on)
+6. Compute/K8s → Messaging (ServiceBus, SQS, PubSub) — same provider
+7. Compute/K8s → Cache (Redis) — same provider
 
-These are stored as 'data_access' connections in resource_connections.
+Fan-out guard: when >_MAX_FANOUT resources of matching types exist in the same
+provider with no VPC isolation available, skip ALL-to-ALL inference to avoid
+cluttering test-suite diagrams with N×M noise edges.  Architecture TF files that
+use a VPC resource bypass this cap because VPC-scoped matching is precise.
 """
 
 import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
 import db_helpers
 
+# Maximum number of resources per side before skipping unprecise (no-VPC) inference.
+# E.g., if there are 6 AppGateways and 11 backends with no VPC isolation, skip.
+_MAX_FANOUT = 3
 
-# Compute resource types → DB/storage resource types they likely connect to
+# Compute resource types
 _COMPUTE_TYPES = {
     "aws_instance", "aws_ec2_instance",
     "aws_lambda_function",
     "aws_ecs_service", "aws_ecs_task",
     "azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine",
     "azurerm_app_service", "azurerm_function_app",
-    "google_compute_instance", "google_container_cluster",
-    "oci_core_instance",
+    "google_compute_instance", "google_cloud_run_service",
+    "google_cloudfunctions_function",
+    "oci_core_instance", "oci_functions_function",
+    "alicloud_instance", "alicloud_fc_function",
 }
 
 _DB_TYPES = {
@@ -44,7 +53,8 @@ _DB_TYPES = {
     "azurerm_mssql_server", "azurerm_mysql_server", "azurerm_postgresql_server",
     "azurerm_cosmosdb_account",
     "google_sql_database_instance", "google_bigtable_instance",
-    "oci_database",
+    "oci_database", "oci_database_autonomous_database",
+    "alicloud_db_instance",
 }
 
 _STORAGE_TYPES = {
@@ -57,19 +67,49 @@ _STORAGE_TYPES = {
 _LB_TYPES = {
     "aws_elb", "aws_alb", "aws_lb", "aws_nlb",
     "azurerm_application_gateway", "azurerm_lb",
-    "google_compute_global_forwarding_rule",
+    "google_compute_global_forwarding_rule", "google_compute_forwarding_rule",
+    "oci_load_balancer_load_balancer",
+    "alicloud_slb_load_balancer",
 }
 
-_CONTAINER_REGISTRY_TYPES = {
-    "aws_ecr_repository",
-    "azurerm_container_registry",
-    "google_container_registry",
+_APIM_TYPES = {
+    "azurerm_api_management",
+    "aws_api_gateway_rest_api", "aws_api_gateway_v2_api",
+    "google_api_gateway_api",
+    "oci_apigateway_gateway",
 }
 
 _K8S_TYPES = {
     "aws_eks_cluster",
     "azurerm_kubernetes_cluster",
     "google_container_cluster",
+    "oci_containerengine_cluster",
+    "alicloud_cs_managed_kubernetes",
+}
+
+_CONTAINER_REGISTRY_TYPES = {
+    "aws_ecr_repository", "aws_ecrpublic_repository",
+    "azurerm_container_registry",
+    "google_container_registry", "google_artifact_registry_repository",
+}
+
+_KV_TYPES = {
+    "azurerm_key_vault",
+    "aws_secretsmanager_secret", "aws_kms_key",
+    "google_secret_manager_secret",
+}
+
+_MESSAGING_TYPES = {
+    "azurerm_servicebus_namespace", "azurerm_eventhub_namespace",
+    "aws_sqs_queue", "aws_sns_topic",
+    "google_pubsub_topic",
+    "alicloud_message_service_queue",
+}
+
+_CACHE_TYPES = {
+    "azurerm_redis_cache",
+    "aws_elasticache_cluster", "aws_elasticache_replication_group",
+    "alicloud_kvstore_instance",
 }
 
 
@@ -104,7 +144,8 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
         existing_pairs = {(r[0], r[1]) for r in existing}
 
         # Get VPC containment: resource_id → parent VPC id
-        vpc_types = ("aws_vpc", "azurerm_virtual_network", "google_compute_network")
+        vpc_types = ("aws_vpc", "azurerm_virtual_network", "google_compute_network",
+                     "oci_core_vcn", "alicloud_vpc")
         vpc_ids = {
             r["id"] for r in resources
             if (r.get("resource_type") or "").lower() in vpc_types
@@ -112,10 +153,13 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
         # Build: resource_id → set of ancestor VPC ids (via recursive contains)
         children_map: dict[int, list[int]] = {}
         for rc in conn.execute(
-            "SELECT source_resource_id, target_resource_id FROM resource_connections WHERE experiment_id = ? AND connection_type = 'contains'",
+            "SELECT source_resource_id, target_resource_id FROM resource_connections "
+            "WHERE experiment_id = ? AND connection_type = 'contains'",
             (experiment_id,),
         ).fetchall():
-            children_map.setdefault(rc[0], []).append(rc[1])
+            # Ignore self-contains
+            if rc[0] != rc[1]:
+                children_map.setdefault(rc[0], []).append(rc[1])
 
         def get_vpc_for(resource_id: int) -> int | None:
             """Walk up containment tree to find VPC parent."""
@@ -133,28 +177,7 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
                         queue.append(parent_id)
             return None
 
-        resource_map = {r["id"]: r for r in resources}
         resource_vpc = {r["id"]: get_vpc_for(r["id"]) for r in resources}
-
-        def same_vpc(id1: int, id2: int) -> bool:
-            v1 = resource_vpc.get(id1)
-            v2 = resource_vpc.get(id2)
-            return v1 is not None and v1 == v2
-
-        # Categorise resources
-        compute = [r for r in resources if _type_matches(r["resource_type"], _COMPUTE_TYPES)]
-        databases = [r for r in resources if _type_matches(r["resource_type"], _DB_TYPES)]
-        storage = [r for r in resources if _type_matches(r["resource_type"], _STORAGE_TYPES)]
-        lbs = [r for r in resources if _type_matches(r["resource_type"], _LB_TYPES)]
-        k8s = [r for r in resources if _type_matches(r["resource_type"], _K8S_TYPES)]
-        registries = [r for r in resources if _type_matches(r["resource_type"], _CONTAINER_REGISTRY_TYPES)]
-
-        new_connections = []
-
-        def add_conn(src_id: int, tgt_id: int, conn_type: str, label: str):
-            if (src_id, tgt_id) not in existing_pairs:
-                new_connections.append((src_id, tgt_id, conn_type, label))
-                existing_pairs.add((src_id, tgt_id))
 
         def same_provider(r1: dict, r2: dict) -> bool:
             p1 = (r1.get("provider") or "").lower().strip()
@@ -162,39 +185,123 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
             return bool(p1 and p2 and p1 == p2)
 
         def plausible_connection(src: dict, tgt: dict) -> bool:
-            """True if a connection between src and tgt is plausible (same provider + VPC or same provider)."""
+            """True if a connection is plausible.
+
+            Requires same provider.  If both resources have VPC membership, they
+            must share the same VPC (precise).  If neither has VPC info, returns
+            True but callers should apply the fan-out guard.
+            """
             if not same_provider(src, tgt):
                 return False
-            # If both in VPCs, must be same VPC
             v1 = resource_vpc.get(src["id"])
             v2 = resource_vpc.get(tgt["id"])
             if v1 and v2:
                 return v1 == v2
-            return True  # No VPC info; assume possible within same provider
+            # One or both lack VPC info — plausible but imprecise
+            return True
 
-        # Rule 1: LB → Compute in same VPC/provider
-        for lb in lbs:
-            for comp in compute:
-                if plausible_connection(lb, comp):
-                    add_conn(lb["id"], comp["id"], "data_access", "routes to")
+        def has_vpc_isolation(r: dict) -> bool:
+            return resource_vpc.get(r["id"]) is not None
 
-        # Rule 2: Compute → DB in same VPC/provider
-        for comp in compute:
-            for db in databases:
-                if plausible_connection(comp, db):
-                    add_conn(comp["id"], db["id"], "data_access", "reads/writes")
+        def fanout_ok(srcs: list, tgts: list, provider: str) -> bool:
+            """Return False when there are too many candidates with no VPC to scope them.
 
-        # Rule 3: Compute → Storage in same provider
-        for comp in compute:
-            for stor in storage:
-                if same_provider(comp, stor):
-                    add_conn(comp["id"], stor["id"], "data_access", "reads/writes")
+            If any resource on either side has VPC membership, we trust the VPC
+            check to filter correctly.  Only suppress when BOTH sides are VPC-less
+            and the cross-product would be large (> _MAX_FANOUT×_MAX_FANOUT).
+            """
+            p_srcs = [r for r in srcs if r.get("provider", "").lower() == provider]
+            p_tgts = [r for r in tgts if r.get("provider", "").lower() == provider]
+            if len(p_srcs) <= _MAX_FANOUT or len(p_tgts) <= _MAX_FANOUT:
+                return True
+            # Check if any have VPC isolation available
+            any_vpc = any(has_vpc_isolation(r) for r in p_srcs + p_tgts)
+            return any_vpc  # If VPC available, trust the filter; else skip
 
-        # Rule 4: K8s → Container registries (same provider)
-        for k in k8s:
-            for reg in registries:
-                if same_provider(k, reg):
-                    add_conn(k["id"], reg["id"], "data_access", "pulls images")
+        # Categorise resources
+        compute = [r for r in resources if _type_matches(r["resource_type"], _COMPUTE_TYPES)]
+        databases = [r for r in resources if _type_matches(r["resource_type"], _DB_TYPES)]
+        storage = [r for r in resources if _type_matches(r["resource_type"], _STORAGE_TYPES)]
+        lbs = [r for r in resources if _type_matches(r["resource_type"], _LB_TYPES)]
+        apims = [r for r in resources if _type_matches(r["resource_type"], _APIM_TYPES)]
+        k8s = [r for r in resources if _type_matches(r["resource_type"], _K8S_TYPES)]
+        registries = [r for r in resources if _type_matches(r["resource_type"], _CONTAINER_REGISTRY_TYPES)]
+        kvs = [r for r in resources if _type_matches(r["resource_type"], _KV_TYPES)]
+        messaging = [r for r in resources if _type_matches(r["resource_type"], _MESSAGING_TYPES)]
+        caches = [r for r in resources if _type_matches(r["resource_type"], _CACHE_TYPES)]
+
+        new_connections = []
+
+        def add_conn(src_id: int, tgt_id: int, conn_type: str, label: str):
+            if src_id != tgt_id and (src_id, tgt_id) not in existing_pairs:
+                new_connections.append((src_id, tgt_id, conn_type, label))
+                existing_pairs.add((src_id, tgt_id))
+
+        # Collect all providers in this experiment
+        providers = {(r.get("provider") or "").lower() for r in resources if r.get("provider")}
+
+        for provider in providers:
+            # Rule 1: LB → Compute/K8s (traffic routing)
+            if fanout_ok(lbs, compute + k8s, provider):
+                for lb in lbs:
+                    for tgt in compute + k8s:
+                        if plausible_connection(lb, tgt):
+                            add_conn(lb["id"], tgt["id"], "data_access", "routes to")
+
+            # Rule 1b: APIM sits between LB and Compute — LB → APIM → Compute
+            if fanout_ok(lbs, apims, provider):
+                for lb in lbs:
+                    for apim in apims:
+                        if plausible_connection(lb, apim):
+                            add_conn(lb["id"], apim["id"], "data_access", "routes to")
+
+            if fanout_ok(apims, compute + k8s, provider):
+                for apim in apims:
+                    for tgt in compute + k8s:
+                        if plausible_connection(apim, tgt):
+                            add_conn(apim["id"], tgt["id"], "data_access", "routes to")
+
+            # Rule 2: Compute/K8s → DB
+            if fanout_ok(compute + k8s, databases, provider):
+                for src in compute + k8s:
+                    for db in databases:
+                        if plausible_connection(src, db):
+                            add_conn(src["id"], db["id"], "data_access", "reads/writes")
+
+            # Rule 3: Compute/K8s → Storage
+            if fanout_ok(compute + k8s, storage, provider):
+                for src in compute + k8s:
+                    for stor in storage:
+                        if plausible_connection(src, stor):
+                            add_conn(src["id"], stor["id"], "data_access", "reads/writes")
+
+            # Rule 4: K8s/Compute → Container Registry
+            if fanout_ok(k8s + compute, registries, provider):
+                for src in k8s + compute:
+                    for reg in registries:
+                        if plausible_connection(src, reg):
+                            add_conn(src["id"], reg["id"], "data_access", "pulls images")
+
+            # Rule 5: Compute/K8s → Key Vault / Secrets (depends_on)
+            if fanout_ok(compute + k8s, kvs, provider):
+                for src in compute + k8s:
+                    for kv in kvs:
+                        if plausible_connection(src, kv):
+                            add_conn(src["id"], kv["id"], "depends_on", "reads secrets")
+
+            # Rule 6: Compute/K8s → Messaging
+            if fanout_ok(compute + k8s, messaging, provider):
+                for src in compute + k8s:
+                    for msg in messaging:
+                        if plausible_connection(src, msg):
+                            add_conn(src["id"], msg["id"], "data_access", "publishes/subscribes")
+
+            # Rule 7: Compute/K8s → Cache
+            if fanout_ok(compute + k8s, caches, provider):
+                for src in compute + k8s:
+                    for cache in caches:
+                        if plausible_connection(src, cache):
+                            add_conn(src["id"], cache["id"], "data_access", "reads/writes cache")
 
         # Persist new connections
         if new_connections:
@@ -237,7 +344,7 @@ def infer_data_flows(experiment_id: str, db_path=None) -> int:
                FROM resource_connections rc
                JOIN resources r1 ON rc.source_resource_id = r1.id
                JOIN resources r2 ON rc.target_resource_id = r2.id
-               WHERE rc.experiment_id = ? AND rc.connection_type = 'data_access'""",
+               WHERE rc.experiment_id = ? AND rc.connection_type IN ('data_access', 'depends_on')""",
             (experiment_id,),
         ).fetchall()
 
@@ -247,19 +354,18 @@ def infer_data_flows(experiment_id: str, db_path=None) -> int:
             r = dict(row)
             flow_name = f"{r['src_name']} → {r['tgt_name']}"
             flow_type = "app_to_db" if _type_matches(r["tgt_type"], _DB_TYPES) else (
-                "app_to_storage" if _type_matches(r["tgt_type"], _STORAGE_TYPES) else "data_access"
-            )
+                "app_to_storage" if _type_matches(r["tgt_type"], _STORAGE_TYPES) else (
+                "app_to_secrets" if _type_matches(r["tgt_type"], _KV_TYPES) else "data_access"
+            ))
             cursor.execute(
                 "INSERT INTO data_flows (experiment_id, name, flow_type, description, notes) VALUES (?,?,?,?,?)",
                 (experiment_id, flow_name, flow_type, f"Inferred: {r['src_type']} accesses {r['tgt_type']}", "inferred"),
             )
             flow_id = cursor.lastrowid
-            # Add source step
             cursor.execute(
                 "INSERT INTO data_flow_steps (flow_id, step_order, resource_id, component_label) VALUES (?,?,?,?)",
                 (flow_id, 1, r["source_resource_id"], r["src_name"]),
             )
-            # Add target step
             cursor.execute(
                 "INSERT INTO data_flow_steps (flow_id, step_order, resource_id, component_label) VALUES (?,?,?,?)",
                 (flow_id, 2, r["target_resource_id"], r["tgt_name"]),
@@ -291,3 +397,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -4458,6 +4458,14 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
         )
 
     # Persist typed relationships as concrete connections for DB-first queries/diagrams.
+    def _provider_prefix(resource_type: str) -> str:
+        """Return the cloud provider prefix for a resource type (e.g. 'azurerm', 'aws', 'google')."""
+        rt = (resource_type or "").lower()
+        for pfx in ("azurerm_", "azuread_", "aws_", "google_", "alicloud_", "oci_", "kubernetes_", "helm_"):
+            if rt.startswith(pfx):
+                return pfx.rstrip("_")
+        return ""
+
     for rel in getattr(context, "relationships", []) or []:
         src_name = str(getattr(rel, "source_name", "") or "").strip()
         tgt_name = str(getattr(rel, "target_name", "") or "").strip()
@@ -4469,7 +4477,17 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
             # Ambiguous refs are tracked in enrichment_queue, not resource_connections.
             continue
 
+        # Skip self-connections (resource referencing itself).
+        if src_name == tgt_name and src_type == tgt_type:
+            continue
+
+        # Skip cross-provider 'contains' edges — they are parse artefacts, not real topology.
         rel_type = _relationship_kind_value(rel)
+        if rel_type == "contains":
+            src_pfx = _provider_prefix(src_type)
+            tgt_pfx = _provider_prefix(tgt_type)
+            if src_pfx and tgt_pfx and src_pfx != tgt_pfx:
+                continue
         relation_notes = str(getattr(rel, "notes", "") or "")
         inferred_auth = "inferred" if rel_type == "authenticates_via" else None
         inferred_authorization = "rbac" if rel_type == "grants_access_to" else None

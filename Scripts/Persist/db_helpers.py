@@ -2479,6 +2479,7 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
+                   r.source_file,
                    parent.id AS parent_resource_id, parent.resource_name AS parent_resource_name, parent.resource_type AS parent_resource_type,
                    COALESCE(MAX(f.severity_score), 0) as max_finding_score
             FROM resources r
@@ -2502,6 +2503,7 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
                 'resource_type': r['resource_type'],
                 'provider': r['provider'],
                 'repo_name': r['repo_name'],
+                'source_file': r.get('source_file') or '',
                 'parent_resource_id': r.get('parent_resource_id'),
                 'parent_resource_name': r.get('parent_resource_name'),
                 'parent_resource_type': r.get('parent_resource_type'),
