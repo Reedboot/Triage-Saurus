@@ -1,0 +1,30 @@
+rules:
+  - id: alicloud-slb-http-listener
+    message: |
+      Alibaba Cloud Server Load Balancer (SLB) has an HTTP listener on port 80.
+      Traffic between clients and the load balancer is unencrypted, exposing
+      credentials, session tokens, and sensitive data to network interception.
+      HTTP listeners also cannot enforce HSTS.
+
+      Replace HTTP listeners with HTTPS listeners using a valid TLS certificate,
+      or configure an HTTP-to-HTTPS redirect rule. Set protocol = "https" and
+      configure ssl_certificate_id on the alicloud_slb_listener resource.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "alicloud_slb_listener" $NAME {
+            ...
+          }
+      - pattern: |
+          protocol = "http"
+    metadata:
+      category: security
+      subcategory: [network, encryption, load-balancer]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud, slb]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

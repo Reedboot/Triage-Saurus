@@ -6,11 +6,7 @@ rules:
       Consider using type: ClusterIP with Ingress instead.
     severity: WARNING
     languages: [yaml]
-    pattern: |
-      kind: Service
-      ...
-      spec:
-        type: LoadBalancer
+    pattern: "type: LoadBalancer"
     metadata:
       category: security
       subcategory: [kubernetes, network]

@@ -1,0 +1,50 @@
+rules:
+  - id: azure-appgateway-listener-no-waf-policy
+    message: |
+      Azure Application Gateway has an HTTP listener without a WAF policy attached.
+      When an Application Gateway (WAF_v2 SKU) hosts multiple listeners, each listener
+      can have its own WAF policy or inherit the global policy. A listener without a
+      waf_policy_id receives no WAF inspection — requests to that listener bypass
+      all L7 security controls regardless of the gateway-level WAF configuration.
+
+      This is a common pattern where a Function App or internal service path is added
+      to the Application Gateway without attaching the WAF policy, creating an
+      unprotected entry point alongside protected listeners.
+
+      Set waf_policy_id on every azurerm_application_gateway http_listener block,
+      or ensure the global WAF policy applies to all listeners via policy association.
+
+      ATTACK: Discover unprotected listener path (func.example.com) → bypass WAF → direct exploitation of backend
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_application_gateway" $NAME {
+            ...
+            sku {
+              ...
+              tier = "WAF_v2"
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          http_listener {
+            ...
+          }
+      - pattern-not: |
+          http_listener {
+            ...
+            firewall_policy_id = ...
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, waf, cloud]
+      cwe: CWE-693
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, application-gateway, waf]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

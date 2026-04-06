@@ -17,18 +17,11 @@ rules:
     severity: WARNING
     languages: [terraform, hcl]
     patterns:
-      - pattern: |
-          resource "azurerm_api_management_api_policy" "$NAME" {
-            ...
-            xml_content = $CONTENT
+      - pattern-inside: |
+          resource "azurerm_api_management_api_policy" $NAME {
             ...
           }
-      - metavariable-regex:
-          metavariable: $CONTENT
-          regex: '<inbound>'
-      - metavariable-regex:
-          metavariable: $CONTENT
-          regex: '(?!.*(rate-limit|quota|rate-limit-by-key))'
+      - pattern-regex: '(?s)<inbound>(?![\s\S]*(?:rate-limit|quota|rate-limit-by-key))[\s\S]*?</inbound>'
     metadata:
       category: security
       subcategory: [availability, api-gateway]

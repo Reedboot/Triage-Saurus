@@ -8,8 +8,8 @@ rules:
     severity: WARNING
     languages: [json, hcl, terraform]
     patterns:
-      - pattern-regex: '(?s)resource\s+"aws_iam_user_policy"\s+\S+\s*\{.*?\}'
-      - pattern-regex: '"Action":\s*\[?[^]]*"(?:ec2|s3|lambda|cloudwatch|\*):\*"'
+      - pattern-regex: '(?s)resource\s+"aws_iam(?:_user)?_policy"\s+\S+\s*\{.*?\}'
+      - pattern-regex: '"Action":\s*\[?[^]]*"(?:ec2|s3|lambda|cloudwatch|\*):\*"|(?:Action|"Action")\s*[=:]\s*\[?\s*"?\*"?\]?'
     metadata:
       category: security
       subcategory: [iam, least-privilege]

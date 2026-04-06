@@ -1,0 +1,38 @@
+rules:
+  - id: gcp-gke-workload-identity-disabled
+    message: |
+      GKE cluster does not have Workload Identity configured. Without Workload Identity,
+      pods running on GKE nodes inherit the credentials of the underlying GCE node
+      service account (typically Compute Engine default SA, which has Editor access).
+      Any SSRF vulnerability or RCE in a pod allows querying the GCE metadata server
+      at http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+      to steal a long-lived OAuth token for the node SA.
+
+      Enable Workload Identity by configuring workload_identity_config.workload_pool
+      and annotate Kubernetes ServiceAccounts with the GCP SA to bind.
+
+      ATTACK: Pod RCE/SSRF → GCE metadata → node SA token (Editor) → full GCP project API access
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_container_cluster" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "google_container_cluster" $NAME {
+            ...
+            workload_identity_config {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [kubernetes, credentials, imds]
+      cwe: CWE-918
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, gcp, gke, kubernetes]
+      five_pillars: Pillar 2 (Identity & Access Management)

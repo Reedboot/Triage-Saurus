@@ -67,13 +67,13 @@
     {% if provider in provider_groups %}
     <div class="provider-group" data-provider="{{ provider }}" style="border: 2px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-subtle);">
       {# Provider header with counts #}
-      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;" 
-           onclick="toggleProviderGroup('{{ provider }}')">
-        <span style="font-size: 1.3rem;">▼</span>
-        <span style="font-size: 1.1rem; font-weight: 700; flex: 1;">{{ provider_names.get(provider, provider) }}</span>
-        <span style="font-size: 0.9rem; color: var(--text-muted);">
-          {{ provider_groups[provider] | length }} finding{{ 's' if provider_groups[provider] | length != 1 }}
-        </span>
+       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+            data-provider-toggle="{{ provider }}">
+         <span data-toggle-icon style="font-size: 1.3rem;">▼</span>
+         <span style="font-size: 1.1rem; font-weight: 700; flex: 1;">{{ provider_names.get(provider, provider) }}</span>
+         <span style="font-size: 0.9rem; color: var(--text-muted);">
+           {{ provider_groups[provider] | length }} finding{{ 's' if provider_groups[provider] | length != 1 }}
+         </span>
         <span style="font-size: 0.85rem; color: var(--text-muted); display: flex; gap: 8px;">
           {{ severity_counts(provider_groups[provider]) }}
         </span>
@@ -349,153 +349,6 @@
   display: none !important;
 }
 </style>
-
-<script>
-function toggleProviderGroup(provider) {
-  var group = document.querySelector(`.provider-group[data-provider="${provider}"]`);
-  group.classList.toggle('collapsed');
-}
-
-function filterFindings() {
-  var q = document.getElementById('findings-search').value.toLowerCase();
-  var p = document.getElementById('findings-provider-filter').value.toLowerCase();
-  var s = document.getElementById('findings-sev-filter').value.toUpperCase();
-  
-  var anyVisible = false;
-  var cards = document.querySelectorAll('.finding-card');
-  
-  cards.forEach(function(card) {
-    var matchQ = !q || card.dataset.search.includes(q);
-    var matchP = !p || card.dataset.provider.toLowerCase() === p;
-    var matchS = !s || card.dataset.sev === s;
-    var show = (matchQ && matchP && matchS);
-    card.style.display = show ? '' : 'none';
-    if (show) anyVisible = true;
-  });
-  
-  // Check each provider group for visible cards
-  document.querySelectorAll('.provider-group').forEach(function(group) {
-    var provider = group.dataset.provider;
-    var visibleCards = group.querySelectorAll('.finding-card:not([style*="display: none"])').length;
-    var emptyMsg = group.querySelector('.provider-empty');
-    
-    if (visibleCards === 0) {
-      emptyMsg.style.display = '';
-    } else {
-      emptyMsg.style.display = 'none';
-    }
-  });
-  
-  document.getElementById('findings-empty').style.display = anyVisible ? 'none' : '';
-}
-
-// Triage button handling
-document.querySelectorAll('.btn-triage').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var findingId = this.dataset.findingId;
-    var status = this.dataset.status;
-    var experimentId = document.querySelector('[data-experiment-id]') && document.querySelector('[data-experiment-id]').dataset.experimentId;
-    // Fallback: read from meta tag or URL if available
-    if (!experimentId) {
-      var metaExp = document.querySelector('meta[name="experiment-id"]');
-      if (metaExp) experimentId = metaExp.content;
-    }
-    if (!experimentId || !findingId) {
-      try { window._triage && window._triage.setStatus && window._triage.setStatus('Cannot triage: missing experiment or finding ID', 'error'); } catch(e) {}
-      return;
-    }
-    var reason = prompt('Reason (optional, press Cancel to abort):');
-    if (reason === null) return; // User cancelled
-    var self = this;
-    self.disabled = true;
-    fetch('/api/finding/triage/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(findingId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ triage_status: status, triage_reason: reason || '' })
-    }).then(function(resp) {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      // Update button styles on the row to reflect new status
-      var row = self.closest('.finding-card');
-      if (row) {
-        row.querySelectorAll('.btn-triage').forEach(function(b) {
-          b.style.fontWeight = b.dataset.status === status ? '700' : '';
-        });
-      }
-      try { window._triage && window._triage.setStatus && window._triage.setStatus('Triage status saved', 'success'); } catch(e) {}
-    }).catch(function(err) {
-      try { window._triage && window._triage.setStatus && window._triage.setStatus('Failed to save triage: ' + err.message, 'error'); } catch(e) {}
-    }).finally(function() {
-      self.disabled = false;
-    });
-  });
-});
-
-// Copy snippet buttons
-document.querySelectorAll('.btn-copy-snippet').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var wrap = this.closest('.code-snippet-wrap');
-    var table = wrap.querySelector('.code-table');
-    var pre   = wrap.querySelector('pre');
-    var text  = '';
-    if (table) {
-      table.querySelectorAll('tr').forEach(function(tr) {
-        var cells = tr.querySelectorAll('td');
-        if (cells.length >= 2) text += cells[1].textContent + '\n';
-      });
-    } else if (pre) {
-      text = pre.textContent;
-    }
-    navigator.clipboard.writeText(text.trimEnd()).then(function() {
-      btn.textContent = '✅ Copied';
-      setTimeout(function() { btn.textContent = '📋 Copy'; }, 1500);
-    }).catch(function() { btn.textContent = '❌ Failed'; });
-  });
-});
-
-// Blast radius button handling
-document.querySelectorAll('.btn-blast-radius').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var resourceName = this.dataset.resource;
-    var experimentId = document.querySelector('[data-experiment-id]') && document.querySelector('[data-experiment-id]').dataset.experimentId;
-    if (!experimentId || !resourceName) return;
-
-    // Show modal
-    var modal = document.getElementById('blast-radius-modal');
-    if (!modal) {
-      modal = document.createElement('div');
-      modal.id = 'blast-radius-modal';
-      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
-      modal.innerHTML = '<div style="background:var(--surface-1,#1e1e2e);border-radius:12px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;position:relative;">' +
-        '<button id="blast-radius-close" style="position:absolute;top:12px;right:12px;background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-primary);">✕</button>' +
-        '<h3 id="blast-radius-title" style="margin:0 0 16px;font-size:1.1rem;">🎯 Blast Radius</h3>' +
-        '<div id="blast-radius-content">Loading...</div></div>';
-      document.body.appendChild(modal);
-      document.getElementById('blast-radius-close').addEventListener('click', function() {
-        modal.remove();
-      });
-      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
-    }
-
-    document.getElementById('blast-radius-title').textContent = '🎯 Blast Radius: ' + resourceName;
-    document.getElementById('blast-radius-content').innerHTML = '<div style="text-align:center;padding:20px;">Loading diagram...</div>';
-
-    fetch('/api/diagrams/blast_radius/' + encodeURIComponent(experimentId) + '/' + encodeURIComponent(resourceName))
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        var content = document.getElementById('blast-radius-content');
-        if (data.error) {
-          content.innerHTML = '<p style="color:var(--severity-high);">' + data.error + '</p>';
-          return;
-        }
-        content.innerHTML = '<pre class="mermaid" style="background:transparent;">' + data.code + '</pre>';
-        if (window.mermaid) { try { window.mermaid.init(undefined, content.querySelectorAll('.mermaid')); } catch(e) {} }
-      })
-      .catch(function(err) {
-        document.getElementById('blast-radius-content').innerHTML = '<p style="color:var(--severity-high);">Failed to load: ' + err.message + '</p>';
-      });
-  });
-});
-</script>
 
 {% else %}
 <div class="empty-state">

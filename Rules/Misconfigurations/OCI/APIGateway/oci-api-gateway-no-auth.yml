@@ -1,0 +1,52 @@
+rules:
+  - id: oci-api-gateway-no-auth
+    message: |
+      OCI API Gateway deployment route has no authentication policy configured.
+      Routes without authentication type (CUSTOM_JWT, HTTP_BASIC, or TOKEN_BASED)
+      allow unauthenticated access to the backend service. Any internet user can
+      call the API route without providing credentials.
+
+      Add an authentication_policy block to the oci_apigateway_deployment resource
+      specifying a JWT issuer, JWKS URI, and required claims, or configure
+      HTTP Basic authentication with appropriate backend credentials.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "oci_apigateway_deployment" $NAME {
+            ...
+            specification {
+              ...
+              routes {
+                ...
+              }
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          resource "oci_apigateway_deployment" $NAME {
+            ...
+            specification {
+              ...
+              request_policies {
+                ...
+                authentication {
+                  ...
+                }
+                ...
+              }
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, cloud, api]
+      cwe: CWE-306
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci, api-gateway]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

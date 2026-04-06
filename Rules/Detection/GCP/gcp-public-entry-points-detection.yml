@@ -1,0 +1,48 @@
+rules:
+  - id: context-gcp-api-gateway-api
+    message: |
+      GCP API Gateway API detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_api_gateway_api" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api_gateway
+      technology: [terraform, gcp, api_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway API
+        resource_type: google_api_gateway_api
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud API Gateway APIs used as public ingress points.
+
+  - id: context-gcp-cloud-run-service
+    message: |
+      GCP Cloud Run service detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_cloud_run_service" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: serverless
+      technology: [terraform, gcp, serverless]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud Run Service
+        resource_type: google_cloud_run_service
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Run services for public exposure analysis.

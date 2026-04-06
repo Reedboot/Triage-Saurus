@@ -10,11 +10,7 @@ rules:
       - pattern: |
           kind: Ingress
           ...
-      - pattern-not: |
-          spec:
-            ...
-            tls:
-              ...
+      - pattern-not-regex: '\btls\b\s*:'
     metadata:
       category: security
       subcategory: [kubernetes, encryption]

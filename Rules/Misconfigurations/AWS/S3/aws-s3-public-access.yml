@@ -5,20 +5,48 @@ rules:
       Ensure block_public_acls and block_public_policy are enabled and avoid public ACLs.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
-      - pattern-inside: |
-          resource "aws_s3_bucket" $NAME {
-            ...
-          }
-      - pattern-either:
-          - pattern: |
-              acl = "public-read"
-          - pattern: |
-              acl = "public-read-write"
-          - pattern: |
-              block_public_acls = false
-          - pattern: |
-              block_public_policy = false
+    pattern-either:
+      # Old-style inline ACL on aws_s3_bucket resource
+      - patterns:
+          - pattern-inside: |
+              resource "aws_s3_bucket" $NAME {
+                ...
+              }
+          - pattern-either:
+              - pattern: |
+                  acl = "public-read"
+              - pattern: |
+                  acl = "public-read-write"
+              - pattern: |
+                  block_public_acls = false
+              - pattern: |
+                  block_public_policy = false
+      # Modern separate aws_s3_bucket_public_access_block resource
+      - patterns:
+          - pattern-inside: |
+              resource "aws_s3_bucket_public_access_block" $NAME {
+                ...
+              }
+          - pattern-either:
+              - pattern: |
+                  block_public_acls = false
+              - pattern: |
+                  block_public_policy = false
+              - pattern: |
+                  ignore_public_acls = false
+              - pattern: |
+                  restrict_public_buckets = false
+      # Modern separate ACL resource
+      - patterns:
+          - pattern-inside: |
+              resource "aws_s3_bucket_acl" $NAME {
+                ...
+              }
+          - pattern-either:
+              - pattern: |
+                  acl = "public-read"
+              - pattern: |
+                  acl = "public-read-write"
     metadata:
       category: security
       subcategory: [storage, exposure]

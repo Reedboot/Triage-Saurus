@@ -1,0 +1,37 @@
+rules:
+  - id: gcp-artifact-registry-public
+    message: |
+      GCP Artifact Registry repository has an IAM binding granting access to allUsers.
+      This makes container images or packages publicly pullable without authentication.
+      Attackers can pull images and perform layer analysis to discover hardcoded
+      credentials, secrets, or sensitive application logic baked into container layers.
+
+      Remove allUsers bindings from Artifact Registry IAM. Use
+      google_artifact_registry_repository_iam_binding with specific service accounts.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_artifact_registry_repository_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allUsers", ...]
+      - patterns:
+          - pattern-inside: |
+              resource "google_artifact_registry_repository_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+    metadata:
+      category: security
+      subcategory: [container, exposure, cloud]
+      cwe: CWE-200
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, artifact-registry, containers]
+      five_pillars: Pillar 5 (Data Protection)
+      internet_exposure: true

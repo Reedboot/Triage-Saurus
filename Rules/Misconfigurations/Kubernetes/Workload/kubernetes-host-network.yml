@@ -6,9 +6,7 @@ rules:
       Remove hostNetwork or use specific port bindings.
     severity: ERROR
     languages: [yaml]
-    pattern: |
-      spec:
-        hostNetwork: true
+    pattern: "hostNetwork: true"
     metadata:
       category: security
       subcategory: [kubernetes, network]

@@ -3,16 +3,24 @@ rules:
     message: |
       SQL Server does not have Azure AD authentication configured.
       Using only SQL logins bypasses centralized identity management.
-      Add azurerm_mssql_server_aad_administrator resource.
+      Add azuread_administrator block or azurerm_mssql_server_aad_administrator resource.
     severity: WARNING
     languages: [terraform, hcl]
     patterns:
       - pattern: |
-          resource "azurerm_mssql_server" "$NAME" {
+          resource "azurerm_mssql_server" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_mssql_server" $NAME {
+            ...
+            azuread_administrator {
+              ...
+            }
             ...
           }
       - pattern-not-inside: |
-          resource "azurerm_mssql_server_aad_administrator" "..." {
+          resource "azurerm_mssql_server_aad_administrator" $AADNAME {
             server_id = azurerm_mssql_server.$NAME.id
             ...
           }

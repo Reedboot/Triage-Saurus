@@ -1,0 +1,37 @@
+rules:
+  - id: alicloud-ecs-public-ip
+    message: |
+      Alibaba Cloud ECS instance has a public IP address assigned directly
+      (internet_charge_type or internet_max_bandwidth_out > 0, or EIP associated).
+      A public IP makes the instance directly reachable from the internet on all
+      ports permitted by the associated Security Group rules.
+      Combined with permissive Security Groups (SSH/RDP from 0.0.0.0/0 or 0.0.0.0/0 on all ports),
+      this allows direct remote access and exploitation from the internet.
+
+      Remove the public IP and use SLB + internal IPs for inbound traffic.
+      Use EIP only if required, with restrictive Security Group rules.
+      Use Alibaba Cloud Bastion Host for administrative access.
+
+      ATTACK: Shodan/Censys scan → discover public ECS → SSH brute force / exploit open service → IMDS at 100.100.100.200 → RAM credentials
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "alicloud_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          internet_max_bandwidth_out = $N
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N > 0
+    metadata:
+      category: security
+      subcategory: [network, exposure, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud, ecs]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

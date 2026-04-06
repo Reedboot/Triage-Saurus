@@ -1,0 +1,35 @@
+rules:
+  - id: oci-functions-public-no-auth
+    message: |
+      OCI Function has a public HTTP endpoint with no authentication policy.
+      Without authentication, any internet user can invoke the function by making
+      an HTTPS request to the function endpoint URL. This exposes the function logic
+      and any OCI resources the function accesses (Object Storage, ATP, Vault)
+      to unauthenticated callers.
+
+      Configure an API Gateway in front of the function with JWT or API key
+      authentication. Alternatively, restrict invocation using OCI IAM policies
+      to require function:invoke permission from authenticated principals only.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "oci_functions_function" $NAME {
+            ...
+          }
+      - pattern: |
+          config = {
+            ...
+            "FN_DISABLE_AUTHENTICATION" = "true"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, serverless, cloud]
+      cwe: CWE-306
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci, functions]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

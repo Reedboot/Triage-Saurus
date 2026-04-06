@@ -1,0 +1,30 @@
+rules:
+  - id: gcp-gke-legacy-abac-enabled
+    message: |
+      GKE cluster has Legacy Attribute-Based Access Control (ABAC) enabled
+      (enable_legacy_abac = true). Legacy ABAC bypasses Kubernetes RBAC policies and
+      can grant over-permissive access. Historical GKE clusters with ABAC allowed
+      unauthenticated access via kubectl --username=admin on public endpoints.
+      Modern clusters must use RBAC exclusively.
+
+      Set enable_legacy_abac = false (the default in new clusters) and migrate
+      authorization to Kubernetes RBAC with WorkloadIdentity.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_container_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          enable_legacy_abac = true
+    metadata:
+      category: security
+      subcategory: [kubernetes, access-control]
+      cwe: CWE-732
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, gcp, gke, kubernetes]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

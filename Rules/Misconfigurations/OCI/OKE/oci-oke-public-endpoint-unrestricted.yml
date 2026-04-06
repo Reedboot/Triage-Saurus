@@ -1,0 +1,36 @@
+rules:
+  - id: oci-oke-public-endpoint-unrestricted
+    message: |
+      OCI Kubernetes Engine (OKE) cluster has a public API endpoint enabled
+      (is_public_ip_enabled = true) without network source restrictions.
+      The Kubernetes API server is accessible from any IP on the internet.
+      Combined with misconfigured RBAC or compromised kubeconfig credentials,
+      this enables remote cluster enumeration and takeover from anywhere.
+
+      Set endpoint_config.is_public_ip_enabled = false and use a private endpoint.
+      If public access is required for operational reasons, configure
+      nsg_ids with restricted Network Security Group rules limiting API access
+      to specific CIDR ranges.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "oci_containerengine_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          endpoint_config {
+            ...
+            is_public_ip_enabled = true
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [kubernetes, network, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, oci, oke, kubernetes]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

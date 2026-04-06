@@ -1,0 +1,42 @@
+rules:
+  - id: azure-aks-pod-imds-unrestricted
+    message: |
+      AKS cluster does not restrict pod access to the Azure Instance Metadata Service
+      (IMDS) endpoint at http://169.254.169.254. Without network policy or managed
+      identity restrictions, any pod can query the IMDS to obtain OAuth tokens for
+      the node's or cluster's managed identity. If the managed identity has broad
+      Azure RBAC permissions (Contributor, Key Vault access, etc.), a compromised
+      or malicious pod can escalate from container-level to full Azure resource access.
+
+      Implement Azure Network Policy or Calico network policies to block pod egress
+      to 169.254.169.254. Use workload identity (azure.workload.identity) to bind
+      specific K8s service accounts to specific managed identities with least privilege,
+      rather than using pod-level managed identity on all pods.
+
+      ATTACK: Pod RCE/SSRF → GET http://169.254.169.254/metadata/identity/oauth2/token → managed identity bearer token → Azure Resource Manager API → Key Vault/SQL/Storage access
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_kubernetes_cluster" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_kubernetes_cluster" $NAME {
+            ...
+            network_profile {
+              ...
+              network_policy = ...
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [kubernetes, credentials, imds, cloud]
+      cwe: CWE-918
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, aks, kubernetes]
+      five_pillars: Pillar 2 (Identity & Access Management)

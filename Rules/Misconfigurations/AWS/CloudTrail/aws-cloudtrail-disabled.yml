@@ -1,0 +1,37 @@
+rules:
+  - id: aws-cloudtrail-disabled
+    message: |
+      AWS CloudTrail trail has logging disabled (enable_logging = false) or
+      is configured without S3 bucket log file validation. CloudTrail is the
+      primary AWS audit log; disabling it leaves no forensic trail of API calls,
+      making attacker persistence (IAM key creation, policy changes, secret access)
+      invisible to detection and incident response.
+
+      Ensure enable_logging = true and enable_log_file_validation = true on all
+      aws_cloudtrail resources covering management events in all regions.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_cloudtrail" $NAME {
+                ...
+              }
+          - pattern: |
+              enable_logging = false
+      - patterns:
+          - pattern-inside: |
+              resource "aws_cloudtrail" $NAME {
+                ...
+              }
+          - pattern: |
+              enable_log_file_validation = false
+    metadata:
+      category: security
+      subcategory: [logging, monitoring, cloud]
+      cwe: CWE-778
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, cloudtrail, logging]
+      five_pillars: Pillar 4 (Monitoring & Response)

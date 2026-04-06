@@ -1,0 +1,41 @@
+rules:
+  - id: alicloud-redis-no-ssl
+    message: |
+      Alibaba Cloud Redis instance does not enforce SSL/TLS encryption in transit
+      (ssl_enable = false or ssl_enable absent). Redis traffic including commands,
+      responses, and authentication credentials are transmitted in plaintext.
+      A network adversary with access to the path between client and Redis
+      can intercept AUTH credentials and execute arbitrary Redis commands.
+
+      Set ssl_enable = "Enable" on alicloud_kvstore_instance resources. Also
+      ensure Redis is not publicly accessible by restricting security group rules.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "alicloud_kvstore_instance" $NAME {
+                ...
+              }
+          - pattern: |
+              ssl_enable = "Disable"
+      - patterns:
+          - pattern: |
+              resource "alicloud_kvstore_instance" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "alicloud_kvstore_instance" $NAME {
+                ...
+                ssl_enable = ...
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption, cache, network]
+      cwe: CWE-319
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, alicloud, redis, kvstore]
+      five_pillars: Pillar 5 (Data Protection)

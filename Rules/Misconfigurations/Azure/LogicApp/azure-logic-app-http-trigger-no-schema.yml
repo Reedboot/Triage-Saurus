@@ -1,0 +1,46 @@
+rules:
+  - id: azure-logic-app-http-trigger-no-schema
+    message: |
+      Azure Logic App HTTP request trigger does not define a JSON schema for the
+      request body. Without a schema, the Logic App accepts any payload structure
+      without validation. More critically, Logic App HTTP trigger URLs are
+      long-lived SAS-signed URLs that, once discovered, can be called by anyone
+      who has the URL. Without schema validation, attackers can send crafted payloads
+      to abuse downstream connectors (O365 mail, SQL, Storage, Teams) connected to the workflow.
+
+      Define a schema in the azurerm_logic_app_trigger_http_request body attribute
+      to enforce expected input structure and add IP restriction access controls
+      via the azurerm_logic_app_workflow access_control block.
+
+      ATTACK: Discover trigger URL (leaked in code/logs) → POST arbitrary payload → trigger workflow → abuse downstream connectors (send emails, read SQL, write Storage)
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_logic_app_trigger_http_request" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_logic_app_trigger_http_request" $NAME {
+                ...
+                schema = $SCHEMA
+                ...
+              }
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_logic_app_trigger_http_request" $NAME {
+                ...
+              }
+          - pattern: |
+              schema = "{}"
+    metadata:
+      category: security
+      subcategory: [authentication, serverless, cloud]
+      cwe: CWE-20
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, azure, logic-app]
+      five_pillars: Pillar 3 (Application Security)
+      internet_exposure: true

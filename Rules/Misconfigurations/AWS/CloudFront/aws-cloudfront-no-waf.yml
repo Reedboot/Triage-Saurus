@@ -1,0 +1,34 @@
+rules:
+  - id: aws-cloudfront-no-waf
+    message: |
+      AWS CloudFront distribution does not have a WAF Web ACL associated
+      (web_acl_id is missing). Without WAF, the CDN distribution has no L7
+      protection against SQL injection, XSS, automated scanners, or DDoS.
+      CloudFront is typically the outermost internet-facing layer; adding
+      WAF here is cost-effective and protects all origins behind it.
+
+      Associate a WAF v2 Web ACL (scope = CLOUDFRONT, must be in us-east-1)
+      via the web_acl_id attribute on the aws_cloudfront_distribution resource.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_cloudfront_distribution" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "aws_cloudfront_distribution" $NAME {
+            ...
+            web_acl_id = ...
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, waf, cdn]
+      cwe: CWE-693
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [terraform, aws, cloudfront, waf]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

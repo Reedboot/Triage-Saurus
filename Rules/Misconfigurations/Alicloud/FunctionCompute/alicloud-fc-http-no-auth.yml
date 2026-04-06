@@ -1,0 +1,35 @@
+rules:
+  - id: alicloud-fc-http-no-auth
+    message: |
+      Alibaba Cloud Function Compute (FC) HTTP trigger has authentication disabled
+      (auth_type = "anonymous"). Any internet user can invoke the function without
+      authentication. This exposes the function logic and any downstream resources
+      it accesses (OSS, RDS, RAM credentials) to unauthenticated callers.
+
+      Set auth_type to "function" (custom function-level auth) or "jwt" on
+      alicloud_fc_trigger resources with type = "http". Alternatively, front the
+      function with an API Gateway that enforces authentication.
+
+      ATTACK: Direct HTTP POST to trigger URL (no credentials) → function executes → accesses downstream data stores
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "alicloud_fc_trigger" $NAME {
+            ...
+            type = "http"
+            ...
+          }
+      - pattern: |
+          config = $JSONCONFIG
+      - pattern-regex: '"?authType"?\s*[=:]\s*"anonymous"'
+    metadata:
+      category: security
+      subcategory: [authentication, cloud, serverless]
+      cwe: CWE-306
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, alicloud, function-compute]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

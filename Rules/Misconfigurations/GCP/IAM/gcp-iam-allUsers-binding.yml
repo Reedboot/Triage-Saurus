@@ -1,0 +1,45 @@
+rules:
+  - id: gcp-iam-allUsers-binding
+    message: |
+      GCP project IAM binding grants a role to allUsers or allAuthenticatedUsers at the
+      project level. This is one of the most dangerous GCP misconfigurations: it grants
+      the specified role to every person on the internet (allUsers) or every Google account
+      (allAuthenticatedUsers) across the entire project. Even viewer/reader roles leak
+      sensitive information about the environment.
+
+      Remove allUsers and allAuthenticatedUsers from project-level IAM bindings.
+      Use specific service accounts, groups, or domains with least-privilege roles.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_project_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allUsers", ...]
+      - patterns:
+          - pattern-inside: |
+              resource "google_project_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+      - patterns:
+          - pattern-inside: |
+              resource "google_project_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allAuthenticatedUsers", ...]
+    metadata:
+      category: security
+      subcategory: [iam, exposure, cloud]
+      cwe: CWE-732
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [terraform, gcp, iam]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

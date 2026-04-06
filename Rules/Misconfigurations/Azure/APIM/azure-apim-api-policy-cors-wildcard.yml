@@ -21,15 +21,12 @@ rules:
     severity: WARNING
     languages: [terraform, hcl]
     patterns:
-      - pattern: |
-          resource "azurerm_api_management_api_policy" "$NAME" {
-            ...
-            xml_content = $CONTENT
+      - pattern-inside: |
+          resource "azurerm_api_management_api_policy" $NAME {
             ...
           }
-      - metavariable-regex:
-          metavariable: $CONTENT
-          regex: '<origin>\s*\*\s*</origin>'
+      - pattern: xml_content = $CONTENT
+      - pattern-regex: '<origin>\s*\*\s*</origin>'
     metadata:
       category: security
       subcategory: [cors, api-gateway]

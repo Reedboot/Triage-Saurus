@@ -1,0 +1,30 @@
+rules:
+  - id: oci-load-balancer-http-listener
+    message: |
+      OCI Load Balancer has an HTTP listener on port 80 without HTTPS redirect.
+      Traffic between clients and the load balancer is transmitted in plaintext,
+      exposing authentication tokens, session cookies, and sensitive request/response
+      data to network-level interception and man-in-the-middle attacks.
+
+      Replace the HTTP listener with an HTTPS listener configured with an SSL
+      certificate bundle. Configure an HTTP-to-HTTPS redirect policy using
+      oci_load_balancer_rule_set with REDIRECT_URI action targeting port 443.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "oci_load_balancer_listener" $NAME {
+            ...
+          }
+      - pattern: |
+          protocol = "HTTP"
+    metadata:
+      category: security
+      subcategory: [network, encryption, load-balancer]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, oci, load-balancer]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

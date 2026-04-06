@@ -42,6 +42,7 @@ DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS / "Utils"))
 from Scripts.Persist import db_helpers
+from Scripts.Generate.internet_exposure_detector import InternetExposureDetector
 
 # Load prompt builder for agent instructions
 try:
@@ -6616,9 +6617,11 @@ def api_view_ingress(experiment_id: str, repo_name: str):
                     'aws_api_gateway_method',
                     'aws_api_gateway_resource',
                     'aws_apigatewayv2_route',
+                    'google_api_gateway_api_config',
                     'google_api_gateway_gateway',
                     'oci_apigateway_deployment',
-                    'alicloud_api_gateway_api'
+                    'alicloud_api_gateway_api',
+                    'alicloud_api_gateway_group'
                   )
                 ORDER BY parent.resource_name, r.resource_name
                 """,
@@ -6853,15 +6856,7 @@ def api_view_ingress(experiment_id: str, repo_name: str):
         # Network ingress: always query for well-known internet-facing resource types
         # regardless of exposure_analysis results (since exposure analysis may be incomplete)
         network_ingress: list[dict] = []
-        _NETWORK_INGRESS_TYPES = (
-            'aws_elb', 'aws_alb', 'aws_lb',
-            'aws_internet_gateway',
-            'azurerm_application_gateway', 'azurerm_frontdoor',
-            'google_compute_forwarding_rule', 'google_compute_global_forwarding_rule',
-            'google_compute_target_https_proxy', 'google_compute_target_http_proxy',
-            'alicloud_slb', 'alicloud_slb_listener',
-            'oci_load_balancer', 'oci_network_load_balancer',
-        )
+        _NETWORK_INGRESS_TYPES = tuple(sorted(InternetExposureDetector.get_public_entry_types()))
         try:
             ni_rows = conn.execute(
                 f"""

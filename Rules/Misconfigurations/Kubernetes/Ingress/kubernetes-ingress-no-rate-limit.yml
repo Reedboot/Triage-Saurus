@@ -10,12 +10,7 @@ rules:
       - pattern: |
           kind: Ingress
           ...
-      - pattern-not-inside: |
-          metadata:
-            annotations:
-              ...
-              nginx.ingress.kubernetes.io/limit-rps: ...
-              ...
+      - pattern-not-regex: '(?m)^\s+nginx\.ingress\.kubernetes\.io/limit-rps\s*:'
     metadata:
       category: security
       subcategory: [kubernetes, dos-protection]

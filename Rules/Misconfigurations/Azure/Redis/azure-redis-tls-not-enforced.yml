@@ -1,0 +1,45 @@
+rules:
+  - id: azure-redis-tls-not-enforced
+    message: |
+      Azure Cache for Redis does not enforce TLS-only connections
+      (non_ssl_port_enabled = true or minimum_tls_version absent/old).
+      Non-TLS Redis connections on port 6379 transmit all data including AUTH
+      passwords and cache contents in plaintext. An attacker with network access
+      between the client and Redis can intercept credentials and read/write cache data.
+
+      Set non_ssl_port_enabled = false (or omit it, as false is the default) and
+      set minimum_tls_version = "1.2" on azurerm_redis_cache resources.
+      Only connect to Redis on SSL port 6380.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_redis_cache" $NAME {
+                ...
+              }
+          - pattern: |
+              non_ssl_port_enabled = true
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_redis_cache" $NAME {
+                ...
+              }
+          - pattern: |
+              minimum_tls_version = "1.0"
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_redis_cache" $NAME {
+                ...
+              }
+          - pattern: |
+              minimum_tls_version = "1.1"
+    metadata:
+      category: security
+      subcategory: [encryption, cache, network]
+      cwe: CWE-319
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, redis]
+      five_pillars: Pillar 5 (Data Protection)

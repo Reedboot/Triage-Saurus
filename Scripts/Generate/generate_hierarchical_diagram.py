@@ -2162,10 +2162,9 @@ class HierarchicalDiagramBuilder:
         
         lines = ["flowchart LR"]
         
-        # Infer connections if resource_connections table is empty/sparse
-        if self.infer_connections():
-            # Use a neutral client label; APIM isn't always internet-facing.
-            lines.append("  internet[🖧 Network Client]")
+        # Infer connections if resource_connections table is empty/sparse.
+        # Internet node emission is handled by render_connections so it only appears once.
+        self.infer_connections()
 
         # Track resources that actually participate in at least one *visible* edge
         # (excluding administrative edge types that are not drawn as arrows) so we

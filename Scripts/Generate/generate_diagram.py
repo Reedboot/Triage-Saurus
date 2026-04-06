@@ -9,6 +9,7 @@ from typing import List, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
+from internet_exposure_detector import InternetExposureDetector
 import resource_type_db as _rtdb
 from shared_utils import _normalize_optional_bool
 
@@ -365,17 +366,7 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
 
         # Type-based fallback: well-known internet-facing resource types
         try:
-            INTERNET_FACING_TYPES = (
-                'aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb',
-                'aws_api_gateway_rest_api', 'aws_apigatewayv2_api',
-                'aws_cloudfront_distribution',
-                'azurerm_application_gateway', 'azurerm_frontdoor',
-                'azurerm_api_management', 'azurerm_public_ip',
-                'azurerm_lb', 'azurerm_application_load_balancer',
-                'google_compute_forwarding_rule', 'google_compute_global_forwarding_rule',
-                'google_compute_url_map', 'google_compute_backend_service',
-                'google_api_gateway_api',
-            )
+            INTERNET_FACING_TYPES = tuple(sorted(InternetExposureDetector.get_public_entry_types()))
             placeholder = ','.join('?' * len(INTERNET_FACING_TYPES))
             type_params = [experiment_id] + list(INTERNET_FACING_TYPES)
             repo_join3 = ""
@@ -654,13 +645,7 @@ def generate_architecture_diagram(
     other          = [r for r in filtered_roots if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas]
 
     # Classify "other" into internet-facing vs remaining
-    _INTERNET_FACING_TYPES = {
-        'aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb', 'aws_nlb',
-        'azurerm_application_gateway', 'azurerm_lb', 'azurerm_front_door',
-        'google_compute_global_forwarding_rule', 'google_compute_forwarding_rule',
-        'aws_api_gateway_rest_api', 'aws_apigatewayv2_api', 'aws_cloudfront_distribution',
-        'oci_load_balancer', 'alicloud_slb',
-    }
+    _INTERNET_FACING_TYPES = InternetExposureDetector.get_public_entry_types()
     # Pull internet-facing resources out of ALL categories (they should appear in zone_internet)
     internet_facing_ids = {
         r['id'] for r in filtered_roots
@@ -685,7 +670,12 @@ def generate_architecture_diagram(
     lines.append("  end")
 
     # ── Internal Zone (Compute, Containers, Network Security) ──
-    if vms or aks or nsgs:
+    internal_resources = vms + aks + nsgs
+    internal_has_children = any(
+        res['id'] in parent_children and parent_children[res['id']]
+        for res in internal_resources
+    )
+    if internal_resources and internal_has_children:
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         # VNet/VPC subgraph nested inside
         lines.append("    subgraph vnet[VNet]")
@@ -698,6 +688,15 @@ def generate_architecture_diagram(
             lines.append(f"      {node_id}[{_display_label(nsg)}]")
         lines.append("    end")
         lines.append("  end")
+    elif internal_resources:
+        # No child hierarchy to wrap — render the resources directly.
+        for vm in vms:
+            _render_resource_subgraph(vm, parent_children, lines, indent="  ")
+        for aks_cluster in aks:
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="  ")
+        for nsg in nsgs:
+            node_id = sanitize_id(nsg['resource_name'])
+            lines.append(f"  {node_id}[{_display_label(nsg)}]")
 
     # ── Data Tier Zone ──
     if sql_servers or storage_accounts:
@@ -848,6 +847,11 @@ def generate_architecture_diagram(
 
     # Keep track of emitted edges to avoid duplicates when collapsing Public IP nodes
     emitted_edges = set()
+    edge_styles = []
+    edge_index = 0
+
+    def _mark_risky_edge() -> None:
+        edge_styles.append(f"  linkStyle {edge_index} stroke:red,stroke-width:2px")
 
     for conn in connections_sorted:
         src_name = conn.get('source')
@@ -890,6 +894,8 @@ def generate_architecture_diagram(
                 src = sanitize_id('Internet')
                 tgt = sanitize_id(real_name)
                 lines.append(f"  {src} -->{new_label} {tgt}")
+                _mark_risky_edge()
+                edge_index += 1
             # Skip normal processing for this connection
             continue
 
@@ -924,7 +930,14 @@ def generate_architecture_diagram(
                 lines.append(f"  {src} -.-> {tgt}")
         else:
             lines.append(f"  {src} -->{label} {tgt}")
+
+        if src_name == 'Internet' and tgt_name and tgt_name != 'Internet':
+            _mark_risky_edge()
+
+        edge_index += 1
     
+    lines.append("")
+    lines.extend(edge_styles)
     lines.append("")
     
     # Styling based on findings

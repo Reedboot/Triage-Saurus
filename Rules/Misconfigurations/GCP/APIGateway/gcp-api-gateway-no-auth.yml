@@ -1,0 +1,35 @@
+rules:
+  - id: gcp-api-gateway-no-auth
+    message: |
+      GCP API Gateway backend config or API config does not require authentication.
+      Without authentication on the API Gateway, all routes are accessible to
+      unauthenticated callers from the internet. This exposes backend services
+      to enumeration, abuse, and data exfiltration without any identity verification.
+
+      Configure security definitions in the OpenAPI spec used by google_api_gateway_api_config
+      to require Google ID token authentication (x-google-backend auth) or API key.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_api_gateway_api_config" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "google_api_gateway_api_config" $NAME {
+            ...
+            grpc_services {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, cloud, exposure]
+      cwe: CWE-306
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, api-gateway]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

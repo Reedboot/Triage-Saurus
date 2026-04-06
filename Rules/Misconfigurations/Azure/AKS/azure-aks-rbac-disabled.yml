@@ -23,6 +23,20 @@ rules:
             }
             ...
           }
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_kubernetes_cluster" $NAME {
+                ...
+              }
+          - pattern: |
+              role_based_access_control_enabled = false
+      - patterns:
+          - pattern-inside: |
+              resource azurerm_kubernetes_cluster $NAME {
+                ...
+              }
+          - pattern: |
+              role_based_access_control_enabled = false
     metadata:
       category: security
       subcategory: [authorization, cloud, kubernetes]

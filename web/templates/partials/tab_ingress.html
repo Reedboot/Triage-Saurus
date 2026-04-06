@@ -24,9 +24,17 @@
         <td><span class="provider-badge provider-{{ r.provider | lower }}">{{ r.provider | upper }}</span></td>
         <td><small class="muted">{{ r.source_file or '—' }}</small></td>
         <td>
-          {% if r.resource_type in ['aws_internet_gateway', 'aws_elb', 'aws_alb', 'aws_lb',
-              'azurerm_application_gateway', 'azurerm_frontdoor', 'google_compute_forwarding_rule',
-              'google_compute_global_forwarding_rule', 'alicloud_slb', 'oci_load_balancer'] %}
+            {% if r.resource_type in ['aws_internet_gateway', 'aws_eip', 'aws_eip_association', 'aws_elb', 'aws_alb', 'aws_lb',
+               'aws_apigatewayv2_api', 'aws_api_gateway_rest_api', 'azurerm_application_gateway',
+               'azurerm_application_load_balancer', 'azurerm_frontdoor', 'azurerm_lb',
+               'azurerm_public_ip', 'azurerm_public_ip_prefix', 'google_api_gateway_api',
+               'google_cloud_run_service', 'google_compute_address', 'google_compute_forwarding_rule',
+               'google_compute_global_address', 'google_compute_global_forwarding_rule',
+               'alicloud_api_gateway_api', 'alicloud_alb_load_balancer', 'alicloud_cdn_domain',
+               'alicloud_eip', 'alicloud_eip_association',
+               'alicloud_slb', 'alicloud_slb_load_balancer', 'oci_apigateway_gateway',
+               'oci_core_internet_gateway', 'oci_load_balancer', 'oci_load_balancer_load_balancer',
+               'oci_network_load_balancer', 'oci_network_load_balancer_network_load_balancer'] %}
             <span class="finding-badge critical" title="Internet-facing by resource type">🌐 Internet-facing</span>
           {% else %}
             <span class="finding-badge warning">⚠️ Exposed (inferred)</span>

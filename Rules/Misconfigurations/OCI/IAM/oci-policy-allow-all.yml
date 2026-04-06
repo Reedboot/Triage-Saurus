@@ -7,15 +7,11 @@ rules:
     severity: HIGH
     languages: [terraform, hcl]
     patterns:
-      - pattern: |
-          resource "oci_identity_policy" "$NAME" {
-            ...
-            statements = $STMTS
+      - pattern-inside: |
+          resource "oci_identity_policy" $NAME {
             ...
           }
-      - metavariable-regex:
-          metavariable: $STMTS
-          regex: .*all-resources.*
+      - pattern-regex: 'all-resources'
     metadata:
       category: security
       subcategory: [iam, cloud]

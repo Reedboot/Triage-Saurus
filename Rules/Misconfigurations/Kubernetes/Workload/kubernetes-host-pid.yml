@@ -5,9 +5,7 @@ rules:
       This allows viewing/killing host processes. Remove hostPID.
     severity: ERROR
     languages: [yaml]
-    pattern: |
-      spec:
-        hostPID: true
+    pattern: "hostPID: true"
     metadata:
       category: security
       subcategory: [kubernetes, container-security]

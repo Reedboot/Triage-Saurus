@@ -18,7 +18,7 @@ rules:
     severity: INFO
     languages: [terraform, hcl]
     pattern-regex: |
-      resource "azurerm_application_insights" "\w+" \{[\s\S]*?sampling_percentage\s*=\s*([5-9]\d|100)[\s\S]*?\}
+      resource "azurerm_application_insights" "\w+" \{[\s\S]*?sampling_percentage\s*=\s*(0*[1-9]|0*1[0-9]|0*20)\b[\s\S]*?\}
     metadata:
       category: security
       subcategory: [logging, observability]

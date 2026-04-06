@@ -1,0 +1,25 @@
+rules:
+  - id: dotnet-jwt-addjwtbearer-detection
+    message: |
+      JWT Bearer authentication is configured with insecure token validation parameters.
+      ValidateIssuer=false, ValidateAudience=false, ValidateLifetime=false, or
+      ValidateIssuerSigningKey=false allow attackers to forge tokens with arbitrary claims,
+      use expired tokens, or bypass signature verification entirely.
+      All validation parameters should be set to true in production.
+    severity: ERROR
+    languages: [csharp]
+    pattern-either:
+      - pattern-regex: 'ValidateIssuer\s*=\s*false'
+      - pattern-regex: 'ValidateAudience\s*=\s*false'
+      - pattern-regex: 'ValidateLifetime\s*=\s*false'
+      - pattern-regex: 'ValidateIssuerSigningKey\s*=\s*false'
+      - pattern-regex: 'RequireSignedTokens\s*=\s*false'
+    metadata:
+      category: security
+      subcategory: [authentication, jwt]
+      cwe: CWE-347
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [dotnet, csharp, aspnet, jwt]
+      five_pillars: Pillar 2 (Identity & Access Management)

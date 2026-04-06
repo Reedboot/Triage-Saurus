@@ -8,11 +8,11 @@ rules:
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |
-          resource "alicloud_actiontrail" $NAME {
+          resource "alicloud_actiontrail_trail" $NAME {
             ...
           }
-      - pattern-not: |
-          is_show = true
+      - pattern: trail_name = $TRAIL_NAME
+      - pattern-not-regex: 'oss_bucket_name\s*=|sls_project_arn\s*='
     metadata:
       category: audit
       subcategory: [logging]

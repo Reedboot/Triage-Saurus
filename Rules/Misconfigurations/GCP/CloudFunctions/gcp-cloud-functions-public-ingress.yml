@@ -1,0 +1,30 @@
+rules:
+  - id: gcp-cloud-functions-public-ingress
+    message: |
+      GCP Cloud Function has ingress_settings = "ALLOW_ALL", accepting requests from
+      the public internet (not just VPC or internal traffic). Combined with missing
+      authentication, this exposes the function endpoint to unauthenticated invocations
+      from any IP address.
+
+      Set ingress_settings to "ALLOW_INTERNAL_ONLY" or "ALLOW_INTERNAL_AND_GCLB"
+      to restrict traffic to VPC or load balancer sources. Use an authenticated
+      Cloud Run or API Gateway proxy for public-facing functions.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_cloudfunctions_function" $NAME {
+            ...
+          }
+      - pattern: |
+          ingress_settings = "ALLOW_ALL"
+    metadata:
+      category: security
+      subcategory: [cloud, network, exposure]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, cloud-functions]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

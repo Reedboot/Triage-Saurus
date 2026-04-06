@@ -1,0 +1,47 @@
+rules:
+  - id: gcp-gcs-bucket-public-iam
+    message: |
+      GCS bucket has an IAM binding granting access to allUsers or allAuthenticatedUsers.
+      This makes the bucket (or objects within it) publicly readable or writable.
+      Unauthenticated users can enumerate and download all objects via HTTPS or gsutil.
+      Automated scanners (GrayHatWarfare, bucket-finder) actively scan for public buckets.
+
+      Remove allUsers and allAuthenticatedUsers from bucket IAM bindings. Use
+      Uniform Bucket-Level Access (uniform_bucket_level_access = true) and grant
+      access only to specific service accounts or groups.
+
+      ATTACK: gsutil ls gs://bucket-name (no creds) → enumerate objects → download sensitive data
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_storage_bucket_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allUsers", ...]
+      - patterns:
+          - pattern-inside: |
+              resource "google_storage_bucket_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+      - patterns:
+          - pattern-inside: |
+              resource "google_storage_bucket_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allAuthenticatedUsers"
+    metadata:
+      category: security
+      subcategory: [storage, exposure, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, gcs, storage]
+      five_pillars: Pillar 5 (Data Protection)
+      internet_exposure: true

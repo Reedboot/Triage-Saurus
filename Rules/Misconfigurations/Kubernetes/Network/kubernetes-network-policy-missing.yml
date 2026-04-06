@@ -1,0 +1,29 @@
+rules:
+  - id: kubernetes-network-policy-missing
+    message: |
+      Kubernetes namespace has workloads deployed but no NetworkPolicy resources defined.
+      Without NetworkPolicy, all pods in the cluster can communicate with each other
+      on all ports by default (Kubernetes default-allow). A compromised pod can:
+      - Connect to any other pod in any namespace (lateral movement)
+      - Reach the Kubernetes API server
+      - Reach cloud metadata services (169.254.169.254) to steal credentials
+      - Exfiltrate data to external endpoints without egress restrictions
+
+      Define ingress and egress NetworkPolicy resources for each namespace to implement
+      least-privilege pod-to-pod communication. Start with a deny-all default policy
+      and explicitly allow only required traffic paths.
+
+      ATTACK: Compromised pod → no network isolation → connect to any pod in cluster → reach metadata API → steal cloud credentials
+    severity: WARNING
+    languages: [yaml]
+    pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*kind:\s+NetworkPolicy)'
+    metadata:
+      category: security
+      subcategory: [network, kubernetes, lateral-movement]
+      cwe: CWE-284
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes, yaml, network-policy]
+      five_pillars: Pillar 1 (Network Security)
+

@@ -7,16 +7,9 @@ rules:
       Analytics or Storage Account destination.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
-      - pattern: |
-          resource "azurerm_mssql_database" "$DB" {
-            ...
-          }
-      - pattern-not-inside: |
-          resource "azurerm_mssql_database_extended_auditing_policy" "$POLICY" {
-            database_id = azurerm_mssql_database.$DB.id
-            ...
-          }
+    pattern-either:
+      - pattern-regex: '(?s)^(?=[\s\S]*resource "azurerm_mssql_database")(?![\s\S]*resource "azurerm_mssql_database_extended_auditing_policy")'
+      - pattern-regex: '(?s)^(?=[\s\S]*resource "azurerm_mssql_server")(?![\s\S]*resource "azurerm_mssql_server_extended_auditing_policy")'
     metadata:
       category: security
       subcategory: [logging, monitoring, cloud]

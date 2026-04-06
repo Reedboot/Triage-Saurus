@@ -48,6 +48,7 @@ class InternetExposureDetector:
         'aws': {
             'aws_lb', 'aws_alb', 'aws_nlb',  # Load balancers (modern names)
             'apigateway', 'api_gateway', 'api_gateway_stage', 'aws_apigateway',
+            'aws_eip', 'aws_eip_association', 'aws_internet_gateway', 'aws_apigatewayv2_api', 'aws_lambda_function_url',
             'elb', 'alb', 'nlb', 'elastic_load_balancing',  # Load balancers (legacy names)
             'application_load_balancer', 'network_load_balancer',
             'cloudfront', 'aws_cloudfront',
@@ -56,23 +57,41 @@ class InternetExposureDetector:
             'api_management_api', 'api_management_product',
             'app_service', 'app_service_plan',
             'function_app', 'app_gateway', 'application_gateway',
-            'front_door', 'cdn_profile',
+            'front_door', 'frontdoor', 'cdn_profile',
             'api_management', 'apim',
             'azurerm_app_service', 'azurerm_function_app',  # Full resource type names
             'azurerm_application_gateway',
+            'azurerm_lb', 'azurerm_application_load_balancer',
             'azurerm_api_management',
+            'azurerm_frontdoor', 'azurerm_front_door',
+            'azurerm_public_ip', 'azurerm_public_ip_prefix',
         },
         'gcp': {
             'compute_backend_service', 'compute_url_map',
             'compute_target_http_proxy', 'compute_target_https_proxy',
             'https_load_balancer', 'http_load_balancer',
             'cloud_load_balancing',
-            'api_gateway', 'google_compute_backend_service',
+            'api_gateway', 'google_api_gateway_api',
+            'google_compute_address', 'google_compute_global_address',
+            'google_compute_backend_service', 'google_compute_forwarding_rule',
+            'google_compute_global_forwarding_rule', 'google_compute_target_http_proxy',
+            'google_compute_target_https_proxy', 'google_compute_url_map',
+            'google_cloud_run_service',
         },
         'oci': {
             'load_balancer', 'oci_load_balancer',
             'api_gateway', 'oci_api_gateway',
+            'oci_load_balancer_load_balancer',
+            'oci_apigateway_gateway', 'oci_network_load_balancer_network_load_balancer',
+            'oci_core_internet_gateway',
             'cdn',
+        },
+        'alicloud': {
+            'alicloud_slb', 'alicloud_slb_load_balancer',
+            'alicloud_alb_load_balancer',
+            'alicloud_api_gateway_api',
+            'alicloud_cdn_domain',
+            'alicloud_eip', 'alicloud_eip_association',
         },
     }
 
@@ -100,6 +119,19 @@ class InternetExposureDetector:
             provider: Cloud provider ('aws', 'azure', 'gcp', 'oci', 'alicloud')
         """
         self.provider = provider.lower()
+
+    @classmethod
+    def get_public_entry_types(cls, provider: str | None = None) -> set[str]:
+        """Return normalized public-by-design resource types.
+
+        When provider is omitted, returns the union of all provider-specific types.
+        """
+        if provider:
+            return {t.lower() for t in cls.PUBLIC_BY_DESIGN.get(provider.lower(), set())}
+        combined = set()
+        for types in cls.PUBLIC_BY_DESIGN.values():
+            combined.update(t.lower() for t in types)
+        return combined
 
     def detect_exposed_resources(
         self,

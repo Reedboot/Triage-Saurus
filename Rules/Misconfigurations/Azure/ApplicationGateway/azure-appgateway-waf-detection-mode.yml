@@ -1,0 +1,49 @@
+rules:
+  - id: azure-appgateway-waf-detection-mode
+    message: |
+      Azure Application Gateway WAF policy is configured in Detection mode rather
+      than Prevention mode (firewall_mode = "Detection"). In Detection mode, the WAF
+      logs malicious requests but does NOT block them — attackers can still exploit
+      SQL injection, XSS, and OWASP Top 10 vulnerabilities while generating alerts
+      that may go unreviewed. Detection mode provides no actual protection.
+
+      Change firewall_mode = "Prevention" to actively block detected attacks.
+      Detection mode should only be used during initial tuning to identify false
+      positives before switching to Prevention.
+
+      ATTACK: WAF in Detection mode → SQL injection / XSS passes through unblocked → backend exploitation
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_web_application_firewall_policy" $NAME {
+                ...
+              }
+          - pattern: |
+              policy_settings {
+                ...
+                mode = "Detection"
+                ...
+              }
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_application_gateway" $NAME {
+                ...
+              }
+          - pattern: |
+              waf_configuration {
+                ...
+                firewall_mode = "Detection"
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, waf, cloud]
+      cwe: CWE-693
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, application-gateway, waf]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

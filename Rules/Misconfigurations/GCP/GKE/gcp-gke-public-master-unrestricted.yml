@@ -1,0 +1,51 @@
+rules:
+  - id: gcp-gke-public-master-unrestricted
+    message: |
+      GKE cluster master (control plane) has a public endpoint with no authorized
+      network restrictions. The Kubernetes API server is accessible from any IP on
+      the internet. Combined with misconfigured RBAC, default service accounts, or
+      compromised credentials, this enables remote cluster enumeration and takeover.
+
+      Add master_authorized_networks_config with specific CIDR blocks, or enable
+      private_cluster_config to use a private endpoint only.
+
+      ATTACK: Public K8s API → RBAC misconfiguration → kubectl exec → IMDS → GCP SA token → project access
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      # Case 1: master_authorized_networks_config absent entirely
+      - patterns:
+          - pattern: |
+              resource "google_container_cluster" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "google_container_cluster" $NAME {
+                ...
+                master_authorized_networks_config {
+                  ...
+                }
+                ...
+              }
+      # Case 2: master_authorized_networks_config present but allows all internet
+      - patterns:
+          - pattern-inside: |
+              resource "google_container_cluster" $NAME {
+                ...
+                master_authorized_networks_config {
+                  ...
+                }
+                ...
+              }
+          - pattern: |
+              cidr_block = "0.0.0.0/0"
+    metadata:
+      category: security
+      subcategory: [network, kubernetes, cloud]
+      cwe: CWE-284
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, gcp, gke, kubernetes]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

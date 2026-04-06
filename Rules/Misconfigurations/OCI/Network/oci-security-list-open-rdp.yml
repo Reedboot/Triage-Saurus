@@ -1,0 +1,42 @@
+rules:
+  - id: oci-security-list-open-rdp
+    message: |
+      OCI Security List allows inbound RDP (TCP port 3389) from any source
+      (source = "0.0.0.0/0"). RDP exposed to the internet is a primary
+      target for automated brute-force attacks, credential stuffing, and
+      exploitation of known RDP vulnerabilities. Ransomware operators frequently
+      scan for open RDP and sell or use access to conduct attacks.
+
+      Restrict the source CIDR on port 3389 to specific trusted administrative
+      IP ranges. Use OCI Bastion service or VPN for Windows administrative access
+      rather than direct internet-exposed RDP.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "oci_core_security_list" $NAME {
+            ...
+          }
+      - pattern: |
+          ingress_security_rules {
+            ...
+            source = "0.0.0.0/0"
+            ...
+            tcp_options {
+              ...
+              min = 3389
+              max = 3389
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, remote-access, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [terraform, oci, security-list, network]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

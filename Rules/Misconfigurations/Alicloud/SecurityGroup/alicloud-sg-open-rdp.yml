@@ -1,0 +1,42 @@
+rules:
+  - id: alicloud-sg-open-rdp
+    message: |
+      Alibaba Cloud Security Group allows inbound RDP (port 3389) from any source
+      (cidr_ip = "0.0.0.0/0" or "::/0"). RDP exposed to the internet is a primary
+      target for automated brute-force attacks, credential stuffing, and exploitation
+      of RDP vulnerabilities (BlueKeep CVE-2019-0708, DejaBlue CVE-2019-1181/1182).
+      Ransomware operators frequently purchase RDP access on criminal markets.
+
+      Restrict the cidr_ip on port 3389 to specific trusted IP ranges.
+      Use Alibaba Cloud Bastion Host or VPN for Windows administrative access.
+      If RDP is not required, remove the inbound rule entirely.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "alicloud_security_group_rule" $NAME {
+            ...
+            type = "ingress"
+            ...
+          }
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  port_range = "3389/3389"
+              - pattern: |
+                  cidr_ip = "0.0.0.0/0"
+          - patterns:
+              - pattern: |
+                  port_range = "3389/3389"
+              - pattern: |
+                  cidr_ip = "::/0"
+    metadata:
+      category: security
+      subcategory: [network, remote-access, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [terraform, alicloud, security-group]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

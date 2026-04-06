@@ -1,0 +1,35 @@
+rules:
+  - id: aws-lambda-no-vpc
+    message: |
+      AWS Lambda function is not deployed inside a VPC (vpc_config block is missing).
+      A Lambda outside a VPC cannot access private VPC resources (RDS, ElastiCache)
+      securely, and its outbound traffic routes through the internet without network-level
+      controls. Placing Lambda inside a VPC with appropriate security groups limits
+      egress and enables private connectivity to data stores without public endpoints.
+
+      Note: Lambda in VPC requires NAT Gateway for internet access. Ensure VPC has
+      private subnets with NAT if internet egress is required.
+    severity: INFO
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_lambda_function" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "aws_lambda_function" $NAME {
+            ...
+            vpc_config {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, cloud, lambda]
+      cwe: CWE-284
+      confidence: LOW
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [terraform, aws, lambda]
+      five_pillars: Pillar 1 (Network Security)

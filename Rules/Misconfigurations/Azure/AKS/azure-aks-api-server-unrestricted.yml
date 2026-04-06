@@ -29,6 +29,21 @@ rules:
                 api_server_authorized_ip_ranges = [...]
                 ...
               }
+      # Explicitly catch empty list [] which is equally insecure as absent
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_kubernetes_cluster" $NAME {
+                ...
+              }
+          - pattern: |
+              api_server_authorized_ip_ranges = []
+      - patterns:
+          - pattern-inside: |
+              resource azurerm_kubernetes_cluster $NAME {
+                ...
+              }
+          - pattern: |
+              api_server_authorized_ip_ranges = []
     metadata:
       category: security
       subcategory: [network, cloud, kubernetes]

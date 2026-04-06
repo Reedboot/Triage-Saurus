@@ -6,17 +6,27 @@ rules:
       Replace with specific port ranges and restrict source_ranges to known CIDR blocks.
     severity: ERROR
     languages: [terraform, hcl]
-    patterns:
-      - pattern-inside: |
-          resource "google_compute_firewall" $NAME {
-            ...
-          }
-      - pattern: |
-          allow {
-            ...
-            ports = ["0-65535"]
-            ...
-          }
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_compute_firewall" $NAME {
+                ...
+              }
+          - pattern: |
+              allow {
+                ...
+                ports = ["0-65535"]
+                ...
+              }
+      - patterns:
+          - pattern-inside: |
+              resource "google_compute_firewall" $NAME {
+                ...
+              }
+          - pattern: |
+              allow {
+                protocol = "all"
+              }
     metadata:
       category: security
       subcategory: [network, exposure]

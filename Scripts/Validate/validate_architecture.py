@@ -19,11 +19,13 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 # Add Scripts paths
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Persist"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Context"))
 
 import db_helpers
 from external_resource_hierarchy import get_parent_mapping, HIERARCHY_CONFIG
+from Scripts.Generate.internet_exposure_detector import InternetExposureDetector
 
 
 class ArchitectureValidator:
@@ -98,24 +100,15 @@ class ArchitectureValidator:
         """Check if public resources have Internet ingress documented."""
         print("  ├─ Checking internet ingress...")
         
-        public_indicators = {
-            # Azure
-            "azurerm_public_ip": lambda r: True,
+        public_types = InternetExposureDetector.get_public_entry_types()
+        property_based_checks = {
             "azurerm_api_management": lambda r: r.get("virtual_network_type") != "Internal",
             "azurerm_application_gateway": lambda r: not r.get("private"),
             "azurerm_app_service": lambda r: not r.get("vnet_integration"),
-            
-            # AWS
-            "aws_elb": lambda r: not r.get("internal"),
-            "aws_lb": lambda r: not r.get("internal"),
             "aws_api_gateway_rest_api": lambda r: r.get("endpoint_configuration", {}).get("types") != ["PRIVATE"],
             "aws_instance": lambda r: r.get("associate_public_ip_address"),
-            
-            # GCP
-            "google_compute_global_forwarding_rule": lambda r: True,
-            "google_cloud_run_service": lambda r: True,  # Default is public
         }
-        
+
         public_resources = []
         has_internet_node = False
         
@@ -127,10 +120,10 @@ class ArchitectureValidator:
                 has_internet_node = True
             
             # Check if resource is public
-            if resource_type in public_indicators:
-                check_func = public_indicators[resource_type]
-                if check_func(resource):
-                    public_resources.append(resource)
+            if resource_type in property_based_checks and property_based_checks[resource_type](resource):
+                public_resources.append(resource)
+            elif resource_type in public_types:
+                public_resources.append(resource)
         
         if public_resources and not has_internet_node:
             self.issues.append({

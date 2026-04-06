@@ -1,4 +1,38 @@
 rules:
+  - id: gcp-cloudsql-backup-and-flags
+    message: |
+      Cloud SQL instance has backup_configuration.enabled = false. Without automated
+      backups, recovery from accidental deletion, data corruption, or ransomware is
+      not possible within Cloud SQL's managed restore flow.
+      Set enabled = true in the backup_configuration block. For production databases
+      also enable point_in_time_recovery = true (PostgreSQL/MySQL 8.0+).
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_sql_database_instance" $NAME {
+            ...
+            settings {
+              ...
+              backup_configuration {
+                ...
+              }
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          enabled = false
+    metadata:
+      category: security
+      subcategory: [resilience, database, backup]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, cloud-sql]
+      five_pillars: Pillar 5 (Data Protection)
+
   - id: gcp-cloudsql-backup-disabled
     message: |
       Cloud SQL instance has backup_configuration.enabled = false. Without automated

@@ -1,0 +1,32 @@
+rules:
+  - id: gcp-compute-instance-public-ip
+    message: |
+      GCP Compute Engine instance has a public IP address assigned
+      (access_config block present with no nat_ip restriction). A public IP
+      makes the instance directly reachable from the internet on all open firewall ports.
+      Combined with open firewall rules (SSH/RDP from 0.0.0.0/0), this allows direct
+      brute-force attacks and service exploitation from the internet.
+
+      Remove the access_config block to use internal IPs only. Use Cloud NAT for
+      outbound internet access, and a bastion host or IAP for administrative access.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_compute_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          access_config {
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, exposure, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, compute]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

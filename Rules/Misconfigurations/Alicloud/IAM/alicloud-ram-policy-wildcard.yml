@@ -7,15 +7,11 @@ rules:
     severity: HIGH
     languages: [terraform, hcl]
     patterns:
-      - pattern: |
-          resource "alicloud_ram_policy" "$NAME" {
-            ...
-            document = $DOC
+      - pattern-inside: |
+          resource "alicloud_ram_policy" $NAME {
             ...
           }
-      - metavariable-regex:
-          metavariable: $DOC
-          regex: '.*\*.*'
+      - pattern-regex: 'Action\s*=\s*\["?\*"?\]'
     metadata:
       category: security
       subcategory: [iam, cloud]

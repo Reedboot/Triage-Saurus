@@ -239,6 +239,8 @@ class TestInternetExposureDetector:
         """Test that detectors are independent per provider."""
         aws_detector = InternetExposureDetector('aws')
         azure_detector = InternetExposureDetector('azure')
+        gcp_detector = InternetExposureDetector('gcp')
+        alicloud_detector = InternetExposureDetector('alicloud')
         
         resources_aws = [
             {'id': 1, 'resource_name': 'alb', 'resource_type': 'aws_lb'}
@@ -247,13 +249,30 @@ class TestInternetExposureDetector:
         resources_azure = [
             {'id': 1, 'resource_name': 'alb', 'resource_type': 'azurerm_application_gateway'}
         ]
+        resources_gcp = [
+            {'id': 1, 'resource_name': 'gateway', 'resource_type': 'google_api_gateway_api'}
+        ]
+        resources_alicloud = [
+            {'id': 1, 'resource_name': 'cdn', 'resource_type': 'alicloud_cdn_domain'}
+        ]
         
         exposed_aws = aws_detector.detect_exposed_resources(resources_aws, [])
         exposed_azure = azure_detector.detect_exposed_resources(resources_azure, [])
+        exposed_gcp = gcp_detector.detect_exposed_resources(resources_gcp, [])
+        exposed_alicloud = alicloud_detector.detect_exposed_resources(resources_alicloud, [])
         
         # Both should detect their resource as public (different type names, same public design)
         assert 'alb' in exposed_aws
         assert 'alb' in exposed_azure
+        assert 'gateway' in exposed_gcp
+        assert 'cdn' in exposed_alicloud
+
+    def test_public_entry_type_inventory_includes_missing_providers(self):
+        public_types = InternetExposureDetector.get_public_entry_types()
+        assert 'aws_eip' in public_types
+        assert 'google_cloud_run_service' in public_types
+        assert 'alicloud_api_gateway_api' in public_types
+        assert 'alicloud_cdn_domain' in public_types
 
 
 class TestMergeExposureDetections:

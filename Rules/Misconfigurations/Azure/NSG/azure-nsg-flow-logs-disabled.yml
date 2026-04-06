@@ -6,15 +6,7 @@ rules:
       Add azurerm_network_watcher_flow_log resource.
     severity: INFO
     languages: [terraform, hcl]
-    pattern-either:
-      - pattern: |
-          resource "azurerm_network_security_group" "$NAME" {
-            ...
-          }
-      - pattern: |
-          resource azurerm_network_security_group "$NAME" {
-            ...
-          }
+    pattern-regex: '(?s)^(?=[\s\S]*resource "azurerm_network_security_group")(?![\s\S]*resource "azurerm_network_watcher_flow_log")'
     metadata:
       category: security
       subcategory: [audit-logging, network]

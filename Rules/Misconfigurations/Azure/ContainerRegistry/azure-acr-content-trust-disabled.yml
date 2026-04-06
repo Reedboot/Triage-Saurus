@@ -1,0 +1,47 @@
+rules:
+  - id: azure-acr-content-trust-disabled
+    message: |
+      Azure Container Registry does not have content trust (image signing) enabled.
+      Without content trust, the registry accepts and serves unsigned container images.
+      An attacker who compromises a build pipeline or registry credentials can push
+      a malicious image that will be pulled and run by clusters without any signature
+      verification. This enables supply chain attacks where legitimate image names
+      serve malicious content.
+
+      Enable content trust by setting trust_policy { enabled = true } on the
+      azurerm_container_registry resource. Combine with quarantine_policy_enabled
+      and retention_policy to enforce image governance.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "azurerm_container_registry" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_container_registry" $NAME {
+                ...
+                trust_policy {
+                  enabled = true
+                }
+                ...
+              }
+      - patterns:
+          - pattern-inside: |
+              resource "azurerm_container_registry" $NAME {
+                ...
+              }
+          - pattern: |
+              trust_policy {
+                enabled = false
+              }
+    metadata:
+      category: security
+      subcategory: [container, supply-chain, cloud]
+      cwe: CWE-494
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, acr, containers]
+      five_pillars: Pillar 3 (Application Security)

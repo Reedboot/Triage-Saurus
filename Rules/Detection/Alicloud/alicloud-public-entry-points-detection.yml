@@ -1,0 +1,72 @@
+rules:
+  - id: context-alicloud-api-gateway-api
+    message: |
+      Alibaba Cloud API Gateway API detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "alicloud_api_gateway_api" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api_gateway
+      technology: [terraform, alicloud, api_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway API
+        resource_type: alicloud_api_gateway_api
+        resource_name: $NAME
+    description: |
+      Detects Alibaba Cloud API Gateway APIs used as public ingress points.
+
+  - id: context-alicloud-cdn-domain
+    message: |
+      Alibaba Cloud CDN domain detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "alicloud_cdn_domain" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: delivery
+      technology: [terraform, alicloud, cdn]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CDN Domain
+        resource_type: alicloud_cdn_domain
+        resource_name: $NAME
+    description: |
+      Detects Alibaba Cloud CDN domains for public exposure analysis.
+
+  - id: context-alicloud-eip
+    message: |
+      Alibaba Cloud Elastic IP detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "alicloud_eip" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: alicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, alicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Elastic IP
+        resource_type: alicloud_eip
+        resource_name: $NAME
+    description: |
+      Detects Alibaba Cloud Elastic IP resources for public ingress analysis.

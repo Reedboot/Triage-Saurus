@@ -1,0 +1,40 @@
+rules:
+  - id: aws-kms-key-rotation-disabled
+    message: |
+      KMS customer-managed key (CMK) does not have automatic key rotation enabled.
+      Key material that is never rotated remains valid indefinitely. If key material
+      is compromised (e.g., via insider threat, exfiltrated CMK policy), all data
+      encrypted with that key remains at risk without a rotation to limit the window of exposure.
+
+      Set enable_key_rotation = true on aws_kms_key resources to rotate key material
+      automatically every 365 days. Note: rotation only applies to symmetric CMKs.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "aws_kms_key" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "aws_kms_key" $NAME {
+                ...
+                enable_key_rotation = true
+                ...
+              }
+      - patterns:
+          - pattern: |
+              resource "aws_kms_key" $NAME {
+                ...
+                enable_key_rotation = false
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption, key-management]
+      cwe: CWE-320
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      technology: [terraform, aws, kms]
+      five_pillars: Pillar 5 (Data Protection)

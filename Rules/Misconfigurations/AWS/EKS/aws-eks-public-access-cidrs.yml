@@ -1,0 +1,33 @@
+rules:
+  - id: aws-eks-public-access-cidrs
+    message: |
+      EKS cluster has public endpoint access enabled with no CIDR restrictions
+      (public_access_cidrs = ["0.0.0.0/0"]). The Kubernetes API server is reachable
+      from any IP address on the internet. Combined with misconfigured RBAC or
+      compromised credentials, this allows full cluster takeover from anywhere.
+
+      Restrict public_access_cidrs to trusted IP ranges or disable public endpoint
+      access entirely and use a private endpoint (endpoint_private_access = true).
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_eks_cluster" $NAME {
+            ...
+          }
+      - pattern: |
+          vpc_config {
+            ...
+            public_access_cidrs = ["0.0.0.0/0"]
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, kubernetes, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, aws, eks, kubernetes]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

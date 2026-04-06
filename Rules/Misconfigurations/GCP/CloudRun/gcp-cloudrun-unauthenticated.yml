@@ -1,0 +1,40 @@
+rules:
+  - id: gcp-cloudrun-unauthenticated
+    message: |
+      Cloud Run service allows unauthenticated invocations. The IAM binding
+      allUsers:roles/run.invoker (or equivalent noauth member) means any internet
+      request invokes the service without a Google identity. An attacker can:
+      - Call the service endpoint with arbitrary input
+      - Use any SSRF vulnerability in the service to reach internal GCP resources
+        via the VPC connector (if attached)
+      - Invoke without audit trail in Cloud Logging if log levels are insufficient
+
+      Remove the allUsers binding and require authenticated callers. Use
+      google_cloud_run_service_iam_binding with specific service accounts or groups.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_cloud_run_service_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allUsers", ...]
+      - patterns:
+          - pattern-inside: |
+              resource "google_cloud_run_service_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+    metadata:
+      category: security
+      subcategory: [cloud, authentication, exposure]
+      cwe: CWE-306
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, cloud-run]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

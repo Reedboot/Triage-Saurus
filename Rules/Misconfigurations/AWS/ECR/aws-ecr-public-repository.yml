@@ -1,0 +1,27 @@
+rules:
+  - id: aws-ecr-public-repository
+    message: |
+      ECR repository is publicly accessible. Public ECR repositories allow any
+      unauthenticated user to pull container images. Attackers can pull images and
+      perform layer-by-layer analysis to discover hardcoded credentials, API keys,
+      or sensitive configuration baked into image layers via ENV or COPY instructions.
+
+      Use private ECR repositories with appropriate IAM resource policies limiting
+      pull access to specific AWS accounts and roles.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_ecrpublic_repository" $NAME {
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [container, exposure, cloud]
+      cwe: CWE-200
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, ecr, containers]
+      five_pillars: Pillar 5 (Data Protection)
+      internet_exposure: true

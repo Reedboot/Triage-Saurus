@@ -6,24 +6,7 @@ rules:
       Restrict to specific namespaces/resources.
     severity: WARNING
     languages: [yaml]
-    patterns:
-      - pattern: |
-          rules:
-            - ...
-              resources:
-                - ...
-                - $RESOURCE
-                - ...
-              verbs:
-                - ...
-                - $VERB
-                - ...
-      - metavariable-regex:
-          metavariable: $RESOURCE
-          regex: (pods|services)
-      - metavariable-regex:
-          metavariable: $VERB
-          regex: (list|watch)
+    pattern-regex: '(?s)kind:\s+ClusterRole[\s\S]*?resources:.*(?:pods|services|secrets)[\s\S]*?verbs:.*(?:list|watch|\*)'
     metadata:
       category: security
       subcategory: [kubernetes, iam]

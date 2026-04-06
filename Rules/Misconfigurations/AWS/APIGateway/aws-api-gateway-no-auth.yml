@@ -1,0 +1,28 @@
+rules:
+  - id: aws-api-gateway-no-auth
+    message: |
+      AWS API Gateway method has authorization set to "NONE". This exposes the API
+      endpoint to unauthenticated access from the internet. Any caller can invoke
+      the method without providing an API key, IAM credentials, or a Cognito token.
+
+      Set authorization_type to AWS_IAM, COGNITO_USER_POOLS, or CUSTOM (Lambda authorizer)
+      and define appropriate authorizer_id to protect the endpoint.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_api_gateway_method" $NAME {
+            ...
+          }
+      - pattern: |
+          authorization = "NONE"
+    metadata:
+      category: security
+      subcategory: [authentication, cloud, exposure]
+      cwe: CWE-306
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, aws, api-gateway]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

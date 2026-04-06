@@ -1,26 +1,5 @@
 rules:
   - id: apim-missing-jwt-validation
-    patterns:
-      - pattern: |
-          resource "azurerm_api_management_api_policy" $NAME {
-            ...
-            xml_content = <<XML
-          <policies>
-            <backend>
-              <forward-request />
-            </backend>
-          </policies>
-          XML
-            ...
-          }
-      - pattern-not: |
-          xml_content = <<XML
-          ...
-          <validate-jwt ...>
-          ...
-          </validate-jwt>
-          ...
-          XML
     message: |
       APIM API Policy missing JWT validation. Current policy only forwards requests without
       cryptographic authentication verification. This allows any holder of subscription key
@@ -33,6 +12,13 @@ rules:
     languages:
       - hcl
     severity: ERROR
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_api_management_api_policy" $NAME {
+            ...
+          }
+      - pattern: xml_content = $CONTENT
+      - pattern-not-regex: 'validate-jwt'
     metadata:
       category: authentication
       cwe: "CWE-306: Missing Authentication for Critical Function"

@@ -1,0 +1,44 @@
+rules:
+  - id: aws-api-gateway-no-waf
+    message: |
+      AWS API Gateway stage does not have a WAF Web ACL associated. Without WAF,
+      the API is exposed to SQL injection, XSS, bot abuse, and volumetric attacks
+      without any L7 inspection or rate limiting.
+
+      Associate a WAF Web ACL with the API Gateway stage using
+      aws_wafv2_web_acl_association or the web_acl_arn on the stage resource.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern: |
+              resource "aws_api_gateway_stage" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "aws_api_gateway_stage" $NAME {
+                ...
+                web_acl_arn = ...
+                ...
+              }
+      - patterns:
+          - pattern: |
+              resource "aws_apigatewayv2_stage" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "aws_apigatewayv2_stage" $NAME {
+                ...
+                web_acl_arn = ...
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [network, waf, cloud]
+      cwe: CWE-693
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, api-gateway, waf]
+      five_pillars: Pillar 1 (Network Security)
+      internet_exposure: true

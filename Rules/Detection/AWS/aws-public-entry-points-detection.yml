@@ -1,0 +1,72 @@
+rules:
+  - id: context-aws-elastic-ip
+    message: |
+      AWS Elastic IP detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_eip" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Elastic IP
+        resource_type: aws_eip
+        resource_name: $NAME
+    description: |
+      Detects AWS Elastic IP resources for internet-facing exposure analysis.
+
+  - id: context-aws-internet-gateway
+    message: |
+      AWS Internet Gateway detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_internet_gateway" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Internet Gateway
+        resource_type: aws_internet_gateway
+        resource_name: $NAME
+    description: |
+      Detects AWS Internet Gateway resources for internet-facing exposure analysis.
+
+  - id: context-aws-apigatewayv2-api
+    message: |
+      AWS API Gateway v2 API detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_apigatewayv2_api" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api_gateway
+      technology: [terraform, aws, api_gateway]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway v2 API
+        resource_type: aws_apigatewayv2_api
+        resource_name: $NAME
+    description: |
+      Detects AWS API Gateway v2 APIs in Terraform to drive public ingress detection.

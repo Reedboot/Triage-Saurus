@@ -1,0 +1,45 @@
+rules:
+  - id: gcp-pubsub-public-policy
+    message: |
+      GCP Pub/Sub topic or subscription has an IAM binding granting access to allUsers
+      or allAuthenticatedUsers. This allows unauthenticated message publishing or
+      subscription from the internet. Attackers can inject messages to poison
+      processing pipelines, or subscribe to drain the topic and exfiltrate event data.
+
+      Remove allUsers/allAuthenticatedUsers from Pub/Sub IAM and grant access
+      only to specific service accounts using least-privilege roles
+      (roles/pubsub.publisher or roles/pubsub.subscriber).
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_pubsub_topic_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              members = [..., "allUsers", ...]
+      - patterns:
+          - pattern-inside: |
+              resource "google_pubsub_subscription_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+      - patterns:
+          - pattern-inside: |
+              resource "google_pubsub_topic_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              member = "allUsers"
+    metadata:
+      category: security
+      subcategory: [messaging, exposure, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, pubsub]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

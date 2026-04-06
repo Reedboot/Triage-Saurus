@@ -1,0 +1,30 @@
+rules:
+  - id: aws-sqs-public-policy
+    message: |
+      SQS queue has a resource policy that allows access from Principal "*" (any principal).
+      This permits unauthenticated sending and/or receiving of messages over the internet.
+      Attackers can inject messages to poison processing pipelines, or consume messages
+      to exfiltrate data and cause denial-of-service by deleting messages before consumers process them.
+
+      Restrict the resource policy Principal to specific AWS accounts, IAM roles, or
+      use a condition with aws:SourceArn / aws:SourceAccount to limit the scope.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_sqs_queue_policy" $NAME {
+            ...
+          }
+      - pattern-either:
+          - pattern-regex: '"Principal"\s*:\s*["\{]?\s*\*\s*["\}]?'
+          - pattern-regex: 'Principal\s*=\s*"?\*"?'
+    metadata:
+      category: security
+      subcategory: [messaging, exposure, cloud]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, sqs]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

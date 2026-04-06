@@ -1,0 +1,35 @@
+rules:
+  - id: aws-ec2-imdsv1-enabled
+    message: |
+      EC2 instance has IMDSv1 enabled (http_tokens = "optional"). IMDSv1 is susceptible to
+      Server-Side Request Forgery (SSRF) attacks: any SSRF in a hosted application allows an
+      attacker to query http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>
+      and steal temporary IAM credentials without authentication.
+
+      Set http_tokens = "required" to enforce IMDSv2, which requires a PUT pre-flight and
+      a hop-limit of 1 (preventing SSRF exploitation). Also set http_put_response_hop_limit = 1.
+
+      ATTACK: App SSRF → GET 169.254.169.254/…/iam/security-credentials/<role> → stolen AWS creds → full IAM role access
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_instance" $NAME {
+            ...
+          }
+      - pattern: |
+          metadata_options {
+            ...
+            http_tokens = "optional"
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [cloud, credentials, ssrf]
+      cwe: CWE-918
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: CRITICAL
+      technology: [terraform, aws, ec2, imds]
+      five_pillars: Pillar 2 (Identity & Access Management)
+      internet_exposure: true

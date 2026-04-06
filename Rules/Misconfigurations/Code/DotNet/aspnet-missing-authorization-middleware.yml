@@ -1,0 +1,23 @@
+rules:
+  - id: aspnet-missing-authorization-middleware
+    message: |
+      ASP.NET Core application configures CORS with AllowAnyOrigin without proper
+      authentication/authorization middleware. AllowAnyOrigin enables cross-origin requests
+      from any website, which combined with missing UseAuthorization() means [Authorize]
+      attributes are not enforced and CSRF-style attacks can succeed.
+      Add UseAuthentication() and UseAuthorization() to the Configure pipeline, and
+      restrict CORS origins to known trusted domains.
+    severity: ERROR
+    languages: [csharp]
+    patterns:
+      - pattern-regex: 'AllowAnyOrigin\(\)'
+      - pattern-not-regex: 'app\.UseAuthorization\(\)'
+    metadata:
+      category: security
+      subcategory: [authentication, cors, middleware]
+      cwe: CWE-284
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      technology: [dotnet, csharp, aspnet]
+      five_pillars: Pillar 2 (Identity & Access Management)
