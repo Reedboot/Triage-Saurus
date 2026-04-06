@@ -172,15 +172,19 @@
   {# AI-detected new assets and fixed info cards #}
   {% if ai_new_assets %}
   <section class="ai-cards">
-    <h4>AI-detected new assets ({{ ai_new_assets | length }} found)</h4>
+    <h4>AI-detected new assets <span style="font-size:0.8em;font-weight:normal;color:var(--text-muted)">({{ ai_new_assets | length }} genuinely novel — already-tracked resources filtered out)</span></h4>
     <div class="ai-card-list">
       {% for a in ai_new_assets %}
-      <div class="ai-card">
+      <div class="ai-card{% if a.get('match_score', 0) >= 20 %} ai-card-warn{% endif %}">
         {% if 'candidate' in a and a['candidate'] %}
-          <div class="ai-card-title">{{ a['candidate']['name'] or ('Asset ' ~ loop.index) }} <span style="font-size:0.8em;color:var(--text-muted)">({{ a['candidate'].get('type', 'unknown') }}){% if a['candidate'].get('confidence') %} - {{ a['candidate']['confidence'] }}{% endif %}</span></div>
+          <div class="ai-card-title">{{ a['candidate'].get('name') or a['candidate'].get('label') or ('Asset ' ~ loop.index) }} <span style="font-size:0.8em;color:var(--text-muted)">({{ a['candidate'].get('type', 'unknown') }}){% if a['candidate'].get('confidence') %} · {{ a['candidate']['confidence'] }} confidence{% endif %}</span></div>
           <div class="ai-card-body">
             {% if a['candidate'].get('how_discovered') %}<div>{{ a['candidate']['how_discovered'] }}</div>{% endif %}
-            {% if a.get('matched_resource_id') %}<div style="color:var(--text-success);font-size:0.9em">✓ Matched to resource ID {{ a['matched_resource_id'] }}</div>{% endif %}
+            {% if a.get('matched_resource_id') %}
+              <div style="color:var(--text-warning);font-size:0.9em">⚠️ Partial match (score {{ a['match_score'] }}) to existing resource "{{ a['matched_name'] }}" ({{ a['matched_type'] }})</div>
+            {% else %}
+              <div style="color:var(--text-success);font-size:0.9em">✅ No match in resources table — this may be a genuine gap</div>
+            {% endif %}
           </div>
         {% else %}
           <div class="ai-card-title">{{ a.get('label') or a.get('name') or ('Asset ' ~ loop.index) }}</div>

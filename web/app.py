@@ -2336,10 +2336,12 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             new_assets = parsed.get("new_assets")
             if isinstance(new_assets, list) and new_assets:
                 yield _sse("log", "")
-                yield _sse("log", "New assets detected:")
+                yield _sse("log", f"New assets reported by AI ({len(new_assets)} total — dedup runs at persist stage):")
                 for a in new_assets:
                     try:
-                        label = a.get("label") if isinstance(a, dict) else str(a)
+                        name = a.get("name") or a.get("label") if isinstance(a, dict) else str(a)
+                        atype = a.get("type", "") if isinstance(a, dict) else ""
+                        label = f"{name} ({atype})" if atype else name
                     except Exception:
                         label = str(a)
                     yield _sse("log", f"- {label}")
@@ -2634,36 +2636,54 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                                 best_score = score
                         return best, best_score
 
-                    augmented = []
+                    # Dedup guard: separate assets into truly novel vs already tracked.
+                    # score >= 50 = exact name match in resources table → already tracked
+                    # score 20-49 = partial match → flag but keep (may be a rename/alias)
+                    # score  < 20 = no match → genuinely new
+                    genuinely_new = []
+                    already_tracked = []
                     for cand in normalized:
                         label = cand.get('label') or cand.get('name') or ''
                         types = cand.get('types') or []
                         match, score = _fuzzy_match(label, types)
-                        if match and score >= 20:
-                            augmented.append({
-                                'candidate': cand,
-                                'matched_resource_id': match['id'],
-                                'matched_name': match.get('resource_name'),
-                                'matched_type': match.get('resource_type'),
-                                'match_score': score,
-                            })
+                        entry = {
+                            'candidate': cand,
+                            'matched_resource_id': match['id'] if match else None,
+                            'matched_name': match.get('resource_name') if match else None,
+                            'matched_type': match.get('resource_type') if match else None,
+                            'match_score': score,
+                        }
+                        if score >= 50:
+                            already_tracked.append(entry)
                         else:
-                            augmented.append({
-                                'candidate': cand,
-                                'matched_resource_id': None,
-                                'matched_name': None,
-                                'matched_type': None,
-                                'match_score': score,
-                            })
+                            genuinely_new.append(entry)
 
-                    db_helpers.upsert_context_metadata(
-                        resolved_exp_id,
-                        repo_name,
-                        "ai_new_assets",
-                        json.dumps(augmented),
-                        namespace="ai_overview",
-                        source="copilot_stream",
-                    )
+                    if already_tracked:
+                        yield _sse("log", f"  ⏭️  {len(already_tracked)} AI 'new' asset(s) skipped — already in resources table")
+
+                    # Only persist genuinely new assets (not already tracked by the scanner)
+                    if genuinely_new:
+                        db_helpers.upsert_context_metadata(
+                            resolved_exp_id,
+                            repo_name,
+                            "ai_new_assets",
+                            json.dumps(genuinely_new),
+                            namespace="ai_overview",
+                            source="copilot_stream",
+                        )
+                    else:
+                        # Clear any stale ai_new_assets from a previous run
+                        try:
+                            db_helpers.upsert_context_metadata(
+                                resolved_exp_id,
+                                repo_name,
+                                "ai_new_assets",
+                                json.dumps([]),
+                                namespace="ai_overview",
+                                source="copilot_stream",
+                            )
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
