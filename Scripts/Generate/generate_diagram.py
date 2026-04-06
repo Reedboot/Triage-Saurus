@@ -160,18 +160,41 @@ def _render_resource_subgraph(
     indent: str = "  ",
     depth: int = 0,
     max_depth: int = 3,
+    _emitted_ids: set | None = None,
 ) -> None:
-    """Recursively render a resource and its children as Mermaid subgraphs."""
-    node_id = sanitize_id(resource['resource_name'])
+    """Recursively render a resource and its children as Mermaid subgraphs.
+
+    ``_emitted_ids`` is a set shared across all recursive calls so that
+    resources with the same sanitized name (e.g. multiple Terraform resources
+    all named ``bad`` or ``good``) receive a unique, qualified node ID instead
+    of silently collapsing into a single Mermaid node.
+    """
+    if _emitted_ids is None:
+        _emitted_ids = set()
+
+    base_id = sanitize_id(resource['resource_name'])
+    rtype = resource.get('resource_type', '')
+    # Qualify with resource type when the base ID is already used by a different resource.
+    if base_id in _emitted_ids:
+        type_short = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+        candidate = sanitize_id(f"{type_short}_{resource['resource_name']}")
+        if candidate in _emitted_ids:
+            # Last resort: append DB id to guarantee uniqueness
+            candidate = sanitize_id(f"{rtype}_{resource['resource_name']}_{resource.get('id', '')}")
+        node_id = candidate
+    else:
+        node_id = base_id
+    _emitted_ids.add(node_id)
+
     children = parent_children.get(resource['id'], [])
 
     if children and depth < max_depth:
         child_count = len(children)
         try:
-            rt_meta = _rtdb.get_resource_type(None, resource.get('resource_type', ''))
-            friendly_type = rt_meta.get('friendly_name', resource.get('resource_type', 'Resource'))
+            rt_meta = _rtdb.get_resource_type(None, rtype)
+            friendly_type = rt_meta.get('friendly_name', rtype or 'Resource')
         except Exception:
-            friendly_type = resource.get('resource_type', 'Resource')
+            friendly_type = rtype or 'Resource'
 
         label = f"{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
         lines.append(f"{indent}subgraph {node_id}_sg[\"{label}\"]")
@@ -181,7 +204,7 @@ def _render_resource_subgraph(
                 'resource_name': child_row['child_name'],
                 'resource_type': child_row['child_type'],
             }
-            _render_resource_subgraph(child_resource, parent_children, lines, indent + "  ", depth + 1, max_depth)
+            _render_resource_subgraph(child_resource, parent_children, lines, indent + "  ", depth + 1, max_depth, _emitted_ids)
         lines.append(f"{indent}end")
     else:
         label = _display_label(resource)
@@ -658,15 +681,25 @@ def generate_architecture_diagram(
     nsgs             = [r for r in nsgs if r['id'] not in internet_facing_ids]
     other_remaining  = [r for r in other if r['id'] not in internet_facing_ids]
 
+    # Shared set to track emitted Mermaid node IDs across all zones — prevents
+    # duplicate node ID collisions when multiple resources share the same name
+    # (e.g., Terraform test fixtures named 'bad'/'good' across resource types).
+    _diagram_emitted_ids: set = set()
+
     # ── Internet-Facing Zone ──
     lines.append("  subgraph zone_internet[\"🌐 Internet-Facing\"]")
     lines.append("    internet[🌐 Internet]")
     for res in internet_facing:
         if res['id'] in parent_children:
-            _render_resource_subgraph(res, parent_children, lines, indent="    ")
+            _render_resource_subgraph(res, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         else:
-            node_id = sanitize_id(res['resource_name'])
-            lines.append(f"    {node_id}[{_display_label(res)}]")
+            base_nid = sanitize_id(res['resource_name'])
+            if base_nid in _diagram_emitted_ids:
+                rtype = res.get('resource_type', '')
+                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+                base_nid = sanitize_id(f"{ts}_{res['resource_name']}")
+            _diagram_emitted_ids.add(base_nid)
+            lines.append(f"    {base_nid}[{_display_label(res)}]")
     lines.append("  end")
 
     # ── Internal Zone (Compute, Containers, Network Security) ──
@@ -680,44 +713,54 @@ def generate_architecture_diagram(
         # VNet/VPC subgraph nested inside
         lines.append("    subgraph vnet[VNet]")
         for vm in vms:
-            _render_resource_subgraph(vm, parent_children, lines, indent="      ")
+            _render_resource_subgraph(vm, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
         for aks_cluster in aks:
-            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="      ")
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
         for nsg in nsgs:
-            node_id = sanitize_id(nsg['resource_name'])
-            lines.append(f"      {node_id}[{_display_label(nsg)}]")
+            base_nid = sanitize_id(nsg['resource_name'])
+            if base_nid in _diagram_emitted_ids:
+                rtype = nsg.get('resource_type', '')
+                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+                base_nid = sanitize_id(f"{ts}_{nsg['resource_name']}")
+            _diagram_emitted_ids.add(base_nid)
+            lines.append(f"      {base_nid}[{_display_label(nsg)}]")
         lines.append("    end")
         lines.append("  end")
     elif internal_resources:
         # No child hierarchy to wrap — render the resources directly.
         for vm in vms:
-            _render_resource_subgraph(vm, parent_children, lines, indent="  ")
+            _render_resource_subgraph(vm, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
         for aks_cluster in aks:
-            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="  ")
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
         for nsg in nsgs:
-            node_id = sanitize_id(nsg['resource_name'])
-            lines.append(f"  {node_id}[{_display_label(nsg)}]")
+            base_nid = sanitize_id(nsg['resource_name'])
+            if base_nid in _diagram_emitted_ids:
+                rtype = nsg.get('resource_type', '')
+                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+                base_nid = sanitize_id(f"{ts}_{nsg['resource_name']}")
+            _diagram_emitted_ids.add(base_nid)
+            lines.append(f"  {base_nid}[{_display_label(nsg)}]")
 
     # ── Data Tier Zone ──
     if sql_servers or storage_accounts:
         lines.append("  subgraph zone_data[\"🗄️ Data Tier\"]")
         for db in sql_servers:
-            _render_resource_subgraph(db, parent_children, lines, indent="    ")
+            _render_resource_subgraph(db, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         for sa in storage_accounts:
-            _render_resource_subgraph(sa, parent_children, lines, indent="    ")
+            _render_resource_subgraph(sa, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         lines.append("  end")
     elif sql_servers or storage_accounts:
         # Fallback: render without zone wrapper
         for db in sql_servers:
-            _render_resource_subgraph(db, parent_children, lines, indent="  ")
+            _render_resource_subgraph(db, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
         for sa in storage_accounts:
-            _render_resource_subgraph(sa, parent_children, lines, indent="  ")
+            _render_resource_subgraph(sa, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
 
     # PaaS/Identity subgraph — use subgraph rendering to show children (e.g. OCI compartments with buckets)
     if paas:
         lines.append(f"  subgraph paas[PaaS / Identity]")
         for p in paas:
-            _render_resource_subgraph(p, parent_children, lines, indent="    ")
+            _render_resource_subgraph(p, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         lines.append("  end")
 
     # Try to group API Management / API resources and render operations when available
@@ -733,6 +776,9 @@ def generate_architecture_diagram(
                     lines.append(f"  subgraph {api_id}_api[API: {api_name}]")
                     for op in ops:
                         op_id = sanitize_id(op['resource_name'])
+                        if op_id in _diagram_emitted_ids:
+                            op_id = sanitize_id(f"op_{op['resource_name']}_{op.get('id','')}")
+                        _diagram_emitted_ids.add(op_id)
                         lines.append(f"    {op_id}[Operation: {op['resource_name']}]")
                     lines.append("  end")
     except Exception:
@@ -742,10 +788,15 @@ def generate_architecture_diagram(
     for res in other_remaining:
         if res['resource_name'] not in ('Internet', 'NSG'):
             if res['id'] in parent_children:
-                _render_resource_subgraph(res, parent_children, lines, indent="  ")
+                _render_resource_subgraph(res, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
             else:
-                node_id = sanitize_id(res['resource_name'])
-                lines.append(f"  {node_id}[{_display_label(res)}]")
+                base_nid = sanitize_id(res['resource_name'])
+                if base_nid in _diagram_emitted_ids:
+                    rtype = res.get('resource_type', '')
+                    ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+                    base_nid = sanitize_id(f"{ts}_{res['resource_name']}")
+                _diagram_emitted_ids.add(base_nid)
+                lines.append(f"  {base_nid}[{_display_label(res)}]")
 
     lines.append("")
     
@@ -890,10 +941,9 @@ def generate_architecture_diagram(
             edge = ("Internet", real_name, new_label)
             if edge not in emitted_edges:
                 emitted_edges.add(edge)
-                # direction Internet -> real resource
-                src = sanitize_id('Internet')
+                # direction Internet -> real resource (always use lowercase 'internet' to match node definition)
                 tgt = sanitize_id(real_name)
-                lines.append(f"  {src} -->{new_label} {tgt}")
+                lines.append(f"  internet -->{new_label} {tgt}")
                 _mark_risky_edge()
                 edge_index += 1
             # Skip normal processing for this connection
@@ -903,8 +953,8 @@ def generate_architecture_diagram(
         _ensure_node_exists(src_name)
         _ensure_node_exists(tgt_name)
 
-        src = sanitize_id(conn['source'])
-        tgt = sanitize_id(conn['target'])
+        src = 'internet' if conn['source'] == 'Internet' else sanitize_id(conn['source'])
+        tgt = 'internet' if conn['target'] == 'Internet' else sanitize_id(conn['target'])
 
         # If target resource has network ACLs or firewall rules, mark as IP-restricted
         ip_restricted = False

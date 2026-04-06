@@ -29,9 +29,9 @@
   {% set medium = findings_list | selectattr('base_severity', 'equalto', 'MEDIUM') | list | length %}
   {% set low = findings_list | selectattr('base_severity', 'equalto', 'LOW') | list | length %}
   {% if critical > 0 %}<span style="color: #ff0000; font-weight: 600;">{{critical}} Critical</span>{% endif %}
-  {%- if high > 0 %}<span style="color: #ff9900;">{{high}} High</span>{% endif %}
-  {%- if medium > 0 %}<span style="color: #ffb800;">{{medium}} Medium</span>{% endif %}
-  {%- if low > 0 %}<span style="color: #00cc00;">{{low}} Low</span>{% endif %}
+  {% if high > 0 %}<span style="color: #ff9900; margin-left: 4px;">{{high}} High</span>{% endif %}
+  {% if medium > 0 %}<span style="color: #ffb800; margin-left: 4px;">{{medium}} Medium</span>{% endif %}
+  {% if low > 0 %}<span style="color: #00cc00; margin-left: 4px;">{{low}} Low</span>{% endif %}
 {% endmacro %}
 
 <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;"
@@ -40,7 +40,7 @@
          placeholder="Filter findings…" autocomplete="off" oninput="filterFindings()" />
   <select id="findings-provider-filter" class="assets-provider-filter" onchange="filterFindings()">
     <option value="">All providers</option>
-    {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'oci', 'alicloud', 'Unknown'] %}
+    {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'alicloud', 'Unknown'] %}
       {% if provider in provider_groups %}
         <option value="{{ provider }}">{{ provider_names.get(provider, provider) }}</option>
       {% endif %}
@@ -63,7 +63,7 @@
 
 {# Render findings grouped by provider #}
 <div id="findings-container" style="display: grid; gap: 24px; min-width: 0;">
-  {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'Unknown'] %}
+  {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'alicloud', 'Unknown'] %}
     {% if provider in provider_groups %}
     <div class="provider-group" data-provider="{{ provider }}" style="border: 2px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-subtle);">
       {# Provider header with counts #}

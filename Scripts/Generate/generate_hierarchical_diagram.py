@@ -114,6 +114,10 @@ class HierarchicalDiagramBuilder:
         # resources named "example"), a qualified ID using the resource_type prefix is
         # generated instead so Mermaid doesn't collapse distinct nodes into one.
         self._emitted_mermaid_ids: Set[str] = set()
+        # Maps sanitized base_node_id → database resource ID of the FIRST resource
+        # emitted with that node ID. Used to detect when a second *different* resource
+        # would collide with an already-emitted node and needs a qualified ID.
+        self._node_id_first_owner: Dict[str, str] = {}
         # Internet exposure detection: map of resource_name → ExposureDetail
         self.exposed_resources: Dict[str, ExposureDetail] = {}
 
@@ -1298,8 +1302,11 @@ class HierarchicalDiagramBuilder:
                 lines.append("  end")
                 self.emitted_nodes.add(server_name)
                 self.emitted_nodes.add(database_name)
+                self._emitted_mermaid_ids.add(server_id)
+                if server_id not in self._node_id_first_owner:
+                    self._node_id_first_owner[server_id] = str(res.get('id', ''))
             else:
-                lines.append(f"  {server_id}[\"{server_name}\"]")
+                lines.append(self.render_node(res, indent="  "))
                 self.emitted_nodes.add(server_name)
 
         return lines
@@ -1321,11 +1328,12 @@ class HierarchicalDiagramBuilder:
             if children:
                 # Render VM as subgraph with children
                 lines.append(f"  subgraph {vm_id}[\"{vm_name}\"]")
+                self._emitted_mermaid_ids.add(vm_id)
+                if vm_id not in self._node_id_first_owner:
+                    self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
                 for child in children:
-                    child_name = child['resource_name']
-                    child_node_id = sanitize_id(child_name)
-                    lines.append(f"    {child_node_id}[\"{child_name}\"]")
-                    self.emitted_nodes.add(child_name)
+                    lines.append(self.render_node(child, indent="    "))
+                    self.emitted_nodes.add(child['resource_name'])
                 lines.append("  end")
             else:
                 # No children, render as regular node
@@ -1348,16 +1356,24 @@ class HierarchicalDiagramBuilder:
         base_node_id = sanitize_id(name)
 
         # Detect ID collision: if this sanitized name was already emitted for a
-        # *different* resource, qualify it with a resource-type prefix.
-        if base_node_id in self._emitted_mermaid_ids and name not in self.emitted_nodes:
-            # Build a short prefix from the resource type (strip provider prefix)
-            rtype = resource.get('resource_type') or ''
-            type_short = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-            node_id = sanitize_id(f"{type_short}_{name}")
-            # If that's still a collision, append the DB id to guarantee uniqueness
-            if node_id in self._emitted_mermaid_ids:
-                node_id = sanitize_id(f"{rtype}_{name}_{resource.get('id', '')}")
-            self.node_id_override[name] = node_id
+        # *different* resource (different DB id), qualify it with a resource-type prefix.
+        resource_db_id = str(resource.get('id', ''))
+        first_owner = self._node_id_first_owner.get(base_node_id)
+        if base_node_id in self._emitted_mermaid_ids and first_owner != resource_db_id:
+            # Check if we've already computed an override for this resource name + type
+            override_key = f"{resource.get('resource_type','')}__{name}"
+            if override_key in self.node_id_override:
+                node_id = self.node_id_override[override_key]
+            else:
+                # Build a short prefix from the resource type (strip provider prefix)
+                rtype = resource.get('resource_type') or ''
+                type_short = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+                node_id = sanitize_id(f"{type_short}_{name}")
+                # If that's still a collision, append the DB id to guarantee uniqueness
+                if node_id in self._emitted_mermaid_ids and self._node_id_first_owner.get(node_id) != resource_db_id:
+                    node_id = sanitize_id(f"{rtype}_{name}_{resource_db_id}")
+                self.node_id_override[name] = node_id
+                self.node_id_override[override_key] = node_id
         else:
             node_id = base_node_id
 
@@ -1365,6 +1381,8 @@ class HierarchicalDiagramBuilder:
         label = name if len(name) <= 50 else name[:47] + "..."
 
         self._emitted_mermaid_ids.add(node_id)
+        if node_id not in self._node_id_first_owner:
+            self._node_id_first_owner[node_id] = resource_db_id
         self.emitted_nodes.add(name)
         return f"{indent}{node_id}[\"{label}\"]"
     
@@ -1630,14 +1648,15 @@ class HierarchicalDiagramBuilder:
                     rendered_ids.add(sub['id'])
                 lines.append(f"{indent}end")
             else:
-                lines.append(f"{indent}{sanitize_id(topic['resource_name'])}[\"📬 {topic['resource_name']}\"]")
-                self.emitted_nodes.add(topic['resource_name'])
+                raw_node = self.render_node(topic, indent=indent)
+                # Replace the plain label with the topic icon version
+                lines.append(raw_node.replace(f'"{topic["resource_name"]}"', f'"📬 {topic["resource_name"]}"', 1))
 
             rendered_ids.add(topic['id'])
 
         def _render_queue(queue: dict, indent: str = "    "):
-            lines.append(f"{indent}{sanitize_id(queue['resource_name'])}[\"📥 {queue['resource_name']}\"]")
-            self.emitted_nodes.add(queue['resource_name'])
+            raw_node = self.render_node(queue, indent=indent)
+            lines.append(raw_node.replace(f'"{queue["resource_name"]}"', f'"📥 {queue["resource_name"]}"', 1))
             rendered_ids.add(queue['id'])
 
         # Render each namespace and its known children.
@@ -2139,7 +2158,8 @@ class HierarchicalDiagramBuilder:
     
     def generate(self) -> str:
         """Generate the complete hierarchical diagram."""
-        self.load_data()
+        if not self.resources:
+            self.load_data()
 
         # Decide whether to include API operations (from DB or OpenAPI spec files).
         if self.include_api_operations is None:
