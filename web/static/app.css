@@ -329,10 +329,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* ── Log output ── */
 #log-output {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto; overflow-x: auto;
   padding: 8px 12px;
-  max-height: 72vh;
+  height: 100%;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.78rem; line-height: 1.6;
   white-space: pre-wrap; word-break: break-all;
@@ -344,6 +345,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output::-webkit-scrollbar-track { background: var(--bg-secondary); border-radius: 6px; }
 #log-output::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 6px; border: 2px solid var(--bg-secondary); background-clip: padding-box; }
 #log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb; }
+
+/* Make the left workspace column (log panel) independently scrollable when page is tall */
+.workspace { min-height: 0; }
+.workspace > #log-panel { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: auto; }
+#log-panel .panel-section { min-height: 0; overflow: auto; }
+#log-panel .panel-header { flex: 0 0 auto; }
+#log-panel .panel-section #log-output { flex: 1 1 auto; }
 
 #log-output .line-ok     { color: var(--green); }
 #log-output .line-warn   { color: var(--yellow); }
