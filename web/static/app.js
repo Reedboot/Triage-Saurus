@@ -98,6 +98,34 @@
     try { localStorage.setItem('diagramHidden', '1'); } catch (e) {}
   }
 
+  // Helper: ensure the top of the diagram panel and internal views are visible
+  function ensureDiagramTopVisible() {
+    if (!diagramPanel) return;
+    try {
+      const hdr = document.querySelector('header');
+      const headerH = hdr ? hdr.getBoundingClientRect().height : 0;
+      const rect = diagramPanel.getBoundingClientRect();
+      const absoluteTop = window.pageYOffset + rect.top;
+      const target = Math.max(absoluteTop - headerH - 8, 0);
+      try { window.scrollTo({ top: target, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, target); }
+    } catch (e) {
+      /* ignore */
+    }
+
+    // Reset internal scroll positions so the top of the mermaid SVG is visible
+    try { if (viewsEl) viewsEl.scrollTop = 0; } catch (e) {}
+    try { if (diagramWrap) diagramWrap.scrollTop = 0; } catch (e) {}
+    try { if (diagramInner) diagramInner.scrollTop = 0; } catch (e) {}
+    try {
+      const activeView = viewsEl && viewsEl.querySelector('.diagram-view.active');
+      if (activeView) {
+        activeView.scrollTop = 0;
+        const mer = activeView.querySelector('.mermaid');
+        if (mer) mer.scrollTop = 0;
+      }
+    } catch (e) {}
+  }
+
   function syncSectionsToggleButton() {
     if (!toggleSectionsBtn) return;
     if (showingSections) {
@@ -951,7 +979,7 @@
     activeTab = 0;
     scheduleFitDiagram(200);
     // Ensure the top of the diagram panel is visible so users don't need to scroll down
-    try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
+    try { ensureDiagramTopVisible(); } catch (e) {}
   }
 
   function switchTab(idx) {
@@ -978,7 +1006,7 @@
     }
     scheduleFitDiagram(100);
     // Bring the diagram panel into view when switching tabs so the top of the diagram is shown
-    try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
+    try { ensureDiagramTopVisible(); } catch (e) {}
   }
 
   // -- Diff rendering --
@@ -1041,7 +1069,7 @@
     if (mermaidNodes.length) {
       await _runMermaid(mermaidNodes);
       // Ensure diagram panel is visible after rendering mermaid diagrams
-      try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
+      try { ensureDiagramTopVisible(); } catch (e) {}
     }
 
     // Timeline
