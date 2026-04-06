@@ -950,6 +950,8 @@
     if (initialView) await renderMermaidInView(initialView);
     activeTab = 0;
     scheduleFitDiagram(200);
+    // Ensure the top of the diagram panel is visible so users don't need to scroll down
+    try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
   }
 
   function switchTab(idx) {
@@ -975,6 +977,8 @@
       }
     }
     scheduleFitDiagram(100);
+    // Bring the diagram panel into view when switching tabs so the top of the diagram is shown
+    try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
   }
 
   // -- Diff rendering --
@@ -1036,6 +1040,8 @@
     const mermaidNodes = diffView.querySelectorAll('.mermaid');
     if (mermaidNodes.length) {
       await _runMermaid(mermaidNodes);
+      // Ensure diagram panel is visible after rendering mermaid diagrams
+      try { if (diagramPanel) diagramPanel.scrollIntoView({behavior:'smooth', block:'start'}); } catch (e) {}
     }
 
     // Timeline
