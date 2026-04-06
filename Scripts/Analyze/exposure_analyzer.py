@@ -145,6 +145,12 @@ class InternetExposureAnalyzer:
         print("[*] Persisting exposure analysis to database...")
         self._persist_exposure_analysis(resources, classifications, findings)
 
+        # Property-based exposure: mark resources with public-access findings
+        # as direct_exposure even if BFS didn't reach them (e.g. public buckets,
+        # public databases in clouds where we have no entry-point topology yet).
+        print("[*] Applying property-based exposure overrides...")
+        self._apply_property_based_exposure(resources)
+
         # Persist internet exposure paths (B2)
         print("[*] Persisting internet exposure paths...")
         self._persist_internet_exposure_paths(classifications)
@@ -172,6 +178,93 @@ class InternetExposureAnalyzer:
             "isolated": isolated,
             "total_exposed": directly_exposed + mitigated,
         }
+
+    def _apply_property_based_exposure(self, resources: List[dict]) -> None:
+        """Override exposure_level to direct_exposure for resources with public-access findings.
+
+        Some resources are directly internet-accessible via misconfigured properties
+        (public bucket ACLs, public database endpoints, open firewall rules) without
+        needing a network gateway in the topology. This is common in Alicloud, OCI, and GCP.
+
+        Rule ID patterns that indicate direct internet exposure:
+          - *-public-access* (OSS buckets, GCS buckets, OCI buckets, Azure mysql)
+          - *-public-ip*     (Cloud SQL with public IP)
+          - *-allow-all*     (GCP firewall allowing all ports / Azure NSG allowing all)
+          - *-open-all-ports (GCP compute firewall open to world)
+          - *-bigquery-dataset-public-access (GCP BigQuery public dataset)
+        """
+        # Patterns in rule_id that signal direct public internet access
+        _PUBLIC_ACCESS_PATTERNS = (
+            "-public-access",
+            "-public-ip",
+            "-network-allow-all",
+            "-open-all-ports",
+            "-allow-all-ports",
+            "-bigquery-dataset-public",
+        )
+
+        conn = self.connect()
+        try:
+            # Find findings with public-access rule IDs for this experiment
+            rows = conn.execute("""
+                SELECT DISTINCT f.resource_id, r.resource_name, r.resource_type, r.provider
+                FROM findings f
+                JOIN resources r ON r.id = f.resource_id
+                WHERE f.experiment_id = ?
+                  AND f.resource_id IS NOT NULL
+            """, (self.experiment_id,)).fetchall()
+
+            upgraded = 0
+            for row in rows:
+                resource_id = row[0]
+                rule_ids_rows = conn.execute(
+                    "SELECT rule_id FROM findings WHERE experiment_id = ? AND resource_id = ?",
+                    (self.experiment_id, resource_id),
+                ).fetchall()
+                rule_ids = [r[0] or "" for r in rule_ids_rows]
+
+                is_public = any(
+                    pat in rule_id.lower()
+                    for rule_id in rule_ids
+                    for pat in _PUBLIC_ACCESS_PATTERNS
+                )
+                if not is_public:
+                    continue
+
+                # Only upgrade if currently isolated (don't downgrade direct/mitigated)
+                existing = conn.execute(
+                    "SELECT exposure_level FROM exposure_analysis WHERE experiment_id = ? AND resource_id = ?",
+                    (self.experiment_id, resource_id),
+                ).fetchone()
+
+                if existing and existing[0] == "isolated":
+                    conn.execute("""
+                        UPDATE exposure_analysis
+                        SET exposure_level = 'direct_exposure',
+                            has_internet_path = 1,
+                            notes = COALESCE(notes || ' | ', '') || 'property-based: public access finding'
+                        WHERE experiment_id = ? AND resource_id = ?
+                    """, (self.experiment_id, resource_id))
+                    upgraded += 1
+                elif not existing:
+                    # No existing row — insert a minimal one
+                    normalized = self.normalizer.normalize(row[1], row[2], row[3])
+                    conn.execute("""
+                        INSERT INTO exposure_analysis
+                          (experiment_id, resource_id, resource_name, resource_type, provider,
+                           normalized_role, is_entry_point, is_countermeasure, is_compute_or_data,
+                           exposure_level, has_internet_path, notes)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 'direct_exposure', 1,
+                                'property-based: public access finding')
+                    """, (self.experiment_id, resource_id, row[1], row[2], row[3],
+                          normalized.normalized_role.value))
+                    upgraded += 1
+
+            if upgraded:
+                conn.commit()
+                print(f"[+] Property-based exposure: upgraded {upgraded} resource(s) to direct_exposure")
+        except Exception as e:
+            print(f"[WARN] Property-based exposure detection failed: {e}", file=sys.stderr)
 
     def _persist_exposure_analysis(
         self,

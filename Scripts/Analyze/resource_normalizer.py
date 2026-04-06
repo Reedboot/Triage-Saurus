@@ -175,6 +175,44 @@ _GCP_MAPPINGS = {
     "google_pubsub_subscription": (UnifiedRole.DATA, False, False),
 }
 
+# Alicloud resource type → (Unified Role, is_public, is_boundary)
+_ALICLOUD_MAPPINGS = {
+    "alicloud_slb": (UnifiedRole.LOAD_BALANCER, False, False),
+    "alicloud_cdn_domain": (UnifiedRole.ENTRY_POINT, True, False),
+    "alicloud_eip": (UnifiedRole.ENTRY_POINT, True, False),
+    "alicloud_eip_association": (UnifiedRole.ENTRY_POINT, True, False),
+    "alicloud_oss_bucket": (UnifiedRole.DATA, False, False),
+    "alicloud_db_instance": (UnifiedRole.DATA, False, False),
+    "alicloud_rds_instance": (UnifiedRole.DATA, False, False),
+    "alicloud_ecs_instance": (UnifiedRole.COMPUTE, False, False),
+    "alicloud_instance": (UnifiedRole.COMPUTE, False, False),
+    "alicloud_vpc": (UnifiedRole.OTHER, False, False),
+    "alicloud_vswitch": (UnifiedRole.OTHER, False, False),
+    "alicloud_ram_role": (UnifiedRole.OTHER, False, False),
+    "alicloud_ram_policy": (UnifiedRole.OTHER, False, False),
+    "alicloud_actiontrail_trail": (UnifiedRole.OTHER, False, False),
+    "alicloud_security_group": (UnifiedRole.COUNTERMEASURE, False, True),
+    "alicloud_security_group_rule": (UnifiedRole.COUNTERMEASURE, False, True),
+}
+
+# OCI (Oracle Cloud Infrastructure) resource type → (Unified Role, is_public, is_boundary)
+_OCI_MAPPINGS = {
+    "oci_load_balancer": (UnifiedRole.LOAD_BALANCER, False, False),
+    "oci_load_balancer_load_balancer": (UnifiedRole.LOAD_BALANCER, False, False),
+    "oci_core_internet_gateway": (UnifiedRole.ENTRY_POINT, True, False),
+    "oci_core_vcn": (UnifiedRole.OTHER, False, False),
+    "oci_core_subnet": (UnifiedRole.OTHER, False, False),
+    "oci_objectstorage_bucket": (UnifiedRole.DATA, False, False),
+    "oci_database": (UnifiedRole.DATA, False, False),
+    "oci_mysql_mysql_db_system": (UnifiedRole.DATA, False, False),
+    "oci_core_instance": (UnifiedRole.COMPUTE, False, False),
+    "oci_functions_function": (UnifiedRole.COMPUTE, False, False),
+    "oci_container_instances_container_instance": (UnifiedRole.COMPUTE, False, False),
+    "oci_identity_policy": (UnifiedRole.OTHER, False, False),
+    "oci_network_firewall_network_firewall": (UnifiedRole.COUNTERMEASURE, False, True),
+    "oci_network_firewall_network_firewall_policy": (UnifiedRole.COUNTERMEASURE, False, True),
+}
+
 
 class ResourceNormalizer:
     """Normalize cloud resources to unified roles for exposure analysis."""
@@ -185,6 +223,8 @@ class ResourceNormalizer:
             "aws": _AWS_MAPPINGS,
             "azure": _AZURE_MAPPINGS,
             "gcp": _GCP_MAPPINGS,
+            "alicloud": _ALICLOUD_MAPPINGS,
+            "oracle": _OCI_MAPPINGS,
         }
         self._all_mappings: Dict[str, tuple] = {}
         for provider, mapping in self._mappings.items():
@@ -199,6 +239,10 @@ class ResourceNormalizer:
             return "azure"
         if resource_type_lower.startswith("google_"):
             return "gcp"
+        if resource_type_lower.startswith("alicloud_"):
+            return "alicloud"
+        if resource_type_lower.startswith("oci_"):
+            return "oracle"
         return "unknown"
 
     def normalize(

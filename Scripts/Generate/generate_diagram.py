@@ -411,6 +411,48 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
         except Exception:
             pass
 
+        # Exposure-analysis fallback: query exposure_analysis for resources
+        # classified as direct_exposure or mitigated. This catches:
+        #   - Resources exposed via BFS from entry points (IGW/ELB/public IPs)
+        #   - Resources with property-based public access (buckets, public DBs)
+        # This is the most authoritative source — it reflects actual analysis results.
+        try:
+            prov_where4 = ""
+            repo_join4 = ""
+            repo_where4 = ""
+            ea_params: list = [experiment_id]
+            if provider:
+                prov_where4 = "AND LOWER(r.provider) = LOWER(?)"
+                ea_params.append(provider)
+            if repo_name:
+                repo_join4 = "JOIN repositories rp4 ON r.repo_id = rp4.id"
+                repo_where4 = "AND LOWER(rp4.repo_name) = LOWER(?)"
+                ea_params.append(repo_name)
+            ea_rows = conn.execute(f"""
+                SELECT r.resource_name, ea.exposure_level
+                FROM exposure_analysis ea
+                JOIN resources r ON r.id = ea.resource_id
+                {repo_join4}
+                WHERE ea.experiment_id = ?
+                  AND ea.exposure_level IN ('direct_exposure', 'mitigated')
+                  {prov_where4}
+                  {repo_where4}
+            """, ea_params).fetchall()
+            for row in ea_rows:
+                name = row['resource_name']
+                level = row['exposure_level']
+                if name and name not in existing_internet_targets:
+                    label = '⚠️ exposed' if level == 'direct_exposure' else 'mitigated'
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': label,
+                        'connection_type': 'exposed' if level == 'direct_exposure' else 'mitigated',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+        except Exception:
+            pass
+
     return connections
 
 
@@ -870,10 +912,10 @@ def generate_architecture_diagram(
 
         label = _connection_label(conn, ip_restricted=ip_restricted)
 
-        # Cross-repo or semantic data_access connections use dashed lines
+        # Cross-repo or semantic data_access connections use dashed lines; mitigated exposure too
         is_cross = conn.get('is_cross_repo') if isinstance(conn, dict) else conn['is_cross_repo']
         conn_type = str(conn.get("connection_type") or "").strip()
-        if is_cross or conn_type == "data_access":
+        if is_cross or conn_type in ("data_access", "mitigated"):
             # Mermaid dashed arrow with label: A -. label .-> B (no pipe characters)
             inner = label.strip('|') if label else ''
             if inner:
