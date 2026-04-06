@@ -7,6 +7,7 @@ rules:
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:
+      # Public cluster with no IP restrictions
       - patterns:
           - pattern: |
               resource "azurerm_kubernetes_cluster" "$NAME" {
@@ -16,6 +17,12 @@ rules:
               resource "azurerm_kubernetes_cluster" "$NAME" {
                 ...
                 api_server_authorized_ip_ranges = [...]
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_kubernetes_cluster" "$NAME" {
+                ...
+                private_cluster_enabled = true
                 ...
               }
       - patterns:
@@ -29,10 +36,22 @@ rules:
                 api_server_authorized_ip_ranges = [...]
                 ...
               }
-      # Explicitly catch empty list [] which is equally insecure as absent
+          - pattern-not: |
+              resource azurerm_kubernetes_cluster "$NAME" {
+                ...
+                private_cluster_enabled = true
+                ...
+              }
+      # Explicitly catch empty list [] which is equally insecure as absent (public cluster only)
       - patterns:
           - pattern-inside: |
               resource "azurerm_kubernetes_cluster" $NAME {
+                ...
+              }
+          - pattern-not-inside: |
+              resource "azurerm_kubernetes_cluster" $NAME {
+                ...
+                private_cluster_enabled = true
                 ...
               }
           - pattern: |
@@ -40,6 +59,12 @@ rules:
       - patterns:
           - pattern-inside: |
               resource azurerm_kubernetes_cluster $NAME {
+                ...
+              }
+          - pattern-not-inside: |
+              resource azurerm_kubernetes_cluster $NAME {
+                ...
+                private_cluster_enabled = true
                 ...
               }
           - pattern: |
