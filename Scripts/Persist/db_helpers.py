@@ -3470,12 +3470,13 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
     # Deduplicate case-insensitively by (provider, diagram_title) keeping the latest updated_at
     grouped: dict[tuple[str, str], dict] = {}
     for r in rows:
-        prov = (r["provider"] or "").strip()
-        title = (r["diagram_title"] or "").strip()
+        row_dict = dict(r)
+        prov = (row_dict.get("provider") or "").strip()
+        title = (row_dict.get("diagram_title") or "").strip()
         key = (prov.lower(), title.lower())
         existing = grouped.get(key)
-        if not existing or (r.get("updated_at") or "") > (existing.get("updated_at") or ""):
-            grouped[key] = dict(r)
+        if not existing or (row_dict.get("updated_at") or "") > (existing.get("updated_at") or ""):
+            grouped[key] = row_dict
 
     # Sort and return
     items = sorted(grouped.values(), key=lambda x: (x.get("display_order") or 0, (x.get("provider") or "").lower()))

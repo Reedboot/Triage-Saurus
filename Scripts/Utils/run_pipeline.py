@@ -40,6 +40,8 @@ sys.path.insert(0, str(SCRIPTS / "Utils"))
 _EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
 _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
 _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
+_INFER_SEMANTIC   = SCRIPTS / "Analyze"  / "infer_semantic_connections.py"
+_RELINK        = SCRIPTS / "Persist"    / "relink_findings_to_resources.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 _GEN_HIERARCHICAL = SCRIPTS / "Generate" / "generate_hierarchical_diagram.py"
 
@@ -244,16 +246,46 @@ def main() -> int:
     
     print("[Pipeline] Phase 3a summary rendering is dynamic from DB (no Internet_Exposure_*.md files).")
 
-    # ── Phase 3b: Findings remain DB-only (no markdown emission) ─────────────
-    finding_ids = _get_experiment_findings(experiment_id)
-    print(f"\n[Pipeline] Phase 3b keeps findings in DB only ({len(finding_ids)} finding(s)); no finding .md files are written.")
-
-    # ── Phase 3c: Architecture diagram ───────────────────────────────────────
-    # DB-first mode: persist cloud diagrams only; do not emit Summary/Cloud markdown artifacts.
-    rc_hierarchical = _run(
-        [sys.executable, str(_GEN_HIERARCHICAL), "--experiment-id", experiment_id, "--persist-db"],
-        "Phase 3c — Generate hierarchical architecture diagram",
+    # ── Phase 3b: Relink findings to resources ───────────────────────────────
+    _run(
+        [sys.executable, str(_RELINK)],
+        "Phase 3b — Relink findings to resources (populate resource_id)",
     )
+    finding_ids = _get_experiment_findings(experiment_id)
+    print(f"\n[Pipeline] Phase 3b: {len(finding_ids)} finding(s) in DB.")
+
+    # ── Phase 3c: Infer semantic connections + data flows ────────────────────
+    _run(
+        [sys.executable, str(_INFER_SEMANTIC), "--experiment", experiment_id],
+        "Phase 3c — Infer semantic connections and data flows",
+    )
+
+    # ── Phase 3d: Architecture diagram ───────────────────────────────────────
+    # Use improved generate_diagram.py with security zones, severity colours, and data flows.
+    import os
+    output_dir = REPO_ROOT / "Output" / "Learning" / "experiments" / f"{experiment_id}_diagrams"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            sys.executable, str(_GEN_DIAGRAM),
+            experiment_id,
+            "--split-by-provider",
+            "--output", str(output_dir),
+        ],
+        "Phase 3d — Generate architecture diagrams (zones, severity colours, data flows)",
+    )
+
+    # ── Mark experiment complete ──────────────────────────────────────────────
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE experiments SET status = 'complete' WHERE id = ?",
+                (experiment_id,),
+            )
+            conn.commit()
+        print(f"\n[Pipeline] Experiment {experiment_id} marked complete.")
+    except Exception as exc:
+        print(f"\n[WARN] Could not mark experiment complete: {exc}", file=sys.stderr)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
@@ -266,7 +298,6 @@ def main() -> int:
     print(f"\n  Next steps (require LLM):")
     print(f"    python3 Scripts/Enrich/enrich_findings.py --experiment {experiment_id}")
     print(f"    python3 Scripts/run_skeptics.py --experiment {experiment_id} --reviewer all")
-    print(f"    python3 Scripts/triage_experiment.py complete {experiment_id}")
     print()
     return 0
 
