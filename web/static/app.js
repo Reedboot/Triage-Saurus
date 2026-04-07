@@ -94,10 +94,19 @@
     return activeView ? activeView.querySelector('svg') : null;
   }
 
-  // SVG must be well-formed XML. Mermaid renders <br> and <hr> as HTML void
-  // elements inside <foreignObject> blocks — invalid without a self-closing slash.
-  function _fixSvgXml(str) {
-    return str.replace(/<(br|hr)(\s[^>]*)?\s*>/gi, '<$1$2/>');
+  // Serialize an SVG DOM element to a well-formed XML string.
+  // Using XMLSerializer is the correct approach — outerHTML uses the HTML
+  // serializer which emits void elements (br, hr, img, …) without the required
+  // self-closing slash, making the resulting file rejected by XML parsers.
+  // The regex fallback is kept as belt-and-suspenders for any edge cases.
+  function _svgToXmlString(svgEl) {
+    const serializer = new XMLSerializer();
+    let str = serializer.serializeToString(svgEl);
+    // Belt-and-suspenders: fix any remaining HTML-style void elements that may
+    // appear inside <foreignObject> blocks (br, hr, img, input, wbr, …).
+    const voidTags = 'br|hr|img|input|wbr|area|col|embed|link|meta|param|source|track';
+    str = str.replace(new RegExp(`<(${voidTags})(\\s[^>]*)?>`, 'gi'), '<$1$2/>');
+    return str;
   }
 
   function _triggerDownload(blob, filename) {
@@ -127,7 +136,7 @@
       bg.setAttribute('height', '100%');
       bg.setAttribute('fill', 'white');
       clone.insertBefore(bg, clone.firstChild);
-      const svgData = '<?xml version="1.0" encoding="utf-8"?>\n' + _fixSvgXml(clone.outerHTML);
+      const svgData = '<?xml version="1.0" encoding="utf-8"?>\n' + _svgToXmlString(clone);
       const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
       _triggerDownload(blob, _diagramFilename('svg'));
       const old = exportSvgBtn.textContent;
@@ -176,7 +185,7 @@
         clone.setAttribute('width',  w * scale);
         clone.setAttribute('height', h * scale);
 
-        const svgStr = _fixSvgXml(clone.outerHTML);
+        const svgStr = _svgToXmlString(clone);
         const img = new Image();
         const canvas = document.createElement('canvas');
         canvas.width  = w * scale;
