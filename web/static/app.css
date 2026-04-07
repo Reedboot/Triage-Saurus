@@ -255,6 +255,15 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   flex: 1;
 }
 
+/* Ensure workspace fills available viewport height so child panels can scroll independently */
+.container { height: calc(100vh - 64px); }
+.workspace { min-height: 0; height: 100%; }
+
+/* Enforce independent vertical scrolling for panels */
+.workspace > #log-panel, .workspace > #diagram-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.workspace > #log-panel .panel-section, .workspace > #log-panel #log-output, .workspace > #log-panel .section-panel-content { overflow-y: auto; min-height: 0; }
+.workspace > #diagram-panel .panel-section, .workspace > #diagram-panel .diagram-views { overflow-y: auto; }
+
 /* When collapsed (log hidden), use a single full-width column so the diagram expands */
 .workspace.collapsed {
   grid-template-columns: 1fr;
@@ -331,7 +340,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto; overflow-x: auto;
+  overflow-y: scroll; overflow-x: auto;
   padding: 8px 12px;
   height: 100%;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -348,10 +357,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* Make the left workspace column (log panel) independently scrollable when page is tall */
 .workspace { min-height: 0; }
-.workspace > #log-panel { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: auto; }
+.workspace > #log-panel { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
 #log-panel .panel-section { min-height: 0; overflow: auto; }
 #log-panel .panel-header { flex: 0 0 auto; }
 #log-panel .panel-section #log-output { flex: 1 1 auto; }
+#log-panel .section-tab-bar { flex: 0 0 auto; }
+#log-panel .section-panel-content { flex: 0 1 auto; min-height: 0; }
+#log-panel #log-output { flex: 1 1 auto; }
 
 #log-output .line-ok     { color: var(--green); }
 #log-output .line-warn   { color: var(--yellow); }
@@ -609,6 +621,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   background: var(--bg-base);
   min-width: 0;
   width: 100%;
+  min-height: 300px;
   align-self: stretch;
   justify-self: stretch;
   flex: 0 1 auto;
@@ -674,8 +687,9 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   flex-direction: column;
   flex: 1 1 100%;
   width: 100%;
+  min-height: 0;
   box-sizing: border-box;
-  overflow-y: auto;
+  overflow-y: scroll;
   overflow-x: auto;
   padding: 14px;
   scrollbar-width: thin;
@@ -751,6 +765,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   border-radius: 10px;
   padding: 18px 20px;
   box-shadow: 0 10px 30px rgba(1, 4, 9, 0.35);
+  overflow: hidden;
 }
 .markdown-card + .markdown-card {
   margin-top: 14px;
@@ -1028,6 +1043,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   display: block;
   overflow-x: auto;
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
   padding: 0 12px 12px;
@@ -1495,6 +1511,13 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .section-tab-bar::-webkit-scrollbar { height: 4px; }
 .section-tab-bar::-webkit-scrollbar-track { background: transparent; }
 .section-tab-bar::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 2px; }
+
+/* Table wrapper scrollbars (both axes) */
+.section-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
+.section-table-wrap::-webkit-scrollbar-track { background: transparent; }
+.section-table-wrap::-webkit-scrollbar-thumb { background: #1f6feb44; border-radius: 4px; }
+.section-table-wrap::-webkit-scrollbar-thumb:hover { background: #1f6feb66; }
+.section-table-wrap::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── Diagram zoom/pan wrapper ── */
 .diagram-zoom-wrap {
