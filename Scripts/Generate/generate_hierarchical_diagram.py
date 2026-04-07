@@ -255,6 +255,17 @@ class HierarchicalDiagramBuilder:
                 if r['id'] in variant_counts:
                     n = variant_counts[r['id']]
                     r['_variant_badge'] = f"+{n} test variants"
+
+        # Always deduplicate connections — even without suppressions, the DB may
+        # contain duplicate edges via different code paths (contains + data_access).
+        seen_edges: set = set()
+        deduped: list = []
+        for c in self.connections:
+            edge_key = (c.get('source'), c.get('target'), c.get('connection_type', ''))
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                deduped.append(c)
+        self.connections = deduped
         # ── End test-variant dedup ──────────────────────────────────────────
         
         # Build lookup maps
@@ -322,28 +333,18 @@ class HierarchicalDiagramBuilder:
             findings = []
             with get_db_connection() as conn:
                 rows = conn.execute("""
-                    SELECT f.id, f.resource_id, f.finding_type, f.finding_context
+                    SELECT f.id, f.resource_id, f.category, f.finding_path
                     FROM findings f
-                    WHERE f.experiment_id = ? AND f.finding_context IS NOT NULL
+                    WHERE f.experiment_id = ?
                 """, [self.experiment_id]).fetchall()
                 
                 for row in rows:
                     finding = {
                         'id': row['id'],
                         'resource_id': row['resource_id'],
-                        'finding_type': row['finding_type'],
+                        'finding_type': row['category'],
                         'context': [],
                     }
-                    # Parse context JSON
-                    try:
-                        if row['finding_context']:
-                            context = json.loads(row['finding_context'])
-                            if isinstance(context, list):
-                                finding['context'] = context
-                            elif isinstance(context, dict):
-                                finding['context'] = [context]
-                    except (json.JSONDecodeError, TypeError):
-                        pass
                     findings.append(finding)
             
             # Load resource properties for this experiment

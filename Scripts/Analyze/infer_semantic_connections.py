@@ -15,10 +15,14 @@ Rules:
 6. Compute/K8s → Messaging (ServiceBus, SQS, PubSub) — same provider
 7. Compute/K8s → Cache (Redis) — same provider
 
-Fan-out guard: when >_MAX_FANOUT resources of matching types exist in the same
-provider with no VPC isolation available, skip ALL-to-ALL inference to avoid
-cluttering test-suite diagrams with N×M noise edges.  Architecture TF files that
-use a VPC resource bypass this cap because VPC-scoped matching is precise.
+Fan-out guard: when the cross-product of matching resources in the same provider
+exceeds _MAX_FANOUT² and no VPC isolation is available, skip ALL-to-ALL inference
+to avoid cluttering test-suite diagrams with N×M noise edges.  Architecture TF
+files that use a VPC resource bypass this cap because VPC-scoped matching is precise.
+
+Key design note: _APIM_TYPES / _K8S_TYPES / _LB_TYPES use EXACT match only (no
+substring) to avoid child resources (azurerm_api_management_api) being counted
+as top-level gateway resources and inflating cross-product counts.
 """
 
 import argparse
@@ -29,9 +33,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
 import db_helpers
 
-# Maximum number of resources per side before skipping unprecise (no-VPC) inference.
-# E.g., if there are 6 AppGateways and 11 backends with no VPC isolation, skip.
-_MAX_FANOUT = 3
+# Maximum fanout per side before blocking unprecise (no-VPC) inference.
+# Cross-products larger than _MAX_FANOUT² are suppressed without VPC scoping.
+_MAX_FANOUT = 5
 
 # Compute resource types
 _COMPUTE_TYPES = {
@@ -203,32 +207,63 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
         def has_vpc_isolation(r: dict) -> bool:
             return resource_vpc.get(r["id"]) is not None
 
-        def fanout_ok(srcs: list, tgts: list, provider: str) -> bool:
-            """Return False when there are too many candidates with no VPC to scope them.
+        def fanout_ok(srcs: list, tgts: list) -> bool:
+            """Return False when the cross-product would be too large with no VPC scoping.
 
-            If any resource on either side has VPC membership, we trust the VPC
-            check to filter correctly.  Only suppress when BOTH sides are VPC-less
-            and the cross-product would be large (> _MAX_FANOUT×_MAX_FANOUT).
+            srcs and tgts must already be filtered to a single provider.
+            If any resource has VPC membership, we trust the VPC check to filter
+            correctly.  Only suppress when both sides are VPC-less and the
+            cross-product exceeds _MAX_FANOUT².
             """
-            p_srcs = [r for r in srcs if r.get("provider", "").lower() == provider]
-            p_tgts = [r for r in tgts if r.get("provider", "").lower() == provider]
-            if len(p_srcs) <= _MAX_FANOUT or len(p_tgts) <= _MAX_FANOUT:
-                return True
-            # Check if any have VPC isolation available
-            any_vpc = any(has_vpc_isolation(r) for r in p_srcs + p_tgts)
-            return any_vpc  # If VPC available, trust the filter; else skip
+            if not srcs or not tgts:
+                return False
+            if len(srcs) * len(tgts) > _MAX_FANOUT * _MAX_FANOUT:
+                # Large cross-product: only allow if VPC can scope it
+                any_vpc = any(has_vpc_isolation(r) for r in srcs + tgts)
+                return any_vpc
+            return True
 
-        # Categorise resources
-        compute = [r for r in resources if _type_matches(r["resource_type"], _COMPUTE_TYPES)]
-        databases = [r for r in resources if _type_matches(r["resource_type"], _DB_TYPES)]
-        storage = [r for r in resources if _type_matches(r["resource_type"], _STORAGE_TYPES)]
-        lbs = [r for r in resources if _type_matches(r["resource_type"], _LB_TYPES)]
-        apims = [r for r in resources if _type_matches(r["resource_type"], _APIM_TYPES)]
-        k8s = [r for r in resources if _type_matches(r["resource_type"], _K8S_TYPES)]
-        registries = [r for r in resources if _type_matches(r["resource_type"], _CONTAINER_REGISTRY_TYPES)]
-        kvs = [r for r in resources if _type_matches(r["resource_type"], _KV_TYPES)]
-        messaging = [r for r in resources if _type_matches(r["resource_type"], _MESSAGING_TYPES)]
-        caches = [r for r in resources if _type_matches(r["resource_type"], _CACHE_TYPES)]
+        # All categories use exact match only (see _categorise docstring).
+        # Doing so prevents child resources from being miscounted as top-level
+        # service instances and triggering spurious cross-product connections.
+
+        def _categorise(resource_type: str) -> dict:
+            """Return a dict of booleans for category membership.
+
+            All categories use exact match only to prevent child resources
+            (e.g. google_cloud_run_service_iam_member) from matching parent types.
+            """
+            rt = (resource_type or "").lower()
+            return {
+                "compute": rt in _COMPUTE_TYPES,
+                "db": rt in _DB_TYPES,
+                "storage": rt in _STORAGE_TYPES,
+                "lb": rt in _LB_TYPES,
+                "apim": rt in _APIM_TYPES,
+                "k8s": rt in _K8S_TYPES,
+                "registry": rt in _CONTAINER_REGISTRY_TYPES,
+                "kv": rt in _KV_TYPES,
+                "messaging": rt in _MESSAGING_TYPES,
+                "cache": rt in _CACHE_TYPES,
+            }
+
+        # Pre-categorise all resources
+        for r in resources:
+            r["_cats"] = _categorise(r["resource_type"])
+
+        def by_cat(cat: str) -> list:
+            return [r for r in resources if r["_cats"].get(cat)]
+
+        compute = by_cat("compute")
+        databases = by_cat("db")
+        storage = by_cat("storage")
+        lbs = by_cat("lb")
+        apims = by_cat("apim")
+        k8s = by_cat("k8s")
+        registries = by_cat("registry")
+        kvs = by_cat("kv")
+        messaging = by_cat("messaging")
+        caches = by_cat("cache")
 
         new_connections = []
 
@@ -241,65 +276,86 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
         providers = {(r.get("provider") or "").lower() for r in resources if r.get("provider")}
 
         for provider in providers:
+            # Pre-filter every category to this provider only.
+            # IMPORTANT: inner loops must use these filtered lists so that the
+            # fanout guard and the cross-product iteration are always scoped to
+            # one provider — prevents cross-provider ghost connections.
+            p = provider  # alias
+
+            def pf(lst):
+                return [r for r in lst if r.get("provider", "").lower() == p]
+
+            p_lbs = pf(lbs)
+            p_apims = pf(apims)
+            p_compute = pf(compute)
+            p_k8s = pf(k8s)
+            p_databases = pf(databases)
+            p_storage = pf(storage)
+            p_registries = pf(registries)
+            p_kvs = pf(kvs)
+            p_messaging = pf(messaging)
+            p_caches = pf(caches)
+            p_ck = p_compute + p_k8s
+
             # Rule 1: LB → Compute/K8s (traffic routing)
-            if fanout_ok(lbs, compute + k8s, provider):
-                for lb in lbs:
-                    for tgt in compute + k8s:
+            if fanout_ok(p_lbs, p_ck):
+                for lb in p_lbs:
+                    for tgt in p_ck:
                         if plausible_connection(lb, tgt):
                             add_conn(lb["id"], tgt["id"], "data_access", "routes to")
 
-            # Rule 1b: APIM sits between LB and Compute — LB → APIM → Compute
-            if fanout_ok(lbs, apims, provider):
-                for lb in lbs:
-                    for apim in apims:
+            # Rule 1b: LB → APIM → Compute (APIM sits in the routing chain)
+            if fanout_ok(p_lbs, p_apims):
+                for lb in p_lbs:
+                    for apim in p_apims:
                         if plausible_connection(lb, apim):
                             add_conn(lb["id"], apim["id"], "data_access", "routes to")
 
-            if fanout_ok(apims, compute + k8s, provider):
-                for apim in apims:
-                    for tgt in compute + k8s:
+            if fanout_ok(p_apims, p_ck):
+                for apim in p_apims:
+                    for tgt in p_ck:
                         if plausible_connection(apim, tgt):
                             add_conn(apim["id"], tgt["id"], "data_access", "routes to")
 
             # Rule 2: Compute/K8s → DB
-            if fanout_ok(compute + k8s, databases, provider):
-                for src in compute + k8s:
-                    for db in databases:
+            if fanout_ok(p_ck, p_databases):
+                for src in p_ck:
+                    for db in p_databases:
                         if plausible_connection(src, db):
                             add_conn(src["id"], db["id"], "data_access", "reads/writes")
 
             # Rule 3: Compute/K8s → Storage
-            if fanout_ok(compute + k8s, storage, provider):
-                for src in compute + k8s:
-                    for stor in storage:
+            if fanout_ok(p_ck, p_storage):
+                for src in p_ck:
+                    for stor in p_storage:
                         if plausible_connection(src, stor):
                             add_conn(src["id"], stor["id"], "data_access", "reads/writes")
 
             # Rule 4: K8s/Compute → Container Registry
-            if fanout_ok(k8s + compute, registries, provider):
-                for src in k8s + compute:
-                    for reg in registries:
+            if fanout_ok(p_ck, p_registries):
+                for src in p_ck:
+                    for reg in p_registries:
                         if plausible_connection(src, reg):
                             add_conn(src["id"], reg["id"], "data_access", "pulls images")
 
             # Rule 5: Compute/K8s → Key Vault / Secrets (depends_on)
-            if fanout_ok(compute + k8s, kvs, provider):
-                for src in compute + k8s:
-                    for kv in kvs:
+            if fanout_ok(p_ck, p_kvs):
+                for src in p_ck:
+                    for kv in p_kvs:
                         if plausible_connection(src, kv):
                             add_conn(src["id"], kv["id"], "depends_on", "reads secrets")
 
             # Rule 6: Compute/K8s → Messaging
-            if fanout_ok(compute + k8s, messaging, provider):
-                for src in compute + k8s:
-                    for msg in messaging:
+            if fanout_ok(p_ck, p_messaging):
+                for src in p_ck:
+                    for msg in p_messaging:
                         if plausible_connection(src, msg):
                             add_conn(src["id"], msg["id"], "data_access", "publishes/subscribes")
 
             # Rule 7: Compute/K8s → Cache
-            if fanout_ok(compute + k8s, caches, provider):
-                for src in compute + k8s:
-                    for cache in caches:
+            if fanout_ok(p_ck, p_caches):
+                for src in p_ck:
+                    for cache in p_caches:
                         if plausible_connection(src, cache):
                             add_conn(src["id"], cache["id"], "data_access", "reads/writes cache")
 
