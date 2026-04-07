@@ -55,6 +55,8 @@
   const viewsEl         = document.getElementById('diagram-views');
   const placeholder     = document.getElementById('diagram-placeholder');
   const copyDiagramBtn  = document.getElementById('copy-diagram-btn');
+  const exportSvgBtn    = document.getElementById('export-diagram-svg-btn');
+  const exportPngBtn    = document.getElementById('export-diagram-png-btn');
 
   if (copyDiagramBtn) {
     copyDiagramBtn.addEventListener('click', async () => {
@@ -74,6 +76,196 @@
         console.warn('Copy failed:', e);
       }
     });
+  }
+
+  // ── Diagram export helpers ──────────────────────────────────────────────────
+
+  function _diagramFilename(ext) {
+    const repo   = (currentRepoName || 'scan').replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const expId  = (currentExpId   || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const activeTab = tabsEl && tabsEl.querySelector('.tab-btn.active');
+    const providerRaw = activeTab ? activeTab.textContent.trim() : 'diagram';
+    const provider = providerRaw.replace(/[^a-zA-Z0-9_\-]/g, '_').toLowerCase();
+    return `${repo}_scan${expId}_${provider}_architecture.${ext}`;
+  }
+
+  function _getActiveSvgElement() {
+    const activeView = viewsEl && viewsEl.querySelector('.diagram-view.active');
+    return activeView ? activeView.querySelector('svg') : null;
+  }
+
+  function _triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+  }
+
+  if (exportSvgBtn) {
+    exportSvgBtn.addEventListener('click', () => {
+      const svg = _getActiveSvgElement();
+      if (!svg) {
+        alert('No diagram rendered yet — please wait for the diagram to load.');
+        return;
+      }
+      // Clone and add XML declaration + namespace for standalone SVG
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+      // Embed a white background rect so the SVG looks good outside the dark UI
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bg.setAttribute('width', '100%');
+      bg.setAttribute('height', '100%');
+      bg.setAttribute('fill', 'white');
+      clone.insertBefore(bg, clone.firstChild);
+      const svgData = '<?xml version="1.0" encoding="utf-8"?>\n' + clone.outerHTML;
+      const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      _triggerDownload(blob, _diagramFilename('svg'));
+      const old = exportSvgBtn.textContent;
+      exportSvgBtn.textContent = '✅ SVG saved';
+      setTimeout(() => { exportSvgBtn.textContent = old; }, 1500);
+    });
+  }
+
+  if (exportPngBtn) {
+    exportPngBtn.addEventListener('click', () => {
+      const svg = _getActiveSvgElement();
+      if (!svg) {
+        alert('No diagram rendered yet — please wait for the diagram to load.');
+        return;
+      }
+      const btn = exportPngBtn;
+      const oldText = btn.textContent;
+      btn.textContent = '⏳ Rendering…';
+      btn.disabled = true;
+
+      try {
+        const clone = svg.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+        // Add white background
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bg.setAttribute('width', '100%');
+        bg.setAttribute('height', '100%');
+        bg.setAttribute('fill', 'white');
+        clone.insertBefore(bg, clone.firstChild);
+
+        // Determine pixel dimensions — use natural SVG size or fall back to rendered size
+        const viewBox = svg.getAttribute('viewBox');
+        let w = svg.clientWidth  || svg.getBoundingClientRect().width  || 1600;
+        let h = svg.clientHeight || svg.getBoundingClientRect().height || 900;
+        if (viewBox) {
+          const vbParts = viewBox.trim().split(/[\s,]+/);
+          if (vbParts.length === 4) {
+            const vbW = parseFloat(vbParts[2]);
+            const vbH = parseFloat(vbParts[3]);
+            if (vbW > 0 && vbH > 0) { w = vbW; h = vbH; }
+          }
+        }
+        // Scale up 2× for high-DPI / readability
+        const scale = 2;
+        clone.setAttribute('width',  w * scale);
+        clone.setAttribute('height', h * scale);
+
+        const svgStr = clone.outerHTML;
+        const img = new Image();
+        const canvas = document.createElement('canvas');
+        canvas.width  = w * scale;
+        canvas.height = h * scale;
+        const ctx = canvas.getContext('2d');
+
+        img.onload = () => {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob(blob => {
+            if (blob) {
+              _triggerDownload(blob, _diagramFilename('png'));
+              btn.textContent = '✅ PNG saved';
+            } else {
+              btn.textContent = '❌ Failed';
+            }
+            btn.disabled = false;
+            setTimeout(() => { btn.textContent = oldText; }, 1800);
+          }, 'image/png');
+        };
+        img.onerror = (e) => {
+          console.warn('PNG export failed to load SVG as image:', e);
+          btn.textContent = '❌ Failed';
+          btn.disabled = false;
+          setTimeout(() => { btn.textContent = oldText; }, 1800);
+        };
+        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgStr)));
+      } catch (err) {
+        console.error('PNG export error:', err);
+        btn.textContent = '❌ Error';
+        btn.disabled = false;
+        setTimeout(() => { btn.textContent = oldText; }, 1800);
+      }
+    });
+  }
+
+  // ── CSV Export ──────────────────────────────────────────────────────────────
+  // A persistent "⬇ Export CSV" button is injected into the section toolbar
+  // whenever a section tab is active. Clicking it downloads the current
+  // section's data as a CSV file named {repo}_scan{expId}_{section}.csv.
+
+  let _csvExportBtn = null;
+
+  function _injectCsvButton() {
+    if (_csvExportBtn) return;  // already injected
+    const toolbar = document.getElementById('section-tab-bar');
+    if (!toolbar) return;
+    const btn = document.createElement('button');
+    btn.id = 'export-csv-btn';
+    btn.className = 'btn-small export-csv-btn';
+    btn.title = 'Export current section to CSV';
+    btn.textContent = '⬇ Export CSV';
+    btn.style.cssText = 'margin-left:auto;flex-shrink:0;';
+    btn.addEventListener('click', _onExportCsv);
+    toolbar.style.display = 'flex';
+    toolbar.style.alignItems = 'center';
+    toolbar.appendChild(btn);
+    _csvExportBtn = btn;
+  }
+
+  async function _onExportCsv() {
+    const section = activeSection;
+    const expId   = currentExpId;
+    const repo    = currentRepoName || resolveSelectedRepoName();
+    if (!section || section === '__log__' || !expId || !repo) {
+      alert('No section active to export.');
+      return;
+    }
+    const btn = _csvExportBtn;
+    const oldText = btn.textContent;
+    btn.textContent = '⏳ Exporting…';
+    btn.disabled = true;
+    try {
+      const url = `/api/export/csv/${encodeURIComponent(expId)}/${encodeURIComponent(repo)}/${encodeURIComponent(section)}`;
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({error: resp.statusText}));
+        alert(`Export failed: ${err.error || resp.statusText}`);
+        return;
+      }
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const fnMatch = cd.match(/filename="([^"]+)"/);
+      const filename = fnMatch ? fnMatch[1] : `export_${section}.csv`;
+      const blob = await resp.blob();
+      _triggerDownload(blob, filename);
+      btn.textContent = '✅ Downloaded';
+      setTimeout(() => { btn.textContent = oldText; }, 1800);
+    } catch (e) {
+      console.error('CSV export error:', e);
+      btn.textContent = '❌ Error';
+      setTimeout(() => { btn.textContent = oldText; }, 1800);
+    } finally {
+      btn.disabled = false;
+    }
   }
   const zoomInBtn       = document.getElementById('zoom-in-btn');
   const zoomOutBtn      = document.getElementById('zoom-out-btn');
@@ -622,6 +814,9 @@
             });
           }
         }
+
+        // Inject CSV export button into section tab bar (once)
+        _injectCsvButton();
       } catch (e) {
         console.warn('Failed to run section initializer:', e);
       }

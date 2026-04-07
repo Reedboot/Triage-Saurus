@@ -8041,6 +8041,287 @@ def api_view_containers(experiment_id: str, repo_name: str):
 
 
 
+# ── Export Routes ─────────────────────────────────────────────────────────────
+
+@app.route("/api/export/csv/<experiment_id>/<repo_name>/<section>")
+def api_export_csv(experiment_id: str, repo_name: str, section: str):
+    """Export a section's data as a CSV file.
+
+    Sections: assets, findings, ingress, egress, roles, ports, containers, risks
+    Filename: {repo_name}_scan{experiment_id}_{section}.csv
+    """
+    import csv
+    import io
+
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+
+    section = section.lower().strip()
+    safe_repo = re.sub(r"[^\w\-]", "_", repo_name)
+    safe_exp  = re.sub(r"[^\w\-]", "_", experiment_id)
+    filename  = f"{safe_repo}_scan{safe_exp}_{section}.csv"
+
+    # Resolve repo_id
+    try:
+        repo_row = conn.execute(
+            "SELECT id FROM repositories WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ?",
+            (repo_name, experiment_id),
+        ).fetchone()
+        repo_id = repo_row["id"] if repo_row else None
+    except Exception:
+        repo_id = None
+
+    _SECTION_QUERIES: dict[str, tuple[str, list]] = {
+        "assets": (
+            """
+            SELECT
+              r.resource_name        AS "Resource Name",
+              r.resource_type        AS "Resource Type",
+              r.provider             AS "Provider",
+              r.region               AS "Region",
+              r.source_file          AS "Source File",
+              r.source_line_start    AS "Line",
+              r.discovered_by        AS "Discovered By",
+              COALESCE(f.finding_count, 0) AS "Finding Count",
+              COALESCE(f.worst_severity, '') AS "Worst Severity"
+            FROM resources r
+            LEFT JOIN (
+              SELECT resource_id,
+                     COUNT(*) AS finding_count,
+                     MAX(base_severity) AS worst_severity
+              FROM findings
+              WHERE experiment_id = ?
+              GROUP BY resource_id
+            ) f ON r.id = f.resource_id
+            WHERE r.experiment_id = ?
+              AND (? IS NULL OR r.repo_id = ?)
+            ORDER BY r.provider, r.resource_type, r.resource_name
+            """,
+            [experiment_id, experiment_id, repo_id, repo_id],
+        ),
+        "findings": (
+            """
+            SELECT
+              f.rule_id              AS "Rule ID",
+              f.title                AS "Title",
+              f.base_severity        AS "Severity",
+              f.severity_score       AS "Score",
+              f.category             AS "Category",
+              r.resource_name        AS "Resource",
+              r.resource_type        AS "Resource Type",
+              r.provider             AS "Provider",
+              f.source_file          AS "Source File",
+              f.source_line_start    AS "Line",
+              f.triage_status        AS "Triage Status",
+              f.description          AS "Description",
+              f.reason               AS "Reason"
+            FROM findings f
+            LEFT JOIN resources r ON f.resource_id = r.id
+            WHERE f.experiment_id = ?
+              AND (? IS NULL OR f.repo_id = ?)
+            ORDER BY f.severity_score DESC, f.base_severity, f.title
+            """,
+            [experiment_id, repo_id, repo_id],
+        ),
+        "ingress": (
+            """
+            SELECT
+              r_tgt.resource_name    AS "Target Resource",
+              r_tgt.resource_type    AS "Target Type",
+              r_tgt.provider         AS "Provider",
+              rc.connection_type     AS "Connection Type",
+              rc.protocol            AS "Protocol",
+              rc.port                AS "Port",
+              rc.auth_method         AS "Auth Method",
+              CASE rc.is_encrypted WHEN 1 THEN 'Yes' WHEN 0 THEN 'No' ELSE '' END AS "Encrypted",
+              rc.via_component       AS "Via Component",
+              rc.notes               AS "Notes"
+            FROM resource_connections rc
+            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
+            WHERE rc.experiment_id = ?
+              AND rc.connection_type = 'internet_to'
+              AND (? IS NULL OR r_tgt.repo_id = ?)
+            ORDER BY r_tgt.provider, r_tgt.resource_type, r_tgt.resource_name
+            """,
+            [experiment_id, repo_id, repo_id],
+        ),
+        "egress": (
+            """
+            SELECT
+              r_src.resource_name    AS "Source Resource",
+              r_src.resource_type    AS "Source Type",
+              r_src.provider         AS "Provider",
+              r_tgt.resource_name    AS "Target Resource",
+              r_tgt.resource_type    AS "Target Type",
+              rc.connection_type     AS "Connection Type",
+              rc.protocol            AS "Protocol",
+              rc.port                AS "Port",
+              rc.auth_method         AS "Auth Method",
+              CASE rc.is_encrypted WHEN 1 THEN 'Yes' WHEN 0 THEN 'No' ELSE '' END AS "Encrypted",
+              rc.notes               AS "Notes"
+            FROM resource_connections rc
+            JOIN resources r_src ON rc.source_resource_id = r_src.id
+            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
+            WHERE rc.experiment_id = ?
+              AND rc.connection_type IN ('data_access', 'depends_on')
+              AND (? IS NULL OR r_src.repo_id = ?)
+            ORDER BY r_src.provider, r_src.resource_name
+            """,
+            [experiment_id, repo_id, repo_id],
+        ),
+        "ports": (
+            """
+            SELECT
+              r_src.resource_name    AS "Source Resource",
+              r_src.resource_type    AS "Source Type",
+              r_tgt.resource_name    AS "Target Resource",
+              r_tgt.resource_type    AS "Target Type",
+              r_src.provider         AS "Provider",
+              rc.protocol            AS "Protocol",
+              rc.port                AS "Port",
+              rc.auth_method         AS "Auth Method",
+              CASE rc.is_encrypted WHEN 1 THEN 'Yes' WHEN 0 THEN 'No' ELSE '' END AS "Encrypted",
+              rc.notes               AS "Notes"
+            FROM resource_connections rc
+            JOIN resources r_src ON rc.source_resource_id = r_src.id
+            JOIN resources r_tgt ON rc.target_resource_id = r_tgt.id
+            WHERE rc.experiment_id = ?
+              AND rc.port IS NOT NULL AND rc.port != ''
+              AND (? IS NULL OR r_src.repo_id = ?)
+            ORDER BY rc.port, r_src.provider, r_src.resource_name
+            """,
+            [experiment_id, repo_id, repo_id],
+        ),
+        "roles": (
+            """
+            SELECT
+              r.resource_name        AS "Resource Name",
+              r.resource_type        AS "Resource Type",
+              r.provider             AS "Provider",
+              r.region               AS "Region",
+              r.source_file          AS "Source File",
+              r.source_line_start    AS "Line",
+              COALESCE(f.finding_count, 0) AS "Finding Count",
+              COALESCE(f.worst_severity, '') AS "Worst Severity"
+            FROM resources r
+            LEFT JOIN (
+              SELECT resource_id, COUNT(*) AS finding_count, MAX(base_severity) AS worst_severity
+              FROM findings WHERE experiment_id = ? GROUP BY resource_id
+            ) f ON r.id = f.resource_id
+            WHERE r.experiment_id = ?
+              AND (? IS NULL OR r.repo_id = ?)
+              AND (
+                r.resource_type LIKE '%iam%'
+                OR r.resource_type LIKE '%role%'
+                OR r.resource_type LIKE '%policy%'
+                OR r.resource_type LIKE '%identity%'
+                OR r.resource_type LIKE '%rbac%'
+                OR r.resource_type LIKE '%permission%'
+                OR r.resource_type LIKE '%access_key%'
+                OR r.resource_type LIKE '%managed_identity%'
+                OR r.resource_type LIKE '%service_account%'
+              )
+            ORDER BY r.provider, r.resource_type, r.resource_name
+            """,
+            [experiment_id, experiment_id, repo_id, repo_id],
+        ),
+        "containers": (
+            """
+            SELECT
+              r.resource_name        AS "Resource Name",
+              r.resource_type        AS "Resource Type",
+              r.provider             AS "Provider",
+              r.region               AS "Region",
+              r.source_file          AS "Source File",
+              r.source_line_start    AS "Line",
+              COALESCE(f.finding_count, 0) AS "Finding Count",
+              COALESCE(f.worst_severity, '') AS "Worst Severity"
+            FROM resources r
+            LEFT JOIN (
+              SELECT resource_id, COUNT(*) AS finding_count, MAX(base_severity) AS worst_severity
+              FROM findings WHERE experiment_id = ? GROUP BY resource_id
+            ) f ON r.id = f.resource_id
+            WHERE r.experiment_id = ?
+              AND (? IS NULL OR r.repo_id = ?)
+              AND (
+                r.resource_type LIKE '%container%'
+                OR r.resource_type LIKE '%kubernetes%'
+                OR r.resource_type LIKE '%docker%'
+                OR r.resource_type LIKE '%aks%'
+                OR r.resource_type LIKE '%eks%'
+                OR r.resource_type LIKE '%gke%'
+                OR r.resource_type LIKE '%oci_containerengine%'
+                OR r.resource_type LIKE '%cs_managed_kubernetes%'
+                OR r.resource_type LIKE '%deployment%'
+                OR r.resource_type LIKE '%pod%'
+                OR r.resource_type LIKE '%ingress%'
+              )
+            ORDER BY r.provider, r.resource_type, r.resource_name
+            """,
+            [experiment_id, experiment_id, repo_id, repo_id],
+        ),
+        "risks": (
+            """
+            SELECT
+              f.base_severity        AS "Severity",
+              f.severity_score       AS "Score",
+              f.rule_id              AS "Rule ID",
+              f.title                AS "Title",
+              f.category             AS "Category",
+              r.resource_name        AS "Resource",
+              r.resource_type        AS "Resource Type",
+              r.provider             AS "Provider",
+              f.source_file          AS "Source File",
+              f.source_line_start    AS "Line",
+              f.triage_status        AS "Triage Status",
+              f.description          AS "Description",
+              f.proposed_fix         AS "Proposed Fix"
+            FROM findings f
+            LEFT JOIN resources r ON f.resource_id = r.id
+            WHERE f.experiment_id = ?
+              AND (? IS NULL OR f.repo_id = ?)
+            ORDER BY f.severity_score DESC, f.base_severity, f.title
+            """,
+            [experiment_id, repo_id, repo_id],
+        ),
+    }
+
+    if section not in _SECTION_QUERIES:
+        conn.close()
+        return jsonify({"error": f"Unknown section '{section}'. Valid: {', '.join(_SECTION_QUERIES)}"}), 400
+
+    sql_query, params = _SECTION_QUERIES[section]
+    try:
+        rows = conn.execute(sql_query, params).fetchall()
+    except Exception as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        conn.close()
+
+    # Build CSV in memory
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys(), lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(dict(row))
+    else:
+        output.write("(no data)\n")
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM for Excel compatibility
+
+    return Response(
+        csv_bytes,
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(csv_bytes)),
+        },
+    )
+
+
 # ── Page Routes ───────────────────────────────────────────────────────────────
 
 @app.route("/")
