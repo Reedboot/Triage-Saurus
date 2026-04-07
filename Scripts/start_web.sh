@@ -112,7 +112,7 @@ fi
 
 echo ""
 echo -e "${GREEN}🦕 Starting Triage-Saurus web server${RESET}"
-echo -e "   ${CYAN}URL: http://localhost:5000${RESET}"
+echo -e "   ${CYAN}URL: http://localhost:9000${RESET}"
 echo -e "   ${CYAN}Press Ctrl-C to stop.${RESET}"
 echo ""
 
