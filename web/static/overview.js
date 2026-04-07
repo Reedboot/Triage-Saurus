@@ -588,16 +588,7 @@
             return;
           }
 
-          if (data.status === 'running') {
-            setStatus('Rule generation already in progress', false);
-            genRulesBtn.disabled = false;
-            if (window._triage && typeof window._triage.appendLog === 'function') {
-              window._triage.appendLog('[Copilot] Rule generation already in progress');
-            }
-            return;
-          }
-
-          if (data.status !== 'started') {
+          if (data.status !== 'started' && data.status !== 'running') {
             setStatus(data.error || 'Failed to start rule generation', true);
             genRulesBtn.disabled = false;
             if (window._triage && typeof window._triage.appendLog === 'function') {
@@ -606,14 +597,61 @@
             return;
           }
 
-          setStatus('Rule generation started', false);
+          const inProgressMsg = data.status === 'running'
+            ? '⚙️ Rule generation in progress…'
+            : '🔄 Rule generation started…';
+          setStatus(inProgressMsg, false);
           if (window._triage && typeof window._triage.appendLog === 'function') {
-            window._triage.appendLog('[Copilot] 🔄 Rule generation started...');
+            window._triage.appendLog(`[Copilot] ${inProgressMsg}`);
           }
 
-          setTimeout(() => {
-            genRulesBtn.disabled = false;
-            setStatus('Idle', false);
+          // Poll the generate_rules job until it completes
+          let rulesAttempts = 0;
+          const MAX_RULES_ATTEMPTS = 180; // ~6 min at 2s intervals
+          let rulesSeenLogCount = 0;
+          const rulesPollTimer = setInterval(async () => {
+            rulesAttempts++;
+            if (rulesAttempts > MAX_RULES_ATTEMPTS) {
+              clearInterval(rulesPollTimer);
+              setStatus('Rule generation timed out', true);
+              genRulesBtn.disabled = false;
+              return;
+            }
+            try {
+              const sr = await fetch(
+                `/api/analysis/status/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}?suffix=generate_rules&_=${Date.now()}`
+              );
+              const sd = await sr.json();
+              // Forward new log lines to the log panel
+              const sLogs = Array.isArray(sd.logs) ? sd.logs : [];
+              if (sLogs.length > rulesSeenLogCount) {
+                const newLines = sLogs.slice(rulesSeenLogCount);
+                rulesSeenLogCount = sLogs.length;
+                if (window._triage && typeof window._triage.appendLog === 'function') {
+                  newLines.forEach((line) => window._triage.appendLog(`[Rules] ${line}`));
+                }
+              }
+              if (sd.status === 'completed') {
+                clearInterval(rulesPollTimer);
+                const count = sd.rules_saved != null ? sd.rules_saved : null;
+                const msg = count != null ? `✅ ${count} rule(s) generated` : '✅ Rules generated';
+                setStatus(msg, false);
+                genRulesBtn.disabled = false;
+                setTimeout(() => setStatus('Idle', false), 4000);
+              } else if (sd.status === 'failed') {
+                clearInterval(rulesPollTimer);
+                setStatus('⚠ Rule generation failed: ' + (sd.error || 'unknown error'), true);
+                genRulesBtn.disabled = false;
+                if (window._triage && typeof window._triage.appendLog === 'function') {
+                  window._triage.appendLog('[Copilot] Rule generation failed: ' + (sd.error || 'unknown error'));
+                }
+              } else if (sd.status === 'idle' || !sd.status) {
+                // Job not found (server restart or key mismatch) — stop polling
+                clearInterval(rulesPollTimer);
+                setStatus('Idle', false);
+                genRulesBtn.disabled = false;
+              }
+            } catch (_e) { /* network hiccup, keep trying */ }
           }, 2000);
         } catch (err) {
           setStatus('Error generating rules', true);

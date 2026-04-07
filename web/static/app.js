@@ -1989,10 +1989,10 @@
           const d = await r.json();
           if (d.status === 'completed') {
             clearInterval(timer);
-            onDone(null);
+            onDone(null, d);
           } else if (d.status === 'failed') {
             clearInterval(timer);
-            onDone(d.error || 'Unknown error');
+            onDone(d.error || 'Unknown error', d);
           }
           // still 'running' — keep polling
         } catch (e) { /* network hiccup, keep trying */ }
@@ -2052,13 +2052,15 @@
           if (d.status === 'running' || d.status === 'started') {
             setOvStatus('⚙️ Generating opengrep rules…', 'busy');
             const rulesKey = 'generate_rules';
-            pollUntilDone(rulesKey, (err) => {
+            pollUntilDone(rulesKey, (err, jobData) => {
               genRulesBtn.disabled = false;
               if (runAiBtn) runAiBtn.disabled = false;
               if (err) {
                 setOvStatus('⚠ Rules failed: ' + err, 'error');
               } else {
-                setOvStatus('✅ Rules generated', 'ok');
+                const count = jobData && jobData.rules_saved != null ? jobData.rules_saved : null;
+                const msg = count != null ? `✅ ${count} rule(s) generated` : '✅ Rules generated';
+                setOvStatus(msg, 'ok');
                 setTimeout(() => setOvStatus('Idle'), 4000);
               }
             });

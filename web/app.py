@@ -97,6 +97,88 @@ def _ai_job_key(experiment_id: str, repo_name: str) -> str:
     return f"{experiment_id}:{repo_name.lower()}"
 
 
+def _extract_rules_from_llm_output(text: str) -> list[dict]:
+    """Extract opengrep rules from LLM output that may be malformed/decorated.
+
+    The Copilot CLI wraps responses with a bullet prefix, formats separators as
+    lines of dashes, and word-wraps block scalars — all of which break standard
+    YAML parsing.  This function uses regex field extraction to avoid those
+    indentation problems entirely.
+    """
+    import textwrap as _textwrap
+
+    # Strip Copilot CLI decorations: bullet chars and markdown fences
+    text = re.sub(r'^[\u25cf\u2022\*]\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'```[^\n]*', '', text)
+
+    # Split into rule blocks on separator lines (10+ dashes) or literal ---
+    raw_blocks = re.split(r'\n\s*-{10,}\s*\n|\n---\n', text)
+
+    seen_ids: set[str] = set()
+    rules: list[dict] = []
+
+    for block in raw_blocks:
+        block = _textwrap.dedent(block).strip()
+        if not block or 'id:' not in block:
+            continue
+
+        m_id = re.search(r'\bid:\s*(\S+)', block)
+        if not m_id:
+            continue
+        rule_id = m_id.group(1).strip().strip('"\'')
+        if not re.match(r'^[a-z][a-z0-9-]*$', rule_id) or rule_id in seen_ids:
+            continue
+        seen_ids.add(rule_id)
+
+        m_sev = re.search(r'\bseverity:\s*(\S+)', block)
+        severity = m_sev.group(1).strip().strip('"\'').upper() if m_sev else 'WARNING'
+        if severity not in ('INFO', 'WARNING', 'ERROR'):
+            severity = 'WARNING'
+
+        m_lang = re.search(r'\blanguages:\s*(.+)', block)
+        languages = ['python']
+        if m_lang:
+            found = re.findall(r'[a-z]+', m_lang.group(1))
+            if found:
+                languages = found
+
+        m_msg = re.search(r'\bmessage:\s*(?:\|\s*)?\n?(.*?)(?=\n\s*\w[\w-]*:|\Z)', block, re.DOTALL)
+        message = ''
+        if m_msg:
+            raw_msg = re.sub(r'^\s*\|\s*\n', '', m_msg.group(1))
+            message = ' '.join(raw_msg.split()).strip()
+
+        m_pat = re.search(r'\bpattern:\s*(?:\|\s*)?\n(.*?)(?=\n\s*\w[\w-]*:|\Z)', block, re.DOTALL)
+        pattern_code = ''
+        if m_pat:
+            pat_lines = [l for l in m_pat.group(1).splitlines() if l.strip()]
+            pattern_code = _textwrap.dedent('\n'.join(pat_lines)).strip() if pat_lines else ''
+
+        rule: dict = {
+            'id': rule_id,
+            'message': message or f'Security issue detected: {rule_id}',
+            'severity': severity,
+            'languages': languages,
+        }
+        if pattern_code:
+            rule['patterns'] = [{'pattern': pattern_code}]
+
+        metadata: dict = {'category': 'security'}
+        m_cwe = re.search(r'cwe:\s*(CWE-\d+)', block, re.IGNORECASE)
+        if m_cwe:
+            metadata['cwe'] = m_cwe.group(1).upper()
+        m_sub = re.search(r'subcategory:\s*\[([^\]]+)\]', block)
+        if m_sub:
+            metadata['subcategory'] = [s.strip() for s in m_sub.group(1).split(',')]
+        m_tech = re.search(r'technology:\s*\[([^\]]+)\]', block)
+        if m_tech:
+            metadata['technology'] = [s.strip() for s in m_tech.group(1).split(',')]
+        rule['metadata'] = metadata
+
+        rules.append(rule)
+
+    return rules
+
 # ── Open question auto-resolver ──────────────────────────────────────────────
 # Patterns that indicate a value is a placeholder, not a real credential
 _PLACEHOLDER_PATTERNS = re.compile(
@@ -3141,11 +3223,30 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
     rules into Output/WorkingCopies/<experiment>_<repo>/generated_rules.txt for
     review. It returns immediately with status 'started'.
     """
-    key = _ai_job_key(experiment_id, repo_name) + ":generate_rules"
+    # Resolve experiment_id the same way the status endpoint does so both use the same job key.
+    _conn = _get_db()
+    resolved_exp_id = experiment_id
+    if _conn:
+        try:
+            _resolved = _get_experiment_for_repo(_conn, repo_name, experiment_id)
+            if _resolved:
+                resolved_exp_id = _resolved
+        except Exception:
+            pass
+        finally:
+            _conn.close()
+
+    key = _ai_job_key(resolved_exp_id, repo_name) + ":generate_rules"
     with _AI_ANALYSIS_LOCK:
         existing = _AI_ANALYSIS_JOBS.get(key)
         if existing and existing.get("status") == "running":
-            return jsonify({"status": "running"}), 202
+            # Only block a re-run if the subprocess is actually still alive.
+            # If the process has exited without updating status (e.g. crash, OOM) the
+            # job would be stuck "running" forever — fall through to restart instead.
+            proc = existing.get("process")
+            if proc is None or proc.poll() is None:
+                return jsonify({"status": "running"}), 202
+            # Process is dead; reset and restart below.
         _AI_ANALYSIS_JOBS[key] = {
             "status": "running",
             "experiment_id": experiment_id,
@@ -3168,7 +3269,7 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
                 try:
                     rows = conn.execute(
                         "SELECT title, rule_id, source_file, source_line_start, source_line_end FROM findings WHERE experiment_id = ? AND repo_id = (SELECT id FROM repositories WHERE experiment_id = ? AND LOWER(repo_name)=LOWER(?) LIMIT 1) LIMIT 20",
-                        (experiment_id, experiment_id, repo_name),
+                        (resolved_exp_id, resolved_exp_id, repo_name),
                     ).fetchall()
                     for r in rows:
                         snippets.append({
@@ -3184,18 +3285,40 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
             pass
 
         prompt = (
-            "You are to write opengrep detection rules based on the following findings and file snippets. "
-            "Return a list of rules in plain text. Keep rules focused and specific.\n\n"
+            "You are a security engineer writing opengrep (semgrep-compatible) detection rules.\n"
+            "Generate one opengrep YAML rule per finding listed below.\n"
+            "Output ONLY raw YAML — no markdown fences, no prose, no explanation.\n"
+            "Each rule must be a complete, standalone YAML document starting with 'rules:'.\n"
+            "Separate multiple rules with a line containing only '---'.\n\n"
+            "IMPORTANT formatting rules:\n"
+            "- Use exactly 2-space indentation throughout.\n"
+            "- The 'message' field MUST be a single-line quoted string, NOT a block scalar.\n"
+            "  Example:  message: \"Explanation of risk and remediation in one line.\"\n"
+            "- Do NOT use 'message: |' or 'message: >' — only quoted inline strings.\n\n"
+            "Required YAML structure for each rule:\n"
+            "rules:\n"
+            "  - id: <kebab-case-id>\n"
+            "    message: \"<one-line explanation of the risk and remediation>\"\n"
+            "    severity: <INFO|WARNING|ERROR>\n"
+            "    languages: [<language list e.g. python, javascript, java, csharp, go>]\n"
+            "    patterns:\n"
+            "      - pattern: |\n"
+            "          <semgrep pattern>\n"
+            "    metadata:\n"
+            "      category: security\n"
+            "      subcategory: [<relevant tags>]\n"
+            "      technology: [<relevant tech>]\n"
+            "      cwe: <CWE-NNN>\n\n"
             f"Repo: {repo_name}\n"
-            f"Findings (JSON): {json.dumps(snippets)}\n\n"
-            "For each rule include: id, short_description, file_glob, regex, rationale."
+            f"Findings (JSON): {json.dumps(snippets)}\n"
         )
 
         wc_root = REPO_ROOT / "Output" / "WorkingCopies"
         wc_root.mkdir(parents=True, exist_ok=True)
-        out_dir = wc_root / f"{experiment_id}_{repo_name}"
+        out_dir = wc_root / f"{resolved_exp_id}_{repo_name}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / "generated_rules.txt"
+        rules_out_dir = REPO_ROOT / "Rules" / "Generated" / f"{resolved_exp_id}_{repo_name}"
 
         copilot_cmd, copilot_err = _resolve_copilot_command()
         if copilot_err:
@@ -3233,20 +3356,58 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
             _append_ai_job_log(key_local, launch_note)
 
         try:
-            proc = subprocess.run(launch_cmd, cwd=launch_cwd, capture_output=True, text=True, env=launch_env)
-            txt = proc.stdout or ''
-            # Save output for review
+            popen = subprocess.Popen(
+                launch_cmd, cwd=launch_cwd, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, env=launch_env,
+            )
+            # Store process handle so the status endpoint uses the subprocess stale threshold
+            # (default 3600s) instead of the 60s SSE-job threshold.
+            with _AI_ANALYSIS_LOCK:
+                job = _AI_ANALYSIS_JOBS.get(key_local, {})
+                job["process"] = popen
+                _AI_ANALYSIS_JOBS[key_local] = job
+
+            stdout_txt, stderr_txt = popen.communicate()
+            txt = stdout_txt or ''
+
+            # Save raw output for debugging
             try:
                 out_file.write_text(txt, encoding='utf-8')
             except Exception:
-                _append_ai_job_log(key_local, "Failed to save generated rules")
-            _append_ai_job_log(key_local, "Rule generation completed")
+                _append_ai_job_log(key_local, "Failed to save generated rules raw output")
+
+            # Parse YAML blocks and write individual .yaml rule files
+            saved_count = 0
+            if txt.strip():
+                try:
+                    import yaml as _yaml
+                    rules_out_dir.mkdir(parents=True, exist_ok=True)
+                    extracted = _extract_rules_from_llm_output(txt)
+                    for rule in extracted:
+                        rule_id = rule.get('id', '')
+                        if not rule_id:
+                            continue
+                        rule_path = rules_out_dir / f"{rule_id}.yaml"
+                        try:
+                            rule_path.write_text(
+                                _yaml.dump({'rules': [rule]}, default_flow_style=False, allow_unicode=True),
+                                encoding='utf-8',
+                            )
+                            saved_count += 1
+                        except Exception:
+                            pass
+                except Exception as parse_err:
+                    _append_ai_job_log(key_local, f"Rule parsing warning: {parse_err}")
+
+            _append_ai_job_log(key_local, f"Rule generation completed — {saved_count} rule(s) saved to Rules/Generated/")
             with _AI_ANALYSIS_LOCK:
                 job = _AI_ANALYSIS_JOBS.get(key_local, {})
-                job["status"] = "completed" if proc.returncode == 0 else "failed"
+                job["status"] = "completed" if popen.returncode == 0 else "failed"
                 job["completed_at"] = time.time()
-                if proc.returncode != 0:
-                    job["error"] = (proc.stderr or '').splitlines()[-1] if proc.stderr else f"exit {proc.returncode}"
+                job["rules_saved"] = saved_count
+                job["rules_dir"] = str(rules_out_dir)
+                if popen.returncode != 0:
+                    job["error"] = (stderr_txt or '').splitlines()[-1] if stderr_txt else f"exit {popen.returncode}"
                 _AI_ANALYSIS_JOBS[key_local] = job
         except Exception as e:
             _append_ai_job_log(key_local, f"Rule generation failed: {e}")
@@ -8352,7 +8513,7 @@ def scan():
 if __name__ == "__main__":
     debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
     debug = debug_env in ("1", "true", "yes", "on")
-    app.run(debug=debug, host="0.0.0.0", port=5000, threaded=True)
+    app.run(debug=debug, host="0.0.0.0", port=9000, threaded=True)
 @app.route("/api/analysis/stop/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_stop(experiment_id: str, repo_name: str):
     """Stop a running Copilot/AI job for this experiment+repo."""
