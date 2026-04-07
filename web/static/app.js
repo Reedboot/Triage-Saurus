@@ -94,6 +94,12 @@
     return activeView ? activeView.querySelector('svg') : null;
   }
 
+  // SVG must be well-formed XML. Mermaid renders <br> and <hr> as HTML void
+  // elements inside <foreignObject> blocks — invalid without a self-closing slash.
+  function _fixSvgXml(str) {
+    return str.replace(/<(br|hr)(\s[^>]*)?\s*>/gi, '<$1$2/>');
+  }
+
   function _triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -121,7 +127,7 @@
       bg.setAttribute('height', '100%');
       bg.setAttribute('fill', 'white');
       clone.insertBefore(bg, clone.firstChild);
-      const svgData = '<?xml version="1.0" encoding="utf-8"?>\n' + clone.outerHTML;
+      const svgData = '<?xml version="1.0" encoding="utf-8"?>\n' + _fixSvgXml(clone.outerHTML);
       const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
       _triggerDownload(blob, _diagramFilename('svg'));
       const old = exportSvgBtn.textContent;
@@ -170,7 +176,7 @@
         clone.setAttribute('width',  w * scale);
         clone.setAttribute('height', h * scale);
 
-        const svgStr = clone.outerHTML;
+        const svgStr = _fixSvgXml(clone.outerHTML);
         const img = new Image();
         const canvas = document.createElement('canvas');
         canvas.width  = w * scale;
