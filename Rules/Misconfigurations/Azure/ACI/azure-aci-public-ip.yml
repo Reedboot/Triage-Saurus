@@ -1,0 +1,30 @@
+rules:
+  - id: azure-aci-public-ip
+    message: |
+      Azure Container Instance has a public IP address.
+      
+      A container instance with a public IP is directly reachable from the internet
+      without a WAF, NSG, or load balancer in front. Any vulnerability in the
+      containerized application results in immediate internet-facing exploitation.
+      Container instances often run admin/utility workloads with elevated permissions
+      that should never be internet-exposed.
+      
+      Remediation: Set ip_address_type to "Private" and use a VNet + private subnet
+      via subnet_ids for private networking.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_container_group" "$_" {
+            ...
+            ip_address_type = "Public"
+            ...
+          }
+      - pattern: |
+          ip_address_type = "Public"
+    metadata:
+      category: security
+      subcategory: [network, exposure]
+      cwe: CWE-284
+      technology: [terraform, azure, aci]
+      internet_exposure: true

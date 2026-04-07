@@ -1,0 +1,28 @@
+rules:
+  - id: azure-synapse-public-endpoint
+    message: |
+      Azure Synapse Analytics workspace has public network access enabled.
+      
+      A Synapse workspace without private endpoint forces all SQL pool, Spark,
+      and pipeline access through the public internet endpoint. The analytics
+      warehouse containing production data is reachable from any IP.
+      Credential brute force, exposed SQL endpoints, and known CVEs in Synapse
+      components are directly exploitable without VNet controls.
+      
+      Remediation: Set public_network_access_enabled = false and configure
+      private_link_hub_ids for private endpoint connectivity.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_synapse_workspace" "$_" {
+            ...
+          }
+      - pattern: |
+          public_network_access_enabled = true
+    metadata:
+      category: security
+      subcategory: [network, analytics]
+      cwe: CWE-284
+      technology: [terraform, azure, synapse]
+      internet_exposure: true

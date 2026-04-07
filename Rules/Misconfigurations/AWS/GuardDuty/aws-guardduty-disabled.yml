@@ -1,0 +1,26 @@
+rules:
+  - id: aws-guardduty-disabled
+    message: |
+      AWS GuardDuty detector is disabled.
+      
+      GuardDuty provides threat detection for IMDS credential abuse, DNS tunneling,
+      crypto mining, port scanning, brute force attacks, and S3 data exfiltration.
+      A disabled detector means all these attack patterns go undetected.
+      Attackers specifically check for GuardDuty status and prefer environments
+      where it is disabled or has findings silenced.
+      
+      Remediation: Set enable = true on aws_guardduty_detector.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_guardduty_detector" "$_" {
+            ...
+          }
+      - pattern: |
+          enable = false
+    metadata:
+      category: security
+      subcategory: [detection, monitoring]
+      cwe: CWE-778
+      technology: [terraform, aws, guardduty]

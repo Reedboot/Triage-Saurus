@@ -1,0 +1,30 @@
+rules:
+  - id: azure-aci-privileged-container
+    message: |
+      Azure Container Instance runs a privileged container.
+      
+      Privileged ACI containers run with elevated kernel capabilities. If exploited
+      via RCE in the application, an attacker can escape the container namespace and
+      reach the underlying Azure hypervisor boundary. From there, querying the Azure
+      IMDS (169.254.169.254) provides subscription-level identity tokens, enabling
+      full Azure control plane access.
+      
+      Remediation: Set secure_environment_variables and remove privileged = true.
+      Run containers as non-root users (security_context.run_as_user).
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_container_group" "$_" {
+            ...
+            container {
+              ...
+            }
+            ...
+          }
+      - pattern-regex: "privileged\\s*=\\s*true"
+    metadata:
+      category: security
+      subcategory: [privilege-escalation, containers]
+      cwe: CWE-250
+      technology: [terraform, azure, aci]

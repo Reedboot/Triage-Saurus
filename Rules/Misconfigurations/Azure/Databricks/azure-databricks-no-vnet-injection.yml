@@ -1,0 +1,36 @@
+rules:
+  - id: azure-databricks-no-vnet-injection
+    message: |
+      Azure Databricks workspace does not use VNet injection.
+      
+      Without VNet injection, Databricks clusters run in a Databricks-managed VNet
+      with no organization-controlled egress filtering. This means:
+      1. Clusters can establish outbound connections to any internet endpoint
+      2. Compromised notebooks can exfiltrate data to attacker infrastructure
+      3. No organization firewall/NSG rules apply to cluster traffic
+      4. Data exfiltration via curl/python requests is undetectable
+      
+      Remediation: Configure custom_parameters with virtual_network_id,
+      public_subnet_name, and private_subnet_name to enable VNet injection.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_databricks_workspace" "$_" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_databricks_workspace" "$_" {
+            ...
+            custom_parameters {
+              ...
+              virtual_network_id = ...
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, data-platform]
+      cwe: CWE-668
+      technology: [terraform, azure, databricks]

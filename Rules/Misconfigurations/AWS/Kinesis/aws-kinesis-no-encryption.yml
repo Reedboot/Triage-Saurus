@@ -1,0 +1,33 @@
+rules:
+  - id: aws-kinesis-no-encryption
+    message: |
+      Kinesis Data Stream does not have server-side encryption enabled.
+      
+      Kinesis streams without SSE store all data shards in plaintext. If AWS
+      account access is compromised or if an attacker gains read access to the
+      Kinesis service via misconfigured IAM policies, they can GetRecords from
+      all shards without decryption. Streams often contain application events,
+      clickstream data, and real-time data feeds with sensitive user information.
+      
+      Remediation: Configure server_side_encryption with type = "KMS" and a
+      key_id referencing a customer-managed KMS key.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_kinesis_stream" "$_" {
+            ...
+          }
+      - pattern-not: |
+          resource "aws_kinesis_stream" "$_" {
+            ...
+            server_side_encryption {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [encryption, streaming]
+      cwe: CWE-311
+      technology: [terraform, aws, kinesis]

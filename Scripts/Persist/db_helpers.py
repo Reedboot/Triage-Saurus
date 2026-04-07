@@ -631,7 +631,7 @@ def _ensure_schema(conn: sqlite3.Connection):
       id INTEGER PRIMARY KEY,
       experiment_id TEXT NOT NULL,
       source_resource_id INTEGER NOT NULL,
-      target_resource_id INTEGER NOT NULL,
+      target_resource_id INTEGER,
       source_repo_id INTEGER,
       target_repo_id INTEGER,
       is_cross_repo BOOLEAN DEFAULT 0,
@@ -1293,6 +1293,50 @@ def _ensure_schema(conn: sqlite3.Connection):
         )
 
         apply_topology_backfills(conn)
+
+        # Migration: drop NOT NULL constraint on resource_connections.target_resource_id.
+        # External-service connections use target_external instead and have no resource row.
+        # SQLite requires a full table rebuild to remove a NOT NULL constraint.
+        rc_not_null = any(
+            row[1] == "target_resource_id" and row[3] == 1  # notnull == 1
+            for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()
+        )
+        if rc_not_null:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS resource_connections_new (
+                  id INTEGER PRIMARY KEY,
+                  experiment_id TEXT NOT NULL,
+                  source_resource_id INTEGER NOT NULL,
+                  target_resource_id INTEGER,
+                  source_repo_id INTEGER,
+                  target_repo_id INTEGER,
+                  is_cross_repo BOOLEAN DEFAULT 0,
+                  connection_type TEXT,
+                  protocol TEXT,
+                  port TEXT,
+                  authentication TEXT,
+                  authorization TEXT,
+                  auth_method TEXT,
+                  is_encrypted BOOLEAN,
+                  via_component TEXT,
+                  notes TEXT,
+                  inferred_internet BOOLEAN DEFAULT 0,
+                  target_external TEXT,
+                  connection_metadata TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO resource_connections_new
+                SELECT id, experiment_id, source_resource_id, target_resource_id,
+                       source_repo_id, target_repo_id, is_cross_repo, connection_type,
+                       protocol, port, authentication, authorization, auth_method,
+                       is_encrypted, via_component, notes, inferred_internet,
+                       target_external, connection_metadata
+                FROM resource_connections
+            """)
+            conn.execute("DROP TABLE resource_connections")
+            conn.execute("ALTER TABLE resource_connections_new RENAME TO resource_connections")
+            conn.commit()
     finally:
         # Release filesystem migration lock if we acquired one
         try:

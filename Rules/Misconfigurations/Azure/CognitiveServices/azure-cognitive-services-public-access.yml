@@ -1,0 +1,30 @@
+rules:
+  - id: azure-cognitive-services-public-access
+    message: |
+      Azure Cognitive Services account has public network access enabled.
+      
+      Cognitive Services without private endpoint allows AI/ML API calls from
+      any internet IP. This means:
+      1. API key brute force from the internet (keys rotate slowly)
+      2. All AI prompts and responses traverse the public internet without
+         network-layer controls
+      3. Model outputs containing sensitive completions are exposed to MITM
+      4. Usage and billing can be abused by leaked API keys
+      
+      Remediation: Set public_network_access = "Disabled" and use
+      private_endpoint to restrict access to VNet-connected clients only.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_cognitive_account" "$_" {
+            ...
+          }
+      - pattern: |
+          public_network_access = "Enabled"
+    metadata:
+      category: security
+      subcategory: [network, ai]
+      cwe: CWE-284
+      technology: [terraform, azure, cognitive-services]
+      internet_exposure: true

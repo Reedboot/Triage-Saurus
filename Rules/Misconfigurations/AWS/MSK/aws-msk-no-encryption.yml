@@ -1,0 +1,49 @@
+rules:
+  - id: aws-msk-no-encryption
+    message: |
+      MSK (Managed Streaming for Kafka) cluster does not enforce TLS encryption.
+      
+      Kafka topics without TLS in-transit encryption allow network-adjacent attackers
+      to intercept all messages. Kafka traffic often contains PII, financial data,
+      authentication tokens, and internal API payloads. A compromised broker or
+      VPC-adjacent attacker can perform passive eavesdropping on all consumer/producer
+      traffic with no authentication required.
+      
+      Remediation: Set encryption_info.encryption_in_transit.client_broker to "TLS"
+      or "TLS_PLAINTEXT" (prefer "TLS").
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_msk_cluster" "$_" {
+                ...
+                encryption_info {
+                  ...
+                  encryption_in_transit {
+                    ...
+                  }
+                  ...
+                }
+                ...
+              }
+          - pattern: |
+              client_broker = "PLAINTEXT"
+      - patterns:
+          - pattern: |
+              resource "aws_msk_cluster" "$_" {
+                ...
+              }
+          - pattern-not: |
+              resource "aws_msk_cluster" "$_" {
+                ...
+                encryption_info {
+                  ...
+                }
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption, kafka]
+      cwe: CWE-319
+      technology: [terraform, aws, msk]

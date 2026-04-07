@@ -160,6 +160,15 @@ class HierarchicalDiagramBuilder:
         # Filter to specific provider if requested
         if self.provider_filter:
             self.resources = [r for r in self.resources if (r.get('provider') or '').lower() == self.provider_filter.lower()]
+            # Also filter connections so only edges touching provider-scoped resources remain.
+            # Without this, infer_connections() sees connections from other providers and exits
+            # early (len > 10), leaving the provider's resources with no connections and causing
+            # them all to be pruned from the diagram by _is_connected_name.
+            provider_resource_names = {r['resource_name'] for r in self.resources}
+            self.connections = [
+                c for c in self.connections
+                if c.get('source') in provider_resource_names or c.get('target') in provider_resource_names
+            ]
         
         # Filter out resource types that shouldn't appear in diagrams
         self.resources = [

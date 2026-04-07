@@ -1,0 +1,44 @@
+rules:
+  - id: azure-monitor-no-activity-log-alert
+    message: |
+      No Azure Monitor activity log alert configured for privileged operations.
+      
+      Without activity log alerts for create/update/delete on security-critical
+      resources (role assignments, NSG rules, Key Vault), attackers who gain
+      initial access can:
+      1. Assign themselves privileged roles without triggering any notification
+      2. Open NSG rules to facilitate persistence
+      3. Delete Key Vault secrets or policies
+      
+      These actions go unnoticed until the next manual audit.
+      
+      Remediation: Create aws_monitor_activity_log_alert resources for:
+      Microsoft.Authorization/roleAssignments/write,
+      Microsoft.Network/networkSecurityGroups/write,
+      Microsoft.KeyVault/vaults/write
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_monitor_activity_log_alert" "$_" {
+            ...
+            criteria {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_monitor_activity_log_alert" "$_" {
+            ...
+            criteria {
+              ...
+              operation_name = "Microsoft.Authorization/roleAssignments/write"
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [monitoring, alerting]
+      cwe: CWE-778
+      technology: [terraform, azure, monitor]

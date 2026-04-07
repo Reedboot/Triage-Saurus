@@ -1,0 +1,32 @@
+rules:
+  - id: azure-container-app-external-ingress
+    message: |
+      Azure Container App has external ingress without IP restrictions.
+      
+      External ingress makes the Container App accessible from the public internet.
+      Without IP restrictions or additional WAF protection, the containerized
+      workload is directly reachable by any internet client. This increases the
+      attack surface for container exploitation, credential brute force, and
+      application-layer attacks.
+      
+      Remediation: Either set external_enabled = false (internal only) or add
+      IP restriction rules via the ingress.ip_security_restriction blocks.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "azurerm_container_app" "$_" {
+            ...
+            ingress {
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          external_enabled = true
+    metadata:
+      category: security
+      subcategory: [network, exposure, containers]
+      cwe: CWE-284
+      technology: [terraform, azure, container-apps]
+      internet_exposure: true

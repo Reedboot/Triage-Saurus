@@ -1,0 +1,30 @@
+rules:
+  - id: aws-ecs-task-host-network
+    message: |
+      ECS task definition uses host network mode.
+      
+      Host network mode shares the EC2 host's network namespace with the container.
+      This means:
+      1. Container can reach the EC2 IMDS endpoint (169.254.169.254) to steal IAM credentials
+      2. Container binds ports directly on the host, potentially conflicting with or 
+         intercepting other services
+      3. Container can sniff all network traffic on the host's network interfaces
+      4. No network isolation between containers on the same host
+      
+      Remediation: Use "awsvpc" network mode for Fargate tasks, or "bridge" for EC2
+      tasks. Restrict IMDS access if host networking is required.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_ecs_task_definition" "$_" {
+            ...
+          }
+      - pattern: |
+          network_mode = "host"
+    metadata:
+      category: security
+      subcategory: [network, containers]
+      cwe: CWE-668
+      owasp: "A05:2021 – Security Misconfiguration"
+      technology: [terraform, aws, ecs]

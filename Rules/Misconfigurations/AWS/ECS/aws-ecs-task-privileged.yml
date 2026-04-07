@@ -1,0 +1,29 @@
+rules:
+  - id: aws-ecs-task-privileged
+    message: |
+      ECS task definition contains a privileged container.
+      
+      Privileged containers run with nearly all host kernel capabilities.
+      If exploited via RCE in the container, an attacker can:
+      1. Escape container isolation and access the EC2 host
+      2. Query the EC2 IMDS endpoint (169.254.169.254) for IAM credentials
+      3. Read host filesystems, other container filesystems, and memory
+      4. Install rootkits or backdoors on the EC2 host
+      
+      Remediation: Set privileged = false and grant only required Linux capabilities
+      via linux_parameters.capabilities.add.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_ecs_task_definition" "$_" {
+            ...
+          }
+      - pattern-regex: "\"privileged\"\\s*:\\s*true"
+    metadata:
+      category: security
+      subcategory: [containers, privilege-escalation]
+      cwe: CWE-250
+      owasp: "A04:2021 – Insecure Design"
+      technology: [terraform, aws, ecs]
+      internet_exposure: false

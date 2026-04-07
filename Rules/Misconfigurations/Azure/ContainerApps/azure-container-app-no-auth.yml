@@ -1,0 +1,33 @@
+rules:
+  - id: azure-container-app-no-auth
+    message: |
+      Azure Container App has no authentication configured.
+      
+      Without built-in authentication, the Container App HTTP endpoint is accessible
+      to unauthenticated requests. If the application itself lacks authentication
+      (or has auth bypasses), any internet user can interact with the containerized
+      workload. This enables: reconnaissance of API endpoints, SSRF to managed identity
+      IMDS (169.254.169.254), and exploitation of unprotected application functionality.
+      
+      Remediation: Configure identity_providers block under ingress to enable Azure AD,
+      Google, GitHub, or custom OpenID Connect authentication at the platform level.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_container_app" "$_" {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_container_app" "$_" {
+            ...
+            identity {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, containers]
+      cwe: CWE-306
+      technology: [terraform, azure, container-apps]

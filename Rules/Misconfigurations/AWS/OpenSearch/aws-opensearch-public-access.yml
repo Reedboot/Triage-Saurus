@@ -1,0 +1,34 @@
+rules:
+  - id: aws-opensearch-public-access
+    message: |
+      OpenSearch domain has no VPC configuration — public endpoint accessible.
+      
+      An OpenSearch domain without a VPC configuration is accessible from the
+      public internet. If the domain also lacks fine-grained access control,
+      anyone can query indices, enumerate mappings, and exfiltrate all data.
+      Even with basic auth, the endpoint is exposed to brute force and CVE exploits
+      (e.g., Log4Shell vulnerabilities in OpenSearch).
+      
+      Remediation: Configure vpc_options with subnet_ids and security_group_ids.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_opensearch_domain" "$_" {
+            ...
+          }
+      - pattern-not: |
+          resource "aws_opensearch_domain" "$_" {
+            ...
+            vpc_options {
+              ...
+            }
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, exposure]
+      cwe: CWE-284
+      owasp: "A01:2021 – Broken Access Control"
+      technology: [terraform, aws, opensearch]
+      internet_exposure: true

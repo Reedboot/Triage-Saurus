@@ -1,0 +1,31 @@
+rules:
+  - id: aws-ecr-no-scan-on-push
+    message: |
+      ECR repository does not scan images on push.
+      
+      Without scan_on_push = true, container images with known vulnerabilities
+      (Log4Shell, Spring4Shell, OpenSSL CVEs) are deployed to ECS/EKS without
+      any vulnerability assessment. Silent deployment of vulnerable images enables
+      attackers to exploit known CVEs within running containers to gain RCE,
+      escape to hosts, and steal credentials.
+      
+      Remediation: Set image_scanning_configuration.scan_on_push = true in
+      the aws_ecr_repository resource.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_ecr_repository" "$_" {
+            ...
+            image_scanning_configuration {
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          scan_on_push = false
+    metadata:
+      category: security
+      subcategory: [containers, vulnerability-scanning]
+      cwe: CWE-1395
+      technology: [terraform, aws, ecr]

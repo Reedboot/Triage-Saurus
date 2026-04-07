@@ -1,0 +1,27 @@
+rules:
+  - id: aws-cognito-user-pool-no-mfa
+    message: |
+      Cognito User Pool does not enforce MFA.
+      
+      Without MFA, the user pool is vulnerable to credential stuffing attacks.
+      Breached credential databases can be replayed against Cognito to gain
+      access to user accounts. MFA provides a second factor that prevents
+      account takeover even when passwords are compromised.
+      
+      Remediation: Set mfa_configuration to "ON" or "OPTIONAL" with at least
+      one MFA configuration (software_token_mfa_configuration or sms_configuration).
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_cognito_user_pool" "$_" {
+            ...
+          }
+      - pattern: |
+          mfa_configuration = "OFF"
+    metadata:
+      category: security
+      subcategory: [authentication, mfa]
+      cwe: CWE-308
+      owasp: "A07:2021 – Identification and Authentication Failures"
+      technology: [terraform, aws, cognito]

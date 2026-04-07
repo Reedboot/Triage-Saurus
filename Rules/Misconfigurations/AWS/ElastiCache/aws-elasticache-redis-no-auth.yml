@@ -1,0 +1,31 @@
+rules:
+  - id: aws-elasticache-redis-no-auth
+    message: |
+      ElastiCache Redis cluster has no auth token configured.
+      
+      Redis without authentication allows any host that can reach the Redis
+      endpoint to execute arbitrary commands: FLUSHALL (delete all data),
+      CONFIG SET (modify Redis configuration, write files to disk), KEYS *
+      (enumerate all keys), or GET on any key. An attacker with network access
+      (same VPC, compromised EC2) can dump the entire cache including session
+      tokens, rate limit counters, and application data.
+      
+      Remediation: Set auth_token to a strong secret, or use Valkey AUTH.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "aws_elasticache_replication_group" "$_" {
+            ...
+          }
+      - pattern-not: |
+          resource "aws_elasticache_replication_group" "$_" {
+            ...
+            auth_token = ...
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [authentication, cache]
+      cwe: CWE-306
+      technology: [terraform, aws, elasticache]

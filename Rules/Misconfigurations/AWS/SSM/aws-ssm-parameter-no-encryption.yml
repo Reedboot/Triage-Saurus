@@ -1,0 +1,24 @@
+rules:
+  - id: aws-ssm-parameter-no-encryption
+    message: |
+      SSM Parameter Store parameter uses String type instead of SecureString.
+      
+      Parameters stored as "String" type are stored in plaintext and are readable
+      by any IAM principal with ssm:GetParameter permission. Secrets, passwords,
+      and API keys stored as String type are also visible in the AWS Console without
+      any additional permissions. Use SecureString for all sensitive values to
+      ensure KMS encryption at rest and more granular access control.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_ssm_parameter" "$_" {
+            ...
+          }
+      - pattern: |
+          type = "String"
+    metadata:
+      category: security
+      subcategory: [secrets, encryption]
+      cwe: CWE-312
+      technology: [terraform, aws, ssm]

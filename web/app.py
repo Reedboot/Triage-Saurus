@@ -4801,6 +4801,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 "ai_asset_visibility": "Asset visibility",
                 "ai_learning_suggestions": "Learning suggestions",
                 "ai_analysis_completed_at": "Analysis completed",
+                "ai_analysis_recovered": "Recovered",
             }
             # ai_context_summary should render first, finding themes second
             priority_keys = ["ai_context_summary", "ai_finding_themes"]
@@ -4808,7 +4809,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
             list_fields = {"ai_action_items", "ai_open_questions", "ai_observations", "ai_asset_visibility", "ai_learning_suggestions"}
             # Fields that contain JSON arrays (skip rendering raw JSON)
             json_fields = {"ai_new_assets", "ai_fixed_information"}
-            timestamp_fields = {"ai_analysis_completed_at"}
+            timestamp_fields = {"ai_analysis_completed_at", "ai_analysis_recovered"}
 
             # Sort rows: priority keys first, then alphabetical
             def _row_sort_key(r):

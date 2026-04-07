@@ -105,7 +105,7 @@
     // Belt-and-suspenders: fix any remaining HTML-style void elements that may
     // appear inside <foreignObject> blocks (br, hr, img, input, wbr, …).
     const voidTags = 'br|hr|img|input|wbr|area|col|embed|link|meta|param|source|track';
-    str = str.replace(new RegExp(`<(${voidTags})(\\s[^>]*)?>`, 'gi'), '<$1$2/>');
+    str = str.replace(new RegExp(`<(${voidTags})([^>]*?)\\s*/?>`, 'gi'), '<$1$2/>');
     return str;
   }
 

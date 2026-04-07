@@ -1,0 +1,43 @@
+rules:
+  - id: aws-opensearch-no-encryption
+    message: |
+      OpenSearch domain does not have encryption at rest enabled.
+      
+      Without encryption at rest, if the underlying EBS volumes are compromised
+      (snapshot exfiltration, physical media disposal), all search index data
+      is readable. OpenSearch indices often contain PII, logs, and sensitive
+      application data.
+      
+      Remediation: Set encrypt_at_rest.enabled = true (uses KMS).
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_opensearch_domain" "$_" {
+                ...
+                encrypt_at_rest {
+                  ...
+                }
+                ...
+              }
+          - pattern: |
+              enabled = false
+      - patterns:
+          - pattern: |
+              resource "aws_opensearch_domain" "$_" {
+                ...
+              }
+          - pattern-not: |
+              resource "aws_opensearch_domain" "$_" {
+                ...
+                encrypt_at_rest {
+                  ...
+                }
+                ...
+              }
+    metadata:
+      category: security
+      subcategory: [encryption]
+      cwe: CWE-311
+      technology: [terraform, aws, opensearch]
