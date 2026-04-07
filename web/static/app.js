@@ -662,6 +662,16 @@
     });
   }
 
+  // Helper to clear tab bar while preserving CSV export button
+  function _clearTabBar() {
+    const csvBtn = sectionTabBar.querySelector('#export-csv-btn');
+    sectionTabBar.innerHTML = '';
+    if (csvBtn) {
+      sectionTabBar.appendChild(csvBtn);
+      _csvExportBtn = csvBtn;
+    }
+  }
+
   async function loadSectionTabs(expId, repoName) {
     const resolvedRepoName = repoName || resolveSelectedRepoName();
     if (!resolvedRepoName) return;
@@ -681,14 +691,14 @@
         const data = JSON.parse(text);
         if (data && data.error) {
           console.warn('Tabs endpoint returned error:', data.error);
-          sectionTabBar.innerHTML = '';
+          _clearTabBar();
           tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
           return;
         }
         renderSectionTabs((data && data.tabs) || [], expId, resolvedRepoName);
       } catch (e) {
         console.warn('Failed to parse tabs response as JSON:', e, text.slice(0,200));
-        sectionTabBar.innerHTML = '';
+        _clearTabBar();
         tabBarPlaceholder && (tabBarPlaceholder.style.display = '');
       }
       // Intentionally do not auto-switch to a content tab here; renderSectionTabs will
@@ -721,7 +731,8 @@
   }
 
   function renderSectionTabs(tabs, expId, repoName) {
-    sectionTabBar.innerHTML = '';
+    // Clear tab buttons but preserve the CSV export button if it exists
+    _clearTabBar();
     if (!tabs.length) return;
     tabBarPlaceholder && (tabBarPlaceholder.style.display = 'none');
 
@@ -1830,8 +1841,9 @@
     statusBar.classList.remove('visible');
     pastScansRow.classList.remove('visible');
 
-    // Clear section tabs
-    sectionTabBar.innerHTML = '';
+    // Clear section tabs and CSV button state
+    _clearTabBar();
+    _csvExportBtn = null;
     if (tabBarPlaceholder) {
       tabBarPlaceholder.style.display = '';
       sectionTabBar.appendChild(tabBarPlaceholder);
