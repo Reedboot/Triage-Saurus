@@ -1736,7 +1736,7 @@
     if (!sectionTabBar || !sectionContent || !logOutput) return;
     logOutput.style.display = 'none';
     sectionTabBar.style.display = 'flex';
-    sectionContent.style.display = 'flex';
+    sectionContent.style.display = '';
     showingSections = true;
     syncSectionsToggleButton();
   }
