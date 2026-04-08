@@ -43,6 +43,10 @@ _CODE_GLOBS = ["*.cs", "*.py", "*.js", "*.ts", "*.go", "*.java"]
 _SKIP_DIRS = {".git", "node_modules", ".terraform", "__pycache__", "bin", "obj", "dist", "build"}
 _DOCKER_FROM_RE = re.compile(r'^\s*FROM\s+([^\s]+)(?:\s+AS\s+([A-Za-z0-9_\-\.]+))?', re.I)
 
+# Timeout for opengrep subprocesses (seconds). Prevents pipeline from hanging
+# indefinitely if opengrep blocks or encounters unexpected input.
+OPENGREP_TIMEOUT_SECONDS = 120
+
 
 def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
     if not config_path.exists():
@@ -58,8 +62,17 @@ def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
         "--quiet",
     ]
     try:
-        subprocess.run(cmd, capture_output=True, text=True)
+        # Add a timeout to prevent an indefinite hang if opengrep blocks.
+        subprocess.run(cmd, capture_output=True, text=True, timeout=OPENGREP_TIMEOUT_SECONDS)
     except FileNotFoundError:
+        # opengrep not installed — treat as no results
+        return []
+    except subprocess.TimeoutExpired:
+        # opengrep timed out — return no hits but continue the pipeline
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         return []
 
     if not tmp_path.exists() or tmp_path.stat().st_size == 0:
@@ -677,8 +690,14 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             "--quiet",
         ]
         try:
-            subprocess.run(cmd, capture_output=True, text=True)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=OPENGREP_TIMEOUT_SECONDS)
         except FileNotFoundError:
+            return []
+        except subprocess.TimeoutExpired:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
             return []
 
         if not tmp_path.exists() or tmp_path.stat().st_size == 0:
