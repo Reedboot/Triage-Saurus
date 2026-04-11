@@ -460,19 +460,6 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .diagram-tabs.visible { display: flex; }
 
 /* Provider tabs inside the header: allow horizontal scroll and let them shrink so buttons stay visible */
-.right-panel-header .diagram-provider-tabs,
-#diagram-tabs,
-.right-panel-header .diagram-tabs {
-  display: flex;
-  gap: 6px;
-  padding: 6px 8px;
-  overflow-x: auto;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0; /* allow shrinking in flex layout */
-  -webkit-overflow-scrolling: touch;
-}
-
 /* Ensure action buttons don't shrink and remain visible */
 .right-panel-header .panel-actions > .btn-small {
   flex: 0 0 auto;
@@ -1578,11 +1565,21 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   line-height: 1;
 }
 
-.diagram-provider-tabs {
-  display: flex; gap: 2px; overflow-x: auto;
-  padding: 5px 10px 0;
+.diagram-tabs-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
+}
+
+.diagram-provider-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-bottom: none;
+  background: transparent;
   flex-shrink: 0;
 }
 
