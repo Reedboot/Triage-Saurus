@@ -43,6 +43,7 @@ _CATEGORY_COLOURS: dict[str, str] = {
     "Security":  "#ff6b6b",
     "Network":   "#7e57c2",
     "Monitoring":"#888888",
+    "API":       "#00b4d8",  # Teal — distinct from Identity amber (#f59f00) and alert amber (#e8a202)
 }
 
 

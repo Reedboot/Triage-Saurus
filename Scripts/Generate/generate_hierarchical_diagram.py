@@ -201,6 +201,20 @@ class HierarchicalDiagramBuilder:
         # provider — small sets (1–2) are kept as-is.
         _DEDUP_THRESHOLD = 3
 
+        # Resource types that must never be collapsed — each instance is a distinct
+        # functional unit, not a test/env variant of the same service.
+        _DEDUP_EXCLUDED_TYPES: frozenset[str] = frozenset({
+            'azurerm_api_management_api',
+            'azurerm_api_management_api_operation',
+            'azurerm_api_management_product',
+            'azurerm_api_management_policy',
+            'azurerm_api_management_api_policy',
+            'aws_api_gateway_resource',
+            'aws_api_gateway_method',
+            'aws_apigatewayv2_route',
+            'google_api_gateway_api',
+        })
+
         # Build connection count per resource_name for scoring
         all_conn_names: dict[str, int] = {}
         for c in self.connections:
@@ -220,6 +234,8 @@ class HierarchicalDiagramBuilder:
         for (rtype, prov), group in type_provider_groups.items():
             if len(group) < _DEDUP_THRESHOLD:
                 continue  # Small groups are fine as-is
+            if rtype in _DEDUP_EXCLUDED_TYPES:
+                continue  # Each instance is a distinct functional unit
 
             def _score(r: dict) -> tuple:
                 src = (r.get('source_file') or '').lower()
@@ -1469,7 +1485,9 @@ class HierarchicalDiagramBuilder:
             node_id = base_node_id
 
         # Truncate long labels to fit in box
-        label = name if len(name) <= 50 else name[:47] + "..."
+        label = resource.get('_label') or name
+        if len(label) > 50:
+            label = label[:47] + "..."
 
         # Append test-variant badge if this node is the primary representative
         badge = resource.get('_variant_badge')
@@ -1600,6 +1618,7 @@ class HierarchicalDiagramBuilder:
                 self.emitted_nodes.add(aname)
             else:
                 lines.append(self.render_node(api, indent="    "))
+                self.emitted_nodes.add(aname)
 
         lines.append("  end")
         return lines
@@ -1755,11 +1774,53 @@ class HierarchicalDiagramBuilder:
             lines.append(raw_node.replace(f'"{queue["resource_name"]}"', f'"📥 {queue["resource_name"]}"', 1))
             rendered_ids.add(queue['id'])
 
+        # Collect all Service Bus queues/topics that have no parent linked in the DB.
+        # These are candidates for fallback name-based matching (e.g. when parent ref
+        # was a var./local. variable that could not be resolved at scan time).
+        namespace_ids = {ns['id'] for ns in namespaces}
+        all_sb_topics = [r for r in sb_resources if self.is_service_bus_topic(r)]
+        all_sb_queues = [r for r in sb_resources if self.is_service_bus_queue(r)]
+        unparented_topics = [
+            r for r in all_sb_topics
+            if r.get('parent_resource_id') is None
+            and r['id'] not in {
+                child['id']
+                for ns_id in namespace_ids
+                for child in self.children_by_parent.get(ns_id, [])
+            }
+        ]
+        unparented_queues = [
+            r for r in all_sb_queues
+            if r.get('parent_resource_id') is None
+            and r['id'] not in {
+                child['id']
+                for ns_id in namespace_ids
+                for child in self.children_by_parent.get(ns_id, [])
+            }
+        ]
+
+        def _name_tokens(name: str) -> set:
+            return {t.lower() for t in re.split(r'[-_\s]+', name or '') if len(t) > 2}
+
+        def _names_share_token(a: str, b: str) -> bool:
+            return bool(_name_tokens(a) & _name_tokens(b))
+
         # Render each namespace and its known children.
         for namespace in namespaces:
             namespace_name = namespace['resource_name']
             namespace_id = sanitize_id(namespace_name)
-            ns_children = self.children_by_parent.get(namespace['id'], [])
+            ns_children = list(self.children_by_parent.get(namespace['id'], []))
+
+            # Fallback: if no children are linked, attempt name-token matching against
+            # unparented topics/queues so diagrams reflect actual hierarchy.
+            if not ns_children:
+                for r in unparented_topics:
+                    if _names_share_token(namespace_name, r.get('resource_name', '')):
+                        ns_children.append(r)
+                for r in unparented_queues:
+                    if _names_share_token(namespace_name, r.get('resource_name', '')):
+                        ns_children.append(r)
+
             topics = [r for r in ns_children if self.is_service_bus_topic(r)]
             queues = [r for r in ns_children if self.is_service_bus_queue(r)]
 
@@ -2361,6 +2422,87 @@ class HierarchicalDiagramBuilder:
                 if (_al['resource_name'], _ac['resource_name']) not in _mon_rendered:
                     self.connections.append({'source': _al['resource_name'], 'target': _ac['resource_name'], 'connection_type': 'triggers', 'confirmed': True})
 
+        # ── APIM backend routing from service_url/backend_url properties ──────────
+        # Query resource_properties for explicit backend URL declarations on APIM API
+        # resources. When a match to an existing resource is found, add a confirmed
+        # routes_ingress_to edge. When only an external hostname is available, emit a
+        # synthetic external node so the diagram shows the backend.
+        _service_url_routed = set()
+        with get_db_connection() as _svc_conn:
+            _svc_rows = _svc_conn.execute("""
+                SELECT r.resource_name, rp.property_key, rp.property_value
+                FROM resources r
+                JOIN resource_properties rp ON r.id = rp.resource_id
+                WHERE r.experiment_id = ?
+                  AND r.resource_type IN (
+                      'azurerm_api_management_api',
+                      'azurerm_api_management_backend',
+                      'apim_api',
+                      'api_management_api'
+                  )
+                  AND rp.property_key IN ('service_url', 'backend_url', 'backend_uri', 'url')
+            """, [self.experiment_id]).fetchall()
+
+        def _extract_hostname_and_service(url_val: str) -> tuple:
+            """Return (hostname, service_name_guess) from a URL string."""
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url_val if '://' in url_val else f'https://{url_val}')
+                host = parsed.hostname or ''
+                # Strip leading www./env- prefix and trailing .domain suffixes
+                service_part = re.split(r'\.', host)[0] if host else ''
+                # e.g. "prod-myservice" → "myservice", "myservice-internal" → "myservice"
+                service_part = re.sub(r'^(prod|dev|stg|staging|uat|int|internal|ext|external)-', '', service_part, flags=re.I)
+                service_part = re.sub(r'-(prod|dev|stg|staging|uat|int|internal|ext|external|api|svc|service)$', '', service_part, flags=re.I)
+                return host, service_part
+            except Exception:
+                return '', ''
+
+        for _svc_row in _svc_rows:
+            _api_name = _svc_row['resource_name'] if hasattr(_svc_row, '__getitem__') and 'resource_name' in _svc_row.keys() else _svc_row[0]
+            _url_val = _svc_row['property_value'] if hasattr(_svc_row, '__getitem__') and 'property_value' in _svc_row.keys() else _svc_row[2]
+            if not _url_val or _api_name in _service_url_routed:
+                continue
+            _hostname, _svc_guess = _extract_hostname_and_service(_url_val)
+            if not _hostname:
+                continue
+            # Try to match service guess to an existing resource name (case-insensitive, partial)
+            _target_name = None
+            for _res in self.resources:
+                _rname = (_res.get('resource_name') or '').lower()
+                if _svc_guess and (_svc_guess.lower() in _rname or _rname in _svc_guess.lower()):
+                    _target_name = _res['resource_name']
+                    break
+            if _target_name:
+                self.connections.append({
+                    'source': _api_name,
+                    'target': _target_name,
+                    'connection_type': 'routes_ingress_to',
+                    'confirmed': True,
+                    'notes': f'service_url={_url_val}',
+                })
+                _service_url_routed.add(_api_name)
+            else:
+                # Emit synthetic external-backend node to make the destination visible
+                _ext_id = 'ext_' + re.sub(r'[^a-zA-Z0-9]', '_', _hostname)[:40]
+                if _ext_id not in self.resource_by_name:
+                    self.resource_by_name[_ext_id] = {
+                        'resource_name': _ext_id,
+                        'resource_type': 'external_service',
+                        'id': _ext_id,
+                        '_synthetic': True,
+                        '_label': f'🌐 {_hostname}',
+                    }
+                    self.resources.append(self.resource_by_name[_ext_id])
+                self.connections.append({
+                    'source': _api_name,
+                    'target': _ext_id,
+                    'connection_type': 'routes_ingress_to',
+                    'confirmed': False,
+                    'notes': f'external backend: {_url_val}',
+                })
+                _service_url_routed.add(_api_name)
+
         # ── Fallback APIM→K8s routing for APIs with no explicit routes_ingress_to ──
         _routed_apis = {c['source'] for c in self.connections if c.get('connection_type') == 'routes_ingress_to'}
         _k8s_svcs = [r for r in self.resources if r.get('resource_type') in ('kubernetes_service', 'kubernetes_deployment')]
@@ -2390,6 +2532,38 @@ class HierarchicalDiagramBuilder:
                     'connection_type': 'routes_ingress_to',
                     'confirmed': False,
                 })
+
+        # ── Placeholder for APIM APIs with no detectable backend ─────────────────
+        # Re-read the routed set (may have grown from service_url and K8s fallback above).
+        _routed_apis = {c['source'] for c in self.connections if c.get('connection_type') == 'routes_ingress_to'}
+        for _api_r in apim_apis:
+            if self.is_api_operation(_api_r):
+                continue
+            _rtype = (_api_r.get('resource_type') or '').lower()
+            if 'policy' in _rtype or 'product' in _rtype or 'operation' in _rtype:
+                continue
+            if 'api_management_api' not in _rtype:
+                continue
+            if _api_r['resource_name'] in _routed_apis:
+                continue
+            # No backend found — emit a synthetic placeholder so the gap is visible
+            _placeholder_id = 'no_backend_' + re.sub(r'[^a-zA-Z0-9]', '_', _api_r['resource_name'])[:40]
+            if _placeholder_id not in self.resource_by_name:
+                self.resource_by_name[_placeholder_id] = {
+                    'resource_name': _placeholder_id,
+                    'resource_type': 'external_service',
+                    'id': _placeholder_id,
+                    '_synthetic': True,
+                    '_label': '⚠️ Backend URL unknown',
+                }
+                self.resources.append(self.resource_by_name[_placeholder_id])
+            self.connections.append({
+                'source': _api_r['resource_name'],
+                'target': _placeholder_id,
+                'connection_type': 'routes_ingress_to',
+                'confirmed': False,
+                'notes': 'service_url not found — check IaC repo for backend URL',
+            })
 
         # ── Internet/Client → APIM entry point (visibility unknown) ─────────────
         if apim_apis:
@@ -2472,6 +2646,15 @@ class HierarchicalDiagramBuilder:
             lines.extend(sql_lines)
             lines.append("")
 
+        # Refresh connected names to include any synthetic nodes/edges added above
+        _ADMIN_EDGE_TYPES_REFRESH = frozenset({'contains', 'grants_access_to', 'parent_of', 'child_of', 'resource_group_member', 'has_role', 'depends_on'})
+        self.connected_resource_names = {
+            n for c in self.connections
+            if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES_REFRESH
+            for n in (c.get('source'), c.get('target'))
+            if n and n != 'Internet'
+        }
+
         other_resources = [
             r for r in self.resources
             if r['id'] not in all_children
@@ -2526,14 +2709,15 @@ class HierarchicalDiagramBuilder:
         
         # Category colors from old generator
         category_colors = {
-            "Compute": "#0066cc",
-            "Container": "#0066cc",
-            "Database": "#00aa00",
-            "Storage": "#00aa00",
-            "Identity": "#f59f00",
-            "Security": "#ff6b6b",
-            "Network": "#7e57c2",
+            "Compute":    "#0066cc",
+            "Container":  "#0066cc",
+            "Database":   "#00aa00",
+            "Storage":    "#00aa00",
+            "Identity":   "#f59f00",
+            "Security":   "#ff6b6b",
+            "Network":    "#7e57c2",
             "Monitoring": "#888888",
+            "API":        "#00b4d8",  # Teal — distinct from Identity amber and alert amber
         }
         
         # Resolve style per rendered node id (not resource name) to avoid duplicate
@@ -2541,6 +2725,7 @@ class HierarchicalDiagramBuilder:
         category_priority = {
             "Security": 8,
             "Identity": 7,
+            "API":      7,  # Same priority as Identity (APIM is an auth boundary)
             "Database": 6,
             "Storage": 5,
             "Network": 4,
@@ -2616,9 +2801,9 @@ class HierarchicalDiagramBuilder:
         if any(t in rtype for t in ['monitor', 'alert', 'metric', 'log']):
             return 'Monitoring'
         
-        # API Management gets Identity color (authentication boundary)
+        # API Management gets its own teal category (distinct from Identity amber)
         if any(t in rtype for t in ['api_management', 'api_gateway', 'apim']):
-            return 'Identity'
+            return 'API'
         
         # Service Bus is Network
         if 'servicebus' in rtype or 'queue' in rtype or 'topic' in rtype:
