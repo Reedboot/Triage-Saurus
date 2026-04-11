@@ -46,7 +46,7 @@ rules:
       This rule identifies functions that send messages to Service Bus.
     severity: INFO
     languages: [generic]
-    pattern-regex: '"type"\s*:\s*"serviceBus"(?s).*"direction"\s*:\s*"out"'
+    pattern-regex: '\{[^{}]*("type"\s*:\s*"serviceBus"[^{}]*"direction"\s*:\s*"out"|"direction"\s*:\s*"out"[^{}]*"type"\s*:\s*"serviceBus")[^{}]*\}'
     metadata:
       finding_kind: Connection
       asset_provider: azure
