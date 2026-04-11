@@ -29,19 +29,8 @@ rules:
       Azure Function with Service Bus trigger/input binding detected.
       This rule identifies functions that process Service Bus messages.
     severity: INFO
-    languages: [json]
-    pattern: |
-      {
-        ...
-        "bindings": [
-          {
-            ...
-            "type": "serviceBusTrigger"
-            ...
-          }
-        ]
-        ...
-      }
+    languages: [generic]
+    pattern-regex: '"type"\s*:\s*"serviceBusTrigger"'
     metadata:
       finding_kind: Connection
       asset_provider: azure
@@ -56,21 +45,8 @@ rules:
       Azure Function with Service Bus output binding detected.
       This rule identifies functions that send messages to Service Bus.
     severity: INFO
-    languages: [json]
-    pattern: |
-      {
-        ...
-        "bindings": [
-          {
-            ...
-            "type": "serviceBus"
-            ...
-            "direction": "out"
-            ...
-          }
-        ]
-        ...
-      }
+    languages: [generic]
+    pattern-regex: '\{[^{}]*("type"\s*:\s*"serviceBus"[^{}]*"direction"\s*:\s*"out"|"direction"\s*:\s*"out"[^{}]*"type"\s*:\s*"serviceBus")[^{}]*\}'
     metadata:
       finding_kind: Connection
       asset_provider: azure
