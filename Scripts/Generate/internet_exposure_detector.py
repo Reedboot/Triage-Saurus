@@ -32,6 +32,16 @@ class ExposureDetail:
             self.detection_methods = []
 
 
+def _clean_resource_type(resource_type: str) -> str:
+    """Remove provider prefix from resource type for display."""
+    if not resource_type:
+        return resource_type
+    for prefix in ('azurerm_', 'aws_', 'google_'):
+        if resource_type.lower().startswith(prefix):
+            return resource_type[len(prefix):]
+    return resource_type
+
+
 class InternetExposureDetector:
     """Detects internet-exposed resources for threat model visualization."""
 
@@ -364,12 +374,13 @@ class InternetExposureDetector:
                 if 'private' in resource_name.lower():
                     continue
 
+                clean_type = _clean_resource_type(matched_type)
                 exposed[resource_name] = ExposureDetail(
                     resource_name=resource_name,
                     resource_id=resource.get('id'),
                     exposure_type='heuristic',
                     confidence='medium',
-                    reason=f'Resource type {matched_type} is inherently public-facing',
+                    reason=f'Resource type {clean_type} is inherently public-facing',
                     color=self.COLORS['heuristic'],
                     detection_methods=['Heuristic'],
                 )
