@@ -7,6 +7,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -241,16 +242,51 @@ def _normalize_parent_ref(value: str) -> str:
       azurerm_storage_account.main.id  -> main
       data.azurerm_storage_account.sa.id -> sa
       myaccount                         -> myaccount
+      var.servicebus_namespace_id       -> None (cannot resolve; caller should fuzzy-match)
     """
     if not value:
         return value
     if value.startswith("data."):
         parts = value.split(".")
         return parts[2] if len(parts) >= 3 else value
+    # var./local. references cannot be resolved to a literal resource name here
+    if value.startswith("var.") or value.startswith("local."):
+        return ""
     parts = value.split(".")
     if len(parts) >= 2:
         return parts[1]
     return value
+
+
+def _fuzzy_parent_lookup(sq: "sqlite3.Connection", experiment_id: str,
+                         parent_type: str, context_value: str) -> "int | None":
+    """Try a token-based lookup for parent resources when exact name matching failed.
+
+    Used when context_value is a var./local. reference whose literal value is unknown.
+    Extracts tokens from the reference string and searches for a parent resource whose
+    name shares at least one significant (>3-char) token.
+
+    Returns the parent resource id, or None if no unambiguous match is found.
+    """
+    if not context_value:
+        return None
+    # Extract word tokens from the reference (e.g. "var.myapp_servicebus_ns_id" → ["myapp", "servicebus", "ns"])
+    tokens = [t for t in re.split(r'[^a-zA-Z0-9]+', context_value) if len(t) > 3
+              and t.lower() not in ('true', 'false', 'null', 'none', 'data', 'local', 'module')]
+    if not tokens:
+        return None
+    candidates = sq.execute(
+        "SELECT id, resource_name FROM resources WHERE experiment_id = ? AND resource_type = ?",
+        (experiment_id, parent_type),
+    ).fetchall()
+    if not candidates:
+        return None
+    matches = []
+    for cid, cname in candidates:
+        name_lower = (cname or "").lower()
+        if any(tok.lower() in name_lower or name_lower in tok.lower() for tok in tokens):
+            matches.append(cid)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _create_parent_child_relationships(db: "Client", experiment_id: str) -> None:
@@ -318,11 +354,25 @@ def _create_parent_child_relationships(db: "Client", experiment_id: str) -> None
                         continue
 
                     norm = _normalize_parent_ref(context_value or "")
-                    parent_row = sq.execute(
-                        "SELECT id FROM resources "
-                        "WHERE experiment_id = ? AND resource_type = ? AND resource_name = ?",
-                        (experiment_id, parent_type, norm),
-                    ).fetchone()
+                    parent_row = None
+                    if norm:
+                        parent_row = sq.execute(
+                            "SELECT id FROM resources "
+                            "WHERE experiment_id = ? AND resource_type = ? AND resource_name = ?",
+                            (experiment_id, parent_type, norm),
+                        ).fetchone()
+                    if not parent_row and not norm:
+                        # context_value was a var./local. reference — try token-based fuzzy match
+                        fuzzy_id = _fuzzy_parent_lookup(sq, experiment_id, parent_type, context_value or "")
+                        if fuzzy_id:
+                            parent_row = (fuzzy_id,)
+                            print(f"  Fuzzy parent match: {context_value!r} → parent id {fuzzy_id} ({parent_type})")
+                        else:
+                            print(
+                                f"WARNING: cannot resolve parent ref {context_value!r} to {parent_type} "
+                                f"(resource {res_id})",
+                                file=sys.stderr,
+                            )
                     parent_id = parent_row[0] if parent_row else None
 
                     if parent_id is not None:
