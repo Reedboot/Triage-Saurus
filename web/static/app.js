@@ -58,25 +58,7 @@
   const exportSvgBtn    = document.getElementById('export-diagram-svg-btn');
   const exportPngBtn    = document.getElementById('export-diagram-png-btn');
 
-  if (copyDiagramBtn) {
-    copyDiagramBtn.addEventListener('click', async () => {
-      // Copy the currently active mermaid source if available
-      const activeView = viewsEl && viewsEl.querySelector('.diagram-view.active');
-      if (!activeView) return;
-      const mer = activeView.querySelector('.mermaid');
-      if (!mer) return;
-      const src = mer.textContent || mer.innerText || '';
-      try {
-        await navigator.clipboard.writeText(src);
-        // small transient feedback
-        const old = copyDiagramBtn.textContent;
-        copyDiagramBtn.textContent = '✅ Copied';
-        setTimeout(() => { copyDiagramBtn.textContent = old; }, 1200);
-      } catch (e) {
-        console.warn('Copy failed:', e);
-      }
-    });
-  }
+  // Copy button wired up later (after diagrams[] state is in scope) — see bottom of file.
 
   // ── Diagram export helpers ──────────────────────────────────────────────────
 
@@ -724,6 +706,8 @@
       if (toggleSectionsBtn) toggleSectionsBtn.textContent = '📑 Sections';
       activeSection = '__log__';
     } else {
+      // Ensure sections panel is visible (user may have been viewing raw log)
+      showSectionsInLog();
       // Load content for the requested key
       loadSectionContent(key, expId || currentExpId, repoName || currentRepoName);
       activeSection = key;
@@ -1938,9 +1922,15 @@
   // Run annotation in background
   annotateRepoOptions();
 
-  copyDiagramBtn?.addEventListener('click', () => {
-    if (diagrams[activeTab]) {
-      navigator.clipboard.writeText(diagrams[activeTab].code).catch(() => {});
+  copyDiagramBtn?.addEventListener('click', async () => {
+    if (!diagrams[activeTab]) return;
+    try {
+      await navigator.clipboard.writeText(diagrams[activeTab].code);
+      const old = copyDiagramBtn.textContent;
+      copyDiagramBtn.textContent = '✅ Copied';
+      setTimeout(() => { copyDiagramBtn.textContent = old; }, 1200);
+    } catch (e) {
+      console.warn('Copy failed:', e);
     }
   });
 
