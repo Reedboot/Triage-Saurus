@@ -1,0 +1,82 @@
+rules:
+  - id: context-azure-function-servicebus-binding
+    message: |
+      Azure Function Service Bus binding detected.
+      This rule identifies Azure Functions that connect to Service Bus via input/output bindings.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_function_app" $FUNC_NAME {
+        ...
+        app_settings = {
+          ...
+          ServiceBusConnectionString = $CONNECTION
+          ...
+        }
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: compute
+      subcategory: messaging-integration
+      technology: [terraform, azure, function-app, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects Function App connections to Service Bus via connection strings
+  - id: context-azure-function-trigger-servicebus-input-binding
+    message: |
+      Azure Function with Service Bus trigger/input binding detected.
+      This rule identifies functions that process Service Bus messages.
+    severity: INFO
+    languages: [json]
+    pattern: |
+      {
+        ...
+        "bindings": [
+          {
+            ...
+            "type": "serviceBusTrigger"
+            ...
+          }
+        ]
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: compute
+      subcategory: messaging-integration
+      technology: [azure, function-app, servicebus]
+      target_files: ["function.json", "**/function.json"]
+      description: Detects Service Bus triggers in function.json (consumer connections)
+  - id: context-azure-function-output-binding-servicebus
+    message: |
+      Azure Function with Service Bus output binding detected.
+      This rule identifies functions that send messages to Service Bus.
+    severity: INFO
+    languages: [json]
+    pattern: |
+      {
+        ...
+        "bindings": [
+          {
+            ...
+            "type": "serviceBus"
+            ...
+            "direction": "out"
+            ...
+          }
+        ]
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: compute
+      subcategory: messaging-integration
+      technology: [azure, function-app, servicebus]
+      target_files: ["function.json", "**/function.json"]
+      description: Detects Service Bus output bindings in function.json (publisher connections)

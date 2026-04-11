@@ -1,0 +1,89 @@
+rules:
+  - id: context-azure-servicebus-authorization-rule-send
+    message: |
+      Azure Service Bus authorization rule with Send permissions detected.
+      This rule identifies which services/applications have permission to publish/send to Service Bus queues and topics.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_servicebus_queue_authorization_rule" $AUTH_RULE_NAME {
+        ...
+        manage = $MANAGE
+        listen = $LISTEN
+        send = $SEND
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: messaging
+      subcategory: authorization
+      technology: [terraform, azure, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects Service Bus queue authorization rules with Send rights (publisher connections)
+  - id: context-azure-servicebus-topic-authorization-rule-send
+    message: |
+      Azure Service Bus topic authorization rule with Send permissions detected.
+      This rule identifies which services can publish messages to Service Bus topics.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_servicebus_topic_authorization_rule" $AUTH_RULE_NAME {
+        ...
+        manage = $MANAGE
+        listen = $LISTEN
+        send = $SEND
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: messaging
+      subcategory: authorization
+      technology: [terraform, azure, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects Service Bus topic authorization rules with Send rights (publisher connections)
+  - id: context-azure-servicebus-queue-authorization-rule-listen
+    message: |
+      Azure Service Bus queue authorization rule with Listen permissions detected.
+      This rule identifies which services/applications have permission to receive/listen to Service Bus queues.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_servicebus_queue_authorization_rule" $AUTH_RULE_NAME {
+        ...
+        listen = $LISTEN
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: messaging
+      subcategory: authorization
+      technology: [terraform, azure, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects Service Bus queue authorization rules with Listen rights (consumer connections)
+  - id: context-azure-servicebus-topic-subscription
+    message: |
+      Azure Service Bus topic subscription detected.
+      This rule identifies Topic-to-Subscription relationships for message flow mapping.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_servicebus_subscription" $SUB_NAME {
+        ...
+        topic_id = $TOPIC_ID
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: messaging
+      subcategory: subscriptions
+      technology: [terraform, azure, servicebus]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects Service Bus subscriptions to identify topic consumers

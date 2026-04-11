@@ -1,0 +1,65 @@
+rules:
+  - id: context-azure-apim-api-policy-backend-connection
+    message: |
+      APIM API policy backend connection detected.
+      This rule extracts the backend-id reference from APIM API policies.
+      It detects which backend an API operation routes to via <set-backend-service>.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_api_policy" $POLICY_NAME {
+        ...
+        xml_content = $XML_POLICY
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, azure, apim, api-management]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects APIM API policy backend routing via XML set-backend-service directive
+  - id: context-azure-apim-operation-policy-backend-connection
+    message: |
+      APIM operation policy backend connection detected.
+      This rule extracts backend-id references from operation-level policies.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_api_operation_policy" $OP_POLICY_NAME {
+        ...
+        xml_content = $XML_POLICY
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, azure, apim, api-management]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects APIM operation policy backend routing
+  - id: context-azure-apim-product-policy-backend-connection
+    message: |
+      APIM product policy backend connection detected.
+      This rule detects backend routing defined at the product level.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_api_management_product_policy" $PROD_POLICY_NAME {
+        ...
+        xml_content = $XML_POLICY
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: api-gateway
+      subcategory: backend-routing
+      technology: [terraform, azure, apim, api-management]
+      target_files: ["*.tf", "**/*.tf"]
+      description: Detects APIM product policy backend routing
