@@ -1,6 +1,7 @@
 // app.js - main application logic for Triage-Saurus UI
 (function () {
   let currentEventSource = null;
+  let currentPollInterval = null;  // Track polling to prevent duplicates
   let statusBar = null;
   let statusText = null;
   let spinner = null;
@@ -273,6 +274,11 @@
   // Handle reset button
   function handleReset() {
     closeEventSource();
+    // Cancel any polling
+    if (currentPollInterval) {
+      clearInterval(currentPollInterval);
+      currentPollInterval = null;
+    }
     clearLog();
     if (statusBar) statusBar.style.display = 'none';
     if (spinner) spinner.style.display = 'none';
@@ -317,6 +323,12 @@
   function reconnectToRunningExperiment(repoPath, experimentId) {
     const repoName = repoPath.split('/').pop();
     
+    // Cancel any existing polling to prevent duplicates
+    if (currentPollInterval) {
+      clearInterval(currentPollInterval);
+      currentPollInterval = null;
+    }
+    
     addLogLine('[Info] Scan already in progress on server', 'info');
     addLogLine(`[Info] Experiment ID: ${experimentId}`, 'info');
     addLogLine('[Info] Waiting for scan to complete...', 'info');
@@ -328,14 +340,15 @@
     // Poll for scan completion with timeout detection
     let pollCount = 0;
     const maxPollCount = 84; // 7 minutes = 420 seconds / 5 sec interval = 84 polls
-    const pollInterval = setInterval(() => {
+    currentPollInterval = setInterval(() => {
       pollCount++;
       const elapsedMin = Math.floor(pollCount * 5 / 60);
       const elapsedSec = (pollCount * 5) % 60;
       
       // Safety check: if polling for more than 7 min without completion, assume process crashed
       if (pollCount > maxPollCount) {
-        clearInterval(pollInterval);
+        clearInterval(currentPollInterval);
+        currentPollInterval = null;
         addLogLine('[Error] Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
         addLogLine('[Error] Lock file may be stale. You can try starting a new scan.', 'error');
         window._triage.setStatus('Scan timeout', 'error');
@@ -350,7 +363,8 @@
           // Check if this experiment is still running
           if (!data.running_experiment) {
             // Scan completed!
-            clearInterval(pollInterval);
+            clearInterval(currentPollInterval);
+            currentPollInterval = null;
             addLogLine('[Info] Scan complete!', 'info');
             window._triage.setStatus('Scan complete', 'success');
             if (spinner) spinner.style.display = 'none';
