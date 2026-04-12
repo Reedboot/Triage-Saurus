@@ -1578,6 +1578,9 @@ def _stream_scan(repo_path: str, scan_name: str):
     yield _sse("log", f"▶  Starting scan: {repo}")
     yield _sse("log", f"   Command: {' '.join(cmd)}")
     yield _sse("log", "")
+    yield _sse("log", "Info: Comprehensive scan in progress — 156 detection rules + 212 misconfig rules")
+    yield _sse("log", "      Estimated duration: 5-6 minutes (detection → misconfig → code analysis)")
+    yield _sse("log", "")
 
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -1623,7 +1626,13 @@ def _stream_scan(repo_path: str, scan_name: str):
                 now = time.time()
                 if now - last_hb >= 5:
                     elapsed = int(now - start_time)
-                    yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s")
+                    # Estimate remaining time: comprehensive scans typically take 5-6 minutes
+                    est_total = 330  # 5.5 minutes in seconds
+                    est_remaining = max(0, est_total - elapsed)
+                    if est_remaining > 0:
+                        yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)")
+                    else:
+                        yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s")
                     last_hb = now
 
             if process.poll() is not None:

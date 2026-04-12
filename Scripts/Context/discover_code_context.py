@@ -1055,6 +1055,9 @@ def main() -> int:
             experiments / f"{args.experiment}_{args.repo}"
         )
 
+    print("=" * 60)
+    print("PHASE 2 — Code context discovery")
+    print("=" * 60)
     print(f"\n[Phase 2] Target:      {target}")
     print(f"[Phase 2] Experiment:  {args.experiment}")
     print(f"[Phase 2] Repo:        {args.repo}")
