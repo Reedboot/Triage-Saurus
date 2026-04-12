@@ -298,9 +298,12 @@
         const tabBar = document.getElementById('section-tab-bar');
         const panelContent = document.getElementById('section-panel-content');
         if (tabBar && panelContent) {
-          const isHidden = tabBar.style.display === 'none';
-          tabBar.style.display = isHidden ? 'block' : 'none';
-          panelContent.style.display = isHidden ? 'block' : 'none';
+          // Use getComputedStyle to check actual display value from CSS
+          const computedDisplay = window.getComputedStyle(tabBar).display;
+          const isHidden = computedDisplay === 'none';
+          // Set inline style to override CSS
+          tabBar.style.display = isHidden ? 'flex' : 'none';
+          panelContent.style.display = isHidden ? 'flex' : 'none';
           toggleSectionsBtn.title = isHidden ? 'Hide sections' : 'Show sections';
         }
       });
