@@ -210,6 +210,24 @@
     window._triage.setStatus('Ready', '');
   }
 
+  // Check if a scan is running for the selected repo
+  function checkForRunningScan(repoPath) {
+    if (!repoPath) return;
+    
+    const repoName = repoPath.split('/').pop();
+    fetch(`/api/scans/${repoName}`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.running_experiment) {
+          addLogLine(`[Info] Scan in progress for experiment ${data.running_experiment}`, 'info');
+          addLogLine('[Info] If you were disconnected, you can reconnect by starting the scan again.', 'info');
+          if (statusBar) statusBar.style.display = 'block';
+          window._triage.setStatus(`Running experiment ${data.running_experiment}`, '');
+        }
+      })
+      .catch(err => console.log('[Stream] Could not check running scan status:', err));
+  }
+
   // Initialize on DOM ready
   function init() {
     statusBar = document.getElementById('status-bar');
@@ -227,6 +245,36 @@
 
     if (resetBtn) {
       resetBtn.addEventListener('click', handleReset);
+    }
+
+    // Handle sections toggle button
+    const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
+    if (toggleSectionsBtn) {
+      toggleSectionsBtn.addEventListener('click', function() {
+        const tabBar = document.getElementById('section-tab-bar');
+        const panelContent = document.getElementById('section-panel-content');
+        if (tabBar && panelContent) {
+          const isHidden = tabBar.style.display === 'none';
+          tabBar.style.display = isHidden ? 'block' : 'none';
+          panelContent.style.display = isHidden ? 'block' : 'none';
+          toggleSectionsBtn.title = isHidden ? 'Hide sections' : 'Show sections';
+        }
+      });
+    }
+
+    // Handle page visibility changes (mobile tab switch)
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        console.log('[Stream] Page hidden');
+      } else {
+        console.log('[Stream] Page visible - stream should resume if active');
+      }
+    });
+
+    // Check for running scans on page load
+    const repoSelect = document.getElementById('repo-select');
+    if (repoSelect && repoSelect.value) {
+      checkForRunningScan(repoSelect.value);
     }
 
     // Set initial status

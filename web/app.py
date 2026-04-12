@@ -1714,7 +1714,20 @@ def api_scans(repo_name: str):
             "scanned_at": row["scanned_at"],
             "has_diagrams": _has_diagrams(exp_id),
         })
-    return jsonify({"scans": scans})
+    
+    # Check if there's a running scan for this repo
+    running_experiment = None
+    try:
+        lock_dir = REPO_ROOT / "Output" / "Learning" / "running_scans"
+        lock_file = lock_dir / f"{repo_name}.lock"
+        if lock_file.exists():
+            running_exp_id = lock_file.read_text(encoding="utf-8").strip()
+            if running_exp_id:
+                running_experiment = running_exp_id
+    except Exception:
+        pass
+    
+    return jsonify({"scans": scans, "running_experiment": running_experiment})
 
 
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
