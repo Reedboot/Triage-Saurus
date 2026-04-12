@@ -280,116 +280,60 @@
       .catch(err => console.log('[Stream] Could not check running scan status:', err));
   }
 
-  // Reconnect to a running experiment and stream its output
+  // Reconnect to a running experiment by polling for its status
   function reconnectToRunningExperiment(repoPath, experimentId) {
-    const formData = new FormData();
-    formData.append('repo_path', repoPath);
+    const repoName = repoPath.split('/').pop();
     
-    try {
-      fetch('/scan', {
-        method: 'POST',
-        body: formData,
-      })
-        .then((response) => {
-          if (!response.ok) {
-            addLogLine(`Error: HTTP ${response.status}`, 'error');
-            window._triage.setStatus('Reconnection failed', 'error');
-            if (scanBtn) scanBtn.disabled = false;
-            if (statusBar) statusBar.style.display = 'none';
+    addLogLine('[Info] Scan already in progress on server', 'info');
+    addLogLine(`[Info] Experiment ID: ${experimentId}`, 'info');
+    addLogLine('[Info] Waiting for scan to complete...', 'info');
+    
+    window._triage.setStatus('Scan in progress…', '');
+    if (statusBar) statusBar.style.display = 'block';
+    
+    // Poll for scan completion
+    let pollCount = 0;
+    const pollInterval = setInterval(() => {
+      pollCount++;
+      const elapsedMin = Math.floor(pollCount * 5 / 60);
+      const elapsedSec = (pollCount * 5) % 60;
+      
+      fetch(`/api/scans/${repoName}`)
+        .then(response => response.json())
+        .then(data => {
+          // Check if this experiment is still running
+          if (!data.running_experiment) {
+            // Scan completed!
+            clearInterval(pollInterval);
+            addLogLine('[Info] Scan complete!', 'info');
+            window._triage.setStatus('Scan complete', 'success');
             if (spinner) spinner.style.display = 'none';
-            return;
-          }
-
-          addLogLine('[Connected to scan stream]', 'info');
-
-          if (!response.body) {
-            addLogLine('Error: Response body not available', 'error');
             if (scanBtn) scanBtn.disabled = false;
-            return;
+            
+            // Optionally show completed message with duration
+            if (elapsedMin > 0) {
+              addLogLine(`[Info] Total scan time: ${elapsedMin}m ${elapsedSec}s`, 'info');
+            } else {
+              addLogLine(`[Info] Total scan time: ${elapsedSec}s`, 'info');
+            }
+          } else if (pollCount > 1 && pollCount % 12 === 0) {
+            // Show progress update every 60 seconds (12 * 5 sec intervals)
+            if (elapsedMin > 0) {
+              addLogLine(`[Info] Still scanning... (${elapsedMin}m ${elapsedSec}s elapsed)`, 'info');
+            } else {
+              addLogLine(`[Info] Still scanning... (${elapsedSec}s elapsed)`, 'info');
+            }
           }
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          let currentEvent = null;
-          let chunkCount = 0;
-
-          function processChunk() {
-            reader.read().then(({ done, value }) => {
-              if (done) {
-                addLogLine('[Stream closed]', 'info');
-                window._triage.setStatus('Scan complete', 'success');
-                if (scanBtn) scanBtn.disabled = false;
-                if (spinner) spinner.style.display = 'none';
-                return;
-              }
-
-              chunkCount++;
-              if (chunkCount === 1) {
-                addLogLine('[Receiving data...]', 'info');
-              }
-
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop();
-
-              lines.forEach((line) => {
-                if (line === '') {
-                  currentEvent = null;
-                  return;
-                }
-
-                if (line.startsWith('event: ')) {
-                  currentEvent = line.slice(7).trim();
-                  return;
-                }
-
-                if (line.startsWith('data: ')) {
-                  const dataStr = line.slice(6);
-                  try {
-                    const message = JSON.parse(dataStr);
-                    if (typeof message === 'string') {
-                      addLogLine(message, currentEvent || '');
-                    } else if (message && typeof message === 'object') {
-                      if (message.message) {
-                        addLogLine(message.message, message.level || currentEvent || '');
-                      }
-                      if (currentEvent === 'done') {
-                        window._triage.setStatus('Scan complete', 'success');
-                      }
-                    }
-                    if (message && message.status) {
-                      window._triage.setStatus(message.status, '');
-                    }
-                  } catch (e) {
-                    addLogLine(dataStr, currentEvent || '');
-                  }
-                  currentEvent = null;
-                  return;
-                }
-              });
-
-              processChunk();
-            });
-          }
-
-          window._triage.setStatus('Scan running…', '');
-          processChunk();
         })
-        .catch((error) => {
-          addLogLine(`Connection error: ${error.message}`, 'error');
-          window._triage.setStatus('Connection failed', 'error');
-          if (scanBtn) scanBtn.disabled = false;
-          if (statusBar) statusBar.style.display = 'none';
-          if (spinner) spinner.style.display = 'none';
+        .catch(err => {
+          // Log errors but don't stop polling
+          if (pollCount === 1) {
+            console.log('[Reconnect] Error checking scan status:', err);
+          }
         });
-    } catch (error) {
-      addLogLine(`Error: ${error.message}`, 'error');
-      window._triage.setStatus('Error reconnecting', 'error');
-      if (scanBtn) scanBtn.disabled = false;
-      if (statusBar) statusBar.style.display = 'none';
-      if (spinner) spinner.style.display = 'none';
-    }
+    }, 5000); // Poll every 5 seconds
+    
+    if (spinner) spinner.style.display = 'none';
   }
 
   // Initialize on DOM ready
