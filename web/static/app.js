@@ -118,8 +118,11 @@
     watchBtnNew.onclick = () => {
       modal.style.display = 'none';
       closeEventSource();
-      // Don't clear log - we want to preserve past progress when reconnecting
-      addLogLine(`[Info] Reconnecting to running experiment ${experimentId}...`, 'info');
+      // Clear placeholder text but preserve past progress
+      if (logOutput && logOutput.innerHTML.includes('Scan output will appear here')) {
+        logOutput.innerHTML = '';
+      }
+      // checkForRunningScan will add appropriate messages
       checkForRunningScan(repoPath);
     };
     
@@ -304,7 +307,10 @@
         if (data.running_experiment) {
           // Auto-reconnect to running scan
           closeEventSource();
-          // Don't clear log - we want to preserve past progress when reconnecting
+          // Clear placeholder text and preserve any past progress
+          if (logOutput && logOutput.innerHTML.includes('Scan output will appear here')) {
+            logOutput.innerHTML = '';
+          }
           addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
           if (statusBar) statusBar.style.display = 'block';
           if (spinner) spinner.style.display = 'block';
