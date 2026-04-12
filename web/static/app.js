@@ -307,9 +307,14 @@
         if (data.running_experiment) {
           // Auto-reconnect to running scan
           closeEventSource();
-          // Clear placeholder text and preserve any past progress
+          // Clear log placeholder text and preserve any past progress
           if (logOutput && logOutput.innerHTML.includes('Scan output will appear here')) {
             logOutput.innerHTML = '';
+          }
+          // Hide section placeholder when reconnecting
+          const sectionPlaceholder = document.getElementById('section-placeholder');
+          if (sectionPlaceholder) {
+            sectionPlaceholder.style.display = 'none';
           }
           addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
           if (statusBar) statusBar.style.display = 'block';
