@@ -324,14 +324,14 @@
           // Start receiving streaming output for the running experiment
           // Since the scan is already running on the server, we just need to get the output
           // by making a request to /scan which will detect the running experiment via lock file
-          reconnectToRunningExperiment(repoPath, data.running_experiment);
+          reconnectToRunningExperiment(repoPath, data.running_experiment, data.running_experiment_created_at);
         }
       })
       .catch(err => console.log('[Stream] Could not check running scan status:', err));
   }
 
   // Reconnect to a running experiment by polling for its status
-  function reconnectToRunningExperiment(repoPath, experimentId) {
+  function reconnectToRunningExperiment(repoPath, experimentId, createdAt) {
     const repoName = repoPath.split('/').pop();
     
     // Cancel any existing polling to prevent duplicates
@@ -351,13 +351,20 @@
     // Poll for scan completion with timeout detection
     let pollCount = 0;
     const maxPollCount = 84; // 7 minutes = 420 seconds / 5 sec interval = 84 polls
+    const startTime = createdAt ? new Date(createdAt) : new Date();  // Use actual start time if available
+    
     currentPollInterval = setInterval(() => {
       pollCount++;
-      const elapsedMin = Math.floor(pollCount * 5 / 60);
-      const elapsedSec = (pollCount * 5) % 60;
+      
+      // Calculate actual elapsed time from scan start
+      const now = new Date();
+      const elapsedMs = now - startTime;
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      const elapsedMin = Math.floor(elapsedSec / 60);
+      const remainingSec = elapsedSec % 60;
       
       // Safety check: if polling for more than 7 min without completion, assume process crashed
-      if (pollCount > maxPollCount) {
+      if (elapsedSec > 420) {  // 7 minutes in seconds
         clearInterval(currentPollInterval);
         currentPollInterval = null;
         addLogLine('[Error] Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
@@ -383,14 +390,14 @@
             
             // Show completed message with duration
             if (elapsedMin > 0) {
-              addLogLine(`[Info] Total time: ${elapsedMin}m ${elapsedSec}s`, 'info');
+              addLogLine(`[Info] Total time: ${elapsedMin}m ${remainingSec}s`, 'info');
             } else {
               addLogLine(`[Info] Total time: ${elapsedSec}s`, 'info');
             }
           } else if (pollCount % 6 === 0) {
             // Show progress update every 30 seconds (6 * 5 sec intervals)
             if (elapsedMin > 0) {
-              addLogLine(`[Web] Scan in progress — elapsed ${elapsedMin}m ${elapsedSec}s (est. 4-5 min remaining)`, 'info');
+              addLogLine(`[Web] Scan in progress — elapsed ${elapsedMin}m ${remainingSec}s (est. 4-5 min remaining)`, 'info');
             } else {
               addLogLine(`[Web] Scan in progress — elapsed ${elapsedSec}s (est. 4-5 min remaining)`, 'info');
             }

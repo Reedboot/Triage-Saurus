@@ -1771,6 +1771,7 @@ def api_scans(repo_name: str):
     
     # Check if there's a running scan for this repo
     running_experiment = None
+    running_experiment_created_at = None
     try:
         lock_dir = REPO_ROOT / "Output" / "Learning" / "running_scans"
         lock_file = lock_dir / f"{repo_name}.lock"
@@ -1786,6 +1787,14 @@ def api_scans(repo_name: str):
                     if exp_dir and (exp_dir / "experiment.json").exists():
                         # Experiment directory exists - trust the lock file
                         running_experiment = running_exp_id
+                        # Get the directory creation time
+                        try:
+                            stat_info = exp_dir.stat()
+                            # Use st_birthtime (creation) if available, otherwise st_mtime
+                            created_timestamp = stat_info.st_birthtime if hasattr(stat_info, 'st_birthtime') else stat_info.st_mtime
+                            running_experiment_created_at = int(created_timestamp * 1000)  # milliseconds
+                        except Exception:
+                            pass
                     else:
                         # Experiment doesn't exist - clean up stale lock file
                         try:
@@ -1801,7 +1810,10 @@ def api_scans(repo_name: str):
     except Exception:
         pass
     
-    return jsonify({"scans": scans, "running_experiment": running_experiment})
+    result = {"scans": scans, "running_experiment": running_experiment}
+    if running_experiment_created_at:
+        result["running_experiment_created_at"] = running_experiment_created_at
+    return jsonify(result)
 
 
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
