@@ -82,7 +82,7 @@
 
     // Start the scan with EventSource for streaming
     try {
-      // Use fetch to POST the form data, then establish SSE connection
+      // Use fetch to POST the form data, then read streaming response
       fetch('/scan', {
         method: 'POST',
         body: formData,
@@ -97,20 +97,35 @@
             return;
           }
 
+          addLogLine('[Connected to scan stream]', 'info');
+
           // Read the streaming response
+          if (!response.body) {
+            addLogLine('Error: Response body not available', 'error');
+            if (scanBtn) scanBtn.disabled = false;
+            return;
+          }
+
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
           let currentEvent = null;
+          let chunkCount = 0;
 
           function processChunk() {
             reader.read().then(({ done, value }) => {
               if (done) {
                 // Stream ended
+                addLogLine('[Stream closed]', 'info');
                 window._triage.setStatus('Scan complete', 'success');
                 if (scanBtn) scanBtn.disabled = false;
                 if (spinner) spinner.style.display = 'none';
                 return;
+              }
+
+              chunkCount++;
+              if (chunkCount === 1) {
+                addLogLine('[Receiving data...]', 'info');
               }
 
               // Append to buffer and process lines
@@ -119,9 +134,15 @@
               buffer = lines.pop(); // Keep incomplete line in buffer
 
               lines.forEach((line) => {
+                // Skip empty lines that are just part of SSE framing
+                if (line === '') {
+                  currentEvent = null;
+                  return;
+                }
+
                 // Handle SSE event type
                 if (line.startsWith('event: ')) {
-                  currentEvent = line.slice(7);
+                  currentEvent = line.slice(7).trim();
                   return;
                 }
 
@@ -137,6 +158,10 @@
                       if (message.message) {
                         addLogLine(message.message, message.level || currentEvent || '');
                       }
+                      // Handle special event types
+                      if (currentEvent === 'done') {
+                        window._triage.setStatus('Scan complete', 'success');
+                      }
                     }
                     if (message && message.status) {
                       window._triage.setStatus(message.status, '');
@@ -147,11 +172,6 @@
                   }
                   currentEvent = null;
                   return;
-                }
-
-                // Empty line ends event
-                if (line === '') {
-                  currentEvent = null;
                 }
               });
 
