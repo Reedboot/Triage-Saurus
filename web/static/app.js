@@ -292,12 +292,24 @@
     window._triage.setStatus('Scan in progress…', '');
     if (statusBar) statusBar.style.display = 'block';
     
-    // Poll for scan completion
+    // Poll for scan completion with timeout detection
     let pollCount = 0;
+    const maxPollCount = 84; // 7 minutes = 420 seconds / 5 sec interval = 84 polls
     const pollInterval = setInterval(() => {
       pollCount++;
       const elapsedMin = Math.floor(pollCount * 5 / 60);
       const elapsedSec = (pollCount * 5) % 60;
+      
+      // Safety check: if polling for more than 7 min without completion, assume process crashed
+      if (pollCount > maxPollCount) {
+        clearInterval(pollInterval);
+        addLogLine('[Error] Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
+        addLogLine('[Error] Lock file may be stale. You can try starting a new scan.', 'error');
+        window._triage.setStatus('Scan timeout', 'error');
+        if (spinner) spinner.style.display = 'none';
+        if (scanBtn) scanBtn.disabled = false;
+        return;
+      }
       
       fetch(`/api/scans/${repoName}`)
         .then(response => response.json())

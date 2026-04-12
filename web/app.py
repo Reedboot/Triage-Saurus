@@ -1774,7 +1774,36 @@ def api_scans(repo_name: str):
         if lock_file.exists():
             running_exp_id = lock_file.read_text(encoding="utf-8").strip()
             if running_exp_id:
-                running_experiment = running_exp_id
+                # Verify the experiment is actually still running by checking status
+                exp_candidates = sorted((REPO_ROOT / "Output" / "Learning" / "experiments").glob(f"{running_exp_id}_*"))
+                exp_dir = exp_candidates[0] if exp_candidates else None
+                exp_json = exp_dir / "experiment.json" if exp_dir else None
+                
+                if exp_json and exp_json.exists():
+                    try:
+                        cfg = json.loads(exp_json.read_text(encoding="utf-8"))
+                        # Only report as running if status is actually "running"
+                        if cfg.get("status") == "running":
+                            running_experiment = running_exp_id
+                        else:
+                            # Status is not "running" (completed, failed, etc)
+                            # Clean up the stale lock file
+                            try:
+                                lock_file.unlink()
+                            except Exception:
+                                pass
+                    except Exception:
+                        # Can't read experiment JSON - assume not running and clean up
+                        try:
+                            lock_file.unlink()
+                        except Exception:
+                            pass
+                else:
+                    # Experiment directory or JSON doesn't exist - clean up stale lock
+                    try:
+                        lock_file.unlink()
+                    except Exception:
+                        pass
     except Exception:
         pass
     
