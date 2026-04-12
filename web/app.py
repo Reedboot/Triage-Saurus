@@ -1470,6 +1470,57 @@ def _has_diagrams(experiment_id: str) -> bool:
         return False
 
 
+def _cleanup_stale_locks():
+    """Clean up lock files from interrupted scans on server startup.
+    
+    Lock files are created when scans start and should be deleted when scans complete.
+    If the server restarts, orphaned lock files may remain. This function removes them
+    so users can start fresh scans without getting "scan in progress" messages for
+    scans that no longer exist.
+    """
+    try:
+        lock_dir = REPO_ROOT / "Output" / "Learning" / "running_scans"
+        if not lock_dir.exists():
+            return
+        
+        for lock_file in lock_dir.glob("*.lock"):
+            try:
+                # Try to read the experiment ID from the lock file
+                exp_id = lock_file.read_text(encoding="utf-8").strip()
+                if not exp_id:
+                    # Empty lock file - delete it
+                    lock_file.unlink()
+                    continue
+                
+                # Check if the experiment directory still exists and scan is actually running
+                exp_candidates = sorted((REPO_ROOT / "Output" / "Learning" / "experiments").glob(f"{exp_id}_*"))
+                if not exp_candidates:
+                    # Experiment directory doesn't exist - delete stale lock
+                    lock_file.unlink()
+                    continue
+                
+                exp_dir = exp_candidates[0]
+                exp_json = exp_dir / "experiment.json"
+                if not exp_json.exists():
+                    # Experiment JSON missing - delete stale lock
+                    lock_file.unlink()
+                    continue
+                
+                # Check if experiment status is still "running"
+                try:
+                    cfg = json.loads(exp_json.read_text(encoding="utf-8"))
+                    if cfg.get("status") != "running":
+                        # Scan completed or failed - delete lock file
+                        lock_file.unlink()
+                except Exception:
+                    # Can't read experiment JSON - delete lock file to be safe
+                    lock_file.unlink()
+            except Exception as e:
+                print(f"[Startup] Warning: Could not process lock file {lock_file.name}: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[Startup] Warning: Could not clean up stale locks: {e}", file=sys.stderr)
+
+
 def _sse(event: str, data) -> str:
     """Format a single SSE message."""
     payload = json.dumps(data) if not isinstance(data, str) else json.dumps(data)
@@ -8538,6 +8589,10 @@ def scan():
 
 
 if __name__ == "__main__":
+    # Clean up stale lock files from previous server crashes/restarts
+    print("[Startup] Cleaning up stale lock files...", file=sys.stderr)
+    _cleanup_stale_locks()
+    
     debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
     debug = debug_env in ("1", "true", "yes", "on")
     app.run(debug=debug, host="0.0.0.0", port=9000, threaded=True)
