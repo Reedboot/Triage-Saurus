@@ -1488,6 +1488,9 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
         return
 
+    # Yield immediately to confirm connection
+    yield _sse("log", f"[Web] Initializing scan for repository: {repo.name}")
+
     # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
     # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
     experiment_id: str | None = None
@@ -1521,6 +1524,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                 experiment_id = None
 
         if experiment_id is None and triage_script.exists():
+            yield _sse("log", "[Web] Creating new experiment...")
             res = subprocess.run(
                 [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
                 cwd=str(REPO_ROOT),
@@ -8506,6 +8510,7 @@ def scan():
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
         },
     )
 
