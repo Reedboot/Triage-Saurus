@@ -37,6 +37,11 @@
     if (logOutput) {
       logOutput.innerHTML = '';
     }
+    // Hide section placeholder when starting a new scan
+    const placeholder = document.getElementById('section-placeholder');
+    if (placeholder) {
+      placeholder.style.display = 'none';
+    }
   }
 
   // Add a line to the log
@@ -206,6 +211,11 @@
     if (spinner) spinner.style.display = 'none';
     if (logOutput) {
       logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
+    }
+    // Show section placeholder when resetting
+    const placeholder = document.getElementById('section-placeholder');
+    if (placeholder) {
+      placeholder.style.display = 'flex';
     }
     window._triage.setStatus('Ready', '');
   }
