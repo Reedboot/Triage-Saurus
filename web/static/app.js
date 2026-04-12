@@ -61,9 +61,7 @@
   // Handle scan form submission
   function handleScanSubmit(e) {
     e.preventDefault();
-    closeEventSource();
-    clearLog();
-
+    
     const form = document.getElementById('scan-form');
     if (!form) return;
 
@@ -72,6 +70,42 @@
       window._triage.setStatus('Please select a repository', 'error');
       return;
     }
+
+    // Check if a scan is already running for this repo
+    const repoName = repoPath.split('/').pop();
+    fetch(`/api/scans/${repoName}`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.running_experiment) {
+          // A scan is already running
+          const msg = `Scan already in progress for ${repoName} (Experiment ${data.running_experiment}).\n\nOptions:\n• "Watch" to reconnect to the running scan\n• "New Scan" to start a fresh scan`;
+          const choice = confirm(msg);
+          
+          if (choice) {
+            // User chose to start new scan - proceed with submission
+            startScan(repoPath);
+          } else {
+            // User chose to watch - reconnect to running scan by clearing and re-checking
+            closeEventSource();
+            clearLog();
+            addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
+            checkForRunningScan(repoPath);
+          }
+        } else {
+          // No scan running - proceed normally
+          startScan(repoPath);
+        }
+      })
+      .catch(err => {
+        console.log('[Stream] Could not check running scan status, proceeding:', err);
+        startScan(repoPath);
+      });
+  }
+
+  // Start a new scan (helper function)
+  function startScan(repoPath) {
+    closeEventSource();
+    clearLog();
 
     // Show status
     if (statusBar) statusBar.style.display = 'block';
