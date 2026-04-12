@@ -77,20 +77,8 @@
       .then(response => response.json())
       .then(data => {
         if (data.running_experiment) {
-          // A scan is already running
-          const msg = `Scan already in progress for ${repoName} (Experiment ${data.running_experiment}).\n\nOptions:\n• "Watch" to reconnect to the running scan\n• "New Scan" to start a fresh scan`;
-          const choice = confirm(msg);
-          
-          if (choice) {
-            // User chose to start new scan - proceed with submission
-            startScan(repoPath);
-          } else {
-            // User chose to watch - reconnect to running scan by clearing and re-checking
-            closeEventSource();
-            clearLog();
-            addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
-            checkForRunningScan(repoPath);
-          }
+          // A scan is already running - show modal
+          showScanModal(repoName, data.running_experiment, repoPath);
         } else {
           // No scan running - proceed normally
           startScan(repoPath);
@@ -100,6 +88,51 @@
         console.log('[Stream] Could not check running scan status, proceeding:', err);
         startScan(repoPath);
       });
+  }
+  
+  // Show modal for running experiment
+  function showScanModal(repoName, experimentId, repoPath) {
+    const modal = document.getElementById('scan-modal');
+    const modalMsg = document.getElementById('modal-message');
+    const watchBtn = document.getElementById('modal-watch');
+    const newBtn = document.getElementById('modal-new');
+    const cancelBtn = document.getElementById('modal-cancel');
+    
+    if (!modal) return;
+    
+    // Set message
+    modalMsg.textContent = `Experiment ${experimentId} is currently running for ${repoName}.`;
+    
+    // Remove old event listeners by cloning
+    watchBtn.replaceWith(watchBtn.cloneNode(true));
+    newBtn.replaceWith(newBtn.cloneNode(true));
+    cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+    
+    // Get fresh references
+    const watchBtnNew = document.getElementById('modal-watch');
+    const newBtnNew = document.getElementById('modal-new');
+    const cancelBtnNew = document.getElementById('modal-cancel');
+    
+    // Attach handlers
+    watchBtnNew.onclick = () => {
+      modal.style.display = 'none';
+      closeEventSource();
+      clearLog();
+      addLogLine(`[Info] Reconnecting to running experiment ${experimentId}...`, 'info');
+      checkForRunningScan(repoPath);
+    };
+    
+    newBtnNew.onclick = () => {
+      modal.style.display = 'none';
+      startScan(repoPath);
+    };
+    
+    cancelBtnNew.onclick = () => {
+      modal.style.display = 'none';
+    };
+    
+    // Show modal
+    modal.style.display = 'flex';
   }
 
   // Start a new scan (helper function)

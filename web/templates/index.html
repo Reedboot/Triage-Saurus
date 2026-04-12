@@ -283,6 +283,101 @@
     </div>
   </div>
 
+  <!-- Scan confirmation modal -->
+  <div id="scan-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h3 id="modal-title">Scan already in progress</h3>
+      <p id="modal-message"></p>
+      <div class="modal-buttons">
+        <button id="modal-watch" class="modal-btn primary">👁 Watch Running Scan</button>
+        <button id="modal-new" class="modal-btn">🔄 Start New Scan</button>
+        <button id="modal-cancel" class="modal-btn cancel">✕ Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal styles -->
+  <style>
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+
+    .modal-content {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 24px;
+      max-width: 400px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-content h3 {
+      margin: 0 0 12px;
+      color: #f0883e;
+      font-size: 18px;
+    }
+
+    .modal-content p {
+      margin: 0 0 24px;
+      color: #8b949e;
+      line-height: 1.5;
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      flex-direction: column;
+    }
+
+    .modal-btn {
+      padding: 10px 16px;
+      border: 1px solid #30363d;
+      background: #161b22;
+      color: #c9d1d9;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .modal-btn:hover {
+      background: #0d1117;
+      border-color: #58a6ff;
+      color: #58a6ff;
+    }
+
+    .modal-btn.primary {
+      background: #238636;
+      border-color: #2ea043;
+      color: #fff;
+    }
+
+    .modal-btn.primary:hover {
+      background: #2ea043;
+      border-color: #3fb950;
+    }
+
+    .modal-btn.cancel {
+      background: transparent;
+      border-color: #30363d;
+    }
+
+    .modal-btn.cancel:hover {
+      background: #da3633;
+      border-color: #f85149;
+      color: #fff;
+    }
+  </style>
+
   <script src="/static/table-resize.js" defer></script>
   <script src="/static/app.js" defer></script>
   <script src="/static/assets.js" defer></script>
