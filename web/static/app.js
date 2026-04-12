@@ -117,7 +117,7 @@
     watchBtnNew.onclick = () => {
       modal.style.display = 'none';
       closeEventSource();
-      clearLog();
+      // Don't clear log - we want to preserve past progress when reconnecting
       addLogLine(`[Info] Reconnecting to running experiment ${experimentId}...`, 'info');
       checkForRunningScan(repoPath);
     };
@@ -298,7 +298,7 @@
         if (data.running_experiment) {
           // Auto-reconnect to running scan
           closeEventSource();
-          clearLog();
+          // Don't clear log - we want to preserve past progress when reconnecting
           addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
           if (statusBar) statusBar.style.display = 'block';
           if (spinner) spinner.style.display = 'block';
