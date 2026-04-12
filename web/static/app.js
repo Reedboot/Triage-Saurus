@@ -254,7 +254,7 @@
     window._triage.setStatus('Ready', '');
   }
 
-  // Check if a scan is running for the selected repo
+  // Check if a scan is running for the selected repo and auto-reconnect
   function checkForRunningScan(repoPath) {
     if (!repoPath) return;
     
@@ -263,13 +263,133 @@
       .then(response => response.json())
       .then(data => {
         if (data.running_experiment) {
-          addLogLine(`[Info] Scan in progress for experiment ${data.running_experiment}`, 'info');
-          addLogLine('[Info] If you were disconnected, you can reconnect by starting the scan again.', 'info');
+          // Auto-reconnect to running scan
+          closeEventSource();
+          clearLog();
+          addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
           if (statusBar) statusBar.style.display = 'block';
-          window._triage.setStatus(`Running experiment ${data.running_experiment}`, '');
+          if (spinner) spinner.style.display = 'block';
+          window._triage.setStatus(`Reconnecting to experiment ${data.running_experiment}...`, '');
+          
+          // Start receiving streaming output for the running experiment
+          // Since the scan is already running on the server, we just need to get the output
+          // by making a request to /scan which will detect the running experiment via lock file
+          reconnectToRunningExperiment(repoPath, data.running_experiment);
         }
       })
       .catch(err => console.log('[Stream] Could not check running scan status:', err));
+  }
+
+  // Reconnect to a running experiment and stream its output
+  function reconnectToRunningExperiment(repoPath, experimentId) {
+    const formData = new FormData();
+    formData.append('repo_path', repoPath);
+    
+    try {
+      fetch('/scan', {
+        method: 'POST',
+        body: formData,
+      })
+        .then((response) => {
+          if (!response.ok) {
+            addLogLine(`Error: HTTP ${response.status}`, 'error');
+            window._triage.setStatus('Reconnection failed', 'error');
+            if (scanBtn) scanBtn.disabled = false;
+            if (statusBar) statusBar.style.display = 'none';
+            if (spinner) spinner.style.display = 'none';
+            return;
+          }
+
+          addLogLine('[Connected to scan stream]', 'info');
+
+          if (!response.body) {
+            addLogLine('Error: Response body not available', 'error');
+            if (scanBtn) scanBtn.disabled = false;
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let currentEvent = null;
+          let chunkCount = 0;
+
+          function processChunk() {
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                addLogLine('[Stream closed]', 'info');
+                window._triage.setStatus('Scan complete', 'success');
+                if (scanBtn) scanBtn.disabled = false;
+                if (spinner) spinner.style.display = 'none';
+                return;
+              }
+
+              chunkCount++;
+              if (chunkCount === 1) {
+                addLogLine('[Receiving data...]', 'info');
+              }
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop();
+
+              lines.forEach((line) => {
+                if (line === '') {
+                  currentEvent = null;
+                  return;
+                }
+
+                if (line.startsWith('event: ')) {
+                  currentEvent = line.slice(7).trim();
+                  return;
+                }
+
+                if (line.startsWith('data: ')) {
+                  const dataStr = line.slice(6);
+                  try {
+                    const message = JSON.parse(dataStr);
+                    if (typeof message === 'string') {
+                      addLogLine(message, currentEvent || '');
+                    } else if (message && typeof message === 'object') {
+                      if (message.message) {
+                        addLogLine(message.message, message.level || currentEvent || '');
+                      }
+                      if (currentEvent === 'done') {
+                        window._triage.setStatus('Scan complete', 'success');
+                      }
+                    }
+                    if (message && message.status) {
+                      window._triage.setStatus(message.status, '');
+                    }
+                  } catch (e) {
+                    addLogLine(dataStr, currentEvent || '');
+                  }
+                  currentEvent = null;
+                  return;
+                }
+              });
+
+              processChunk();
+            });
+          }
+
+          window._triage.setStatus('Scan running…', '');
+          processChunk();
+        })
+        .catch((error) => {
+          addLogLine(`Connection error: ${error.message}`, 'error');
+          window._triage.setStatus('Connection failed', 'error');
+          if (scanBtn) scanBtn.disabled = false;
+          if (statusBar) statusBar.style.display = 'none';
+          if (spinner) spinner.style.display = 'none';
+        });
+    } catch (error) {
+      addLogLine(`Error: ${error.message}`, 'error');
+      window._triage.setStatus('Error reconnecting', 'error');
+      if (scanBtn) scanBtn.disabled = false;
+      if (statusBar) statusBar.style.display = 'none';
+      if (spinner) spinner.style.display = 'none';
+    }
   }
 
   // Initialize on DOM ready
@@ -318,8 +438,17 @@
       }
     });
 
-    // Check for running scans on page load
+    // Handle repo selection change - auto-reconnect to running scans
     const repoSelect = document.getElementById('repo-select');
+    if (repoSelect) {
+      repoSelect.addEventListener('change', function() {
+        if (this.value) {
+          checkForRunningScan(this.value);
+        }
+      });
+    }
+
+    // Check for running scans on page load
     if (repoSelect && repoSelect.value) {
       checkForRunningScan(repoSelect.value);
     }
