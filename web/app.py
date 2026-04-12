@@ -1637,6 +1637,8 @@ def _stream_scan(repo_path: str, scan_name: str):
     env.setdefault("PYTHONUNBUFFERED", "1")
 
     try:
+        # Start process in a new session group so it survives if the HTTP request is closed
+        # This ensures scans continue running even if the browser disconnects
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1645,6 +1647,7 @@ def _stream_scan(repo_path: str, scan_name: str):
             cwd=str(REPO_ROOT),
             bufsize=1,
             env=env,
+            start_new_session=True,  # Create new process group (Unix/Linux)
         )
     except Exception as exc:
         yield _sse("error", f"Failed to start pipeline: {exc}")
