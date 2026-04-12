@@ -1774,34 +1774,17 @@ def api_scans(repo_name: str):
         if lock_file.exists():
             running_exp_id = lock_file.read_text(encoding="utf-8").strip()
             if running_exp_id:
-                # Verify the experiment is actually still running by checking status
+                # Verify the experiment directory still exists
                 exp_base = REPO_ROOT / "Output" / "Learning" / "experiments"
                 if exp_base.exists():
                     exp_candidates = sorted(exp_base.glob(f"{running_exp_id}_*"))
                     exp_dir = exp_candidates[0] if exp_candidates else None
-                    exp_json = exp_dir / "experiment.json" if exp_dir else None
                     
-                    if exp_json and exp_json.exists():
-                        try:
-                            cfg = json.loads(exp_json.read_text(encoding="utf-8"))
-                            # Only report as running if status is actually "running"
-                            if cfg.get("status") == "running":
-                                running_experiment = running_exp_id
-                            else:
-                                # Status is not "running" (completed, failed, etc)
-                                # Clean up the stale lock file
-                                try:
-                                    lock_file.unlink()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            # Can't read experiment JSON - assume not running and clean up
-                            try:
-                                lock_file.unlink()
-                            except Exception:
-                                pass
+                    if exp_dir and (exp_dir / "experiment.json").exists():
+                        # Experiment directory exists - trust the lock file
+                        running_experiment = running_exp_id
                     else:
-                        # Experiment directory or JSON doesn't exist - clean up stale lock
+                        # Experiment doesn't exist - clean up stale lock file
                         try:
                             lock_file.unlink()
                         except Exception:
