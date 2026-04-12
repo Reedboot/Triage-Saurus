@@ -287,6 +287,7 @@
     addLogLine('[Info] Scan already in progress on server', 'info');
     addLogLine(`[Info] Experiment ID: ${experimentId}`, 'info');
     addLogLine('[Info] Waiting for scan to complete...', 'info');
+    addLogLine('[Info] Polling server every 5 seconds...', 'info');
     
     window._triage.setStatus('Scan in progress…', '');
     if (statusBar) statusBar.style.display = 'block';
@@ -310,18 +311,18 @@
             if (spinner) spinner.style.display = 'none';
             if (scanBtn) scanBtn.disabled = false;
             
-            // Optionally show completed message with duration
+            // Show completed message with duration
             if (elapsedMin > 0) {
-              addLogLine(`[Info] Total scan time: ${elapsedMin}m ${elapsedSec}s`, 'info');
+              addLogLine(`[Info] Total time: ${elapsedMin}m ${elapsedSec}s`, 'info');
             } else {
-              addLogLine(`[Info] Total scan time: ${elapsedSec}s`, 'info');
+              addLogLine(`[Info] Total time: ${elapsedSec}s`, 'info');
             }
-          } else if (pollCount > 1 && pollCount % 12 === 0) {
-            // Show progress update every 60 seconds (12 * 5 sec intervals)
+          } else if (pollCount % 6 === 0) {
+            // Show progress update every 30 seconds (6 * 5 sec intervals)
             if (elapsedMin > 0) {
-              addLogLine(`[Info] Still scanning... (${elapsedMin}m ${elapsedSec}s elapsed)`, 'info');
+              addLogLine(`[Web] Scan in progress — elapsed ${elapsedMin}m ${elapsedSec}s (est. 4-5 min remaining)`, 'info');
             } else {
-              addLogLine(`[Info] Still scanning... (${elapsedSec}s elapsed)`, 'info');
+              addLogLine(`[Web] Scan in progress — elapsed ${elapsedSec}s (est. 4-5 min remaining)`, 'info');
             }
           }
         })
