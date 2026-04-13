@@ -994,7 +994,15 @@
     }
 
     try {
-      const svgString = new XMLSerializer().serializeToString(svgElement);
+      let svgString = new XMLSerializer().serializeToString(svgElement);
+      
+      // Add dark background rect as first element after <svg tag
+      const darkBg = '#0d1111';
+      svgString = svgString.replace(
+        '<svg',
+        `<svg><rect width="100%" height="100%" fill="${darkBg}"/>`
+      );
+      
       const blob = new Blob([svgString], { type: 'image/svg+xml' });
       
       const experimentId = currentExperimentId || 'unknown';
@@ -1039,7 +1047,7 @@
       tempDiv.style.position = 'fixed';
       tempDiv.style.left = '-9999px';
       tempDiv.style.top = '-9999px';
-      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.backgroundColor = '#0d1111';
       tempDiv.style.padding = '20px';
       
       // Clone the SVG
@@ -1056,7 +1064,7 @@
       }
 
       window.html2canvas(tempDiv, {
-        backgroundColor: '#ffffff',
+        backgroundColor: '#0d1111',
         scale: 2,
         allowTaint: true,
         useCORS: true
