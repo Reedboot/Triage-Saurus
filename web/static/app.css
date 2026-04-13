@@ -470,6 +470,24 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   font-weight: 500;
 }
 
+#log-output .phase-3c {
+  background-color: rgba(115, 105, 0, 0.15);
+  border-left: 4px solid #8b7e00;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-3d {
+  background-color: rgba(160, 82, 45, 0.15);
+  border-left: 4px solid #a0522d;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
 #log-output .phase-4 {
   background-color: rgba(108, 51, 141, 0.15);
   border-left: 4px solid #6b3380;
