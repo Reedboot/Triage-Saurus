@@ -17,9 +17,9 @@
 
   // Zoom state for mermaid diagrams - now per-diagram
   const zoomState = {
-    scale: 1.0,
+    scale: 2.0,
     minScale: 0.5,
-    maxScale: 4.0,
+    maxScale: 8.0,
     panX: 0,
     panY: 0
   };

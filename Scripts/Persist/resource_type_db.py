@@ -778,6 +778,10 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
     Lookup order: resource_types table -> in-memory fallback -> derived heuristics.
     """
     info = get_resource_type(conn, terraform_type)
+    # Override: NSG should be in Network tier for diagram layout, not Security
+    lower_type = (terraform_type or '').lower()
+    if any(k in lower_type for k in ['nsg', 'network_security_group']):
+        return 'Network'
     # Use category if present and maps to a known render category
     cat = (info.get('category') or '').strip()
     if cat:
@@ -810,9 +814,9 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
         return 'Database'
     if any(k in lower for k in ['storage', 's3', 'blob', 'bucket', 'disk', 'volume']):
         return 'Storage'
-    if any(k in lower for k in ['vnet', 'virtual_network', 'subnet', 'network', 'public_ip', 'vpc', 'route', 'gateway', 'lb', 'load_balancer']):
+    if any(k in lower for k in ['vnet', 'virtual_network', 'subnet', 'network', 'public_ip', 'vpc', 'route', 'gateway', 'lb', 'load_balancer', 'nsg', 'network_security_group', 'security_group']):
         return 'Network'
-    if any(k in lower for k in ['firewall', 'nsg', 'security_group', 'waf', 'network_security_group']):
+    if any(k in lower for k in ['firewall', 'waf']):
         return 'Firewall'
     if any(k in lower for k in ['role', 'azuread', 'iam', 'user', 'group', 'service_principal']):
         return 'Identity'

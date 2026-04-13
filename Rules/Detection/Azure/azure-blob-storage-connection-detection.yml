@@ -1,0 +1,60 @@
+rules:
+  - id: context-azure-storage-blob-account-containment
+    message: |
+      Azure Storage Account to Storage Blob containment relationship detected.
+      This rule identifies the parent-child relationship between storage accounts and their blobs.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_storage_blob" $BLOB_NAME {
+        ...
+        storage_account_name = $ACCOUNT_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, azure, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: contains
+      source_resource: azurerm_storage_account
+      target_resource: azurerm_storage_blob
+      description: |
+        Detects Azure Storage Blob resources with storage_account_name references to identify
+        Storage Account → Storage Blob containment relationships for infrastructure mapping.
+  - id: context-azure-storage-container-account-containment
+    message: |
+      Azure Storage Account to Storage Container containment relationship detected.
+      This rule identifies the parent-child relationship between storage accounts and their containers.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_storage_container" $CONTAINER_NAME {
+            ...
+            storage_account_name = $ACCOUNT_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_storage_container" $CONTAINER_NAME {
+            ...
+            storage_account_id = $ACCOUNT_ID
+            ...
+          }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, azure, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: contains
+      source_resource: azurerm_storage_account
+      target_resource: azurerm_storage_container
+      description: |
+        Detects Azure Storage Container resources with storage_account_name or storage_account_id references
+        to identify Storage Account → Storage Container containment relationships for infrastructure mapping.

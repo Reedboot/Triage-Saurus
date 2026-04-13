@@ -434,85 +434,62 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output .line-sep    { color: var(--border); }
 
 /* ── Phase-specific background colors with rotating palette ── */
+/* Base phase styling for all phases */
+#log-output [class^="phase-"] {
+  display: block;
+  border-left: 5px solid;
+  padding-left: 12px;
+  padding-right: 8px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  margin-left: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
 #log-output .phase-1 {
   background-color: rgba(51, 111, 180, 0.15);
-  border-left: 4px solid #1a5a96;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #1a5a96;
 }
 
 #log-output .phase-2 {
   background-color: rgba(44, 125, 66, 0.15);
-  border-left: 4px solid #228f47;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #228f47;
 }
 
 #log-output .phase-3a {
   background-color: rgba(179, 137, 0, 0.15);
-  border-left: 4px solid #997700;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #997700;
 }
 
 #log-output .phase-3b {
   background-color: rgba(180, 100, 44, 0.15);
-  border-left: 4px solid #b36422;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #b36422;
 }
 
 #log-output .phase-3c {
   background-color: rgba(115, 105, 0, 0.15);
-  border-left: 4px solid #8b7e00;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #8b7e00;
 }
 
 #log-output .phase-3d {
   background-color: rgba(160, 82, 45, 0.15);
-  border-left: 4px solid #a0522d;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #a0522d;
 }
 
 #log-output .phase-4 {
   background-color: rgba(108, 51, 141, 0.15);
-  border-left: 4px solid #6b3380;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #6b3380;
 }
 
 #log-output .phase-5 {
   background-color: rgba(25, 103, 110, 0.15);
-  border-left: 4px solid #1a6b75;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #1a6b75;
 }
 
 #log-output .phase-6 {
   background-color: rgba(157, 61, 105, 0.15);
-  border-left: 4px solid #9d3d69;
-  padding: 4px 8px;
-  margin-left: -4px;
-  color: var(--text);
-  font-weight: 500;
+  border-left-color: #9d3d69;
 }
 
 /* ── Panel-level nav tabs ── */

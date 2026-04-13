@@ -793,9 +793,12 @@ def generate_architecture_diagram(
     # (e.g., Terraform test fixtures named 'bad'/'good' across resource types).
     _diagram_emitted_ids: set = set()
 
+    # ── Internet Node (External Reference) ──
+    # Internet is rendered at root level, not inside any zone, to avoid circular references
+    lines.append("  internet[🌐 Internet]")
+
     # ── Internet-Facing Zone ──
     lines.append("  subgraph zone_internet[\"🌐 Internet-Facing\"]")
-    lines.append("    internet[🌐 Internet]")
     for res in internet_facing:
         if res['id'] in parent_children:
             _render_resource_subgraph(res, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
