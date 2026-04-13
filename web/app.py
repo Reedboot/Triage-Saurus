@@ -4123,7 +4123,7 @@ def api_assets(repo_name: str):
                 res.discovery_method,
                 res.status,
                 COUNT(f.id) AS finding_count,
-                MAX(CASE f.base_severity
+                MAX(CASE UPPER(f.base_severity)
                     WHEN 'CRITICAL' THEN 5
                     WHEN 'HIGH'     THEN 4
                     WHEN 'MEDIUM'   THEN 3
@@ -4132,7 +4132,29 @@ def api_assets(repo_name: str):
                     ELSE 0 END) AS max_sev_rank
             FROM resources res
             JOIN repositories repo ON res.repo_id = repo.id
-            LEFT JOIN findings f ON f.resource_id = res.id
+            LEFT JOIN findings f ON (
+                f.experiment_id = res.experiment_id AND
+                f.repo_id = res.repo_id AND
+                (f.source_file = res.source_file OR f.source_file LIKE '%' || res.source_file) AND
+                (
+                    f.source_line_start = res.source_line_start OR
+                    (
+                        f.source_line_start > res.source_line_start AND
+                        (
+                            res.source_line_end IS NULL OR
+                            f.source_line_start <= res.source_line_end
+                        ) AND
+                        NOT EXISTS (
+                            SELECT 1 FROM resources r2
+                            WHERE r2.experiment_id = res.experiment_id AND
+                                r2.repo_id = res.repo_id AND
+                                (r2.source_file = res.source_file OR r2.source_file LIKE '%' || res.source_file) AND
+                                r2.source_line_start > res.source_line_start AND
+                                r2.source_line_start <= f.source_line_start
+                        )
+                    )
+                )
+            )
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
