@@ -1,0 +1,27 @@
+rules:
+  - id: context-azure-vnet-subnet-containment
+    message: |
+      Azure Virtual Network to Subnet containment relationship detected.
+      This rule identifies the parent-child relationship between virtual networks and their subnets.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_subnet" $SUBNET_NAME {
+        ...
+        virtual_network_name = $VNET_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: contains
+      source_resource: azurerm_virtual_network
+      target_resource: azurerm_subnet
+      description: |
+        Detects Azure Subnet resources with virtual_network_name references to identify
+        Virtual Network → Subnet containment relationships for infrastructure mapping.

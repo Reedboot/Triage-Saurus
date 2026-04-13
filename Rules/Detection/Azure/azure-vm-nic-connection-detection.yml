@@ -1,0 +1,53 @@
+rules:
+  - id: context-azure-vm-nic-association-linux
+    message: |
+      Azure Linux Virtual Machine to Network Interface association detected.
+      This rule identifies network interface assignments to Linux VMs.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_linux_virtual_machine" $VM_NAME {
+        ...
+        network_interface_ids = $NIC_IDS
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, azure, compute, network]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: attached_to
+      source_resource: azurerm_linux_virtual_machine
+      target_resource: azurerm_network_interface
+      description: |
+        Detects Azure Linux Virtual Machine resources with network_interface_ids references to identify
+        Virtual Machine → Network Interface relationships for compute networking mapping.
+  - id: context-azure-vm-nic-association-windows
+    message: |
+      Azure Windows Virtual Machine to Network Interface association detected.
+      This rule identifies network interface assignments to Windows VMs.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_windows_virtual_machine" $VM_NAME {
+        ...
+        network_interface_ids = $NIC_IDS
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, azure, compute, network]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: attached_to
+      source_resource: azurerm_windows_virtual_machine
+      target_resource: azurerm_network_interface
+      description: |
+        Detects Azure Windows Virtual Machine resources with network_interface_ids references to identify
+        Virtual Machine → Network Interface relationships for compute networking mapping.

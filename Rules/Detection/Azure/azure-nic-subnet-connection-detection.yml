@@ -1,0 +1,38 @@
+rules:
+  - id: context-azure-nic-subnet-association
+    message: |
+      Azure Network Interface to Subnet association detected.
+      This rule identifies the relationship between network interfaces and their assigned subnets.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_network_interface" $NIC_NAME {
+            ...
+            ip_configuration {
+              ...
+              subnet_id = $SUBNET_ID
+              ...
+            }
+            ...
+          }
+      - pattern: |
+          resource "azurerm_network_interface" $NIC_NAME {
+            ...
+            subnet_id = $SUBNET_ID
+            ...
+          }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: attached_to
+      source_resource: azurerm_network_interface
+      target_resource: azurerm_subnet
+      description: |
+        Detects Azure Network Interface resources with subnet_id references to identify
+        Network Interface → Subnet association relationships for infrastructure mapping.

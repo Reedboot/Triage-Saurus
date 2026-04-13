@@ -182,8 +182,34 @@ def _relative_repo_path(repo_path: Path, target: Path) -> str:
         rel = str(target)
     return rel.replace("\\", "/")
 
+def is_valid_azure_resource_name(name: str) -> bool:
+    """Validate that a name is a valid Azure resource name, not a reference or Terraform syntax.
+    
+    Returns False if the name contains:
+    - Dots (.) which indicate Terraform interpolation like azurerm_public_ip.VM_PublicIP.name
+    - Resource type prefixes (azurerm_, aws_, etc.) which indicate it's a reference
+    - Interpolation syntax ($, {, }) which indicate dynamic values
+    """
+    if not name:
+        return False
+    # Check for Terraform reference syntax
+    if "." in name:
+        return False
+    # Check for resource type prefixes (indicates a reference like "azurerm_public_ip")
+    for prefix in ["azurerm_", "aws_", "google_", "azuread_", "alicloud_", "oci_", "data."]:
+        if name.startswith(prefix):
+            return False
+    # Check for interpolation syntax
+    if any(c in name for c in "${}"):
+        return False
+    return True
+
+
 def extract_resource_names(files: List[Path], repo_path: Path, resource_type: str) -> List[str]:
-    """Extract resource names of a given type from Terraform files."""
+    """Extract resource names of a given type from Terraform files.
+    
+    Only extracts from 'resource' blocks, not 'data' blocks.
+    """
     names = []
     for file in files:
         if file.suffix == ".tf":
@@ -202,13 +228,17 @@ def extract_resource_names_with_property(files: List[Path], repo_path: Path, res
 
 
 def detect_terraform_resources(files: List[Path], repo_path: Path) -> Set[str]:
-    """Detect all Terraform resource types in the repository."""
+    """Detect all Terraform resource types in the repository.
+    
+    Only detects 'resource' blocks, not 'data' blocks.
+    """
     resource_types = set()
     for file in files:
         if file.suffix == ".tf":
             try:
                 content = file.read_text()
-                matches = re.findall(r'resource "?([A-Za-z_][A-Za-z0-9_]*)"?', content)
+                # Only match 'resource' blocks, not 'data' blocks
+                matches = re.findall(r'^\s*resource\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', content, re.MULTILINE)
                 resource_types.update(matches)
             except Exception:
                 continue
@@ -1028,6 +1058,17 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             m = block_re.match(lines[i])
             if m:
                 block_kind, resource_type, name = m.groups()
+                
+                # Skip data blocks - they are references to existing resources, not deployable resources
+                if block_kind == "data":
+                    i += 1
+                    continue
+                
+                # Validate resource name - skip invalid names that are likely references
+                if not is_valid_azure_resource_name(name):
+                    i += 1
+                    continue
+                
                 # Collect block body until matching closing brace
                 depth = 0
                 block_lines = []

@@ -723,6 +723,35 @@ def generate_architecture_diagram(
         )
         return any(kw in rt for kw in app_tier_keywords)
 
+    def _is_compute_tier_resource(r: dict) -> bool:
+        """Return True if resource should ALWAYS be in Compute tier (VMs, instances).
+        
+        VMs must go to Compute tier regardless of parent, since they represent
+        compute capacity even when provisioned via NICs.
+        """
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        compute_keywords = (
+            'virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine',
+            'ec2', 'instance', 'vm',
+        )
+        return any(kw in rt for kw in compute_keywords)
+
+    def _is_data_tier_resource(r: dict) -> bool:
+        """Return True if resource should ALWAYS be in Data tier (databases).
+        
+        Databases must go to Data tier regardless of categorization anomalies.
+        """
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        data_keywords = (
+            'database', 'sql', 'rds', 'cosmos', 'postgresql', 'mysql',
+            'mssql', 'bigquery', 'db_', 'cosmosdb',
+        )
+        return any(kw in rt for kw in data_keywords)
+
     # Exclude only orphaned (parentless) public IP resources — those with parents stay in filtered_roots for hierarchical rendering
     filtered_roots = [r for r in root_resources if not _is_public_ip_orphaned(r)]
     # Exclude resources explicitly hidden from architecture diagrams (unless already filtered as children)
@@ -730,15 +759,18 @@ def generate_architecture_diagram(
 
     # Application tier: function apps, app services (web apps), and app service plans
     app_tier       = [r for r in filtered_roots if _is_application_tier_resource(r)]
-    vms            = [r for r in filtered_roots if _in_render_cat(r, 'Compute') and not _is_application_tier_resource(r) and not _is_public_ip_resource_obj(r)]
+    # Compute tier: VMs and load balancers (force VMs to Compute tier regardless of parent)
+    vms            = [r for r in filtered_roots if (_is_compute_tier_resource(r) or _in_render_cat(r, 'Compute')) and not _is_application_tier_resource(r) and not _is_public_ip_resource_obj(r)]
     aks            = [r for r in filtered_roots if _in_render_cat(r, 'Container')]
-    sql_servers    = [r for r in filtered_roots if _in_render_cat(r, 'Database')]
+    # Data tier: ensure databases always go to Data tier
+    sql_servers    = [r for r in filtered_roots if _is_data_tier_resource(r) or _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
     # Network/Firewall nodes: only include true firewall/appliance devices for Network category
     nsgs           = [r for r in filtered_roots if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
     paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     # Include Load Balancers in Compute tier
     lbs            = [r for r in filtered_roots if _in_render_cat(r, 'Network') and any(tok in r.get('resource_type','').lower() for tok in ('load_balancer', 'lb', 'elastic_load'))]
+    # Other resources: exclude those already categorized
     other          = [r for r in filtered_roots if r not in app_tier + vms + aks + sql_servers + storage_accounts + nsgs + paas + lbs]
 
     # Classify "other" into internet-facing vs remaining
