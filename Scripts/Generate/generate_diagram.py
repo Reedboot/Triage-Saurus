@@ -501,6 +501,53 @@ def generate_architecture_diagram(
     files can be produced.
     """
     
+    # Backfill parent_resource_id for orphaned Public IPs using connections table
+    def _associate_orphaned_public_ips_to_parents():
+        """Best-effort enrichment: associate orphaned Public IPs to their parent VM/LB via connections."""
+        try:
+            with get_db_connection() as conn:
+                orphaned_ips = conn.execute("""
+                    SELECT r.id
+                    FROM resources r
+                    WHERE r.experiment_id = ?
+                      AND (r.resource_type LIKE '%public_ip%' OR r.resource_type LIKE '%elastic_ip%')
+                      AND r.parent_resource_id IS NULL
+                """, [experiment_id]).fetchall()
+                
+                for ip in orphaned_ips:
+                    ip_id = ip['id']
+                    # Check connections table for parent
+                    parent = conn.execute("""
+                        SELECT DISTINCT r.id
+                        FROM resource_connections rc
+                        JOIN resources r ON rc.target_resource_id = r.id
+                        WHERE rc.source_resource_id = ? AND (
+                            r.resource_type LIKE '%virtual_machine%'
+                            OR r.resource_type LIKE '%ec2%'
+                            OR r.resource_type LIKE '%load_balancer%'
+                            OR r.resource_type LIKE '%lb%'
+                        )
+                        UNION
+                        SELECT DISTINCT r.id
+                        FROM resource_connections rc
+                        JOIN resources r ON rc.source_resource_id = r.id
+                        WHERE rc.target_resource_id = ? AND (
+                            r.resource_type LIKE '%virtual_machine%'
+                            OR r.resource_type LIKE '%ec2%'
+                            OR r.resource_type LIKE '%load_balancer%'
+                            OR r.resource_type LIKE '%lb%'
+                        )
+                        LIMIT 1
+                    """, [ip_id, ip_id]).fetchone()
+                    
+                    if parent:
+                        conn.execute("UPDATE resources SET parent_resource_id = ? WHERE id = ?", [parent['id'], ip_id])
+                conn.commit()
+        except Exception:
+            pass
+    
+    _associate_orphaned_public_ips_to_parents()
+    
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
@@ -663,12 +710,27 @@ def generate_architecture_diagram(
         """Return True if a Public IP has no parent_resource_id."""
         return _is_public_ip_resource_obj(r) and not r.get('parent_resource_id')
 
+    def _is_application_tier_resource(r: dict) -> bool:
+        """Return True if resource is an application-tier resource (app service plan, function app, web app, etc.)"""
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        app_tier_keywords = (
+            'app_service_plan', 'service_plan',
+            'function_app', 'linux_function_app', 'windows_function_app',
+            'app_service', 'linux_web_app', 'windows_web_app',
+            'elastic_beanstalk',
+        )
+        return any(kw in rt for kw in app_tier_keywords)
+
     # Exclude only orphaned (parentless) public IP resources — those with parents stay in filtered_roots for hierarchical rendering
     filtered_roots = [r for r in root_resources if not _is_public_ip_orphaned(r)]
     # Exclude resources explicitly hidden from architecture diagrams (unless already filtered as children)
     filtered_roots = [r for r in filtered_roots if _should_show_on_diagram(r, child_ids)]
 
-    vms            = [r for r in filtered_roots if _in_render_cat(r, 'Compute') and not _is_public_ip_resource_obj(r)]
+    # Application tier: function apps, app services (web apps), and app service plans
+    app_tier       = [r for r in filtered_roots if _is_application_tier_resource(r)]
+    vms            = [r for r in filtered_roots if _in_render_cat(r, 'Compute') and not _is_application_tier_resource(r) and not _is_public_ip_resource_obj(r)]
     aks            = [r for r in filtered_roots if _in_render_cat(r, 'Container')]
     sql_servers    = [r for r in filtered_roots if _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
@@ -677,7 +739,7 @@ def generate_architecture_diagram(
     paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     # Include Load Balancers in Compute tier
     lbs            = [r for r in filtered_roots if _in_render_cat(r, 'Network') and any(tok in r.get('resource_type','').lower() for tok in ('load_balancer', 'lb', 'elastic_load'))]
-    other          = [r for r in filtered_roots if r not in vms + aks + sql_servers + storage_accounts + nsgs + paas + lbs]
+    other          = [r for r in filtered_roots if r not in app_tier + vms + aks + sql_servers + storage_accounts + nsgs + paas + lbs]
 
     # Classify "other" into internet-facing vs remaining
     _INTERNET_FACING_TYPES = InternetExposureDetector.get_public_entry_types()
@@ -688,6 +750,7 @@ def generate_architecture_diagram(
     }
     internet_facing = [r for r in filtered_roots if r['id'] in internet_facing_ids]
     # Remove internet-facing resources from their other category lists
+    app_tier         = [r for r in app_tier if r['id'] not in internet_facing_ids]
     vms              = [r for r in vms if r['id'] not in internet_facing_ids]
     aks              = [r for r in aks if r['id'] not in internet_facing_ids]
     nsgs             = [r for r in nsgs if r['id'] not in internet_facing_ids]
