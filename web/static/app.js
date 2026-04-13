@@ -737,9 +737,10 @@
         // Initialize pan/zoom after rendering
         setTimeout(() => {
           initPanZoom();
-          // Load state for first diagram
-          loadDiagramState(0);
-        }, 100);
+          // Reset zoom and center for first diagram
+          currentDiagramIndex = 0;
+          zoomReset();
+        }, 150);
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
       }
@@ -754,9 +755,10 @@
             // Initialize pan/zoom after rendering
             setTimeout(() => {
               initPanZoom();
-              // Load state for first diagram
-              loadDiagramState(0);
-            }, 100);
+              // Reset zoom and center for first diagram
+              currentDiagramIndex = 0;
+              zoomReset();
+            }, 150);
           } catch (e) {}
         }
       }, 300);
