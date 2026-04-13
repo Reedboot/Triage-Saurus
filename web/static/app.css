@@ -562,18 +562,23 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   overflow: auto;
   height: 100%;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 .diagram-view.active {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex: 1 1 auto;
+  align-items: stretch;
+  justify-content: stretch;
   overflow: auto;
 }
 .diagram-view.active .mermaid {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
   min-height: 100%;
 }
 .diagram-view.active .mermaid svg {
@@ -584,7 +589,17 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   max-height: none !important;
   margin: 0 auto;
 }
-.diagram-views { min-height: 360px; overflow: auto; height: 100%; width: 100%; }
+.diagram-views {
+  min-height: 360px;
+  overflow: auto;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
 
 /* ── Mermaid container ── */
 .mermaid { overflow: auto; }
@@ -1618,16 +1633,18 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   width: 100%;
   height: 100%;
   display: flex;
-  align-items: flex-start; /* align to top-left so diagram uses full panel */
-  justify-content: flex-start;
+  align-items: center;
+  justify-content: center;
   transition: transform 0.15s ease-out;
 }
 
 .diagram-zoom-wrap .mermaid svg {
   display: block;
-  width: 100% !important;
+  width: auto !important;
   height: auto !important;
-  max-height: 100% !important; /* cap to container height */
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 auto;
   transform-origin: 0 0;
 }
 

@@ -960,11 +960,11 @@ def generate_architecture_diagram(
         }
 
     # Track which resource nodes have been emitted so we can create missing endpoints
-    node_names_present = {'Internet'} | {r['resource_name'] for r in resources}
+    node_names_present = {'Internet', 'internet'} | {r['resource_name'] for r in resources}
 
     # Helper to ensure a resource node exists in the diagram for a given resource name
     def _ensure_node_exists(resource_name: str):
-        if not resource_name or resource_name in node_names_present:
+        if not resource_name or str(resource_name).strip().lower() == 'internet' or resource_name in node_names_present:
             return
         if resource_name in non_service_resource_names:
             return
@@ -1013,7 +1013,7 @@ def generate_architecture_diagram(
     def _layer_of(name: str) -> int:
         if not name:
             return 7
-        if name == 'Internet':
+        if str(name).strip().lower() == 'internet':
             return LAYER_ORDER['internet']
         r = resource_map.get(name)
         if not r:
@@ -1043,6 +1043,8 @@ def generate_architecture_diagram(
     for conn in connections_sorted:
         src_name = conn.get('source')
         tgt_name = conn.get('target')
+        if str(src_name or "").strip().lower() == str(tgt_name or "").strip().lower():
+            continue
 
         # If connection involves a standalone Public IP resource, collapse it into an Internet->resource edge labeled 'public IP'
         if _is_public_ip_resource_name(src_name) or _is_public_ip_resource_name(tgt_name):
@@ -1058,7 +1060,7 @@ def generate_architecture_diagram(
             _ensure_node_exists(real_name)
 
             # Ensure Internet node is present
-            if 'Internet' not in node_names_present:
+            if 'Internet' not in node_names_present and 'internet' not in node_names_present:
                 lines.append("  internet[Internet]")
                 node_names_present.add('Internet')
 
@@ -1078,7 +1080,9 @@ def generate_architecture_diagram(
             if edge not in emitted_edges:
                 emitted_edges.add(edge)
                 # direction Internet -> real resource (always use lowercase 'internet' to match node definition)
-                tgt = sanitize_id(real_name)
+                tgt = 'internet' if str(real_name or "").strip().lower() == 'internet' else sanitize_id(real_name)
+                if tgt == 'internet':
+                    continue
                 lines.append(f"  internet -->{new_label} {tgt}")
                 _mark_risky_edge()
                 edge_index += 1
@@ -1089,8 +1093,8 @@ def generate_architecture_diagram(
         _ensure_node_exists(src_name)
         _ensure_node_exists(tgt_name)
 
-        src = 'internet' if conn['source'] == 'Internet' else sanitize_id(conn['source'])
-        tgt = 'internet' if conn['target'] == 'Internet' else sanitize_id(conn['target'])
+        src = 'internet' if str(conn['source'] or "").strip().lower() == 'internet' else sanitize_id(conn['source'])
+        tgt = 'internet' if str(conn['target'] or "").strip().lower() == 'internet' else sanitize_id(conn['target'])
 
         # If target resource has network ACLs or firewall rules, mark as IP-restricted
         ip_restricted = False
@@ -1132,12 +1136,14 @@ def generate_architecture_diagram(
         if style:
             lines.append(f"  {style}")
 
-    has_internet_connections = any(c['source'] == 'Internet' or c['target'] == 'Internet' for c in connections)
+    has_internet_connections = any(
+        str(c.get('source') or "").strip().lower() == 'internet' or str(c.get('target') or "").strip().lower() == 'internet'
+        for c in connections
+    )
     if has_internet_connections:
         lines.append("  style internet stroke:#ff0000, stroke-width:3px")
 
     # Style security zone subgraphs
-    lines.append("  style zone_internet fill:#1a0a0a,stroke:#ff4444,stroke-width:2px")
     lines.append("  style zone_internal fill:#0a0a1a,stroke:#4444ff,stroke-width:1px")
     lines.append("  style zone_data fill:#0a1a0a,stroke:#44aa44,stroke-width:1px")
 

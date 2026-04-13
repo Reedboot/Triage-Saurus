@@ -164,8 +164,8 @@
     );
 
     zoomState.scale = fitScale;
-    zoomState.panX = (wrapWidth / (2 * fitScale)) - (bounds.x + (bounds.width / 2));
-    zoomState.panY = (wrapHeight / (2 * fitScale)) - (bounds.y + (bounds.height / 2));
+    zoomState.panX = (wrapWidth * (1 - fitScale)) / (2 * fitScale);
+    zoomState.panY = (wrapHeight * (1 - fitScale)) / (2 * fitScale);
     applyTransform();
     saveDiagramState(currentDiagramIndex);
   }

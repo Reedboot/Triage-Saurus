@@ -18,8 +18,13 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import sys
 
 from models import RepositoryContext, Relationship, RelationshipType
+# Prefer the repo-root cozo_helpers shim when pycozo is unavailable.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 # cozo_helpers is required — fail fast with a clear message if missing
 try:
     from cozo_helpers import (

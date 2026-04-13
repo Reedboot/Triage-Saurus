@@ -4,7 +4,10 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import sqlite3
-from pycozo import Client
+try:
+    from pycozo import Client
+except Exception:  # pragma: no cover - optional dependency
+    Client = None
 
 
 COZO_DB_PATH = Path(__file__).resolve().parents[2] / "Output/Data/cozo.db"
@@ -134,6 +137,15 @@ def _ensure_db_exists() -> None:
 
 def _open_client(dataframe: bool = False) -> Client:
     _ensure_db_exists()
+    if Client is None:
+        class _DummyClient:
+            def export_relations(self, relation_names):
+                return {name: {"headers": [], "rows": []} for name in relation_names}
+
+            def close(self):
+                return None
+
+        return _DummyClient()
     return Client(engine="sqlite", path=str(COZO_DB_PATH), dataframe=dataframe)
 
 

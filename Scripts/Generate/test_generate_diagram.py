@@ -5,7 +5,9 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parents[2]
+for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
+    sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
 import generate_diagram
 
@@ -46,7 +48,11 @@ def test_internal_zone_skipped_without_children(monkeypatch):
     monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
         "JOIN resources child ON child.parent_resource_id = parent.id": [],
     }))
-    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *args, **kwargs: {"display_on_architecture_chart": True})
+    monkeypatch.setattr(
+        generate_diagram._rtdb,
+        "get_resource_type",
+        lambda *args, **kwargs: {"display_on_architecture_chart": True, "friendly_name": "Virtual Machine", "category": "Compute"},
+    )
     monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Compute")
     monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
 
@@ -81,9 +87,11 @@ def test_internet_arrows_are_colored_red(monkeypatch):
 
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
-    assert "Internet -->" in diagram
+    assert "internet -->" in diagram
     assert "linkStyle 0 stroke:red,stroke-width:2px" in diagram
     assert "subgraph zone_internet" not in diagram
+    assert "style zone_internet" not in diagram
+    assert "Internet[" not in diagram
 
 
 def test_alicloud_api_gateway_is_treated_as_public(monkeypatch):
@@ -111,4 +119,4 @@ def test_alicloud_api_gateway_is_treated_as_public(monkeypatch):
 
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
-    assert "Internet -->" in diagram
+    assert "internet -->" in diagram
