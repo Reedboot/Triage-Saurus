@@ -5,12 +5,31 @@ rules:
       This rule identifies the parent-child relationship between storage accounts and their blobs.
     severity: INFO
     languages: [terraform, hcl]
-    pattern: |
-      resource "azurerm_storage_blob" $BLOB_NAME {
-        ...
-        storage_account_name = $ACCOUNT_NAME
-        ...
-      }
+    pattern-either:
+      - pattern: |
+          resource "azurerm_storage_blob" $BLOB_NAME {
+            ...
+            storage_account_name = $ACCOUNT_NAME
+            ...
+          }
+      - pattern: |
+          data "azurerm_storage_blob" $BLOB_NAME {
+            ...
+            storage_account_name = $ACCOUNT_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_storage_blob" $BLOB_NAME {
+            ...
+            storage_account_id = $ACCOUNT_ID
+            ...
+          }
+      - pattern: |
+          data "azurerm_storage_blob" $BLOB_NAME {
+            ...
+            storage_account_id = $ACCOUNT_ID
+            ...
+          }
     metadata:
       finding_kind: Connection
       asset_provider: azure
@@ -23,8 +42,8 @@ rules:
       source_resource: azurerm_storage_account
       target_resource: azurerm_storage_blob
       description: |
-        Detects Azure Storage Blob resources with storage_account_name references to identify
-        Storage Account → Storage Blob containment relationships for infrastructure mapping.
+        Detects Azure Storage Blob resources and data sources with storage_account_name or storage_account_id 
+        references to identify Storage Account → Storage Blob containment relationships for infrastructure mapping.
   - id: context-azure-storage-container-account-containment
     message: |
       Azure Storage Account to Storage Container containment relationship detected.

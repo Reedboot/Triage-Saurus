@@ -1,0 +1,61 @@
+rules:
+  - id: context-azure-storage-queue-account-containment
+    message: |
+      Azure Storage Account to Storage Queue containment relationship detected.
+      This rule identifies the parent-child relationship between storage accounts and their queues.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_storage_queue" $QUEUE_NAME {
+        ...
+        storage_account_name = $ACCOUNT_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, azure, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: contains
+      source_resource: azurerm_storage_account
+      target_resource: azurerm_storage_queue
+      description: |
+        Detects Azure Storage Queue resources with storage_account_name references to identify
+        Storage Account → Storage Queue containment relationships for infrastructure mapping.
+  
+  - id: context-azure-storage-share-account-containment
+    message: |
+      Azure Storage Account to Storage Share containment relationship detected.
+      This rule identifies the parent-child relationship between storage accounts and their shares.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_storage_share" $SHARE_NAME {
+            ...
+            storage_account_name = $ACCOUNT_NAME
+            ...
+          }
+      - pattern: |
+          resource "azurerm_storage_share" $SHARE_NAME {
+            ...
+            storage_account_id = $ACCOUNT_ID
+            ...
+          }
+    metadata:
+      finding_kind: Connection
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, azure, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      connection_type: contains
+      source_resource: azurerm_storage_account
+      target_resource: azurerm_storage_share
+      description: |
+        Detects Azure Storage Share resources with storage_account_name or storage_account_id references
+        to identify Storage Account → Storage Share containment relationships for infrastructure mapping.

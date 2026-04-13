@@ -28,6 +28,15 @@ def _base_severity(severity: str) -> str:
     return "Medium"
 
 
+def _clean_terraform_string(value: str) -> str:
+    """Remove terraform string delimiters (quotes) from a captured value."""
+    if not value:
+        return value
+    # Remove surrounding double quotes if present
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+    return value
+
 # File extension → display language name
 _EXT_TO_LANG: dict[str, str] = {
     'cs': 'C#/.NET', 'csproj': 'C#/.NET', 'fsproj': 'C#/.NET',
@@ -138,6 +147,120 @@ def _already_exists(conn, experiment_id: str, rule_id: str, source_file: str, so
     return row is not None
 
 
+def _extract_resource_names_from_metavars(metavars: dict) -> tuple[str, str] | None:
+    """Extract source and target resource names from opengrep metavars.
+    
+    For Connection findings, looks for specific variable patterns:
+    - $SOURCE_NAME / $TARGET_NAME
+    - $VNET_NAME / $SUBNET_NAME
+    - $PARENT_NAME / $CHILD_NAME
+    
+    Returns (source_name, target_name) tuple or None if extraction fails.
+    """
+    if not metavars:
+        return None
+    
+    # Define patterns for common connection scenarios
+    pattern_pairs = [
+        ('$SOURCE_NAME', '$TARGET_NAME'),
+        ('$VNET_NAME', '$SUBNET_NAME'),
+        ('$PARENT_NAME', '$CHILD_NAME'),
+    ]
+    
+    for source_var, target_var in pattern_pairs:
+        source_match = metavars.get(source_var)
+        target_match = metavars.get(target_var)
+        
+        if source_match and target_match:
+            source_val = source_match.get('abstract_content', '').strip()
+            target_val = target_match.get('abstract_content', '').strip()
+            
+            # Clean terraform string literals (remove quotes)
+            source_val = _clean_terraform_string(source_val)
+            target_val = _clean_terraform_string(target_val)
+            
+            if source_val and target_val:
+                return (source_val, target_val)
+    
+    return None
+
+
+def _process_connection_finding(
+    conn,
+    experiment_id: str,
+    result: dict,
+    metadata: dict
+) -> bool:
+    """Process a Connection finding and create a resource connection.
+    
+    Uses the existing database connection to avoid locking issues.
+    Returns True if connection was created, False otherwise.
+    """
+    # Extract resource names from metavars
+    metavars = result.get('extra', {}).get('metavars', {})
+    extracted = _extract_resource_names_from_metavars(metavars)
+    
+    if not extracted:
+        return False
+    
+    source_name, target_name = extracted
+    connection_type = metadata.get('connection_type', 'connected_to')
+    
+    try:
+        # Get source and target resource IDs using the existing connection
+        source_result = conn.execute("""
+            SELECT id, repo_id FROM resources
+            WHERE resource_name = ? AND experiment_id = ?
+        """, (source_name, experiment_id)).fetchone()
+        
+        target_result = conn.execute("""
+            SELECT id, repo_id FROM resources
+            WHERE resource_name = ? AND experiment_id = ?
+        """, (target_name, experiment_id)).fetchone()
+        
+        if not source_result or not target_result:
+            return False
+        
+        source_id, source_repo_id = source_result
+        target_id, target_repo_id = target_result
+        is_cross_repo = source_repo_id != target_repo_id
+        
+        # Check if connection already exists
+        existing = conn.execute("""
+            SELECT id FROM resource_connections
+            WHERE experiment_id = ?
+              AND source_resource_id = ?
+              AND target_resource_id = ?
+              AND COALESCE(connection_type, '') = COALESCE(?, '')
+            LIMIT 1
+        """, (experiment_id, source_id, target_id, connection_type)).fetchone()
+        
+        if existing:
+            return True  # Connection already exists, consider it a success
+        
+        # Create the connection
+        message = result.get('extra', {}).get('message', 'Auto-detected from infrastructure')
+        conn.execute("""
+            INSERT INTO resource_connections
+            (experiment_id, source_resource_id, target_resource_id, source_repo_id, target_repo_id,
+             is_cross_repo, connection_type, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id,
+            source_id,
+            target_id,
+            source_repo_id,
+            target_repo_id,
+            is_cross_repo,
+            connection_type,
+            message,
+        ))
+        return True
+    except Exception as e:
+        print(f"  [warn] Failed to create connection {source_name} -> {target_name}: {e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Store opengrep findings to DB")
     parser.add_argument("scan_json", nargs="?", help="Path to opengrep JSON output file")
@@ -203,10 +326,17 @@ def main():
             check_id: str = result.get("check_id", "")
             severity: str = result.get("extra", {}).get("severity", "WARNING")
             extra = result.get("extra", {})
-
-            # Skip pure asset-detection context-discovery rules (INFO severity only)
-            # All other INFO findings are stored with base_severity=Low and severity_score=2
-            if severity.upper() == 'INFO' and (extra.get('metadata') or {}).get('rule_type') == 'context_discovery':
+            metadata = extra.get('metadata') or {}
+            
+            # Handle Connection findings specially (context_discovery with finding_kind: Connection)
+            if severity.upper() == 'INFO' and metadata.get('rule_type') == 'context_discovery':
+                if metadata.get('finding_kind') == 'Connection':
+                    # Process as a connection between resources, not a finding
+                    if _process_connection_finding(conn, args.experiment, result, metadata):
+                        print(f"  [connection] created: {metadata.get('connection_type', 'connected_to')}")
+                    else:
+                        print(f"  [skip] could not extract resources from connection finding")
+                # Skip all other context_discovery rules (asset detection only)
                 continue
 
             path: str = result.get("path", "")
@@ -215,7 +345,7 @@ def main():
             message: str = extra.get("message", "")
             reason: str = message.split("\n")[0]
             code_snippet: str = extra.get("lines", "")
-            category: str = (extra.get("metadata") or {}).get("category", "IaC")
+            category: str = metadata.get("category", "IaC")
 
             rule_id: str = check_id.split(".")[-1]
             title: str = rule_id.replace("-", " ").title()
