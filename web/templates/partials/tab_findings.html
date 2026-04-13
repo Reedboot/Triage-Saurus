@@ -19,7 +19,16 @@
   'oracle': '☁️ Oracle Cloud',
   'oci': '☁️ Oracle Cloud',
   'alicloud': '☁️ Alibaba Cloud',
+  'code': '💻 Code/IaC Findings',
   'Unknown': '❓ Unknown Provider'
+} %}
+
+{# Triage status badge CSS classes #}
+{% set triage_status_classes = {
+  'valid': 'status-valid',
+  'false_positive': 'status-invalid',
+  'needs_context': 'status-pending',
+  'pending': 'status-pending'
 } %}
 
 {# Helper function to count findings by severity in a provider group #}
@@ -59,6 +68,26 @@
     {%- set total_hits = findings | sum(attribute='hit_count') %}
     {%- if total_hits > findings | length %} ({{ total_hits }} total hits){% endif %}
   </span>
+</div>
+
+{# Triage Status Legend #}
+<div class="triage-status-legend" style="margin-bottom: 16px; padding: 12px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.85rem;">
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span class="status-badge status-valid">✓ Valid</span>
+    <span style="color: var(--text-muted);">Accepted finding</span>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span class="status-badge status-invalid">✗ False Positive</span>
+    <span style="color: var(--text-muted);">Rejected finding</span>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span class="status-badge status-pending">❓ Needs Context</span>
+    <span style="color: var(--text-muted);">Awaiting review</span>
+  </div>
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <span class="status-badge status-pending">⏳ Pending</span>
+    <span style="color: var(--text-muted);">Not yet triaged</span>
+  </div>
 </div>
 
 {# Render findings grouped by provider #}
@@ -242,11 +271,19 @@
 
               {# Dev Skeptic #}
               {% if f.dev_score %}
-              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+              <div class="skeptic-review-box" style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); border-left: 4px solid var(--blue-bright, #79c0ff);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
                   <span>👨‍💻 Dev Skeptic</span>
-                  <span>{{ f.dev_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.dev_confidence * 100) | int }}%)</span></span>
+                  <span style="color: {% if f.dev_confidence >= 0.8 %}var(--green-bright, #3fb950){% elif f.dev_confidence >= 0.5 %}var(--yellow){% else %}var(--orange){% endif %}; font-weight: 600;">
+                    {{ f.dev_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.dev_confidence * 100) | int }}% confidence)</span>
+                  </span>
                 </div>
+                {% if f.dev_key_concerns %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">
+                  <div style="font-weight: 500; color: var(--text);">Concerns:</div>
+                  <div style="margin-top: 3px; margin-left: 8px;">{{ f.dev_key_concerns }}</div>
+                </div>
+                {% endif %}
                 {% if f.dev_reasoning %}
                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.dev_reasoning }}</div>
                 {% endif %}
@@ -255,11 +292,19 @@
 
               {# Platform Skeptic #}
               {% if f.platform_score %}
-              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+              <div class="skeptic-review-box" style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); border-left: 4px solid var(--orange, #f0883e);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
                   <span>☁️ Platform Skeptic</span>
-                  <span>{{ f.platform_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.platform_confidence * 100) | int }}%)</span></span>
+                  <span style="color: {% if f.platform_confidence >= 0.8 %}var(--green-bright, #3fb950){% elif f.platform_confidence >= 0.5 %}var(--yellow){% else %}var(--orange){% endif %}; font-weight: 600;">
+                    {{ f.platform_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.platform_confidence * 100) | int }}% confidence)</span>
+                  </span>
                 </div>
+                {% if f.platform_key_concerns %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">
+                  <div style="font-weight: 500; color: var(--text);">Concerns:</div>
+                  <div style="margin-top: 3px; margin-left: 8px;">{{ f.platform_key_concerns }}</div>
+                </div>
+                {% endif %}
                 {% if f.platform_reasoning %}
                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.platform_reasoning }}</div>
                 {% endif %}
@@ -268,11 +313,19 @@
 
               {# Security Skeptic #}
               {% if f.security_score %}
-              <div style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
-                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between;">
+              <div class="skeptic-review-box" style="background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); border-left: 4px solid var(--red-bright, #ff7b72);">
+                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
                   <span>🔒 Security Skeptic</span>
-                  <span>{{ f.security_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.security_confidence * 100) | int }}%)</span></span>
+                  <span style="color: {% if f.security_confidence >= 0.8 %}var(--green-bright, #3fb950){% elif f.security_confidence >= 0.5 %}var(--yellow){% else %}var(--orange){% endif %}; font-weight: 600;">
+                    {{ f.security_score }}/10 <span style="font-size: 0.75rem; color: var(--text-muted);">({{ (f.security_confidence * 100) | int }}% confidence)</span>
+                  </span>
                 </div>
+                {% if f.security_key_concerns %}
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">
+                  <div style="font-weight: 500; color: var(--text);">Concerns:</div>
+                  <div style="margin-top: 3px; margin-left: 8px;">{{ f.security_key_concerns }}</div>
+                </div>
+                {% endif %}
                 {% if f.security_reasoning %}
                 <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">{{ f.security_reasoning }}</div>
                 {% endif %}
@@ -295,20 +348,37 @@
 
           {# Triage Status & Controls #}
           <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px;">✏️ Triage</div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-              {% set ts = (f.triage_status or 'valid') %}
-              <span class="how-badge" style="padding: 4px 8px;" title="{{ f.triage_reason or '' }}{% if f.triage_set_by %} ({{ f.triage_set_by }}){% endif %}">
-                {{ ts }}
-              </span>
-              <div style="font-size: 0.8rem; color: var(--text-muted);">
-                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="valid" style="{% if ts == 'valid' %}font-weight: 700;{% endif %}">✓ Valid</button>
-                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="false_positive" style="{% if ts == 'false_positive' %}font-weight: 700;{% endif %}">✗ False Positive</button>
-                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="needs_context" style="{% if ts == 'needs_context' %}font-weight: 700;{% endif %}">❓ Needs Context</button>
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px;">✏️ Triage Status</div>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start;">
+              {# Current Status Badge #}
+              <div style="flex: 0 0 auto;">
+                {% set ts = (f.triage_status or 'pending') %}
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <span class="status-badge {{ triage_status_classes.get(ts, 'status-pending') }}" title="Current status{% if f.triage_reason %}: {{ f.triage_reason }}{% endif %}{% if f.triage_set_by %} (set by {{ f.triage_set_by }}){% endif %}" style="font-weight: 600; font-size: 0.9rem;">
+                    {% if ts == 'valid' %}✓ Valid
+                    {% elif ts == 'false_positive' %}✗ False Positive
+                    {% elif ts == 'needs_context' %}❓ Needs Context
+                    {% else %}⏳ Pending
+                    {% endif %}
+                  </span>
+                  {% if f.triage_set_at %}
+                  <span style="font-size: 0.75rem; color: var(--text-muted);">{{ f.triage_set_at }}</span>
+                  {% endif %}
+                </div>
+              </div>
+              
+              {# Action Buttons #}
+              <div style="flex: 1 1 auto; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
+                <span style="font-size: 0.8rem; color: var(--text-muted); margin-right: 4px;">Change to:</span>
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="valid" title="Mark as valid/accepted finding" style="{% if ts == 'valid' %}font-weight: 700; border-color: var(--green);{% endif %}">✓ Valid</button>
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="false_positive" title="Mark as false positive/rejected" style="{% if ts == 'false_positive' %}font-weight: 700; border-color: var(--red);{% endif %}">✗ False Positive</button>
+                <button class="btn-triage" data-finding-id="{{ f.id }}" data-status="needs_context" title="Mark as needing more context" style="{% if ts == 'needs_context' %}font-weight: 700; border-color: var(--yellow);{% endif %}">❓ Needs Context</button>
               </div>
             </div>
             {% if f.triage_reason %}
-            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">Reason: {{ f.triage_reason }}</div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle);">
+              <span style="font-weight: 600;">Reason:</span> {{ f.triage_reason }}
+            </div>
             {% endif %}
           </div>
         </div>
@@ -347,6 +417,41 @@
 }
 .provider-group.collapsed .provider-findings {
   display: none !important;
+}
+
+/* Status Badge Styles */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  gap: 4px;
+}
+
+.status-valid {
+  background: rgba(63, 185, 80, 0.2);
+  color: #3fb950;
+  border: 1px solid rgba(63, 185, 80, 0.4);
+}
+
+.status-invalid {
+  background: rgba(248, 81, 73, 0.2);
+  color: #f85149;
+  border: 1px solid rgba(248, 81, 73, 0.4);
+}
+
+.status-pending {
+  background: rgba(227, 179, 65, 0.2);
+  color: #e3b341;
+  border: 1px solid rgba(227, 179, 65, 0.4);
+}
+
+.triage-status-legend {
+  font-size: 0.85rem;
 }
 </style>
 

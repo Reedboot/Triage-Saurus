@@ -6,10 +6,6 @@
     <span id="overview-ai-status" class="overview-ai-status">Idle</span>
   </div>
 
-  <div style="padding:8px 12px;background:var(--bg-secondary);border-left:3px solid var(--border-color);margin:8px 0;font-size:0.85rem;border-radius:4px;">
-    <strong>Repo-specific questions below.</strong> For cross-repo context and platform-wide Q&A, see <a href="#subscription" style="color:var(--link-color);">Global Knowledge Q&A tab →</a>
-  </div>
-
   {% if overview_html %}
   <article class="overview-body">
     {{ overview_html | safe }}
@@ -208,6 +204,42 @@
       {% endfor %}
     </div>
   </section>
+  {% endif %}
+
+  {# Footer with analysis metadata #}
+  {% if analysis_completed_at or analysis_recovered %}
+  <footer class="overview-footer">
+    <div class="overview-footer-item">
+      {% if analysis_completed_at %}
+      <div class="overview-footer-label">Analysis completed</div>
+      <div class="overview-footer-value">{{ analysis_completed_at }}</div>
+      {% endif %}
+    </div>
+    <div class="overview-footer-item">
+      {% if analysis_recovered %}
+      <div class="overview-footer-label">Recovered</div>
+      <div class="overview-footer-value">{{ analysis_recovered }}</div>
+      {% endif %}
+    </div>
+  </footer>
+  {% endif %}
+
+  {# Footer with analysis metadata #}
+  {% if analysis_completed_at or analysis_recovered %}
+  <footer class="overview-footer">
+    <div class="overview-footer-item">
+      {% if analysis_completed_at %}
+      <div class="overview-footer-label">Analysis completed</div>
+      <div class="overview-footer-value">{{ analysis_completed_at }}</div>
+      {% endif %}
+    </div>
+    <div class="overview-footer-item">
+      {% if analysis_recovered %}
+      <div class="overview-footer-label">Recovered</div>
+      <div class="overview-footer-value">{{ analysis_recovered }}</div>
+      {% endif %}
+    </div>
+  </footer>
   {% endif %}
 
   {% if not overview_html and not ai_new_assets and not ai_fixed_information %}

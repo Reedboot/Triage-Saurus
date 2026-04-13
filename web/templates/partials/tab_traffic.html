@@ -1,0 +1,300 @@
+{# partials/tab_traffic.html — Combined Ingress and Egress traffic view #}
+
+{# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ INGRESS ━━━━━━━━ #}
+<h2 class="s-inline-f1c952">➡️ Ingress</h2>
+
+{% if network_ingress %}
+<div class="callout info s-inline-157a9c" style="margin-bottom:12px;">
+  <strong>{{ network_ingress | length }}</strong>
+  network ingress point{{ 's' if network_ingress | length != 1 }}
+  detected (load balancers, gateways, internet-facing resources).
+</div>
+<div class="section-table-wrap" style="margin-bottom:24px;">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Resource</th>
+        <th>Type</th>
+        <th>Provider</th>
+        <th>Source File</th>
+        <th>Internet Access</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in network_ingress %}
+      <tr>
+        <td><span class="asset-name">{{ r.resource_name }}</span></td>
+        <td><small class="muted">{{ r.resource_type }}</small></td>
+        <td><span class="provider-badge provider-{{ r.provider | lower }}">{{ r.provider | upper }}</span></td>
+        <td><small class="muted">{{ r.source_file or '—' }}</small></td>
+        <td>
+            {% if r.resource_type in ['aws_internet_gateway', 'aws_eip', 'aws_eip_association', 'aws_elb', 'aws_alb', 'aws_lb',
+               'aws_apigatewayv2_api', 'aws_api_gateway_rest_api', 'azurerm_application_gateway',
+               'azurerm_application_load_balancer', 'azurerm_frontdoor', 'azurerm_lb',
+               'azurerm_public_ip', 'azurerm_public_ip_prefix', 'google_api_gateway_api',
+               'google_cloud_run_service', 'google_compute_address', 'google_compute_forwarding_rule',
+               'google_compute_global_address', 'google_compute_global_forwarding_rule',
+               'alicloud_api_gateway_api', 'alicloud_alb_load_balancer', 'alicloud_cdn_domain',
+               'alicloud_eip', 'alicloud_eip_association',
+               'alicloud_slb', 'alicloud_slb_load_balancer', 'oci_apigateway_gateway',
+               'oci_core_internet_gateway', 'oci_load_balancer', 'oci_load_balancer_load_balancer',
+               'oci_network_load_balancer', 'oci_network_load_balancer_network_load_balancer'] %}
+            <span class="finding-badge critical" title="Internet-facing by resource type">🌐 Internet-facing</span>
+          {% else %}
+            <span class="finding-badge warning">⚠️ Exposed (inferred)</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if operations %}
+<div class="callout info s-inline-157a9c">
+  <strong>{{ operation_count }}</strong>
+  API endpoint{{ 's' if operation_count != 1 }}
+  detected in this experiment.
+</div>
+
+{# Group operations by protocol #}
+{% set protocols = {} %}
+{% for op in operations %}
+  {% if op.resource_type == 'azurerm_api_management_api' %}
+    {% set protocol = op.protocol or 'HTTPS' %}
+    {% if protocol not in protocols %}
+      {% set _ = protocols.update({protocol: []}) %}
+    {% endif %}
+    {% set _ = protocols[protocol].append(op.id) %}
+  {% endif %}
+{% endfor %}
+
+{# Display APIs grouped by protocol #}
+{% for protocol in protocols | sort %}
+  <h3 class="s-inline-f1c952">🔌 {{ protocol }}</h3>
+  <div class="section-table-wrap" style="margin-bottom: 18px;">
+    <table class="section-table" id="section-api-details-table-{{ protocol }}">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Source</th>
+          <th>Line</th>
+          <th>Exposed</th>
+          <th>Auth</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for op_id in protocols[protocol] %}
+          {% set op = operations_by_id.get(op_id) %}
+          {% if op %}
+          <tr class="api-parent" data-api-id="{{ op.id }}" data-search="{{ [op.operation_name, op.resource_type] | join(' ') | lower }}">
+            <td>
+              {% set child_count = children_by_parent.get(op.id, [])|length %}
+              {% if child_count > 0 %}
+                <span class="expand-toggle" data-api-id="{{ op.id }}" title="Expand/collapse operations">▶</span>
+              {% else %}
+                <span style="display:inline-block; width:16px;"></span>
+              {% endif %}
+              <span class="operation-name" style="font-weight: bold;">{{ op.operation_name }}</span>
+              {% if child_count > 0 %}<span class="child-count-badge" title="{{ child_count }} operation(s)">{{ child_count }}</span>{% endif %}
+            </td>
+            <td>
+              <span class="api-type-badge" title="API container/definition">📡 API</span>
+            </td>
+            <td>
+              <small class="muted">{{ op.source_file or '—' }}</small>
+            </td>
+            <td>
+              <small class="muted">{{ op.source_line_start or '—' }}</small>
+            </td>
+            <td>
+              {% if op.internet_access == '—' %}
+                <span class="finding-badge none">—</span>
+              {% elif op.internet_access and op.internet_access | lower == 'true' %}
+                {% if op.internet_access_signals and 'verified' in op.internet_access_signals|lower %}
+                  <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
+                {% else %}
+                  <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
+                {% endif %}
+              {% elif op.internet_access and op.internet_access | lower == 'false' %}
+                <span class="finding-badge none">🔒 Private</span>
+              {% else %}
+                <span class="finding-badge none">{{ op.internet_access or '—' }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if op.is_public and op.is_public | lower == 'true' %}
+                <span class="finding-badge critical" title="No auth required at APIM level">🔓 None</span>
+              {% else %}
+                <span class="finding-badge info">🔐 Subscription Key</span>
+              {% endif %}
+            </td>
+          </tr>
+          
+          {# Render operations (children) under each API #}
+          {% for child_id in children_by_parent.get(op.id, []) %}
+            {% set child_op = operations_by_id.get(child_id) %}
+            {% if child_op %}
+            <tr class="api-operation child-row" data-parent-api="{{ op.id }}" style="display:none;"
+                data-search="{{ [child_op.operation_name, child_op.resource_type] | join(' ') | lower }}"
+                data-operation_name="{{ child_op.operation_name | e }}"
+                data-resource_type="{{ child_op.resource_type | e }}"
+                data-is_public="{{ child_op.is_public | lower }}"
+                data-internet_access="{{ child_op.internet_access | e }}">
+              <td>
+                <span style="display:inline-block; width:16px; margin-left:20px;"></span>
+                <span class="operation-name">{{ child_op.operation_name }}</span>
+              </td>
+              <td>
+                <span class="api-type-badge" title="Individual endpoint/method">⚙️ Operation</span>
+              </td>
+              <td>
+                <small class="muted">{{ child_op.source_file or '—' }}</small>
+              </td>
+              <td>
+                <small class="muted">{{ child_op.source_line_start or '—' }}</small>
+              </td>
+              <td>
+                {% if child_op.internet_access == '—' %}
+                  <span class="finding-badge none">—</span>
+                {% elif child_op.internet_access and child_op.internet_access | lower == 'true' %}
+                  {% if child_op.internet_access_signals and 'verified' in child_op.internet_access_signals|lower %}
+                    <span class="finding-badge critical" title="Confirmed - reachable from the internet">🌐 Exposed</span>
+                  {% else %}
+                    <span class="finding-badge warning" title="Inferred from configuration">⚠️ Exposed (inferred)</span>
+                  {% endif %}
+                {% elif child_op.internet_access and child_op.internet_access | lower == 'false' %}
+                  <span class="finding-badge none">🔒 Private</span>
+                {% else %}
+                  <span class="finding-badge none">{{ child_op.internet_access or '—' }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if op.is_public and op.is_public | lower == 'true' %}
+                  <span class="finding-badge critical" title="No auth required - inherited by operations">🔓 None</span>
+                {% else %}
+                  <span class="finding-badge info" title="Inherited by all operations">🔐 Subscription Key</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+          {% endfor %}
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
+
+{% elif not network_ingress %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+  </svg>
+  <p>No API endpoints detected for this scan.<br/>API ingress configuration will appear here once<br/>API Management resources are discovered.</p>
+</div>
+{% endif %}
+
+{# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ EGRESS ━━━━━━━━ #}
+<hr style="margin: 32px 0; border: none; border-top: 1px solid var(--border-color);">
+<h2 class="s-inline-f1c952">⬅️ Egress</h2>
+
+{% if internet_egress %}
+<div class="callout warning" style="margin-bottom:12px; display:flex; align-items:flex-start; gap:10px;">
+  <span style="font-size:1.4rem;">🌐</span>
+  <div>
+    <strong>{{ internet_egress | length }} internet egress path{{ 's' if internet_egress | length != 1 }}</strong>
+    detected — these resources can send traffic directly to the internet (0.0.0.0/0 routes or permissive security group rules).
+    Verify data-exfiltration controls are in place.
+  </div>
+</div>
+<div class="section-table-wrap" style="margin-bottom:20px;">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Source Resource</th>
+        <th>→</th>
+        <th>Destination</th>
+        <th>Protocol</th>
+        <th>Port</th>
+        <th>Provider</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in internet_egress %}
+      <tr>
+        <td>
+          <span class="asset-name">{{ c.source_name }}</span>
+          {% if c.source_file %}<div><small class="muted">{{ c.source_file }}</small></div>{% endif %}
+        </td>
+        <td style="text-align:center; color:var(--text-muted);">→</td>
+        <td><span class="finding-badge critical">{{ c.target_name }}</span></td>
+        <td>{{ c.protocol or '—' }}</td>
+        <td>{{ c.port or '*' }}</td>
+        <td><span class="provider-badge provider-{{ (c.provider or '') | lower }}">{{ (c.provider or '—') | upper }}</span></td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">{{ c.connection_purpose or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if egress_connections %}
+<div class="callout info s-inline-157a9c">
+  <strong>{{ egress_connections | length }}</strong>
+  outbound connection{{ 's' if egress_connections | length != 1 }} detected.
+</div>
+
+<div class="section-table-wrap">
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th>Source (this service)</th>
+        <th>→</th>
+        <th>Target (called by this service)</th>
+        <th>Protocol</th>
+        <th>Port</th>
+        <th>Encrypted</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in egress_connections %}
+      <tr>
+        <td><span class="asset-name">{{ c.source_name or '—' }}</span></td>
+        <td style="text-align:center; color:var(--text-muted); font-size:1rem;">→</td>
+        <td>
+          <span class="asset-name">{{ c.target_name or c.target_domain or '—' }}</span>
+          {% if c.target_domain and (c.target_domain|lower) not in (c.target_name|default('', true)|lower) %}
+            <div class="s-inline-b6d566">{{ c.target_domain }}</div>
+          {% endif %}
+        </td>
+        <td>{{ c.protocol or '—' }}</td>
+        <td>{{ c.port or '—' }}</td>
+        <td>
+          {% if c.is_encrypted == 1 %}
+            <span class="s-inline-4bfd80">✓ Yes</span>
+          {% elif c.is_encrypted == 0 %}
+            <span class="s-inline-e09362">✗ No</span>
+          {% else %}—{% endif %}
+        </td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">
+          {{ c.connection_purpose or c.target_type or '—' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif not internet_egress %}
+<div class="empty-state">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M5 12h14M12 5l7 7-7 7"/>
+  </svg>
+  <p>No outbound connections detected.<br/>Egress paths will appear here once<br/>external connections are discovered in the scan.</p>
+</div>
+{% endif %}

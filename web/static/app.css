@@ -361,7 +361,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-panel .panel-section { min-height: 0; overflow: auto; }
 #log-panel .panel-header { flex: 0 0 auto; }
 #log-panel .panel-section #log-output { flex: 1 1 auto; }
-#log-panel .section-tab-bar { flex: 0 0 auto; display: flex !important; }
+#log-panel .section-tab-bar { flex: 0 0 auto; display: flex; }
 #log-panel .section-panel-content { flex: 1 1 auto; min-height: 0; max-height: 100%; overflow-y: scroll; }
 #log-panel #log-output { flex: 1 1 auto; }
 
@@ -1753,6 +1753,32 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   color: var(--text-secondary);
 }
 
+/* ── Overview footer with metadata ── */
+.overview-footer {
+  display: flex;
+  gap: 2rem;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.overview-footer-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.overview-footer-label {
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+.overview-footer-value {
+  font-family: var(--mono-font, monospace);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
 /* ── Open Questions interactive widget ── */
 .oq-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
 .oq-item {
@@ -1899,4 +1925,49 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .ai-security-note {
   font-size: 0.77rem; color: #e3b341;
   padding: 3px 6px; background: #2d2a1a; border-radius: 4px;
+}
+
+/* ── Triage Status Badges ── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  gap: 4px;
+  border: 1px solid transparent;
+}
+
+.status-valid {
+  background: rgba(63, 185, 80, 0.2);
+  color: #3fb950;
+  border-color: rgba(63, 185, 80, 0.4);
+}
+
+.status-invalid {
+  background: rgba(248, 81, 73, 0.2);
+  color: #f85149;
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.status-pending {
+  background: rgba(227, 179, 65, 0.2);
+  color: #e3b341;
+  border-color: rgba(227, 179, 65, 0.4);
+}
+
+.triage-status-legend {
+  font-size: 0.85rem;
+}
+
+/* ── Skeptic Review Styling ── */
+.skeptic-review-box {
+  transition: all 0.2s ease;
+}
+.skeptic-review-box:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-color: var(--border-subtle);
 }

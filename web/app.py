@@ -26,7 +26,24 @@ app = Flask(__name__)
 
 # Jinja2 custom filters
 import os as _os
+from markupsafe import Markup as _Markup
 app.jinja_env.filters["basename"] = lambda p: _os.path.basename(p or "") if p else ""
+
+def _format_list_text(text):
+    """Convert semicolon-separated text to HTML list if it contains multiple items."""
+    if not text or not isinstance(text, str):
+        return text
+    # Check if text contains semicolons (likely a list)
+    if ';' in text:
+        items = [item.strip() for item in text.split(';') if item.strip()]
+        if len(items) > 1:
+            # Render as list
+            list_items = ''.join(f"<li>{_html.escape(item)}</li>" for item in items)
+            return _Markup(f"<ul style=\"margin: 6px 0; padding-left: 20px;\">{list_items}</ul>")
+    return text
+
+import html as _html
+app.jinja_env.filters["format_list"] = _format_list_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "Scripts"
@@ -1539,8 +1556,30 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _sse("error", f"Path not found or not a directory: {repo_path}")
         return
 
+    # Open per-repo scan log file (truncate at start of new scan so reconnects
+    # always see the freshest run from the beginning).
+    scan_log_dir = REPO_ROOT / "Output" / "ScanLogs"
+    scan_log_file: Path | None = None
+    scan_log_fh = None
+    try:
+        scan_log_dir.mkdir(parents=True, exist_ok=True)
+        safe_repo_name = re.sub(r'[^A-Za-z0-9_.-]', '_', repo.name)
+        scan_log_file = scan_log_dir / f"{safe_repo_name}.log"
+        scan_log_fh = open(scan_log_file, "w", encoding="utf-8", buffering=1)
+    except Exception:
+        scan_log_fh = None
+
+    def _write_scan_log(line: str) -> None:
+        if scan_log_fh:
+            try:
+                scan_log_fh.write(line + "\n")
+            except Exception:
+                pass
+
     # Yield immediately to confirm connection
-    yield _sse("log", f"[Web] Initializing scan for repository: {repo.name}")
+    first_line = f"[Web] Initializing scan for repository: {repo.name}"
+    _write_scan_log(first_line)
+    yield _sse("log", first_line)
 
     # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
     # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
@@ -1569,12 +1608,14 @@ def _stream_scan(repo_path: str, scan_name: str):
                         cfg = json.loads((exp_dir / "experiment.json").read_text(encoding="utf-8"))
                         if cfg.get("status") == "running":
                             experiment_id = existing
+                            _write_scan_log(f"[Web] Reusing running experiment id from lock: {experiment_id}")
                             yield _sse("log", f"[Web] Reusing running experiment id from lock: {experiment_id}")
             except Exception:
                 # If lock read fails or experiment not found, fall through to normal creation
                 experiment_id = None
 
         if experiment_id is None and triage_script.exists():
+            _write_scan_log("[Web] Creating new experiment...")
             yield _sse("log", "[Web] Creating new experiment...")
             res = subprocess.run(
                 [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
@@ -1601,7 +1642,9 @@ def _stream_scan(repo_path: str, scan_name: str):
             else:
                 # If triage_experiment failed, include stderr in logs for diagnostics
                 if res.stderr:
-                    yield _sse("log", f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}")
+                    msg = f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}"
+                    _write_scan_log(msg)
+                    yield _sse("log", msg)
 
         # Persist lock for the experiment so concurrent requests reuse it
         if experiment_id:
@@ -1610,7 +1653,9 @@ def _stream_scan(repo_path: str, scan_name: str):
             except Exception:
                 pass
     except Exception as exc:
-        yield _sse("log", f"[Web] Experiment creation attempt failed: {exc}")
+        msg = f"[Web] Experiment creation attempt failed: {exc}"
+        _write_scan_log(msg)
+        yield _sse("log", msg)
 
     # Build pipeline command. If an experiment was created, pass it to the pipeline so all scripts use the same id.
     cmd = [
@@ -1622,16 +1667,21 @@ def _stream_scan(repo_path: str, scan_name: str):
     ]
     if experiment_id:
         cmd.extend(["--experiment", experiment_id])
+        _write_scan_log(f"[Web] Using experiment id: {experiment_id}")
         yield _sse("log", f"[Web] Using experiment id: {experiment_id}")
         # Inform the UI immediately of the experiment id so it can bind sections/queries
         yield _sse("experiment", experiment_id)
 
-    yield _sse("log", f"▶  Starting scan: {repo}")
-    yield _sse("log", f"   Command: {' '.join(cmd)}")
-    yield _sse("log", "")
-    yield _sse("log", "Info: Comprehensive scan in progress — 156 detection rules + 212 misconfig rules")
-    yield _sse("log", "      Estimated duration: 5-6 minutes (detection → misconfig → code analysis)")
-    yield _sse("log", "")
+    for msg in [
+        f"▶  Starting scan: {repo}",
+        f"   Command: {' '.join(cmd)}",
+        "",
+        "Info: Comprehensive scan in progress — 156 detection rules + 212 misconfig rules",
+        "      Estimated duration: 5-6 minutes (detection → misconfig → code analysis)",
+        "",
+    ]:
+        _write_scan_log(msg)
+        yield _sse("log", msg)
 
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -1666,6 +1716,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                 if raw_line == '' and process.poll() is not None:
                     break
                 line = raw_line.rstrip()
+                _write_scan_log(line)
                 yield _sse("log", line)
 
                 # Capture experiment ID printed by run_pipeline.py
@@ -1684,15 +1735,18 @@ def _stream_scan(repo_path: str, scan_name: str):
                     est_total = 330  # 5.5 minutes in seconds
                     est_remaining = max(0, est_total - elapsed)
                     if est_remaining > 0:
-                        yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)")
+                        hb = f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
                     else:
-                        yield _sse("log", f"[Web] Scan in progress — elapsed {elapsed}s")
+                        hb = f"[Web] Scan in progress — elapsed {elapsed}s"
+                    _write_scan_log(hb)
+                    yield _sse("log", hb)
                     last_hb = now
 
             if process.poll() is not None:
                 # Drain remaining output
                 for raw_line in process.stdout:
                     line = raw_line.rstrip()
+                    _write_scan_log(line)
                     yield _sse("log", line)
                     if experiment_id is None:
                         m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
@@ -1701,6 +1755,12 @@ def _stream_scan(repo_path: str, scan_name: str):
                 break
     except Exception as exc:
         yield _sse("error", f"Stream error: {exc}")
+    finally:
+        if scan_log_fh:
+            try:
+                scan_log_fh.close()
+            except Exception:
+                pass
 
     if experiment_id:
         # DB-only: read architecture diagrams from cloud_diagrams.
@@ -1717,6 +1777,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         if diagrams:
             yield _sse("diagrams", diagrams)
         else:
+            _write_scan_log("[Web] No architecture diagrams found in cloud_diagrams.")
             yield _sse("log", "[Web] No architecture diagrams found in cloud_diagrams.")
 
     # Remove lock file if it refers to this experiment so future scans can start.
@@ -1735,6 +1796,21 @@ def _stream_scan(repo_path: str, scan_name: str):
 
 
 # ── API Routes ────────────────────────────────────────────────────────────────
+
+@app.route("/api/scan_log/<repo_name>")
+def api_scan_log(repo_name: str):
+    """Return the most recent scan log lines for a repo (written during _stream_scan)."""
+    safe_name = re.sub(r'[^A-Za-z0-9_.-]', '_', repo_name)
+    log_file = REPO_ROOT / "Output" / "ScanLogs" / f"{safe_name}.log"
+    if not log_file.exists():
+        return jsonify({"lines": []})
+    try:
+        content = log_file.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        return jsonify({"lines": lines})
+    except Exception as exc:
+        return jsonify({"lines": [], "error": str(exc)})
+
 
 @app.route("/api/scans/<repo_name>")
 def api_scans(repo_name: str):
@@ -4162,8 +4238,7 @@ def api_view_tabs(experiment_id: str, repo_name: str):
             {"key": "findings",   "label": "🔎 Findings"},
             {"key": "containers", "label": "🐳 Containers"},
             {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
-            {"key": "ingress",    "label": "➡️ Ingress"},
-            {"key": "egress",     "label": "⬅️ Egress"},
+            {"key": "traffic",    "label": "📶 Traffic"},
             {"key": "subscription", "label": "🌐 Global Knowledge Q&A"},
         ]
 
@@ -4476,8 +4551,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
 
         rows_html = []
 
-        def add_row(label: str, value: str) -> None:
+        def add_row(label: str, value: str, link: str = None) -> None:
             if value:
+                if link:
+                    value = f'<a href="#{link}" style="color: var(--link-color); text-decoration: underline; cursor: pointer;">{value}</a>'
                 rows_html.append(f"<tr><td>{label}</td><td>{value}</td></tr>")
 
         add_row("Type", repo_type)
@@ -4614,7 +4691,7 @@ def api_view_tldr(experiment_id: str, repo_name: str):
         if cicd_tool:
             add_row("CI/CD", cicd_tool)
         add_row("Cloud providers", provider_summary)
-        add_row("Resources discovered", str(total_resources))
+        add_row("Resources discovered", str(total_resources), link="assets")
         if total_resources:
             details = []
             if compute_count:
@@ -4635,7 +4712,7 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                 details.append(f"Other: {other_count}")
             if details:
                 add_row("Breakdown", ", ".join(details))
-        add_row("Findings discovered", str(total_findings))
+        add_row("Findings discovered", str(total_findings), link="findings")
         if total_findings:
             sev_parts = []
             if critical_count:
@@ -5651,22 +5728,49 @@ def api_view_overview(experiment_id: str, repo_name: str):
         else:
             tech_details = ""
 
+        # 1) Summary with resource and findings counts (with links)
+        summary_items = []
+        if _table_exists("resources"):
+            resource_count = _safe_fetchone(
+                "SELECT COUNT(*) as cnt FROM resources WHERE repo_id = ? AND experiment_id = ?",
+                (repo_id, resolved_exp_id)
+            )
+            if resource_count and resource_count['cnt'] > 0:
+                summary_items.append(f"<li><strong>Resources discovered:</strong> <a href=\"#assets\" style=\"color: var(--link-color);\"><strong>{resource_count['cnt']}</strong></a></li>")
+        
+        if _table_exists("findings"):
+            findings_count = _safe_fetchone(
+                "SELECT COUNT(*) as cnt FROM findings WHERE repo_id = ? AND experiment_id = ?",
+                (repo_id, resolved_exp_id)
+            )
+            if findings_count and findings_count['cnt'] > 0:
+                summary_items.append(f"<li><strong>Findings discovered:</strong> <a href=\"#findings\" style=\"color: var(--link-color);\"><strong>{findings_count['cnt']}</strong></a></li>")
+        
+        if summary_items:
+            overview_sections.append(f"<h2>📊 Quick Summary</h2><ul>{''.join(summary_items)}</ul>")
+
         overview_sections.append(
             f"<h2>📝 What This Repo Does</h2>"
             f"{ai_lead_html}{tech_details}"
         )
 
         # 2) Where it is deployed
+        # Filter out non-cloud/tool providers (terraform, kubernetes, helm, local, null, etc.)
+        non_cloud = {'kubernetes', 'helm', 'terraform', 'local', 'null', 'random',
+                     'time', 'tls', 'http', 'archive', 'external', 'template', 'unknown'}
         provider_rows = _safe_fetchall(
             """
-            SELECT COALESCE(provider, 'unknown') AS provider, COUNT(*) AS cnt
+            SELECT provider, COUNT(*) AS cnt
             FROM resources
             WHERE repo_id = ? AND experiment_id = ?
-            GROUP BY COALESCE(provider, 'unknown')
+              AND provider IS NOT NULL AND TRIM(provider) != ''
+            GROUP BY provider
             ORDER BY cnt DESC
             """,
             (repo_id, resolved_exp_id),
         ) if _table_exists("resources") else []
+        # Filter to only cloud providers
+        provider_rows = [r for r in provider_rows if r['provider'].lower() not in non_cloud]
         region_rows = _safe_fetchall(
             """
             SELECT region, COUNT(*) AS cnt
@@ -5696,9 +5800,45 @@ def api_view_overview(experiment_id: str, repo_name: str):
             (repo_id, resolved_exp_id),
         ) if _table_exists("resources") else []
         if footprint_rows:
-            deploy_points.append("<li>Deployment footprint: " + esc(', '.join(f"{r['resource_type']} x{r['cnt']}" for r in footprint_rows)) + "</li>")
+            footprint_items = ''.join(f"<li>{esc(r['resource_type'])} x{r['cnt']}</li>" for r in footprint_rows)
+            deploy_points.append(f"<li>Deployment footprint:<ul>{footprint_items}</ul></li>")
         if deploy_points:
             overview_sections.append("<h2>🌍 Where It Is Deployed</h2><ul>" + ''.join(deploy_points) + "</ul>")
+
+        # 2b) Projects & Dependencies
+        if _table_exists("dependencies"):
+            deps_by_lang = {}
+            deps_rows = _safe_fetchall(
+                """
+                SELECT DISTINCT language, project_path, COUNT(*) as dep_count
+                FROM dependencies
+                WHERE repo_id = ? AND experiment_id = ?
+                GROUP BY language, project_path
+                ORDER BY language, project_path
+                """,
+                (repo_id, resolved_exp_id),
+            )
+            for row in deps_rows:
+                lang = row['language'] or 'Other'
+                if lang not in deps_by_lang:
+                    deps_by_lang[lang] = []
+                deps_by_lang[lang].append(row)
+            
+            if deps_by_lang:
+                deps_sections = []
+                for lang in sorted(deps_by_lang.keys()):
+                    projects = deps_by_lang[lang]
+                    project_list = ''.join(
+                        f"<li><code>{esc(p['project_path'] or 'root')}</code> – {p['dep_count']} dependencies</li>"
+                        for p in projects
+                    )
+                    deps_sections.append(f"<strong>{esc(lang)}</strong><ul>{project_list}</ul>")
+                
+                overview_sections.append(
+                    f"<h2>📦 Projects & Dependencies</h2><div style=\"margin: 12px 0;\">"
+                    + "".join(deps_sections) + 
+                    "</div>"
+                )
 
         # 3) What talks to it
         talk_rows = _safe_fetchall(
@@ -6281,7 +6421,49 @@ def api_view_overview(experiment_id: str, repo_name: str):
     finally:
         conn.close()
 
+    # Extract timestamps from ai_overview_rows for footer
+    analysis_completed_at = None
+    analysis_recovered = None
+    if 'ai_overview_rows' in locals() and ai_overview_rows:
+        for _r in ai_overview_rows:
+            if _r["key"] == "ai_analysis_completed_at":
+                analysis_completed_at = (_r["value"] or "").strip()
+            elif _r["key"] == "ai_analysis_recovered":
+                analysis_recovered = (_r["value"] or "").strip()
+    
+    # Fallback: if no AI metadata, use scan timestamp
+    if not analysis_completed_at:
+        try:
+            conn = _get_db()
+            if conn:
+                scanned_row = _safe_fetchone(
+                    "SELECT scanned_at FROM repositories WHERE LOWER(repo_name) = LOWER(?) AND experiment_id = ? ORDER BY scanned_at DESC LIMIT 1",
+                    (repo_name, resolved_exp_id),
+                    conn
+                )
+                if scanned_row and scanned_row.get("scanned_at"):
+                    # Format ISO timestamp nicely
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromisoformat(scanned_row["scanned_at"].replace("Z", "+00:00"))
+                        analysis_completed_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        analysis_completed_at = str(scanned_row["scanned_at"])
+                conn.close()
+        except:
+            pass
+
     final_html = '<div class="markdown-content">' + ''.join(overview_sections) + '</div>' if overview_sections else ''
+    
+    # Add footer with analysis metadata if available
+    if analysis_completed_at or analysis_recovered:
+        footer_html = '<footer class="overview-footer">'
+        if analysis_completed_at:
+            footer_html += '<div class="overview-footer-item"><div class="overview-footer-label">Analysis completed</div><div class="overview-footer-value">' + analysis_completed_at + '</div></div>'
+        if analysis_recovered:
+            footer_html += '<div class="overview-footer-item"><div class="overview-footer-label">Recovered</div><div class="overview-footer-value">' + analysis_recovered + '</div></div>'
+        footer_html += '</footer>'
+        final_html += footer_html
     
     # Fetch available repos for module mapping dropdowns — ReposToScan.txt is the primary source
     available_repos = []
@@ -6325,7 +6507,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
         ai_new_assets = None
         ai_fixed_information = None
 
-    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information, module_deps=module_deps_data, available_repos=available_repos)
+    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information, module_deps=module_deps_data, available_repos=available_repos, analysis_completed_at=analysis_completed_at, analysis_recovered=analysis_recovered)
 
 
 @app.route("/api/module/mappings/<experiment_id>/<repo_name>", methods=["POST"])
@@ -6438,13 +6620,35 @@ def api_view_assets(experiment_id: str, repo_name: str):
                    res.discovered_by, res.discovery_method, res.status,
                    res.parent_resource_id,
                    COUNT(f.id) AS finding_count,
-                   MAX(CASE f.base_severity
+                   MAX(CASE UPPER(f.base_severity)
                        WHEN 'CRITICAL' THEN 5 WHEN 'HIGH' THEN 4
                        WHEN 'MEDIUM'   THEN 3 WHEN 'LOW'  THEN 2
                        WHEN 'INFO'     THEN 1 ELSE 0 END) AS max_sev_rank
             FROM resources res
             JOIN repositories repo ON res.repo_id = repo.id
-            LEFT JOIN findings f ON f.resource_id = res.id
+            LEFT JOIN findings f ON (
+                f.experiment_id = res.experiment_id AND
+                f.repo_id = res.repo_id AND
+                (f.source_file = res.source_file OR f.source_file LIKE '%' || res.source_file) AND
+                (
+                    f.source_line_start = res.source_line_start OR
+                    (
+                        f.source_line_start > res.source_line_start AND
+                        (
+                            res.source_line_end IS NULL OR
+                            f.source_line_start <= res.source_line_end
+                        ) AND
+                        NOT EXISTS (
+                            SELECT 1 FROM resources r2
+                            WHERE r2.experiment_id = res.experiment_id AND
+                                r2.repo_id = res.repo_id AND
+                                (r2.source_file = res.source_file OR r2.source_file LIKE '%' || res.source_file) AND
+                                r2.source_line_start > res.source_line_start AND
+                                r2.source_line_start <= f.source_line_start
+                        )
+                    )
+                )
+            )
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
             GROUP BY res.id
             ORDER BY res.provider, res.resource_type, res.resource_name
@@ -6663,11 +6867,22 @@ def api_finding_triage(experiment_id: str, finding_id: str):
 
 
 def _infer_provider_from_rule(rule_id: str) -> str:
-    """Infer cloud provider from rule_id prefix. Returns lowercase to match resources table."""
+    """Infer cloud provider from rule_id prefix. Returns lowercase to match resources table.
+    
+    Code findings (connection strings, hardcoded secrets, etc.) are returned as 'code'
+    Infrastructure-as-code findings (terraform, cloudformation) are returned as 'code' unless they're cloud-specific.
+    """
     if not rule_id:
         return 'Unknown'
     rule_lower = str(rule_id).lower()
-    if rule_lower.startswith('aws-') or rule_lower.startswith('terraform-'):
+    
+    # Code/secrets findings - not cloud-specific
+    code_patterns = {'connection-string', 'hardcoded', 'credential', 'secret', 'api-key', 'token', 'password'}
+    if any(pattern in rule_lower for pattern in code_patterns):
+        return 'code'
+    
+    # Cloud provider patterns
+    if rule_lower.startswith('aws-'):
         return 'aws'
     elif rule_lower.startswith('azure-') or rule_lower.startswith('azurerm-'):
         return 'azure'
@@ -6677,6 +6892,12 @@ def _infer_provider_from_rule(rule_id: str) -> str:
         return 'oracle'
     elif rule_lower.startswith('alicloud-'):
         return 'alicloud'
+    
+    # IaC tools (terraform, cloudformation, etc.) - treat as code findings
+    iac_patterns = {'terraform-', 'cloudformation-', 'helm-', 'kubernetes-', 'docker-'}
+    if any(pattern in rule_lower for pattern in iac_patterns):
+        return 'code'
+    
     return 'Unknown'
 
 @app.route("/api/view/findings/<experiment_id>/<repo_name>")
@@ -7767,6 +7988,342 @@ def api_view_egress(experiment_id: str, repo_name: str):
                           internet_egress=internet_egress)
     except Exception as exc:
         return _db_render("tab_egress.html", egress_connections=[], internet_egress=[], error=str(exc))
+    finally:
+        conn.close()
+
+
+@app.route("/api/view/traffic/<experiment_id>/<repo_name>")
+def api_view_traffic(experiment_id: str, repo_name: str):
+    """Render the combined traffic tab with ingress and egress sections."""
+    conn = _get_db()
+    if conn is None:
+        return _db_render("tab_traffic.html", network_ingress=[], operations=[], egress_connections=[], internet_egress=[], error="DB unavailable")
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id)
+        if not resolved_exp_id:
+            return _db_render("tab_traffic.html", network_ingress=[], operations=[], egress_connections=[], internet_egress=[], error=f"No scan found for {repo_name}.")
+        target_exp = resolved_exp_id
+        
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ INGRESS DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Primary: exposure_analysis table (entry points and internet-facing resources)
+        network_ingress = []
+        try:
+            ea_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.id,
+                    r.resource_name,
+                    r.resource_type,
+                    r.provider,
+                    r.region,
+                    r.source_file,
+                    r.source_line_start
+                FROM exposure_analysis ea
+                JOIN resources r ON ea.resource_id = r.id
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND (ea.is_entry_point = 1 OR ea.has_internet_path = 1)
+                ORDER BY r.resource_type, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            network_ingress = [dict(row) for row in ea_rows]
+        except Exception as e:
+            print(f"Warning: Could not fetch network_ingress from exposure_analysis: {e}")
+        
+        # Load API operations for ingress
+        operations = []
+        operations_by_id = {}
+        children_by_parent = {}
+        operation_count = 0
+        try:
+            ops_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.resource_name as operation_name,
+                    r.resource_type,
+                    r.id,
+                    r.parent_resource_id,
+                    r.source_file,
+                    r.source_line_start,
+                    COALESCE(
+                        (SELECT property_value FROM resource_properties 
+                         WHERE resource_id = r.id AND property_key = 'custom_headers' LIMIT 1),
+                        NULL
+                    ) as custom_headers_json,
+                    COALESCE(
+                        (SELECT property_value FROM resource_properties 
+                         WHERE resource_id = r.id AND property_key = 'is_ingress_endpoint' LIMIT 1),
+                        'false'
+                    ) as is_public,
+                    COALESCE(
+                        (SELECT property_value FROM resource_properties 
+                         WHERE resource_id = r.id AND property_key = 'internet_access' LIMIT 1),
+                        '—'
+                    ) as internet_access,
+                    COALESCE(
+                        (SELECT property_value FROM resource_properties 
+                         WHERE resource_id = r.id AND property_key = 'internet_access_signals' LIMIT 1),
+                        ''
+                    ) as internet_access_signals,
+                    COALESCE(
+                        (SELECT property_value FROM resource_properties 
+                         WHERE resource_id = r.id AND property_key = 'protocol' LIMIT 1),
+                        'HTTPS'
+                    ) as protocol
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN ('azurerm_api_management_api', 'azurerm_api_management_api_operation')
+                ORDER BY r.resource_type DESC, r.parent_resource_id, r.resource_name ASC
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            operations = [dict(row) for row in ops_rows]
+            operations_by_id = {op['id']: op for op in operations}
+            
+            # Build parent-child relationships
+            for op in operations:
+                parent_id = op.get('parent_resource_id')
+                if parent_id and parent_id in operations_by_id:
+                    if parent_id not in children_by_parent:
+                        children_by_parent[parent_id] = []
+                    children_by_parent[parent_id].append(op['id'])
+            
+            operation_count = sum(
+                len([c for c in operations if c.get('resource_type') == 'azurerm_api_management_api_operation'])
+                for _ in [None]
+            )
+        except Exception as e:
+            print(f"Warning: Could not fetch operations for traffic: {e}")
+        
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ EGRESS DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Build outbound connections
+        egress_connections = []
+        try:
+            rc_rows = conn.execute(
+                """
+                SELECT DISTINCT 
+                    COALESCE(src.resource_name, 'Unknown source') AS source_name,
+                    src.resource_type AS source_type,
+                    COALESCE(tgt.resource_name, rc.target_external, 'External Target') AS target_name,
+                    COALESCE(tgt.resource_type, 'external') AS target_type,
+                    rc.protocol,
+                    rc.port,
+                    rc.auth_method,
+                    rc.is_encrypted,
+                    rc.connection_type,
+                    rc.connection_metadata,
+                    rc.target_external AS target_domain,
+                    COALESCE(repo_src.experiment_id, repo_tgt.experiment_id) AS conn_experiment_id
+                FROM resource_connections rc
+                JOIN resources src ON rc.source_resource_id = src.id
+                LEFT JOIN resources tgt ON rc.target_resource_id = tgt.id
+                JOIN repositories repo_src ON src.repo_id = repo_src.id
+                LEFT JOIN repositories repo_tgt ON tgt.repo_id = repo_tgt.id
+                WHERE LOWER(repo_src.repo_name) = LOWER(?)
+                  AND repo_src.experiment_id = ?
+                  AND COALESCE(rc.connection_type, '') NOT IN (
+                    'contains', 'orchestrates', 'composed_of', 'parent_child',
+                    'routes_ingress_to', 'restricts_access'
+                  )
+                  AND (rc.inferred_internet IS NULL OR rc.inferred_internet = 0)
+                ORDER BY source_name, target_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in rc_rows:
+                entry = dict(row)
+                purpose = ""
+                tgt_type = (entry.get("target_type") or "").lower()
+                conn_type = (entry.get("connection_type") or "").lower()
+                target_domain = (entry.get("target_domain") or "").lower()
+
+                # Check connection_metadata for service catalogue info
+                try:
+                    meta = json.loads(entry.get("connection_metadata") or "{}")
+                    if meta.get("category"):
+                        cat = meta["category"]
+                        purpose = {
+                            "alerting":       "alerting / incident management",
+                            "observability":  "observability / APM",
+                            "logging":        "log aggregation",
+                            "payment":        "payment processing",
+                            "email":          "email delivery",
+                            "sms":            "SMS / communication",
+                            "messaging":      "messaging",
+                            "auth":           "external auth / identity",
+                            "vcs":            "version control API",
+                            "issue_tracking": "issue tracking",
+                            "data_warehouse": "data warehouse",
+                        }.get(cat, cat)
+                        if meta.get("service"):
+                            entry["target_name"] = entry.get("target_name") or meta["service"]
+                except Exception:
+                    pass
+
+                if not purpose:
+                    # Classify by target resource type
+                    if "topic" in tgt_type or "queue" in tgt_type or "servicebus" in tgt_type:
+                        purpose = "messaging"
+                    elif "database" in tgt_type or "sql" in tgt_type or "cosmos" in tgt_type or "redis" in tgt_type:
+                        purpose = "data storage"
+                    elif "storage" in tgt_type or "blob" in tgt_type:
+                        purpose = "blob storage"
+                    elif "vault" in tgt_type or "keyvault" in tgt_type:
+                        purpose = "secrets"
+                    elif "insight" in tgt_type or "monitor" in tgt_type or "telemetry" in tgt_type:
+                        purpose = "telemetry"
+                    elif "apim" in tgt_type or "api_management" in tgt_type or "api management" in tgt_type:
+                        purpose = "API management"
+                    elif tgt_type in ("external", "") or target_domain:
+                        purpose = "external API / internet egress"
+                    elif conn_type in ("reads_from", "reads"):
+                        purpose = "read"
+                    elif conn_type in ("writes_to", "writes", "publishes_to"):
+                        purpose = "write"
+                    elif conn_type in ("connects_to", "depends_on", "calls"):
+                        purpose = "outbound call"
+
+                entry["connection_purpose"] = purpose or conn_type or "outbound"
+                egress_connections.append(entry)
+        except Exception as e:
+            print(f"Warning: Could not fetch egress_connections: {e}")
+
+        # Exposure analysis: include data-legged destinations
+        try:
+            ea_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.resource_name AS source_name,
+                    r.resource_type AS source_type,
+                    ea.resource_name AS target_name,
+                    ea.resource_type AS target_type,
+                    ea.protocol,
+                    ea.port,
+                    ea.auth_method,
+                    ea.is_encrypted,
+                    COALESCE(ea.destination_type, ea.normalized_role) AS connection_purpose,
+                    ea.endpoint AS target_domain
+                FROM exposure_analysis ea
+                JOIN repositories repo ON ea.repo_id = repo.id
+                LEFT JOIN resources r ON ea.resource_id = r.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND ea.normalized_role = 'data'
+                ORDER BY r.resource_name, ea.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            egress_connections.extend([dict(r) for r in ea_rows])
+        except Exception as e:
+            print(f"Warning: Could not fetch exposure_analysis for egress: {e}")
+
+        # Detect actual internet egress via topology inference
+        internet_egress = []
+        try:
+            # Heuristic 1: aws_route alongside aws_internet_gateway in same VPC = internet egress
+            igw_routes = conn.execute(
+                """
+                SELECT DISTINCT
+                    route_r.resource_name AS route_name,
+                    route_r.resource_type,
+                    route_r.provider,
+                    route_r.source_file,
+                    igw.resource_name AS igw_name,
+                    subnet_r.resource_name AS subnet_name
+                FROM resources route_r
+                JOIN repositories repo ON route_r.repo_id = repo.id
+                JOIN resources igw ON igw.repo_id = route_r.repo_id
+                    AND igw.resource_type = 'aws_internet_gateway'
+                LEFT JOIN resource_connections rc_rtb ON rc_rtb.source_resource_id = route_r.id
+                LEFT JOIN resource_connections rc_sub ON rc_sub.source_resource_id = rc_rtb.target_resource_id
+                LEFT JOIN resources subnet_r ON subnet_r.id = rc_sub.target_resource_id
+                    AND subnet_r.resource_type = 'aws_subnet'
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND route_r.resource_type = 'aws_route'
+                ORDER BY route_r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in igw_routes:
+                rd = dict(row)
+                internet_egress.append({
+                    'source_name': rd.get('subnet_name') or rd['route_name'],
+                    'source_type': rd['resource_type'],
+                    'target_name': f"Internet via {rd['igw_name']} (0.0.0.0/0)",
+                    'target_type': 'internet',
+                    'protocol': 'Any',
+                    'port': '*',
+                    'is_encrypted': None,
+                    'connection_purpose': f"Internet egress — aws_route {rd['route_name']} routes via Internet Gateway {rd['igw_name']}",
+                    'provider': rd['provider'],
+                    'source_file': rd['source_file'],
+                })
+        except Exception as e:
+            print(f"Warning: Could not query IGW routes for internet egress: {e}")
+
+        try:
+            # Heuristic 2: Security group / firewall rule resources named 'egress' or 'allow_all'
+            sg_egress_rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    r.resource_name, r.resource_type, r.provider, r.source_file,
+                    parent.resource_name AS sg_name
+                FROM resources r
+                JOIN repositories repo ON r.repo_id = repo.id
+                LEFT JOIN resources parent ON r.parent_resource_id = parent.id
+                WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+                  AND r.resource_type IN ('aws_security_group_rule', 'azurerm_network_security_rule',
+                                          'google_compute_firewall', 'alicloud_security_group_rule')
+                  AND (
+                    LOWER(r.resource_name) LIKE '%egress%'
+                    OR LOWER(r.resource_name) LIKE '%allow_all%'
+                    OR LOWER(r.resource_name) LIKE '%allow-all%'
+                    OR LOWER(r.resource_name) LIKE '%outbound%'
+                  )
+                ORDER BY r.provider, r.resource_name
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in sg_egress_rows:
+                rd = dict(row)
+                internet_egress.append({
+                    'source_name': rd.get('sg_name') or rd['resource_name'],
+                    'source_type': rd['resource_type'],
+                    'target_name': 'Internet (0.0.0.0/0)',
+                    'target_type': 'internet',
+                    'protocol': 'Any',
+                    'port': '*',
+                    'is_encrypted': None,
+                    'connection_purpose': f"Security group rule '{rd['resource_name']}' permits outbound internet traffic",
+                    'provider': rd['provider'],
+                    'source_file': rd['source_file'],
+                })
+        except Exception as e:
+            print(f"Warning: Could not query SG egress rules: {e}")
+
+        return _db_render(
+            "tab_traffic.html",
+            network_ingress=network_ingress,
+            operations=operations,
+            operations_by_id=operations_by_id,
+            children_by_parent=children_by_parent,
+            operation_count=operation_count,
+            egress_connections=egress_connections,
+            internet_egress=internet_egress,
+        )
+    except Exception as exc:
+        return _db_render(
+            "tab_traffic.html",
+            network_ingress=[],
+            operations=[],
+            operations_by_id={},
+            children_by_parent={},
+            operation_count=0,
+            egress_connections=[],
+            internet_egress=[],
+            error=str(exc),
+        )
     finally:
         conn.close()
 

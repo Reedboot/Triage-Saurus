@@ -8,6 +8,7 @@
   let logOutput = null;
   let scanBtn = null;
   let resetBtn = null;
+  let currentExperimentId = null;  // Track active experiment for section tabs
 
   // Global status setter used by other modules
   window._triage = window._triage || {};
@@ -237,7 +238,20 @@
                       // Handle special event types
                       if (currentEvent === 'done') {
                         window._triage.setStatus('Scan complete', 'success');
+                        const expId = message.experiment_id || currentExperimentId;
+                        if (expId) {
+                          const repoName = getCurrentRepoName();
+                          buildSectionTabs(expId, repoName);
+                        }
                       }
+                    }
+                    // Handle experiment id event
+                    if (currentEvent === 'experiment' && typeof message === 'string' && message) {
+                      currentExperimentId = message;
+                    }
+                    // Handle diagrams event — render mermaid in diagram panel
+                    if (currentEvent === 'diagrams' && Array.isArray(message)) {
+                      renderDiagrams(message);
                     }
                     if (message && message.status) {
                       window._triage.setStatus(message.status, '');
@@ -277,22 +291,27 @@
   // Handle reset button
   function handleReset() {
     closeEventSource();
-    // Cancel any polling
     if (currentPollInterval) {
       clearInterval(currentPollInterval);
       currentPollInterval = null;
     }
     clearLog();
+    currentExperimentId = null;
     if (statusBar) statusBar.style.display = 'none';
     if (spinner) spinner.style.display = 'none';
     if (logOutput) {
       logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
     }
-    // Show section placeholder when resetting
-    const placeholder = document.getElementById('section-placeholder');
-    if (placeholder) {
-      placeholder.style.display = 'flex';
+    // Reset section tabs to placeholder and switch back to log view
+    const tabBar = document.getElementById('section-tab-bar');
+    if (tabBar) {
+      tabBar.innerHTML = '<span id="tab-bar-placeholder" style="padding:8px 14px;font-size:0.75rem;color:var(--text-faint)">Run or load a scan to see sections</span>';
     }
+    const panelContent = document.getElementById('section-panel-content');
+    if (panelContent) {
+      panelContent.innerHTML = '<div class="empty-state" id="section-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h18M3 12h18M3 17h18"/></svg><p>Run or load a scan to view<br/>section details.</p></div>';
+    }
+    showLogView();
     window._triage.setStatus('Ready', '');
   }
 
@@ -342,15 +361,32 @@
     
     addLogLine('[Info] Scan already in progress on server', 'info');
     addLogLine(`[Info] Experiment ID: ${experimentId}`, 'info');
-    addLogLine('[Info] Waiting for scan to complete...', 'info');
-    addLogLine('[Info] Polling server every 5 seconds...', 'info');
-    
+
+    // Fetch and display historical log from disk before starting poll
+    fetch(`/api/scan_log/${encodeURIComponent(repoName)}`)
+      .then(r => r.json())
+      .then(data => {
+        const lines = Array.isArray(data.lines) ? data.lines : [];
+        if (lines.length > 0) {
+          addLogLine('[Info] --- Log from scan start ---', 'info');
+          lines.forEach(line => addLogLine(line, ''));
+          addLogLine('[Info] --- End of historical log ---', 'info');
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        addLogLine('[Info] Waiting for scan to complete...', 'info');
+        addLogLine('[Info] Polling server every 5 seconds...', 'info');
+        _startReconnectPoll(repoName, experimentId, createdAt);
+      });
+
     window._triage.setStatus('Scan in progress…', '');
     if (statusBar) statusBar.style.display = 'block';
-    
+  }
+
+  function _startReconnectPoll(repoName, experimentId, createdAt) {
     // Poll for scan completion with timeout detection
     let pollCount = 0;
-    const maxPollCount = 84; // 7 minutes = 420 seconds / 5 sec interval = 84 polls
     const startTime = createdAt ? new Date(createdAt) : new Date();  // Use actual start time if available
     
     // Show initial elapsed time immediately on reconnect
@@ -408,7 +444,11 @@
             } else {
               addLogLine(`[Info] Total time: ${elapsedSec}s`, 'info');
             }
-          } else if (pollCount % 6 === 0) {
+
+            // Load section tabs now that scan is done
+            const expId = currentExperimentId || experimentId;
+            if (expId) buildSectionTabs(expId, repoName);
+          }else if (pollCount % 6 === 0) {
             // Show progress update every 30 seconds (6 * 5 sec intervals)
             if (elapsedMin > 0) {
               addLogLine(`[Web] Scan in progress — elapsed ${elapsedMin}m ${remainingSec}s (est. 4-5 min remaining)`, 'info');
@@ -427,6 +467,283 @@
     
     if (spinner) spinner.style.display = 'none';
   }
+
+  // Switch the log panel to show sections (hide raw log)
+  function showSectionsView() {
+    const tabBar = document.getElementById('section-tab-bar');
+    const panelContent = document.getElementById('section-panel-content');
+    const logOut = document.getElementById('log-output');
+    const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
+    if (tabBar) tabBar.style.display = 'flex';
+    if (panelContent) panelContent.style.display = '';
+    if (logOut) logOut.style.display = 'none';
+    if (toggleSectionsBtn) { toggleSectionsBtn.title = 'Show log'; toggleSectionsBtn.textContent = '📜 Log'; }
+  }
+
+  // Switch the log panel to show raw log (hide sections)
+  function showLogView() {
+    const tabBar = document.getElementById('section-tab-bar');
+    const panelContent = document.getElementById('section-panel-content');
+    const logOut = document.getElementById('log-output');
+    const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
+    if (tabBar) tabBar.style.display = 'none';
+    if (panelContent) panelContent.style.display = 'none';
+    if (logOut) logOut.style.display = '';
+    if (toggleSectionsBtn) { toggleSectionsBtn.title = 'Show sections'; toggleSectionsBtn.textContent = '📑 Sections'; }
+  }
+
+  // ── Diagram rendering ────────────────────────────────────────────────────
+
+  function renderDiagrams(diagrams) {
+    if (!Array.isArray(diagrams) || !diagrams.length) return;
+
+    const diagramViews = document.getElementById('diagram-views');
+    const diagramTabs = document.getElementById('diagram-tabs');
+    if (!diagramViews || !diagramTabs) return;
+
+    // Remove placeholder
+    const placeholder = diagramViews.querySelector('#diagram-placeholder, .diagram-placeholder');
+    if (placeholder) placeholder.remove();
+
+    // Clear existing dynamic content
+    diagramTabs.innerHTML = '';
+    diagramViews.querySelectorAll('.diagram-view').forEach(el => el.remove());
+
+    diagrams.forEach((diag, idx) => {
+      const title = diag.title || `Diagram ${idx + 1}`;
+      const code = (diag.code || '').trim();
+      if (!code) return;
+
+      // Create tab button
+      const tabBtn = document.createElement('button');
+      tabBtn.className = 'btn-small' + (idx === 0 ? ' active' : '');
+      tabBtn.dataset.idx = idx;
+      tabBtn.textContent = title;
+      tabBtn.style.marginRight = '4px';
+      diagramTabs.appendChild(tabBtn);
+
+      // Create diagram view
+      const viewDiv = document.createElement('div');
+      viewDiv.className = 'diagram-view' + (idx === 0 ? ' active' : '');
+      viewDiv.dataset.idx = idx;
+
+      const pre = document.createElement('pre');
+      pre.className = 'mermaid';
+      pre.style.background = 'transparent';
+      pre.textContent = code;
+      viewDiv.appendChild(pre);
+      diagramViews.appendChild(viewDiv);
+
+      tabBtn.addEventListener('click', () => {
+        diagramTabs.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        tabBtn.classList.add('active');
+        diagramViews.querySelectorAll('.diagram-view').forEach(v => {
+          v.classList.toggle('active', v.dataset.idx === String(idx));
+        });
+      });
+    });
+
+    // Render mermaid
+    if (window.mermaid) {
+      try {
+        window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
+      } catch (e) {
+        console.warn('[Diagrams] Mermaid render error:', e);
+      }
+    } else {
+      // Wait for mermaid to load then re-render
+      const waitForMermaid = setInterval(() => {
+        if (window.mermaid) {
+          clearInterval(waitForMermaid);
+          try {
+            window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+            window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
+          } catch (e) {}
+        }
+      }, 300);
+      setTimeout(() => clearInterval(waitForMermaid), 10000);
+    }
+  }
+
+  // Expose so past scan loading can also trigger diagrams
+  window._triage.renderDiagrams = renderDiagrams;
+
+  // Also wire up renderDiff (used by compare feature)
+  window._triage.renderDiff = window._triage.renderDiff || function(data) {
+    if (data && data.diagrams) renderDiagrams(data.diagrams);
+  };
+  window.renderDiff = window._triage.renderDiff;
+
+  // ── Section tabs system ───────────────────────────────────────────────────
+
+  function getCurrentRepoName() {
+    const sel = document.getElementById('repo-select');
+    if (!sel || !sel.value) return '';
+    return sel.value.split('/').pop();
+  }
+
+  // Build tab buttons for a completed/loaded experiment
+  function buildSectionTabs(experimentId, repoName) {
+    if (!experimentId || !repoName) return;
+    currentExperimentId = experimentId;
+
+    fetch(`/api/view/tabs/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`)
+      .then(r => r.json())
+      .then(data => {
+        const tabs = Array.isArray(data.tabs) ? data.tabs : [];
+        if (!tabs.length) return;
+
+        const tabBar = document.getElementById('section-tab-bar');
+        if (!tabBar) return;
+
+        // Build tab buttons
+        tabBar.innerHTML = '';
+        tabs.forEach((tab, idx) => {
+          const btn = document.createElement('button');
+          btn.className = 'section-tab-btn' + (idx === 0 ? ' active' : '');
+          btn.dataset.key = tab.key;
+          btn.dataset.experimentId = experimentId;
+          btn.dataset.repoName = repoName;
+          btn.textContent = tab.label;
+          btn.addEventListener('click', function () {
+            tabBar.querySelectorAll('.section-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadSectionContent(tab.key, experimentId, repoName);
+          });
+          tabBar.appendChild(btn);
+        });
+
+        // Make tabs visible and switch panel to sections view
+        tabBar.style.removeProperty('display');
+        showSectionsView();
+
+        // Auto-load the first tab
+        if (tabs.length > 0) {
+          loadSectionContent(tabs[0].key, experimentId, repoName);
+        }
+      })
+      .catch(err => console.log('[Sections] Could not load tabs:', err));
+
+    // Load diagrams for this experiment (needed when loading past scans)
+    fetch(`/api/diagrams/${encodeURIComponent(experimentId)}`)
+      .then(r => r.json())
+      .then(data => {
+        const diags = Array.isArray(data.diagrams) ? data.diagrams : [];
+        if (diags.length > 0) {
+          renderDiagrams(diags.map(d => ({ title: d.title || d.diagram_title, code: d.code || d.mermaid_code })));
+        }
+      })
+      .catch(() => {});
+  }
+
+  // Load section content into the panel
+  function loadSectionContent(key, experimentId, repoName) {
+    if (!key || !experimentId || !repoName) return Promise.resolve();
+
+    const panel = document.getElementById('section-panel-content');
+    if (!panel) return Promise.resolve();
+
+    // Show loading state
+    panel.innerHTML = '<div class="section-loading"><span>⏳ Loading…</span></div>';
+    panel.style.removeProperty('display');
+
+    const url = `/api/view/${encodeURIComponent(key)}/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`;
+
+    return fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then(html => {
+        panel.innerHTML = html;
+        // Run section-specific init functions on the injected content
+        const initMap = {
+          overview:   () => window.initOverview && window.initOverview(panel),
+          tldr:       () => window.initOverview && window.initOverview(panel),
+          findings:   () => window.initFindings && window.initFindings(panel),
+          containers: () => window.initContainers && window.initContainers(panel),
+          assets:     () => window.initAssets && window.initAssets(panel, repoName, experimentId),
+          roles:      () => window.initRoles && window.initRoles(panel),
+        };
+        const initFn = initMap[key];
+        if (initFn) {
+          try { initFn(); } catch (e) { console.warn('[Sections] init error for', key, e); }
+        }
+        // Re-execute inline <script> blocks injected via innerHTML
+        panel.querySelectorAll('script').forEach(oldScript => {
+          const s = document.createElement('script');
+          s.textContent = oldScript.textContent;
+          oldScript.replaceWith(s);
+        });
+      })
+      .catch(err => {
+        panel.innerHTML = `<div class="empty-state"><p>⚠ Failed to load section: ${err.message}</p></div>`;
+      });
+  }
+
+  // Activate a section by key (find tab button and click it, or load directly)
+  function activateSectionKey(key, experimentId, repoName) {
+    const tabBar = document.getElementById('section-tab-bar');
+    if (tabBar) {
+      const btn = tabBar.querySelector(`.section-tab-btn[data-key="${key}"]`);
+      if (btn) { btn.click(); return; }
+    }
+    if (experimentId && repoName) buildSectionTabs(experimentId, repoName);
+  }
+
+  // ── window._triage helpers used by overview.js and other modules ─────────
+
+  window._triage.appendLog = function (text) {
+    if (logOutput) addLogLine(text, 'info');
+  };
+
+  window._triage.showLog = function () {
+    showLogView();
+    if (logOutput) logOutput.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  window._triage.showRawLog = function () {
+    window._triage.showLog();
+  };
+
+  window._triage.loadSectionContent = function (key, experimentId, repoName) {
+    const tabBar = document.getElementById('section-tab-bar');
+    if (tabBar) {
+      tabBar.querySelectorAll('.section-tab-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.key === key);
+      });
+    }
+    return loadSectionContent(key, experimentId, repoName);
+  };
+
+  window._triage.activateSectionKey = function (key, experimentId, repoName) {
+    activateSectionKey(key, experimentId, repoName);
+  };
+
+  window._triage.setStatusBusy = function (isBusy) {
+    if (spinner) spinner.style.display = isBusy ? 'block' : 'none';
+  };
+
+  window._triage.setToolbarStopState = function (opts) {
+    const btn = document.getElementById('stop-ai-toolbar-btn');
+    if (!btn) return;
+    if (opts && opts.label) btn.textContent = opts.label;
+    btn.disabled = !(opts && opts.enabled);
+    btn.hidden = !(opts && opts.visible);
+  };
+
+  let _toolbarStopCallback = null;
+  window._triage.registerToolbarStop = function (callback) {
+    _toolbarStopCallback = callback;
+    const btn = document.getElementById('stop-ai-toolbar-btn');
+    if (btn && !btn.__stopBound) {
+      btn.__stopBound = true;
+      btn.addEventListener('click', () => { if (_toolbarStopCallback) _toolbarStopCallback(); });
+    }
+  };
+
+  // ── End section tabs system ───────────────────────────────────────────────
 
   // Initialize on DOM ready
   function init() {
@@ -447,21 +764,44 @@
       resetBtn.addEventListener('click', handleReset);
     }
 
-    // Handle sections toggle button
+    // Handle sections toggle button — switches between sections view and raw log view
     const toggleSectionsBtn = document.getElementById('toggle-sections-btn');
     if (toggleSectionsBtn) {
       toggleSectionsBtn.addEventListener('click', function() {
         const tabBar = document.getElementById('section-tab-bar');
         const panelContent = document.getElementById('section-panel-content');
-        if (tabBar && panelContent) {
-          // Use getComputedStyle to check actual display value from CSS
-          const computedDisplay = window.getComputedStyle(tabBar).display;
-          const isHidden = computedDisplay === 'none';
-          // Set inline style to override CSS
-          tabBar.style.display = isHidden ? 'flex' : 'none';
-          panelContent.style.display = isHidden ? 'flex' : 'none';
-          toggleSectionsBtn.title = isHidden ? 'Hide sections' : 'Show sections';
+        const logOut = document.getElementById('log-output');
+        if (!tabBar || !panelContent || !logOut) return;
+        const sectionsVisible = tabBar.style.display !== 'none' &&
+          window.getComputedStyle(tabBar).display !== 'none';
+        if (sectionsVisible) {
+          // Switch to log view
+          tabBar.style.display = 'none';
+          panelContent.style.display = 'none';
+          logOut.style.display = '';
+          toggleSectionsBtn.title = 'Show sections';
+          toggleSectionsBtn.textContent = '📑 Sections';
+        } else {
+          // Switch to sections view
+          tabBar.style.display = 'flex';
+          panelContent.style.display = '';
+          logOut.style.display = 'none';
+          toggleSectionsBtn.title = 'Show log';
+          toggleSectionsBtn.textContent = '📜 Log';
         }
+      });
+    }
+
+    // Handle hide/show log panel from diagram panel toolbar
+    const toggleLogBtn = document.getElementById('toggle-log-btn');
+    if (toggleLogBtn) {
+      toggleLogBtn.addEventListener('click', function() {
+        const logPanel = document.getElementById('log-panel');
+        if (!logPanel) return;
+        const isHidden = logPanel.style.display === 'none';
+        logPanel.style.display = isHidden ? '' : 'none';
+        toggleLogBtn.textContent = isHidden ? '📜 Hide scan' : '📜 Show scan';
+        toggleLogBtn.title = isHidden ? 'Hide scan output' : 'Show scan output';
       });
     }
 
@@ -474,11 +814,76 @@
       }
     });
 
-    // Handle repo selection change - auto-reconnect to running scans
+    // Handle repo selection change - reset UI and auto-reconnect to running scans
     const repoSelect = document.getElementById('repo-select');
     if (repoSelect) {
       repoSelect.addEventListener('change', function() {
         if (this.value) {
+          // Reset log output
+          closeEventSource();
+          if (currentPollInterval) {
+            clearInterval(currentPollInterval);
+            currentPollInterval = null;
+          }
+          if (logOutput) {
+            logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
+          }
+          if (statusBar) statusBar.style.display = 'none';
+          if (spinner) spinner.style.display = 'none';
+          window._triage.setStatus('Ready', '');
+
+          // Reset section tabs to placeholder state
+          const tabBar = document.getElementById('section-tab-bar');
+          if (tabBar) {
+            tabBar.innerHTML = '<span id="tab-bar-placeholder" style="padding:8px 14px;font-size:0.75rem;color:var(--text-faint)">Run or load a scan to see sections</span>';
+          }
+          const panelContent = document.getElementById('section-panel-content');
+          if (panelContent) {
+            panelContent.innerHTML = '<div class="empty-state" id="section-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h18M3 12h18M3 17h18"/></svg><p>Run or load a scan to view<br/>section details.</p></div>';
+          }
+
+          // Populate past-scan and compare dropdowns from API
+          const repoName = this.value.split('/').pop();
+          fetch(`/api/scans/${encodeURIComponent(repoName)}`)
+            .then(r => r.json())
+            .then(data => {
+              const scans = Array.isArray(data.scans) ? data.scans : [];
+
+              // Populate past-scan-select
+              const pastSelect = document.getElementById('past-scan-select');
+              if (pastSelect) {
+                pastSelect.innerHTML = '<option value="" disabled selected>— select a past scan —</option>';
+                scans.forEach(s => {
+                  const opt = document.createElement('option');
+                  opt.value = s.experiment_id;
+                  const dt = s.scanned_at ? new Date(s.scanned_at).toLocaleString() : s.experiment_id;
+                  opt.textContent = `#${s.experiment_id} — ${dt}`;
+                  pastSelect.appendChild(opt);
+                });
+              }
+
+              // Populate compare dropdowns
+              ['compare-from-select', 'compare-to-select'].forEach(id => {
+                const sel = document.getElementById(id);
+                if (!sel) return;
+                sel.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
+                scans.forEach(s => {
+                  const opt = document.createElement('option');
+                  opt.value = s.experiment_id;
+                  const dt = s.scanned_at ? new Date(s.scanned_at).toLocaleString() : s.experiment_id;
+                  opt.textContent = `#${s.experiment_id} — ${dt}`;
+                  sel.appendChild(opt);
+                });
+              });
+
+              // Show past-scans-row if there are past scans
+              const pastRow = document.getElementById('past-scans-row');
+              if (pastRow) {
+                pastRow.classList.toggle('visible', scans.length > 0);
+              }
+            })
+            .catch(err => console.log('[Repo] Could not load past scans:', err));
+
           checkForRunningScan(this.value);
         }
       });
@@ -489,13 +894,28 @@
       checkForRunningScan(repoSelect.value);
     }
 
-    // Set initial status
+    // Load section tabs when a past scan is selected
+    const pastScanSelect = document.getElementById('past-scan-select');
+    if (pastScanSelect) {
+      pastScanSelect.addEventListener('change', function () {
+        const experimentId = this.value;
+        const repoName = getCurrentRepoName();
+        if (experimentId && repoName) {
+          currentExperimentId = experimentId;
+          buildSectionTabs(experimentId, repoName);
+        }
+      });
+    }
+
+    // Set initial status and ensure log view on startup
     if (statusText) {
       statusText.textContent = 'Ready';
     }
     if (statusBar) {
       statusBar.style.display = 'none';
     }
+    // Start in log view (sections hidden until a scan completes or past scan is loaded)
+    showLogView();
   }
 
   // Run init when DOM is ready

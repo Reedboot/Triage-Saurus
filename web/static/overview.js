@@ -663,6 +663,68 @@
       });
     }
 
+    // Initialize theme finding buttons
+    const themeCards = container.querySelectorAll('.theme-cards');
+    themeCards.forEach(function(themeCardsEl) {
+      const expId = themeCardsEl.dataset.experimentId;
+      const repoName = themeCardsEl.dataset.repoName;
+      if (!expId || !repoName) return;
+
+      themeCardsEl.querySelectorAll('.theme-card').forEach(function(card) {
+        const buttons = card.querySelectorAll('.theme-btns .oq-btn');
+        const statusEl = card.querySelector('.oq-status');
+        const scriptEl = card.querySelector('script.theme-data');
+        if (!scriptEl || !buttons.length) return;
+
+        let themeData;
+        try {
+          themeData = JSON.parse(scriptEl.textContent);
+        } catch (e) {
+          return;
+        }
+
+        buttons.forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            const ans = btn.dataset.ans;
+            if (!ans) return;
+
+            // Update UI
+            card.querySelectorAll('.oq-btn').forEach(function(b) { b.classList.remove('oq-btn--active'); });
+            btn.classList.add('oq-btn--active');
+            if (statusEl) statusEl.textContent = 'Saving…';
+
+            // Save to API
+            fetch('/api/subscription_context/' + encodeURIComponent(expId), {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                question: themeData.question || '',
+                answer: ans === 'dont_know' ? "Don't know" : (ans.charAt(0).toUpperCase() + ans.slice(1)),
+                scope: 'repo',
+                repo_name: repoName,
+                answered_by: 'user',
+                confidence: ans === 'yes' ? 1.0 : ans === 'no' ? 1.0 : 0.5,
+                tags: 'finding_theme',
+              })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (statusEl) {
+                statusEl.textContent = d.status === 'ok' ? '✓ Saved' : ('⚠ ' + (d.error || 'error'));
+                setTimeout(function() { statusEl.textContent = ''; }, 3000);
+              }
+            })
+            .catch(function(e) {
+              if (statusEl) {
+                statusEl.textContent = '⚠ Failed';
+                setTimeout(function() { statusEl.textContent = ''; }, 3000);
+              }
+            });
+          });
+        });
+      });
+    });
+
     pollStatus();
     initModuleMapping(container);
   }
