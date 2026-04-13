@@ -28,7 +28,10 @@
     "azurerm_postgresql_configuration",
     "azurerm_key_vault_secret",
     "azurerm_key_vault_key",
-    "aws_kms_alias"
+    "aws_kms_alias",
+    "azurerm_role_assignment",
+    "azurerm_role_assignment_schedule",
+    "azurerm_role_definition"
   ],
   "notes": [
     "These are typically configuration objects, metadata, or data sources",
