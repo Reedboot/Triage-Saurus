@@ -3627,9 +3627,14 @@ def api_blast_radius(experiment_id: str, resource_name: str):
 
         code = generate_blast_radius_diagram(experiment_id, resource_name)
         return jsonify({"code": code})
+    except ValueError as exc:
+        # Resource not found or other validation error
+        app.logger.warning("Validation error in blast_radius for %s/%s: %s", experiment_id, resource_name, exc)
+        return jsonify({"error": str(exc)}), 404
     except Exception as exc:
         app.logger.exception("blast_radius error for %s/%s", experiment_id, resource_name)
-        return jsonify({"error": str(exc)}), 500
+        return jsonify({"error": f"Failed to generate blast radius diagram: {str(exc)}"}), 500
+
 
 
 @app.route("/api/diagrams/<experiment_id>")

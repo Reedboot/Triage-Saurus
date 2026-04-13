@@ -2,6 +2,7 @@
 """Database helper functions for Triage-Saurus."""
 
 import json
+import logging
 import sqlite3
 import sys
 import time
@@ -51,6 +52,12 @@ DB_PATH = COZO_DB
 # Track which DB paths have had their schema ensured in this process so
 # _ensure_schema skips the expensive DDL + lock on every subsequent connection.
 _schema_ensured_for: set = set()
+
+# Setup logging for database operations
+_logger = logging.getLogger(__name__)
+if not _logger.handlers:
+    _logger.addHandler(logging.StreamHandler())
+    _logger.setLevel(logging.WARNING)
 
 ENRICHMENT_QUEUE_STATUSES = {"pending_review", "confirmed", "rejected"}
 ENRICHMENT_DECISION_MAP = {
@@ -3491,49 +3498,63 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
     Groups diagrams by lowercase(provider)+lower(diagram_title) and keeps the most
     recently updated row for each logical diagram. Provider is returned in Title
     case for display.
+    
+    Logs warnings if no diagrams are found, which can help diagnose resource issues.
     """
-    with get_db_connection() as conn:
-        if repo_name:
-            rows = conn.execute(
-                """
-                SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
-                FROM cloud_diagrams
-                WHERE experiment_id = ?
-                  AND LOWER(COALESCE(repo_name, '')) = LOWER(?)
-                """,
-                (experiment_id, repo_name),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
-                FROM cloud_diagrams
-                WHERE experiment_id = ?
-                """,
-                (experiment_id,),
-            ).fetchall()
+    try:
+        with get_db_connection() as conn:
+            if repo_name:
+                rows = conn.execute(
+                    """
+                    SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                    FROM cloud_diagrams
+                    WHERE experiment_id = ?
+                      AND LOWER(COALESCE(repo_name, '')) = LOWER(?)
+                    """,
+                    (experiment_id, repo_name),
+                ).fetchall()
+                if not rows:
+                    _logger.debug(
+                        f"No diagrams found for experiment_id={experiment_id}, repo_name={repo_name}"
+                    )
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                    FROM cloud_diagrams
+                    WHERE experiment_id = ?
+                    """,
+                    (experiment_id,),
+                ).fetchall()
+                if not rows:
+                    _logger.debug(
+                        f"No diagrams found for experiment_id={experiment_id}"
+                    )
 
-    # Deduplicate case-insensitively by (provider, diagram_title) keeping the latest updated_at
-    grouped: dict[tuple[str, str], dict] = {}
-    for r in rows:
-        row_dict = dict(r)
-        prov = (row_dict.get("provider") or "").strip()
-        title = (row_dict.get("diagram_title") or "").strip()
-        key = (prov.lower(), title.lower())
-        existing = grouped.get(key)
-        if not existing or (row_dict.get("updated_at") or "") > (existing.get("updated_at") or ""):
-            grouped[key] = row_dict
+        # Deduplicate case-insensitively by (provider, diagram_title) keeping the latest updated_at
+        grouped: dict[tuple[str, str], dict] = {}
+        for r in rows:
+            row_dict = dict(r)
+            prov = (row_dict.get("provider") or "").strip()
+            title = (row_dict.get("diagram_title") or "").strip()
+            key = (prov.lower(), title.lower())
+            existing = grouped.get(key)
+            if not existing or (row_dict.get("updated_at") or "") > (existing.get("updated_at") or ""):
+                grouped[key] = row_dict
 
-    # Sort and return
-    items = sorted(grouped.values(), key=lambda x: (x.get("display_order") or 0, (x.get("provider") or "").lower()))
-    result: list[dict] = []
-    for row in items:
-        provider_display = (row.get("provider") or "").capitalize()
-        result.append({
-            "provider": provider_display,
-            "diagram_title": row.get("diagram_title"),
-            "mermaid_code": row.get("mermaid_code"),
-            "display_order": row.get("display_order") or 0,
-        })
-    return result
+        # Sort and return
+        items = sorted(grouped.values(), key=lambda x: (x.get("display_order") or 0, (x.get("provider") or "").lower()))
+        result: list[dict] = []
+        for row in items:
+            provider_display = (row.get("provider") or "").capitalize()
+            result.append({
+                "provider": provider_display,
+                "diagram_title": row.get("diagram_title"),
+                "mermaid_code": row.get("mermaid_code"),
+                "display_order": row.get("display_order") or 0,
+            })
+        return result
+    except Exception as e:
+        _logger.error(f"Failed to retrieve cloud diagrams for experiment_id={experiment_id}, repo_name={repo_name}: {e}", exc_info=True)
+        return []
 

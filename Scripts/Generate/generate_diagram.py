@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate Mermaid diagrams from database queries."""
 
+import logging
 import re
 import sqlite3
 import sys
@@ -12,6 +13,12 @@ from db_helpers import get_db_connection, get_resources_for_diagram, get_connect
 from internet_exposure_detector import InternetExposureDetector
 import resource_type_db as _rtdb
 from shared_utils import _normalize_optional_bool
+
+# Setup logging for diagram generation
+_logger = logging.getLogger(__name__)
+if not _logger.handlers:
+    _logger.addHandler(logging.StreamHandler())
+    _logger.setLevel(logging.WARNING)
 
 # Lazy DB connection for resource type lookups
 _lookup_conn: sqlite3.Connection | None = None
@@ -628,6 +635,8 @@ def generate_architecture_diagram(
 
     
     if not resources:
+        log_msg = f"No resources found for diagram generation (experiment_id={experiment_id}, repo_name={repo_name}, provider={provider})"
+        _logger.warning(log_msg)
         return "flowchart LR\n  empty[No resources found]"
     
     lines = ["flowchart LR"]
@@ -1235,9 +1244,43 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
 
 
 def generate_blast_radius_diagram(experiment_id: str, compromised_resource: str) -> str:
-    """Show what attacker can reach from compromised resource."""
+    """Show what attacker can reach from compromised resource.
+    
+    Raises:
+        ValueError: If the resource is not found in the experiment.
+    """
     
     with get_db_connection() as conn:
+        # First, verify the resource exists in the experiment
+        resource_check = conn.execute("""
+            SELECT id, resource_name, resource_type
+            FROM resources
+            WHERE experiment_id = ? AND resource_name = ?
+            LIMIT 1
+        """, [experiment_id, compromised_resource]).fetchone()
+        
+        if not resource_check:
+            # Get available resources for a helpful error message
+            available_resources = conn.execute("""
+                SELECT DISTINCT resource_name, resource_type
+                FROM resources
+                WHERE experiment_id = ?
+                ORDER BY resource_name
+                LIMIT 10
+            """, [experiment_id]).fetchall()
+            
+            available_list = ", ".join([r['resource_name'] for r in available_resources])
+            error_msg = f"Resource not found: '{compromised_resource}' in experiment '{experiment_id}'"
+            if available_resources:
+                error_msg += f"\nAvailable resources: {available_list}"
+                if len(available_resources) == 10:
+                    error_msg += "... (more)"
+            else:
+                error_msg += "\nNo resources found in this experiment."
+            
+            _logger.warning(f"Blast radius diagram requested for non-existent resource: {compromised_resource} in experiment {experiment_id}")
+            raise ValueError(error_msg)
+        
         # Recursive CTE to find all reachable resources
         reachable = conn.execute("""
             WITH RECURSIVE blast_radius AS (

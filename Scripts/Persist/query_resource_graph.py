@@ -87,7 +87,15 @@ def main() -> int:
         repo_name=args.repo,
     )
     if view is None:
-        print("Resource not found for the requested experiment/repo.", file=sys.stderr)
+        error_msg = (
+            f"Resource not found for the requested experiment/repo.\n"
+            f"  Experiment ID: {args.experiment}\n"
+            f"  Resource name: {args.resource}"
+        )
+        if args.repo:
+            error_msg += f"\n  Repository: {args.repo}"
+        error_msg += "\n\nHint: Check that the experiment ID and resource name are spelled correctly."
+        print(error_msg, file=sys.stderr)
         return 1
 
     if args.json:
