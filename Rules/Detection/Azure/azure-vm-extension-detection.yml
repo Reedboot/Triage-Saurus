@@ -11,6 +11,18 @@ rules:
             virtual_machine_id = $VM_ID
             ...
           }
+      - pattern: |
+          resource "azurerm_linux_virtual_machine_extension" $NAME {
+            ...
+            virtual_machine_id = $VM_ID
+            ...
+          }
+      - pattern: |
+          resource "azurerm_windows_virtual_machine_extension" $NAME {
+            ...
+            virtual_machine_id = $VM_ID
+            ...
+          }
       - patterns:
           - pattern: |
               module $MOD {

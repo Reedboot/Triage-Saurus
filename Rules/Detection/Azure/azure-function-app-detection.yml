@@ -1,0 +1,48 @@
+rules:
+  - id: context-azure-function-app
+    message: |
+      Azure Function App detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_function_app" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "azurerm_linux_function_app" $NAME {
+            ...
+          }
+      - pattern: |
+          resource "azurerm_windows_function_app" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*function[_-]?app.*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: app_service
+      technology: [terraform, azure, app_service]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Function App
+        resource_type: azurerm_function_app
+        resource_name: $NAME
+        properties:
+          - name: service_plan_id
+            pattern: service_plan_id = $PLAN_ID
+          - name: app_service_plan_id
+            pattern: app_service_plan_id = $PLAN_ID
+    description: |
+      Detects Azure Function App resources and captures service plan references for App Service topology linking.

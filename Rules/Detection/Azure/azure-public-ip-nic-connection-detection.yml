@@ -1,26 +1,4 @@
 rules:
-  - id: context-azure-public-ip-nic-association
-    message: |
-      Azure Public IP to Network Interface association detected.
-      This rule identifies public IP assignments to network interfaces.
-    severity: INFO
-    languages: [terraform, hcl]
-    pattern: |
-      resource "azurerm_public_ip_address" $PIP_NAME {
-        ...
-        allocation_method = $ALLOC_METHOD
-        ...
-      }
-    metadata:
-      finding_kind: Asset
-      asset_provider: azure
-      rule_type: context_discovery
-      category: infrastructure
-      subcategory: network
-      technology: [terraform, azure, network]
-      target_files: ["*.tf", "**/*.tf"]
-      description: |
-        Detects Azure Public IP resources which can be associated with network interfaces.
   - id: context-azure-public-ip-nic-link
     message: |
       Azure Network Interface with Public IP reference detected.

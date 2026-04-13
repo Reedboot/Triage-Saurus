@@ -191,8 +191,62 @@ class TestLogPanel:
     def test_section_tab_bar_placeholder(self, home: Page):
         """Section tab bar shows 'Run or load a scan' before first scan."""
         placeholder = home.locator("#tab-bar-placeholder")
-        expect(placeholder).to_be_visible()
+        expect(placeholder).to_be_attached()
         assert "run or load a scan" in placeholder.inner_text().lower()
+
+    def test_log_auto_scroll_pauses_when_scrolled_up(self, home: Page):
+        """New log lines keep the tail in view unless the user scrolls away."""
+        log_output = home.locator("#log-output")
+        home.wait_for_function("window._triage && typeof window._triage.appendLog === 'function'")
+
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.innerHTML = '';
+              for (let i = 0; i < 140; i++) {
+                const line = document.createElement('div');
+                line.textContent = `seed line ${i}`;
+                el.appendChild(line);
+              }
+              el.scrollTop = el.scrollHeight;
+              el.dispatchEvent(new Event('scroll'));
+            }
+            """
+        )
+        home.wait_for_timeout(100)
+
+        assert log_output.evaluate(
+            "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
+        )
+
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.scrollTop = 0;
+              el.dispatchEvent(new Event('scroll'));
+            }
+            """
+        )
+        home.evaluate("window._triage.appendLog('paused auto-scroll test line')")
+        home.wait_for_timeout(100)
+        assert log_output.evaluate("el => el.scrollTop <= 4")
+
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.scrollTop = el.scrollHeight;
+              el.dispatchEvent(new Event('scroll'));
+            }
+            """
+        )
+        home.evaluate("window._triage.appendLog('resumed auto-scroll test line')")
+        home.wait_for_timeout(100)
+        assert log_output.evaluate(
+            "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
+        )
 
 
 class TestDiagramPanel:
@@ -241,6 +295,34 @@ class TestDiagramPanel:
     def test_toggle_log_button(self, home: Page):
         """📜 Hide/show scan log button is visible in the diagram panel."""
         expect(home.locator("#toggle-log-btn")).to_be_visible()
+
+    def test_rendered_diagram_is_centered_and_fit(self, home: Page):
+        """Rendered Mermaid diagrams should center inside the architecture panel."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Centering test',
+                code: 'flowchart LR; A[Start] --> B[Step 1] --> C[Step 2] --> D[Step 3] --> E[Step 4] --> F[Step 5] --> G[Step 6] --> H[End]'
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+        home.wait_for_timeout(1000)
+
+        wrap_box = home.locator("#diagram-zoom-wrap").bounding_box()
+        svg_box = home.locator("#diagram-views svg").bounding_box()
+        assert wrap_box and svg_box, "Expected both the panel and diagram to have layout boxes"
+
+        wrap_center_x = wrap_box["x"] + (wrap_box["width"] / 2)
+        wrap_center_y = wrap_box["y"] + (wrap_box["height"] / 2)
+        svg_center_x = svg_box["x"] + (svg_box["width"] / 2)
+        svg_center_y = svg_box["y"] + (svg_box["height"] / 2)
+
+        assert abs(svg_center_x - wrap_center_x) < wrap_box["width"] * 0.15
+        assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.15
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,12 @@ rules:
             location = $LOCATION
             ...
           }
+      - pattern: |
+          resource "azurerm_app_service_plan" $NAME {
+            ...
+            location = $LOCATION
+            ...
+          }
       - patterns:
           - pattern: |
               module $MOD {
@@ -44,4 +50,3 @@ rules:
             pattern: worker_count = $WORKERS
     description: |
       Detects Azure App Service Plan (serverfarms) resources or modules to capture hosting capacity context.
-

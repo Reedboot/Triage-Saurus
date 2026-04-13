@@ -923,6 +923,16 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_application_gateway_http_listener": "azurerm_application_gateway",
         "azurerm_key_vault_key": "azurerm_key_vault",
         "azurerm_key_vault_secret": "azurerm_key_vault",
+        "azurerm_app_service": "azurerm_app_service_plan|azurerm_service_plan",
+        "azurerm_function_app": "azurerm_app_service_plan|azurerm_service_plan",
+        "azurerm_linux_function_app": "azurerm_app_service_plan|azurerm_service_plan",
+        "azurerm_windows_function_app": "azurerm_app_service_plan|azurerm_service_plan",
+        "azurerm_network_interface": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
+        "azurerm_public_ip": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine|azurerm_lb",
+        "azurerm_virtual_machine_extension": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
+        "azurerm_linux_virtual_machine_extension": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
+        "azurerm_windows_virtual_machine_extension": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
+        "azurerm_automation_runbook": "azurerm_automation_account",
         # Service Bus hierarchy
         "azurerm_servicebus_queue": "azurerm_servicebus_namespace",
         "azurerm_servicebus_topic": "azurerm_servicebus_namespace",
@@ -1575,22 +1585,26 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         preferred_parent_type = parent_type_map.get(resource.resource_type)
 
         def _parent_candidate_for_type(parent_tf_type: str) -> Optional[str]:
-            for ref_key in ref_candidates:
-                parts = ref_key.split(".", 1)
-                if len(parts) == 2 and parts[0] == parent_tf_type:
-                    return ref_key
-            # Same-file fallback for unresolved references (keeps deterministic local grouping)
-            for candidate, _ in resource_blocks:
-                if (
-                    candidate is not resource
-                    and candidate.resource_type == parent_tf_type
-                    and candidate.file_path == resource.file_path
-                ):
-                    return f"{candidate.resource_type}.{candidate.name}"
-            # Repo-wide fallback when same-file parent is not present
-            for candidate, _ in resource_blocks:
-                if candidate is not resource and candidate.resource_type == parent_tf_type:
-                    return f"{candidate.resource_type}.{candidate.name}"
+            parent_types = [part.strip() for part in parent_tf_type.split("|") if part.strip()]
+            if not parent_types:
+                return None
+            for candidate_parent_type in parent_types:
+                for ref_key in ref_candidates:
+                    parts = ref_key.split(".", 1)
+                    if len(parts) == 2 and parts[0] == candidate_parent_type:
+                        return ref_key
+                # Same-file fallback for unresolved references (keeps deterministic local grouping)
+                for candidate, _ in resource_blocks:
+                    if (
+                        candidate is not resource
+                        and candidate.resource_type == candidate_parent_type
+                        and candidate.file_path == resource.file_path
+                    ):
+                        return f"{candidate.resource_type}.{candidate.name}"
+                # Repo-wide fallback when same-file parent is not present
+                for candidate, _ in resource_blocks:
+                    if candidate is not resource and candidate.resource_type == candidate_parent_type:
+                        return f"{candidate.resource_type}.{candidate.name}"
             return None
 
         # If type metadata defines a preferred parent, only accept that parent type.

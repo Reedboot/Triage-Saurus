@@ -785,22 +785,10 @@ def generate_architecture_diagram(
     # Other resources: exclude those already categorized
     other          = [r for r in filtered_roots if r not in app_tier + vms + aks + sql_servers + storage_accounts + nsgs + paas + lbs]
 
-    # Classify "other" into internet-facing vs remaining
-    _INTERNET_FACING_TYPES = InternetExposureDetector.get_public_entry_types()
-    # Pull internet-facing resources out of ALL categories (they should appear in zone_internet)
-    # BUT: skip children that are part of parent-child relationships (they should render within parent subgraphs)
-    internet_facing_ids = {
-        r['id'] for r in filtered_roots
-        if (r.get('resource_type') or '').lower() in _INTERNET_FACING_TYPES
-        and r['id'] not in child_ids  # Skip children to keep them in parent subgraphs
-    }
-    internet_facing = [r for r in filtered_roots if r['id'] in internet_facing_ids]
-    # Remove internet-facing resources from their other category lists
-    app_tier         = [r for r in app_tier if r['id'] not in internet_facing_ids]
-    vms              = [r for r in vms if r['id'] not in internet_facing_ids]
-    aks              = [r for r in aks if r['id'] not in internet_facing_ids]
-    nsgs             = [r for r in nsgs if r['id'] not in internet_facing_ids]
-    other_remaining  = [r for r in other if r['id'] not in internet_facing_ids]
+    # Internet exposure is rendered through edges from the shared Internet node.
+    # Keep exposed resources in their normal tiers so they remain connected to
+    # the rest of the topology instead of being split into a separate zone.
+    other_remaining  = list(other)
 
     # Shared set to track emitted Mermaid node IDs across all zones — prevents
     # duplicate node ID collisions when multiple resources share the same name
@@ -810,24 +798,6 @@ def generate_architecture_diagram(
     # ── Internet Node (External Reference) ──
     # Internet is rendered at root level, not inside any zone, to avoid circular references
     lines.append("  internet[🌐 Internet]")
-
-    # ── Internet-Facing Zone ──
-    lines.append("  subgraph zone_internet[\"🌐 Internet-Facing\"]")
-    for res in internet_facing:
-        # Skip the synthetic "Internet" node to avoid circular nesting
-        if res['resource_name'] == 'Internet':
-            continue
-        if res['id'] in parent_children:
-            _render_resource_subgraph(res, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
-        else:
-            base_nid = sanitize_id(res['resource_name'])
-            if base_nid in _diagram_emitted_ids:
-                rtype = res.get('resource_type', '')
-                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                base_nid = sanitize_id(f"{ts}_{res['resource_name']}")
-            _diagram_emitted_ids.add(base_nid)
-            lines.append(f"    {base_nid}[{_display_label(res)}]")
-    lines.append("  end")
 
     # ── Internal Zone (Compute, Containers, Network Security) ──
     internal_resources = vms + lbs + aks + nsgs

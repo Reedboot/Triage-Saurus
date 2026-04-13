@@ -1,0 +1,42 @@
+rules:
+  - id: context-azure-virtual-machine
+    message: |
+      Azure legacy Virtual Machine detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_virtual_machine" $NAME {
+            ...
+          }
+      - patterns:
+          - pattern: |
+              module $MOD {
+                ...
+                source = $SRC
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SRC
+              regex: "(?i).*(virtual[_-]?machine|legacy[_-]?vm).*"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, azure, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Machine
+        resource_type: azurerm_virtual_machine
+        resource_name: $NAME
+        properties:
+          - name: network_interface_ids
+            pattern: network_interface_ids = $NIC_IDS
+          - name: size
+            pattern: size = "$SIZE"
+          - name: admin_username
+            pattern: admin_username = "$ADMIN"
+    description: |
+      Detects Azure legacy Virtual Machine resources and captures network interface references for topology linking.

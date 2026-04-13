@@ -32,9 +32,11 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     # Azure — Compute / Containers
     "context-azure-aks-cluster":               ["Azure/AKS", "Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
     "context-azure-app-service-plan":          ["Azure/AppService"],
+    "context-azure-function-app":              ["Azure/AppService"],
     "context-azure-app-service-environment":   ["Azure/AppService"],
     "context-azure-container-registry":        ["Azure/ContainerRegistry"],
     "context-azure-linux-vm":                 ["Azure/VM", "Azure/Compute"],
+    "context-azure-virtual-machine":          ["Azure/VM", "Azure/Compute"],
     "context-azure-windows-vm":               ["Azure/VM", "Azure/Compute"],
     "context-azure-nsg":                      ["Azure/NSG"],
 

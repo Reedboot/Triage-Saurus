@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Regression tests for generate_diagram.py."""
 
+from pathlib import Path
+import sys
 from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import generate_diagram
 
@@ -79,6 +83,7 @@ def test_internet_arrows_are_colored_red(monkeypatch):
 
     assert "Internet -->" in diagram
     assert "linkStyle 0 stroke:red,stroke-width:2px" in diagram
+    assert "subgraph zone_internet" not in diagram
 
 
 def test_alicloud_api_gateway_is_treated_as_public(monkeypatch):
