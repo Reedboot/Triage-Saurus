@@ -353,6 +353,20 @@
     const maxPollCount = 84; // 7 minutes = 420 seconds / 5 sec interval = 84 polls
     const startTime = createdAt ? new Date(createdAt) : new Date();  // Use actual start time if available
     
+    // Show initial elapsed time immediately on reconnect
+    if (createdAt) {
+      const now = new Date();
+      const elapsedMs = now - startTime;
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      const elapsedMin = Math.floor(elapsedSec / 60);
+      const remainingSec = elapsedSec % 60;
+      if (elapsedMin > 0) {
+        addLogLine(`[Web] Scan in progress — elapsed ${elapsedMin}m ${remainingSec}s (est. 4-5 min remaining)`, 'info');
+      } else {
+        addLogLine(`[Web] Scan in progress — elapsed ${elapsedSec}s (est. 4-5 min remaining)`, 'info');
+      }
+    }
+    
     currentPollInterval = setInterval(() => {
       pollCount++;
       
