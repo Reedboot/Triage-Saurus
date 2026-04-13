@@ -14,7 +14,7 @@
   const zoomState = {
     scale: 1.0,
     minScale: 0.5,
-    maxScale: 2.0,
+    maxScale: 4.0,
     panX: 0,
     panY: 0
   };
