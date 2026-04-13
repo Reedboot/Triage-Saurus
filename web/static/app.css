@@ -562,12 +562,12 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .diagram-placeholder p, .assets-placeholder p, .summary-placeholder p, .section-placeholder p { font-size: 0.85rem; }
 
 .diagram-view { display: none; padding: 8px; overflow: auto; height: 100%; }
-.diagram-view.active { display: block; }
+.diagram-view.active { display: flex; align-items: center; justify-content: center; overflow: auto; }
 .diagram-views { min-height: 360px; overflow: auto; height: 100%; width: 100%; }
 
 /* ── Mermaid container ── */
 .mermaid { overflow: auto; }
-.mermaid svg { background: transparent !important; }
+.mermaid svg { background: transparent !important; max-width: calc(100% - 10px); max-height: calc(100% - 10px); }
 /* Allow Mermaid to control foreignObject dimensions for proper text rendering */
 .mermaid foreignObject { 
   overflow: visible;
@@ -1599,6 +1599,7 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   display: flex;
   align-items: flex-start; /* align to top-left so diagram uses full panel */
   justify-content: flex-start;
+  transition: transform 0.15s ease-out;
 }
 
 .diagram-zoom-wrap .mermaid svg {

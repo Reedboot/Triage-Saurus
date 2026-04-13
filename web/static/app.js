@@ -9,6 +9,11 @@
   let scanBtn = null;
   let resetBtn = null;
   let currentExperimentId = null;  // Track active experiment for section tabs
+  let currentRepoName = null;  // Track current repo for API ops refetching
+
+  // API ops visibility mode state
+  let apiOpsMode = 'auto'; // 'auto' | 'all' | 'hide'
+  let storedDiagrams = []; // Cache original diagrams for API ops filtering
 
   // Zoom state for mermaid diagrams - now per-diagram
   const zoomState = {
@@ -56,8 +61,10 @@
   function applyTransform() {
     const zoomInner = document.getElementById('diagram-zoom-inner');
     if (zoomInner) {
-      zoomInner.style.transform = `scale(${zoomState.scale}) translate(${zoomState.panX}px, ${zoomState.panY}px)`;
-      zoomInner.style.transformOrigin = 'top left';
+      requestAnimationFrame(() => {
+        zoomInner.style.transform = `scale(${zoomState.scale}) translate(${zoomState.panX}px, ${zoomState.panY}px)`;
+        zoomInner.style.transformOrigin = 'top left';
+      });
     }
     updateZoomDisplay();
   }
@@ -71,9 +78,9 @@
     }
   }
 
-  // Zoom in by 20%
+  // Zoom in by 10%
   function zoomIn() {
-    const newScale = zoomState.scale * 1.2;
+    const newScale = zoomState.scale * 1.1;
     if (newScale <= zoomState.maxScale) {
       zoomState.scale = newScale;
       applyTransform();
@@ -81,9 +88,9 @@
     }
   }
 
-  // Zoom out by 20%
+  // Zoom out by 10%
   function zoomOut() {
-    const newScale = zoomState.scale / 1.2;
+    const newScale = zoomState.scale / 1.1;
     if (newScale >= zoomState.minScale) {
       zoomState.scale = newScale;
       applyTransform();
@@ -167,7 +174,7 @@
       // Mouse wheel zoom
       svg.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.8 : 1.2;
+        const delta = e.deltaY > 0 ? 0.909 : 1.1;
         const newScale = zoomState.scale * delta;
         
         if (newScale >= zoomState.minScale && newScale <= zoomState.maxScale) {
@@ -909,6 +916,188 @@
     }
   }
 
+  function updateApiOpsButtonText() {
+    const btn = document.getElementById('toggle-api-ops-btn');
+    if (!btn) return;
+    
+    let buttonText = '🧩 API ops: ';
+    if (apiOpsMode === 'auto') {
+      buttonText += 'Auto (<10)';
+    } else if (apiOpsMode === 'all') {
+      buttonText += 'All';
+    } else if (apiOpsMode === 'hide') {
+      buttonText += 'Hidden';
+    }
+    btn.textContent = buttonText;
+  }
+
+  function refetchDiagramsWithApiOpsMode() {
+    if (!currentExperimentId) {
+      showToast('No experiment loaded');
+      return;
+    }
+
+    let includeApiOpsParam = '';
+    if (apiOpsMode === 'all') {
+      includeApiOpsParam = '&include_api_operations=true';
+    } else if (apiOpsMode === 'hide') {
+      includeApiOpsParam = '&include_api_operations=false';
+    }
+    // 'auto' mode: don't pass the parameter, let server decide
+
+    const url = `/api/diagrams/${encodeURIComponent(currentExperimentId)}?repo_name=${encodeURIComponent(currentRepoName || '')}${includeApiOpsParam}`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        const diags = Array.isArray(data.diagrams) ? data.diagrams : [];
+        if (diags.length > 0) {
+          renderDiagrams(diags.map(d => ({ title: d.title || d.diagram_title, code: d.code || d.mermaid_code })));
+          showToast(`API ops: ${apiOpsMode}`);
+        } else {
+          showToast('No diagrams available');
+        }
+      })
+      .catch(err => {
+        console.error('[API Ops] Refetch error:', err);
+        showToast('Failed to update API ops');
+      });
+  }
+
+  function handleToggleApiOps() {
+    // Cycle: auto -> all -> hide -> auto
+    if (apiOpsMode === 'auto') {
+      apiOpsMode = 'all';
+    } else if (apiOpsMode === 'all') {
+      apiOpsMode = 'hide';
+    } else {
+      apiOpsMode = 'auto';
+    }
+
+    updateApiOpsButtonText();
+    refetchDiagramsWithApiOpsMode();
+  }
+
+  function exportDiagramSvg() {
+    const activeDiagram = getActiveDiagramView();
+    if (!activeDiagram) {
+      showToast('No active diagram');
+      return;
+    }
+
+    const svgElement = activeDiagram.querySelector('svg');
+    if (!svgElement) {
+      showToast('No diagram SVG found');
+      return;
+    }
+
+    try {
+      const svgString = new XMLSerializer().serializeToString(svgElement);
+      const blob = new Blob([svgString], { type: 'image/svg+xml' });
+      
+      const experimentId = currentExperimentId || 'unknown';
+      const repoName = getCurrentRepoName() || 'diagram';
+      const timestamp = Date.now();
+      const filename = `diagram_${experimentId}_${repoName}_${timestamp}.svg`;
+      
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      showToast('SVG downloaded');
+    } catch (err) {
+      console.error('[Diagram] SVG export error:', err);
+      showToast('Error exporting SVG');
+    }
+  }
+
+  function exportDiagramPNG() {
+    const activeDiagram = getActiveDiagramView();
+    if (!activeDiagram) {
+      showToast('No active diagram');
+      return;
+    }
+
+    const svg = activeDiagram.querySelector('svg');
+    if (!svg) {
+      showToast('No diagram SVG found');
+      return;
+    }
+
+    showToast('Converting to PNG...');
+
+    try {
+      // Create a temporary div to hold the cloned SVG
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'fixed';
+      tempDiv.style.left = '-9999px';
+      tempDiv.style.top = '-9999px';
+      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.padding = '20px';
+      
+      // Clone the SVG
+      const clonedSvg = svg.cloneNode(true);
+      tempDiv.appendChild(clonedSvg);
+      document.body.appendChild(tempDiv);
+
+      // Use html2canvas to render the SVG to canvas
+      if (!window.html2canvas) {
+        document.body.removeChild(tempDiv);
+        showToast('html2canvas library not loaded');
+        console.error('[Diagram] html2canvas not available');
+        return;
+      }
+
+      window.html2canvas(tempDiv, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        allowTaint: true,
+        useCORS: true
+      }).then(canvas => {
+        // Convert canvas to PNG blob and trigger download
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            showToast('Failed to create PNG');
+            document.body.removeChild(tempDiv);
+            return;
+          }
+
+          // Create filename with experiment ID, repo name, and timestamp
+          const experimentId = currentExperimentId || 'unknown';
+          const repoName = getCurrentRepoName() || 'repo';
+          const timestamp = Date.now();
+          const filename = `diagram_${experimentId}_${repoName}_${timestamp}.png`;
+
+          // Create download link and trigger
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+
+          // Clean up temporary div
+          document.body.removeChild(tempDiv);
+          showToast('PNG downloaded: ' + filename);
+        }, 'image/png');
+      }).catch(err => {
+        document.body.removeChild(tempDiv);
+        console.error('[Diagram] PNG export error:', err);
+        showToast('Failed to export PNG');
+      });
+    } catch (err) {
+      console.error('[Diagram] PNG export error:', err);
+      showToast('PNG export failed');
+    }
+  }
+
   // ── Section tabs system ───────────────────────────────────────────────────
 
   function getCurrentRepoName() {
@@ -921,6 +1110,9 @@
   function buildSectionTabs(experimentId, repoName) {
     if (!experimentId || !repoName) return;
     currentExperimentId = experimentId;
+    currentRepoName = repoName;
+    apiOpsMode = 'auto'; // Reset API ops mode when loading new experiment
+    updateApiOpsButtonText(); // Update button text to reflect reset state
 
     fetch(`/api/view/tabs/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`)
       .then(r => r.json())
@@ -1165,6 +1357,24 @@
     const copyDiagramBtn = document.getElementById('copy-diagram-btn');
     if (copyDiagramBtn) {
       copyDiagramBtn.addEventListener('click', copyDiagramSource);
+    }
+
+    // Handle diagram export SVG button
+    const exportSvgBtn = document.getElementById('export-diagram-svg-btn');
+    if (exportSvgBtn) {
+      exportSvgBtn.addEventListener('click', exportDiagramSvg);
+    }
+
+    // Handle diagram PNG export button
+    const exportPngBtn = document.getElementById('export-diagram-png-btn');
+    if (exportPngBtn) {
+      exportPngBtn.addEventListener('click', exportDiagramPNG);
+    }
+
+    // Handle API ops visibility toggle button
+    const toggleApiOpsBtn = document.getElementById('toggle-api-ops-btn');
+    if (toggleApiOpsBtn) {
+      toggleApiOpsBtn.addEventListener('click', handleToggleApiOps);
     }
 
     // Reset zoom when switching diagram tabs
