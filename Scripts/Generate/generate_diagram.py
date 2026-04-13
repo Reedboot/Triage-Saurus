@@ -779,9 +779,11 @@ def generate_architecture_diagram(
     # Classify "other" into internet-facing vs remaining
     _INTERNET_FACING_TYPES = InternetExposureDetector.get_public_entry_types()
     # Pull internet-facing resources out of ALL categories (they should appear in zone_internet)
+    # BUT: skip children that are part of parent-child relationships (they should render within parent subgraphs)
     internet_facing_ids = {
         r['id'] for r in filtered_roots
         if (r.get('resource_type') or '').lower() in _INTERNET_FACING_TYPES
+        and r['id'] not in child_ids  # Skip children to keep them in parent subgraphs
     }
     internet_facing = [r for r in filtered_roots if r['id'] in internet_facing_ids]
     # Remove internet-facing resources from their other category lists
