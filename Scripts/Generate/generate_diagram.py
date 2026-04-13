@@ -266,6 +266,9 @@ def _is_non_service_resource_type(resource_type: str) -> bool:
         'azurerm_monitor_metric_alert',
         'azurerm_monitor_scheduled_query_rules_alert',
         'azurerm_monitor_scheduled_query_rules_alert_v2',
+        'azurerm_role_assignment',
+        'azurerm_role_assignment_schedule',
+        'azurerm_role_definition',
         'template_file',
         'kubernetes_config',
     }
@@ -800,6 +803,9 @@ def generate_architecture_diagram(
     # ── Internet-Facing Zone ──
     lines.append("  subgraph zone_internet[\"🌐 Internet-Facing\"]")
     for res in internet_facing:
+        # Skip the synthetic "Internet" node to avoid circular nesting
+        if res['resource_name'] == 'Internet':
+            continue
         if res['id'] in parent_children:
             _render_resource_subgraph(res, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         else:

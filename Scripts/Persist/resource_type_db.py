@@ -849,7 +849,7 @@ def is_physical_network_device(conn: sqlite3.Connection | None, terraform_type: 
     except Exception:
         pass
 
-    physical_tokens = ('firewall', 'application_gateway', 'load_balancer', 'lb', 'nat_gateway', 'gateway', 'appliance', 'virtual_appliance', 'edge', 'vpn_gateway')
+    physical_tokens = ('firewall', 'application_gateway', 'load_balancer', 'lb', 'nat_gateway', 'gateway', 'appliance', 'virtual_appliance', 'edge', 'vpn_gateway', 'nsg', 'network_security_group')
     return any(tok in lower for tok in physical_tokens)
 
 
