@@ -10,6 +10,24 @@
   let resetBtn = null;
   let currentExperimentId = null;  // Track active experiment for section tabs
 
+  // Zoom state for mermaid diagrams - now per-diagram
+  const zoomState = {
+    scale: 1.0,
+    minScale: 0.5,
+    maxScale: 2.0,
+    panX: 0,
+    panY: 0
+  };
+
+  // Per-diagram zoom/pan state store (keyed by diagram index)
+  const diagramStates = {};
+
+  // Pan interaction state
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let currentDiagramIndex = 0;
+
   // Global status setter used by other modules
   window._triage = window._triage || {};
   window._triage.setStatus = function (message, type) {
@@ -34,6 +52,144 @@
     }
   }
 
+  // Apply zoom and pan to diagram container
+  function applyTransform() {
+    const zoomInner = document.getElementById('diagram-zoom-inner');
+    if (zoomInner) {
+      zoomInner.style.transform = `scale(${zoomState.scale}) translate(${zoomState.panX}px, ${zoomState.panY}px)`;
+      zoomInner.style.transformOrigin = 'top left';
+    }
+    updateZoomDisplay();
+  }
+
+  // Update zoom level display
+  function updateZoomDisplay() {
+    const zoomLevel = Math.round(zoomState.scale * 100);
+    const display = document.getElementById('zoom-level-display');
+    if (display) {
+      display.textContent = `${zoomLevel}%`;
+    }
+  }
+
+  // Zoom in by 20%
+  function zoomIn() {
+    const newScale = zoomState.scale * 1.2;
+    if (newScale <= zoomState.maxScale) {
+      zoomState.scale = newScale;
+      applyTransform();
+      saveDiagramState(currentDiagramIndex);
+    }
+  }
+
+  // Zoom out by 20%
+  function zoomOut() {
+    const newScale = zoomState.scale / 1.2;
+    if (newScale >= zoomState.minScale) {
+      zoomState.scale = newScale;
+      applyTransform();
+      saveDiagramState(currentDiagramIndex);
+    }
+  }
+
+  // Reset zoom and pan to default
+  function zoomReset() {
+    zoomState.scale = 1.0;
+    zoomState.panX = 0;
+    zoomState.panY = 0;
+    applyTransform();
+    saveDiagramState(currentDiagramIndex);
+  }
+
+  // Save current zoom state for a diagram index
+  function saveDiagramState(diagramIndex) {
+    diagramStates[diagramIndex] = {
+      scale: zoomState.scale,
+      panX: zoomState.panX,
+      panY: zoomState.panY
+    };
+  }
+
+  // Load zoom state for a diagram index
+  function loadDiagramState(diagramIndex) {
+    if (diagramStates[diagramIndex]) {
+      const state = diagramStates[diagramIndex];
+      zoomState.scale = state.scale;
+      zoomState.panX = state.panX;
+      zoomState.panY = state.panY;
+    } else {
+      zoomReset();
+    }
+    applyTransform();
+  }
+
+  // Initialize pan/zoom interactivity on diagram SVG
+  function initPanZoom() {
+    const zoomWrap = document.getElementById('diagram-zoom-wrap');
+    if (!zoomWrap) return;
+
+    const diagramViews = document.getElementById('diagram-views');
+    if (!diagramViews) return;
+
+    // Get all mermaid SVG elements
+    const mermaidElements = diagramViews.querySelectorAll('.mermaid svg');
+    
+    mermaidElements.forEach(svg => {
+      if (svg.__panZoomInitialized) return;
+      svg.__panZoomInitialized = true;
+
+      // Enable dragging for pan
+      svg.addEventListener('mousedown', (e) => {
+        isPanning = true;
+        panStartX = e.clientX - zoomState.panX;
+        panStartY = e.clientY - zoomState.panY;
+        svg.style.cursor = 'grabbing';
+      });
+
+      svg.addEventListener('mousemove', (e) => {
+        if (!isPanning) return;
+        zoomState.panX = e.clientX - panStartX;
+        zoomState.panY = e.clientY - panStartY;
+        applyTransform();
+      });
+
+      svg.addEventListener('mouseup', () => {
+        isPanning = false;
+        svg.style.cursor = 'grab';
+        saveDiagramState(currentDiagramIndex);
+      });
+
+      svg.addEventListener('mouseleave', () => {
+        isPanning = false;
+        svg.style.cursor = 'grab';
+        saveDiagramState(currentDiagramIndex);
+      });
+
+      // Mouse wheel zoom
+      svg.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.8 : 1.2;
+        const newScale = zoomState.scale * delta;
+        
+        if (newScale >= zoomState.minScale && newScale <= zoomState.maxScale) {
+          // Calculate zoom center point
+          const rect = svg.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          
+          // Adjust pan to zoom towards cursor
+          zoomState.panX -= x * (delta - 1);
+          zoomState.panY -= y * (delta - 1);
+          zoomState.scale = newScale;
+          applyTransform();
+          saveDiagramState(currentDiagramIndex);
+        }
+      });
+
+      svg.style.cursor = 'grab';
+    });
+  }
+
+
   // Clear the log output
   function clearLog() {
     if (logOutput) {
@@ -46,13 +202,29 @@
     }
   }
 
+  // Detect phase in message and return CSS class
+  function detectPhaseClass(text) {
+    if (typeof text !== 'string') return null;
+    const phaseMatch = text.match(/▶\s*Phase\s*(\d+[a-z]?)/i);
+    if (phaseMatch) {
+      return `phase-${phaseMatch[1].toLowerCase()}`;
+    }
+    return null;
+  }
+
   // Add a line to the log
   function addLogLine(text, className) {
     if (!logOutput) return;
     const line = document.createElement('div');
-    if (className) {
+    
+    // Check for phase messages and add phase class
+    const phaseClass = detectPhaseClass(text);
+    if (phaseClass) {
+      line.className = phaseClass;
+    } else if (className) {
       line.className = className;
     }
+    
     // Preserve whitespace but escape HTML
     line.textContent = text;
     logOutput.appendChild(line);
@@ -535,11 +707,18 @@
       diagramViews.appendChild(viewDiv);
 
       tabBtn.addEventListener('click', () => {
+        // Save current diagram state before switching
+        saveDiagramState(currentDiagramIndex);
+        
         diagramTabs.querySelectorAll('button').forEach(b => b.classList.remove('active'));
         tabBtn.classList.add('active');
         diagramViews.querySelectorAll('.diagram-view').forEach(v => {
           v.classList.toggle('active', v.dataset.idx === String(idx));
         });
+        
+        // Load new diagram state
+        currentDiagramIndex = idx;
+        loadDiagramState(idx);
       });
     });
 
@@ -548,6 +727,12 @@
       try {
         window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
         window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
+        // Initialize pan/zoom after rendering
+        setTimeout(() => {
+          initPanZoom();
+          // Load state for first diagram
+          loadDiagramState(0);
+        }, 100);
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
       }
@@ -559,6 +744,12 @@
           try {
             window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
             window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
+            // Initialize pan/zoom after rendering
+            setTimeout(() => {
+              initPanZoom();
+              // Load state for first diagram
+              loadDiagramState(0);
+            }, 100);
           } catch (e) {}
         }
       }, 300);
@@ -574,6 +765,149 @@
     if (data && data.diagrams) renderDiagrams(data.diagrams);
   };
   window.renderDiff = window._triage.renderDiff;
+
+  // ── Diagram button handlers ──────────────────────────────────────────────
+
+  function showToast(message) {
+    const existingToast = document.querySelector('.diagram-toast');
+    if (existingToast) {
+      existingToast.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'diagram-toast';
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 12px 16px;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      z-index: 1000;
+      font-size: 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: slideIn 0.3s ease-out;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+      toast.style.animation = 'fadeOut 0.3s ease-out';
+      setTimeout(() => toast.remove(), 300);
+    }, 2500);
+  }
+
+  function getActiveDiagramView() {
+    const diagramViews = document.getElementById('diagram-views');
+    if (!diagramViews) return null;
+    return diagramViews.querySelector('.diagram-view.active');
+  }
+
+  function getDiagramSource(diagramView) {
+    if (!diagramView) return null;
+    const preEl = diagramView.querySelector('pre.mermaid');
+    if (!preEl) return null;
+    return preEl.textContent || '';
+  }
+
+  function refreshDiagram() {
+    const activeDiagram = getActiveDiagramView();
+    if (!activeDiagram) {
+      showToast('No active diagram');
+      return;
+    }
+
+    const source = getDiagramSource(activeDiagram);
+    if (!source) {
+      showToast('No diagram source found');
+      return;
+    }
+
+    try {
+      const preEl = activeDiagram.querySelector('pre.mermaid');
+      if (!preEl) return;
+
+      // Store zoom/pan state if it exists
+      const zoomWrap = document.getElementById('diagram-zoom-wrap');
+      const zoomState = zoomWrap ? {
+        scrollLeft: zoomWrap.scrollLeft,
+        scrollTop: zoomWrap.scrollTop,
+        scale: parseFloat(document.getElementById('diagram-zoom-inner')?.style.transform?.match(/scale\(([^)]+)\)/)?.[1] || 1)
+      } : null;
+
+      // Clear rendered diagram by removing SVG
+      const svg = preEl.nextElementSibling;
+      if (svg && svg.tagName === 'svg') {
+        svg.remove();
+      }
+
+      // Re-initialize mermaid on this element
+      if (window.mermaid) {
+        window.mermaid.init(undefined, preEl);
+        
+        // Restore zoom/pan state
+        if (zoomState && zoomWrap) {
+          setTimeout(() => {
+            zoomWrap.scrollLeft = zoomState.scrollLeft;
+            zoomWrap.scrollTop = zoomState.scrollTop;
+            const zoomInner = document.getElementById('diagram-zoom-inner');
+            if (zoomInner && zoomState.scale !== 1) {
+              zoomInner.style.transform = `scale(${zoomState.scale})`;
+            }
+          }, 100);
+        }
+        
+        showToast('Diagram refreshed');
+      }
+    } catch (err) {
+      console.error('[Diagram] Refresh error:', err);
+      showToast('Error refreshing diagram');
+    }
+  }
+
+  function copyDiagramSource() {
+    const activeDiagram = getActiveDiagramView();
+    if (!activeDiagram) {
+      showToast('No active diagram');
+      return;
+    }
+
+    const source = getDiagramSource(activeDiagram);
+    if (!source) {
+      showToast('No diagram source found');
+      return;
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(source)
+        .then(() => {
+          showToast('Copied to clipboard');
+        })
+        .catch(err => {
+          console.error('[Diagram] Copy error:', err);
+          showToast('Copy failed');
+        });
+    } else {
+      // Fallback for older browsers
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = source;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast('Copied to clipboard');
+      } catch (err) {
+        console.error('[Diagram] Fallback copy error:', err);
+        showToast('Copy failed');
+      }
+    }
+  }
 
   // ── Section tabs system ───────────────────────────────────────────────────
 
@@ -803,6 +1137,49 @@
         toggleLogBtn.textContent = isHidden ? '📜 Hide scan' : '📜 Show scan';
         toggleLogBtn.title = isHidden ? 'Hide scan output' : 'Show scan output';
       });
+    }
+
+    // Handle zoom buttons for diagrams
+    const zoomInBtn = document.getElementById('zoom-in-btn');
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener('click', zoomIn);
+    }
+
+    const zoomOutBtn = document.getElementById('zoom-out-btn');
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener('click', zoomOut);
+    }
+
+    const zoomResetBtn = document.getElementById('zoom-reset-btn');
+    if (zoomResetBtn) {
+      zoomResetBtn.addEventListener('click', zoomReset);
+    }
+
+    // Handle diagram refresh button
+    const refreshDiagramBtn = document.getElementById('refresh-diagram-btn');
+    if (refreshDiagramBtn) {
+      refreshDiagramBtn.addEventListener('click', refreshDiagram);
+    }
+
+    // Handle diagram copy source button
+    const copyDiagramBtn = document.getElementById('copy-diagram-btn');
+    if (copyDiagramBtn) {
+      copyDiagramBtn.addEventListener('click', copyDiagramSource);
+    }
+
+    // Reset zoom when switching diagram tabs
+    const diagramTabs = document.getElementById('diagram-tabs');
+    if (diagramTabs) {
+      const observer = new MutationObserver(() => {
+        const tabBtns = diagramTabs.querySelectorAll('button');
+        tabBtns.forEach(btn => {
+          if (!btn.__zoomListenerAttached) {
+            btn.__zoomListenerAttached = true;
+            btn.addEventListener('click', zoomReset);
+          }
+        });
+      });
+      observer.observe(diagramTabs, { childList: true });
     }
 
     // Handle page visibility changes (mobile tab switch)

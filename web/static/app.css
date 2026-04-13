@@ -433,6 +433,70 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output .line-done   { color: var(--green); font-weight: 600; }
 #log-output .line-sep    { color: var(--border); }
 
+/* ── Phase-specific background colors with rotating palette ── */
+#log-output .phase-1 {
+  background-color: rgba(51, 111, 180, 0.15);
+  border-left: 4px solid #1a5a96;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-2 {
+  background-color: rgba(44, 125, 66, 0.15);
+  border-left: 4px solid #228f47;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-3a {
+  background-color: rgba(179, 137, 0, 0.15);
+  border-left: 4px solid #997700;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-3b {
+  background-color: rgba(180, 100, 44, 0.15);
+  border-left: 4px solid #b36422;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-4 {
+  background-color: rgba(108, 51, 141, 0.15);
+  border-left: 4px solid #6b3380;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-5 {
+  background-color: rgba(25, 103, 110, 0.15);
+  border-left: 4px solid #1a6b75;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+#log-output .phase-6 {
+  background-color: rgba(157, 61, 105, 0.15);
+  border-left: 4px solid #9d3d69;
+  padding: 4px 8px;
+  margin-left: -4px;
+  color: var(--text);
+  font-weight: 500;
+}
+
 /* ── Panel-level nav tabs ── */
 .panel-nav { display: flex; gap: 2px; }
 
@@ -1970,4 +2034,29 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .skeptic-review-box:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   border-color: var(--border-subtle);
+}
+
+/* ── Diagram Toast Notifications ── */
+@keyframes slideIn {
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.diagram-toast {
+  animation: slideIn 0.3s ease-out;
 }
