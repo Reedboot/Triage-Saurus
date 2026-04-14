@@ -1473,7 +1473,7 @@ def _build_simple_architecture_diagram(
     repo_path: Path | None = None,
     compact_apim: bool = False,
 ) -> str:
-    lines = ["flowchart LR"]
+    lines = ["flowchart TB"]
     edge_lines: list[str] = []
     link_styles: list[str] = []
     node_styles: list[str] = []
@@ -3228,11 +3228,16 @@ def _mermaid_node_id(label: str, used_ids: set[str]) -> str:
     return node_id
 
 
-def _build_flow_mermaid(edges: list[tuple[str, str, str]], *, include_internet: bool) -> str:
+def _build_flow_mermaid(
+    edges: list[tuple[str, str, str]],
+    *,
+    include_internet: bool,
+    direction: str = "LR",
+) -> str:
     if not edges:
         return ""
 
-    lines = ["```mermaid", "flowchart LR"]
+    lines = ["```mermaid", f"flowchart {direction}"]
     if include_internet:
         lines.append("    Internet[Internet]")
 
@@ -3638,7 +3643,7 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
 
     if all_db_edges:
         # _build_flow_mermaid returns a fenced code block; strip fences and return the inner diagram
-        fenced = _build_flow_mermaid(all_db_edges[:48], include_internet=True)
+        fenced = _build_flow_mermaid(all_db_edges[:48], include_internet=True, direction="TB")
         # fenced starts with ```mermaid\nflowchart ... and ends with ```
         inner = fenced.split('\n', 1)[1].rsplit('\n', 1)[0] if '\n' in fenced else fenced
         return inner
@@ -3660,7 +3665,7 @@ def _build_service_only_architecture_diagram(repo_name: str, context: Repository
         node_ids[label] = nid
         return nid
 
-    lines = ["flowchart LR"]
+    lines = ["flowchart TB"]
     # Repo node
     repo_id = _id_for(f"{repo_name}")
     lines.append(f'  {repo_id}["{repo_name}"]')

@@ -41,5 +41,6 @@ def test_internet_node_emitted_once(monkeypatch):
 
     diagram = builder.generate()
 
+    assert diagram.startswith('flowchart TB')
     assert diagram.count('internet[') == 1
     assert 'Network Client' not in diagram

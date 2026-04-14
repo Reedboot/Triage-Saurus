@@ -58,6 +58,7 @@ def test_internal_zone_skipped_without_children(monkeypatch):
 
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
+    assert diagram.startswith("flowchart TB")
     assert "subgraph zone_internal" not in diagram
     assert "vm-1" in diagram
 
@@ -87,6 +88,7 @@ def test_internet_arrows_are_colored_red(monkeypatch):
 
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
+    assert diagram.startswith("flowchart TB")
     assert "internet -->" in diagram
     assert "linkStyle 0 stroke:red,stroke-width:2px" in diagram
     assert "subgraph zone_internet" not in diagram
@@ -119,4 +121,5 @@ def test_alicloud_api_gateway_is_treated_as_public(monkeypatch):
 
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
+    assert diagram.startswith("flowchart TB")
     assert "internet -->" in diagram

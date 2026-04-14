@@ -365,6 +365,48 @@ class TestDiagramPanel:
         assert abs(svg_center_x - wrap_center_x) < wrap_box["width"] * 0.15
         assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.15
 
+    def test_rendered_diagram_svg_fills_wrapper(self, home: Page):
+        """Rendered Mermaid SVG should fill the active diagram wrapper."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Wrapper fit test',
+                code: 'flowchart TB; A[Start] --> B[Step 1] --> C[Step 2] --> D[Step 3] --> E[End]'
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+        home.wait_for_timeout(500)
+
+        sizes = home.evaluate(
+            """
+            () => {
+              const svg = document.querySelector('#diagram-views svg');
+              const mermaid = document.querySelector('#diagram-views .diagram-view.active .mermaid');
+              const view = document.querySelector('#diagram-views .diagram-view.active');
+              const svgStyle = getComputedStyle(svg);
+              const mermaidStyle = getComputedStyle(mermaid);
+              const viewStyle = getComputedStyle(view);
+              return {
+                svgWidth: parseFloat(svgStyle.width),
+                svgHeight: parseFloat(svgStyle.height),
+                mermaidWidth: parseFloat(mermaidStyle.width),
+                mermaidHeight: parseFloat(mermaidStyle.height),
+                viewWidth: parseFloat(viewStyle.width),
+                viewHeight: parseFloat(viewStyle.height),
+              };
+            }
+            """
+        )
+
+        assert abs(sizes["svgWidth"] - sizes["mermaidWidth"]) < 1.0
+        assert abs(sizes["svgHeight"] - sizes["mermaidHeight"]) < 1.0
+        assert sizes["viewWidth"] - sizes["mermaidWidth"] < 24
+        assert sizes["viewHeight"] - sizes["mermaidHeight"] < 24
+
 
 # ---------------------------------------------------------------------------
 # Tests — API smoke tests (no browser needed, plain HTTP)

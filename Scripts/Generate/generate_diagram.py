@@ -637,9 +637,9 @@ def generate_architecture_diagram(
     if not resources:
         log_msg = f"No resources found for diagram generation (experiment_id={experiment_id}, repo_name={repo_name}, provider={provider})"
         _logger.warning(log_msg)
-        return "flowchart LR\n  empty[No resources found]"
+        return "flowchart TB\n  empty[No resources found]"
     
-    lines = ["flowchart LR"]
+    lines = ["flowchart TB"]
     
     # Build parent-child mapping
     parent_children: Dict[int, List] = {}

@@ -2335,9 +2335,9 @@ class HierarchicalDiagramBuilder:
             self._infer_from_config_files()
         
         if not self.resources:
-            return "flowchart LR\n  empty[No resources found]"
+            return "flowchart TB\n  empty[No resources found]"
         
-        lines = ["flowchart LR"]
+        lines = ["flowchart TB"]
         
         # Infer connections if resource_connections table is empty/sparse.
         # Internet node emission is handled by render_connections so it only appears once.

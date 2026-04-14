@@ -583,11 +583,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .diagram-view.active .mermaid svg {
   display: block;
-  width: auto !important;
-  height: auto !important;
-  max-width: none !important;
-  max-height: none !important;
-  margin: 0 auto;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0;
 }
 .diagram-views {
   min-height: 360px;
@@ -1640,11 +1640,11 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 
 .diagram-zoom-wrap .mermaid svg {
   display: block;
-  width: auto !important;
-  height: auto !important;
-  max-width: none !important;
-  max-height: none !important;
-  margin: 0 auto;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  margin: 0;
   transform-origin: 0 0;
 }
 
