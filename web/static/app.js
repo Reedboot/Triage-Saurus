@@ -36,6 +36,7 @@
   // Track whether live scan output should stay pinned to the bottom.
   let logAutoScrollEnabled = true;
   const logAutoScrollThreshold = 24;
+  let logAutoScrollBtn = null;
 
   // Global status setter used by other modules
   window._triage = window._triage || {};
@@ -170,6 +171,27 @@
     saveDiagramState(currentDiagramIndex);
   }
 
+  function scheduleDiagramFit(attempt = 0) {
+    const activeDiagram = getActiveDiagramView();
+    const svg = activeDiagram ? activeDiagram.querySelector('svg') : null;
+    const zoomWrap = document.getElementById('diagram-zoom-wrap');
+    const bounds = svg ? getDiagramContentBounds(svg) : null;
+
+    if (svg && zoomWrap && bounds && bounds.width > 0 && bounds.height > 0 &&
+      (zoomWrap.clientWidth || zoomWrap.offsetWidth) &&
+      (zoomWrap.clientHeight || zoomWrap.offsetHeight)) {
+      fitActiveDiagram();
+      return;
+    }
+
+    if (attempt >= 30) {
+      fitActiveDiagram();
+      return;
+    }
+
+    requestAnimationFrame(() => scheduleDiagramFit(attempt + 1));
+  }
+
   // Save current zoom state for a diagram index
   function saveDiagramState(diagramIndex) {
     diagramStates[diagramIndex] = {
@@ -187,7 +209,8 @@
       zoomState.panX = state.panX;
       zoomState.panY = state.panY;
     } else {
-      zoomReset();
+      scheduleDiagramFit();
+      return;
     }
     applyTransform();
   }
@@ -266,12 +289,35 @@
       logOutput.innerHTML = '';
       logOutput.scrollTop = 0;
     }
-    logAutoScrollEnabled = true;
+    setLogAutoScrollEnabled(true, false);
     // Hide section placeholder when starting a new scan
     const placeholder = document.getElementById('section-placeholder');
     if (placeholder) {
       placeholder.style.display = 'none';
     }
+  }
+
+  function updateLogAutoScrollButton() {
+    if (!logAutoScrollBtn) return;
+    if (logAutoScrollEnabled) {
+      logAutoScrollBtn.textContent = '⏸ Auto-scroll';
+      logAutoScrollBtn.title = 'Pause auto-scroll';
+    } else {
+      logAutoScrollBtn.textContent = '▶ Resume auto-scroll';
+      logAutoScrollBtn.title = 'Resume auto-scroll';
+    }
+  }
+
+  function setLogAutoScrollEnabled(enabled, scrollToBottom) {
+    logAutoScrollEnabled = !!enabled;
+    if (logAutoScrollEnabled && scrollToBottom && logOutput) {
+      requestAnimationFrame(() => {
+        if (logOutput) {
+          logOutput.scrollTop = logOutput.scrollHeight;
+        }
+      });
+    }
+    updateLogAutoScrollButton();
   }
 
   // Detect phase in message and return CSS class
@@ -552,7 +598,7 @@
       logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
       logOutput.scrollTop = 0;
     }
-    logAutoScrollEnabled = true;
+    setLogAutoScrollEnabled(true, false);
     // Reset section tabs to placeholder and switch back to log view
     const tabBar = document.getElementById('section-tab-bar');
     if (tabBar) {
@@ -582,7 +628,7 @@
             logOutput.innerHTML = '';
             logOutput.scrollTop = 0;
           }
-          logAutoScrollEnabled = true;
+          setLogAutoScrollEnabled(true, false);
           // Hide section placeholder when reconnecting
           const sectionPlaceholder = document.getElementById('section-placeholder');
           if (sectionPlaceholder) {
@@ -814,9 +860,9 @@
         // Initialize pan/zoom after rendering
         setTimeout(() => {
           initPanZoom();
-          // Reset zoom and center for first diagram
+          // Reset zoom and center for first diagram once layout has settled
           currentDiagramIndex = 0;
-          zoomReset();
+          scheduleDiagramFit();
         }, 150);
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
@@ -832,9 +878,9 @@
             // Initialize pan/zoom after rendering
             setTimeout(() => {
               initPanZoom();
-              // Reset zoom and center for first diagram
+              // Reset zoom and center for first diagram once layout has settled
               currentDiagramIndex = 0;
-              zoomReset();
+              scheduleDiagramFit();
             }, 150);
           } catch (e) {}
         }
@@ -1366,6 +1412,8 @@
     logOutput = document.getElementById('log-output');
     scanBtn = document.getElementById('scan-btn');
     resetBtn = document.getElementById('reset-btn');
+    logAutoScrollBtn = document.getElementById('toggle-log-autoscroll-btn');
+    updateLogAutoScrollButton();
 
     const scanForm = document.getElementById('scan-form');
 
@@ -1375,6 +1423,13 @@
 
     if (resetBtn) {
       resetBtn.addEventListener('click', handleReset);
+    }
+
+    if (logAutoScrollBtn) {
+      logAutoScrollBtn.addEventListener('click', function () {
+        const nextEnabled = !logAutoScrollEnabled;
+        setLogAutoScrollEnabled(nextEnabled, nextEnabled);
+      });
     }
 
     // Handle sections toggle button — switches between sections view and raw log view
@@ -1519,7 +1574,7 @@
             logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
             logOutput.scrollTop = 0;
           }
-          logAutoScrollEnabled = true;
+          setLogAutoScrollEnabled(true, false);
           if (statusBar) statusBar.style.display = 'none';
           if (spinner) spinner.style.display = 'none';
           window._triage.setStatus('Ready', '');
@@ -1613,7 +1668,10 @@
       logOutput.__autoScrollBound = true;
       const updateLogAutoScroll = () => {
         const distanceFromBottom = logOutput.scrollHeight - logOutput.scrollTop - logOutput.clientHeight;
-        logAutoScrollEnabled = distanceFromBottom <= logAutoScrollThreshold;
+        const atBottom = distanceFromBottom <= logAutoScrollThreshold;
+        if (atBottom !== logAutoScrollEnabled) {
+          setLogAutoScrollEnabled(atBottom, false);
+        }
       };
       logOutput.addEventListener('scroll', updateLogAutoScroll);
       updateLogAutoScroll();

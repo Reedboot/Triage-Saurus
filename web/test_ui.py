@@ -182,6 +182,47 @@ class TestLogPanel:
         """📑 Sections button is in the log panel toolbar."""
         expect(home.locator("#toggle-sections-btn")).to_be_visible()
 
+    def test_log_auto_scroll_toggle_button(self, home: Page):
+        """Auto-scroll button pauses and resumes the live tail."""
+        log_output = home.locator("#log-output")
+        button = home.locator("#toggle-log-autoscroll-btn")
+        expect(button).to_be_visible()
+
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.innerHTML = '';
+              for (let i = 0; i < 140; i++) {
+                const line = document.createElement('div');
+                line.textContent = `seed line ${i}`;
+                el.appendChild(line);
+              }
+              el.scrollTop = el.scrollHeight;
+              el.dispatchEvent(new Event('scroll'));
+            }
+            """
+        )
+        home.wait_for_timeout(100)
+        assert log_output.evaluate(
+            "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
+        )
+
+        button.click()
+        home.wait_for_timeout(100)
+        assert "resume auto-scroll" in button.inner_text().lower()
+
+        home.evaluate("window._triage.appendLog('paused-by-button')")
+        home.wait_for_timeout(100)
+        assert log_output.evaluate("el => el.scrollTop <= 4")
+
+        button.click()
+        home.wait_for_timeout(100)
+        assert "pause auto-scroll" in button.get_attribute("title").lower()
+        assert log_output.evaluate(
+            "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
+        )
+
     def test_initial_log_placeholder(self, home: Page):
         """Before any scan, the log area shows placeholder text."""
         log_output = home.locator("#log-output")
