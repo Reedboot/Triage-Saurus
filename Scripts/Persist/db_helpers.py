@@ -988,12 +988,41 @@ def _ensure_schema(conn: sqlite3.Connection):
       UNIQUE(repo_id, project_path, package_name, version, package_manager),
       FOREIGN KEY (experiment_id) REFERENCES experiments(id)
     );
+
+    CREATE TABLE IF NOT EXISTS resource_internet_accessibility (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      is_internet_accessible BOOLEAN DEFAULT 0,
+      shortest_path_distance INTEGER,
+      path_data TEXT,
+      via_public_ip BOOLEAN DEFAULT 0,
+      via_public_endpoint BOOLEAN DEFAULT 0,
+      via_managed_identity BOOLEAN DEFAULT 0,
+      entry_point TEXT,
+      auth_level TEXT,
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, resource_id)
+    );
     """)
 
         # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
         try:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_diagrams_repo_provider_title ON cloud_diagrams(repo_name, provider, diagram_title)"
+            )
+        except Exception:
+            pass
+
+        # Create indexes for internet accessibility table
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_internet_accessibility_experiment ON resource_internet_accessibility(experiment_id, is_internet_accessible)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_internet_accessibility_distance ON resource_internet_accessibility(experiment_id, shortest_path_distance)"
             )
         except Exception:
             pass

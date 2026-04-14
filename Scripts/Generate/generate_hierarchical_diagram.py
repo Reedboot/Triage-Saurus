@@ -1037,6 +1037,16 @@ class HierarchicalDiagramBuilder:
             'diagnostic',
         ])
 
+    def is_application_tier_resource(self, resource: dict) -> bool:
+        """Check if resource belongs in the application tier."""
+        rtype = (resource.get('resource_type') or '').lower()
+        return any(tok in rtype for tok in [
+            'app_service_plan', 'service_plan',
+            'function_app', 'linux_function_app', 'windows_function_app',
+            'app_service', 'linux_web_app', 'windows_web_app',
+            'elastic_beanstalk',
+        ])
+
     def is_service_bus(self, resource: dict) -> bool:
         """Check if resource is Service Bus/messaging related."""
         rtype = (resource.get('resource_type') or '').lower()
@@ -1398,14 +1408,23 @@ class HierarchicalDiagramBuilder:
             server_id = sanitize_id(server_name)
             props = res.get('properties') or {}
             database_name = str(props.get('database') or preferred_database or '').strip()
+            children = self.children_by_parent.get(res['id'], [])
 
-            if database_name:
+            if database_name or children:
                 db_node_id = sanitize_id(f"{server_name}_{database_name}")
                 # Use server_id as the subgraph ID so that existing connection edges
                 # (which reference the server by name/id) correctly target the subgraph.
-                # Databases are rendered as child nodes inside.
-                lines.append(f"  subgraph {server_id}[\"SQL Server: {server_name}\"]")
-                lines.append(f"    {db_node_id}[\"{database_name}\"]")
+                # Databases / children are rendered as child nodes inside.
+                label = f"SQL Server: {server_name}" if database_name or 'sql' in (res.get('resource_type') or '').lower() else server_name
+                lines.append(f"  subgraph {server_id}[\"{label}\"]")
+                if database_name:
+                    lines.append(f"    {db_node_id}[\"{database_name}\"]")
+                for child in children:
+                    if self.children_by_parent.get(child['id']):
+                        lines.extend(self._render_nested_resource(child, indent="    "))
+                    else:
+                        lines.append(self.render_node(child, indent="    "))
+                        self.emitted_nodes.add(child['resource_name'])
                 lines.append("  end")
                 self.emitted_nodes.add(server_name)
                 self.emitted_nodes.add(database_name)
@@ -1416,6 +1435,75 @@ class HierarchicalDiagramBuilder:
                 lines.append(self.render_node(res, indent="  "))
                 self.emitted_nodes.add(server_name)
 
+        return lines
+
+    def _render_nested_resource(self, resource: dict, indent: str = "  ") -> List[str]:
+        """Render a resource as a nested subgraph when it has children."""
+        name = resource['resource_name']
+        node_id = sanitize_id(name)
+        children = self.children_by_parent.get(resource['id'], [])
+
+        if not children:
+            return [self.render_node(resource, indent=indent)]
+
+        lines: List[str] = []
+        lines.append(f'{indent}subgraph {node_id}["{name}"]')
+        self._emitted_mermaid_ids.add(node_id)
+        if node_id not in self._node_id_first_owner:
+            self._node_id_first_owner[node_id] = str(resource.get('id', ''))
+
+        for child in children:
+            if self.children_by_parent.get(child['id']):
+                lines.extend(self._render_nested_resource(child, indent=indent + "  "))
+            else:
+                lines.append(self.render_node(child, indent=indent + "  "))
+                self.emitted_nodes.add(child['resource_name'])
+
+        lines.append(f'{indent}end')
+        self.emitted_nodes.add(name)
+        return lines
+
+    def render_data_hierarchy(self, sql_resources: List[dict], storage_resources: List[dict]) -> List[str]:
+        """Render the data tier with SQL, Cosmos DB, and storage resources nested."""
+        if not sql_resources and not storage_resources:
+            return []
+
+        lines: List[str] = []
+        lines.append('  subgraph data_tier["🗄️ Data Tier"]')
+
+        for res in sql_resources:
+            lines.extend(self.render_sql_hierarchy([res]))
+
+        for res in storage_resources:
+            lines.extend(self._render_nested_resource(res, indent="    "))
+
+        lines.append('  end')
+        return lines
+
+    def is_paas_identity_resource(self, resource: dict) -> bool:
+        """Check if resource belongs in the PaaS / Identity tier."""
+        rtype = (resource.get('resource_type') or '').lower()
+        if self._get_category(resource) == 'Identity':
+            return True
+
+        return any(tok in rtype for tok in [
+            'automation_account', 'app_configuration', 'appconfig',
+            'managed_identity', 'user_assigned_identity', 'service_principal',
+            'key_vault', 'role_assignment', 'directory_role_assignment',
+        ])
+
+    def render_paas_identity_hierarchy(self, paas_resources: List[dict]) -> List[str]:
+        """Render PaaS / Identity resources with nested children."""
+        if not paas_resources:
+            return []
+
+        lines: List[str] = []
+        lines.append('  subgraph paas["PaaS / Identity"]')
+
+        for res in paas_resources:
+            lines.extend(self._render_nested_resource(res, indent="    "))
+
+        lines.append('  end')
         return lines
     
     def render_compute_hierarchy(self, compute_resources: List[dict]) -> List[str]:
@@ -1448,6 +1536,36 @@ class HierarchicalDiagramBuilder:
             
             self.emitted_nodes.add(vm_name)
         
+        return lines
+
+    def render_application_hierarchy(self, app_resources: List[dict]) -> List[str]:
+        """Render application-tier resources with their direct children nested."""
+        if not app_resources:
+            return []
+
+        lines: List[str] = []
+        lines.append('  subgraph app_tier["⚙️ Application Tier"]')
+
+        for app in app_resources:
+            app_name = app['resource_name']
+            app_id = sanitize_id(app_name)
+            children = self.children_by_parent.get(app['id'], [])
+
+            if children:
+                lines.append(f'    subgraph {app_id}["{app_name}"]')
+                self._emitted_mermaid_ids.add(app_id)
+                if app_id not in self._node_id_first_owner:
+                    self._node_id_first_owner[app_id] = str(app.get('id', ''))
+                for child in children:
+                    lines.append(self.render_node(child, indent="      "))
+                    self.emitted_nodes.add(child['resource_name'])
+                lines.append('    end')
+            else:
+                lines.append(self.render_node(app, indent="    "))
+
+            self.emitted_nodes.add(app_name)
+
+        lines.append('  end')
         return lines
     
     def render_node(self, resource: dict, indent: str = "  ") -> str:
@@ -2600,6 +2718,87 @@ class HierarchicalDiagramBuilder:
         if monitoring_lines:
             lines.extend(monitoring_lines)
             lines.append("")
+
+        # Render Application Tier (App Service Plans, Function Apps, Web Apps)
+        app_resources = [
+            r for r in self.resources
+            if self.is_application_tier_resource(r)
+            and r['id'] not in all_children
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+        app_related_ids = {r['id'] for r in app_resources}
+        for app in app_resources:
+            for child in self.children_by_parent.get(app['id'], []):
+                app_related_ids.add(child['id'])
+
+        app_lines = self.render_application_hierarchy(app_resources)
+        if app_lines:
+            lines.extend(app_lines)
+            lines.append("")
+
+        # Render Data Tier (SQL, Cosmos DB, Storage)
+        sql_resources = [
+            r for r in self.resources
+            if self.is_database_resource(r)
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
+            and r['id'] not in app_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+
+        storage_resources = [
+            r for r in self.resources
+            if (self._get_category(r) == 'Storage' or 'cosmos' in (r.get('resource_type') or '').lower())
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
+            and r['id'] not in app_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+
+        data_related_ids = {r['id'] for r in sql_resources}
+        data_related_ids.update(r['id'] for r in storage_resources)
+        for res in sql_resources + storage_resources:
+            for child in self.children_by_parent.get(res['id'], []):
+                data_related_ids.add(child['id'])
+
+        data_lines = self.render_data_hierarchy(sql_resources, storage_resources)
+        if data_lines:
+            lines.extend(data_lines)
+            lines.append("")
+
+        # Render PaaS / Identity (managed identities, key vaults, automation accounts)
+        paas_resources = [
+            r for r in self.resources
+            if self.is_paas_identity_resource(r)
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
+            and r['id'] not in app_related_ids
+            and r['id'] not in data_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+
+        paas_related_ids = {r['id'] for r in paas_resources}
+        for res in paas_resources:
+            for child in self.children_by_parent.get(res['id'], []):
+                paas_related_ids.add(child['id'])
+
+        paas_lines = self.render_paas_identity_hierarchy(paas_resources)
+        if paas_lines:
+            lines.extend(paas_lines)
+            lines.append("")
         
         # Render other resources not in above categories (exclude subscriptions which are metadata)
         connected_resource_names = set(self.connected_resource_names)
@@ -2662,6 +2861,9 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
             and r['id'] not in monitoring_related_ids
+            and r['id'] not in app_related_ids
+            and r['id'] not in data_related_ids
+            and r['id'] not in paas_related_ids
             and r['id'] not in compute_related_ids
             and r not in sql_resources
             and not self.is_api_gateway(r)
@@ -2669,6 +2871,8 @@ class HierarchicalDiagramBuilder:
             and not self.is_service_bus(r)
             and not self.is_monitoring(r)
             and not self.is_api_product(r)
+            and not self.is_application_tier_resource(r)
+            and not self.is_paas_identity_resource(r)
             and 'subscription' not in r.get('resource_type', '').lower()  # Exclude subscriptions - they're metadata
             and 'resource_group' not in r.get('resource_type', '').lower()  # Exclude resource groups
             and 'terraform_data' not in r.get('resource_type', '').lower()  # Exclude terraform data

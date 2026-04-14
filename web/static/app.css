@@ -34,6 +34,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* ── Header ── */
@@ -75,6 +76,8 @@ header span.badge {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── Scan form ── */
@@ -338,11 +341,10 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* ── Log output ── */
 #log-output {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: scroll; overflow-x: auto;
   padding: 8px 12px;
-  height: 100%;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.78rem; line-height: 1.6;
   white-space: pre-wrap; word-break: break-all;
@@ -360,10 +362,10 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .workspace > #log-panel { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
 #log-panel .panel-section { min-height: 0; overflow: auto; }
 #log-panel .panel-header { flex: 0 0 auto; }
-#log-panel .panel-section #log-output { flex: 1 1 auto; }
+#log-panel .panel-section #log-output { flex: 1 1 0; }
 #log-panel .section-tab-bar { flex: 0 0 auto; display: flex; }
-#log-panel .section-panel-content { flex: 1 1 auto; min-height: 0; max-height: 100%; overflow-y: scroll; }
-#log-panel #log-output { flex: 1 1 auto; }
+#log-panel .section-panel-content { flex: 1 1 0; min-height: 0; max-height: 100%; overflow-y: auto; }
+#log-panel #log-output { flex: 1 1 0; }
 
 #log-output .line-ok     { color: var(--green); }
 #log-output .line-warn   { color: var(--yellow); }

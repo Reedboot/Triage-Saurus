@@ -212,9 +212,13 @@ class TestLogPanel:
         home.wait_for_timeout(100)
         assert "resume auto-scroll" in button.inner_text().lower()
 
+        paused_scroll_top = log_output.evaluate("el => el.scrollTop")
         home.evaluate("window._triage.appendLog('paused-by-button')")
         home.wait_for_timeout(100)
-        assert log_output.evaluate("el => el.scrollTop <= 4")
+        assert log_output.evaluate(
+            "(el, expected) => Math.abs(el.scrollTop - expected) <= 4",
+            paused_scroll_top,
+        )
 
         button.click()
         home.wait_for_timeout(100)
@@ -286,6 +290,34 @@ class TestLogPanel:
         home.evaluate("window._triage.appendLog('resumed auto-scroll test line')")
         home.wait_for_timeout(100)
         assert log_output.evaluate(
+            "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
+        )
+
+    def test_log_stream_does_not_grow_page(self, home: Page):
+        """Streaming output stays inside the panel instead of extending the page."""
+        home.wait_for_function("window._triage && typeof window._triage.appendLog === 'function'")
+
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.innerHTML = '';
+              for (let i = 0; i < 240; i++) {
+                const line = document.createElement('div');
+                line.textContent = `stream line ${i}`;
+                el.appendChild(line);
+              }
+              el.scrollTop = el.scrollHeight;
+              el.dispatchEvent(new Event('scroll'));
+            }
+            """
+        )
+        home.wait_for_timeout(100)
+
+        assert home.evaluate(
+            "() => document.scrollingElement.scrollHeight <= window.innerHeight + 2"
+        )
+        assert home.locator("#log-output").evaluate(
             "el => el.scrollTop + el.clientHeight >= el.scrollHeight - 4"
         )
 

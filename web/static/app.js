@@ -105,7 +105,7 @@
 
   // Reset zoom and pan to default
   function zoomReset() {
-    fitActiveDiagram();
+    fitActiveDiagram('contain');
   }
 
   function getDiagramContentBounds(svg) {
@@ -131,7 +131,7 @@
     return null;
   }
 
-  function fitActiveDiagram() {
+  function fitActiveDiagram(mode = 'contain') {
     const activeDiagram = getActiveDiagramView();
     const svg = activeDiagram ? activeDiagram.querySelector('svg') : null;
     const zoomWrap = document.getElementById('diagram-zoom-wrap');
@@ -159,14 +159,21 @@
     const padding = 32;
     const availableWidth = Math.max(1, wrapWidth - padding);
     const availableHeight = Math.max(1, wrapHeight - padding);
+    const containScale = Math.max(
+      zoomState.minScale,
+      Math.min(availableWidth / bounds.width, availableHeight / bounds.height)
+    );
+    const widthScale = Math.max(zoomState.minScale, availableWidth / bounds.width);
     const fitScale = Math.min(
       zoomState.maxScale,
-      Math.max(zoomState.minScale, Math.min(availableWidth / bounds.width, availableHeight / bounds.height))
+      mode === 'width' ? widthScale : containScale
     );
 
     zoomState.scale = fitScale;
     zoomState.panX = (wrapWidth * (1 - fitScale)) / (2 * fitScale);
-    zoomState.panY = (wrapHeight * (1 - fitScale)) / (2 * fitScale);
+    zoomState.panY = mode === 'width'
+      ? 0
+      : (wrapHeight * (1 - fitScale)) / (2 * fitScale);
     applyTransform();
     saveDiagramState(currentDiagramIndex);
   }
@@ -180,12 +187,12 @@
     if (svg && zoomWrap && bounds && bounds.width > 0 && bounds.height > 0 &&
       (zoomWrap.clientWidth || zoomWrap.offsetWidth) &&
       (zoomWrap.clientHeight || zoomWrap.offsetHeight)) {
-      fitActiveDiagram();
+      fitActiveDiagram('width');
       return;
     }
 
     if (attempt >= 30) {
-      fitActiveDiagram();
+      fitActiveDiagram('width');
       return;
     }
 
