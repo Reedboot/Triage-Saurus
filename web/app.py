@@ -71,6 +71,7 @@ try:
         "PlatformSkeptic": prompt_builder.load_agent_instruction("PlatformSkeptic"),
         "ContextDiscoveryAgent": prompt_builder.load_agent_instruction("ContextDiscoveryAgent"),
         "ArchitectureAgent": prompt_builder.load_agent_instruction("ArchitectureAgent"),
+        "ArchitectureValidationAgent": prompt_builder.load_agent_instruction("ArchitectureValidationAgent"),
     }
     PROMPT_BUILDER_AVAILABLE = True
 except Exception as e:
@@ -112,6 +113,12 @@ _AI_ANALYSIS_LOCK = threading.Lock()
 
 def _ai_job_key(experiment_id: str, repo_name: str) -> str:
     return f"{experiment_id}:{repo_name.lower()}"
+
+
+def _ai_raw_output_file(key: str) -> Path:
+    """Return the per-job raw Copilot output file."""
+    safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    return REPO_ROOT / "Output" / "AILogs" / f"{safe_key}-raw.txt"
 
 
 def _extract_rules_from_llm_output(text: str) -> list[dict]:
@@ -415,8 +422,7 @@ def _detect_resume_state(experiment_id: str, repo_name: str, key: str) -> dict:
     }
     
     # Check if raw output exists (indicates Step 2 was done)
-    safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
-    raw_file = REPO_ROOT / 'Output' / 'AILogs' / f"{safe_key}-raw.txt"
+    raw_file = _ai_raw_output_file(key)
     
     if raw_file.exists():
         resume_state["has_raw_output"] = True
@@ -478,8 +484,7 @@ def _try_recover_from_raw_output(experiment_id: str, repo_name: str, key: str) -
     This handles cases where the stream disconnected during Step 3 (parsing & persisting).
     """
     try:
-        safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
-        raw_file = REPO_ROOT / 'Output' / 'AILogs' / f"{safe_key}-raw.txt"
+        raw_file = _ai_raw_output_file(key)
         
         if not raw_file.exists():
             return False
@@ -1002,6 +1007,8 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
                 nodes = list(_extract_mermaid_nodes(code)) if code else []
                 diagrams.append({
                     'title': d.get('diagram_title'),
+                    'diagram_title': d.get('diagram_title'),
+                    'mermaid_code': code,
                     'nodes': nodes,
                     'code_snippet': (code[:200] + '...') if code and len(code) > 200 else code,
                 })
@@ -2091,6 +2098,29 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             "Populate 'references' with the specific findings (using ids/files/snippets from the 'Detected findings' JSON) that directly support each observation. Include 1-4 references per observation."
         )
 
+    def _build_legacy_architecture_prompt(repo_name: str, fact_json: dict, skeptic_rows: list) -> str:
+        """Build a fallback architecture-validation prompt."""
+        assets_json = json.dumps((fact_json or {}).get("assets") or [])
+        diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
+        findings_json = json.dumps((fact_json or {}).get("findings") or [])
+        other_facts = dict(fact_json or {})
+        for k in ("assets", "diagrams", "findings"):
+            other_facts.pop(k, None)
+
+        return (
+            "You are the Architecture Validation Agent for a security triage portal. "
+            "Validate the generated architecture diagrams and return JSON only.\n\n"
+            f"Repository: {repo_name}\n\n"
+            f"1) Architecture diagrams JSON: {diagrams_json}\n\n"
+            f"2) Assets JSON: {assets_json}\n\n"
+            f"3) Findings JSON: {findings_json}\n\n"
+            f"4) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
+            f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
+            "Return compact JSON with keys: architecture_summary, new_assets, diagram_corrections, learning_suggestions, open_questions, fixed_information\n\n"
+            "The 'diagram_corrections' array should list missing assets, missing connections, incorrect hierarchy, incorrect grouping, and internet exposure issues.\n"
+            "When recommending fixes, include concrete code or rule targets when known."
+        )
+
     def _gen():
         conn = _get_db()
         if conn is None:
@@ -2106,6 +2136,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             conn.close()
 
         key = _ai_job_key(resolved_exp_id, repo_name)
+        analysis_mode = (request.args.get("mode") or "").strip().lower()
+        raw_file = _ai_raw_output_file(key)
 
         with _AI_ANALYSIS_LOCK:
             existing = _AI_ANALYSIS_JOBS.get(key)
@@ -2123,6 +2155,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 "steps": [],
                 "logs": [],
                 "error": "",
+                "analysis_mode": analysis_mode or "default",
             }
 
         _append_ai_job_log(key, "Copilot streaming job started")
@@ -2155,7 +2188,10 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 yield _sse("error", err)
                 return
 
-            yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
+            if analysis_mode == "architecture":
+                yield _sse("log", "Step 2/3: Running focused architecture AI review...")
+            else:
+                yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
         else:
             # Resuming, need to fetch facts for context but skip the AI review
             facts = _fetch_overview_facts(resolved_exp_id, repo_name)
@@ -2205,18 +2241,23 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         }
 
         # ═══ STEP 2: Run AI Agents (or Skip if Resuming) ═══
-        REVIEWER_AGENTS = [
-            ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
-            ("SecurityAgent",         "🔒 Security",           "security_review"),
-            ("DevSkeptic",            "💻 Dev Skeptic",         "dev_review"),
-            ("PlatformSkeptic",       "☁️ Platform",           "platform_review"),
-        ]
+        if analysis_mode == "architecture":
+            REVIEWER_AGENTS = [
+                ("ArchitectureValidationAgent", "🏗️ Architecture validation", "architecture_review"),
+            ]
+        else:
+            REVIEWER_AGENTS = [
+                ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
+                ("SecurityAgent",         "🔒 Security",           "security_review"),
+                ("DevSkeptic",            "💻 Dev Skeptic",         "dev_review"),
+                ("PlatformSkeptic",       "☁️ Platform",           "platform_review"),
+            ]
 
         per_agent_combined: dict[str, str] = {}
         temp_copy_dir = None
         
         if resume_state["resume_from_step"] <= 2:
-            # Normal path: Run all agents
+            # Normal path: Run reviewer agents
             # Initialise per-agent status in the job dict
             with _AI_ANALYSIS_LOCK:
                 job = _AI_ANALYSIS_JOBS.get(key, {})
@@ -2224,7 +2265,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 _AI_ANALYSIS_JOBS[key] = job
 
             # We stream *progress* + a compact formatted result, not the raw token stream.
-            model = os.environ.get("COPILOT_MODEL", "gpt-5-mini")
+            model = os.environ.get("COPILOT_MODEL", "gpt-5.4-mini")
 
             # Set up a single working copy of the repo that all three agents share.
             repo_cwd = str(REPO_ROOT)
@@ -2286,7 +2327,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 return
 
             # Run one focused Copilot job per reviewer agent.
-            # SecurityAgent's output drives the main TL;DR parse; all results are saved.
+            # The first reviewer output drives the merged parse; all results are saved.
         rc = 0  # aggregate exit code — set to non-zero if any agent fails
 
         for agent_idx, (agent_name, agent_label, agent_section_key) in enumerate(REVIEWER_AGENTS, 1):
@@ -2310,6 +2351,13 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                             repo_name=repo_name,
                             experiment_id=resolved_exp_id,
                         )
+                    elif agent_name == "ArchitectureValidationAgent":
+                        agent_prompt = prompt_builder.build_architecture_review_prompt(
+                            agent_content=agent_content,
+                            baseline_data=baseline_data,
+                            repo_name=repo_name,
+                            experiment_id=resolved_exp_id,
+                        )
                     else:
                         agent_prompt = prompt_builder.build_focused_prompt(
                             agent_name=agent_name,
@@ -2321,9 +2369,15 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     yield _sse("log", f"  ↳ Prompt ready: {len(agent_prompt):,} chars ({agent_name})")
                 except Exception as build_err:
                     yield _sse("log", f"  ✗ Prompt build failed: {build_err} — using legacy fallback")
-                    agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
+                    if agent_name == "ArchitectureValidationAgent":
+                        agent_prompt = _build_legacy_architecture_prompt(repo_name, fact_json, skeptic_rows)
+                    else:
+                        agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
             else:
-                agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
+                if agent_name == "ArchitectureValidationAgent":
+                    agent_prompt = _build_legacy_architecture_prompt(repo_name, fact_json, skeptic_rows)
+                else:
+                    agent_prompt = _build_legacy_prompt(repo_name, fact_json, skeptic_rows)
                 yield _sse("log", f"  ↳ Agent instructions unavailable — using legacy prompt")
 
             prompt_file = None
@@ -2471,7 +2525,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 preview = _extract_json_object(agent_combined)
                 if preview:
                     summary_text = (
-                        preview.get("context_summary")
+                        preview.get("architecture_summary")
+                        or preview.get("context_summary")
                         or preview.get("enhanced_tldr")
                         or ""
                     )
@@ -2552,12 +2607,15 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         # SecurityAgent output drives the main parse; fall back to whichever ran.
         # (or use cached output if resuming from Step 3)
         if resume_state["resume_from_step"] <= 2:
-            combined_source = (
-                per_agent_combined.get("SecurityAgent")
-                or per_agent_combined.get("DevSkeptic")
-                or per_agent_combined.get("PlatformSkeptic")
-                or ""
-            )
+            if analysis_mode == "architecture":
+                combined_source = per_agent_combined.get("ArchitectureValidationAgent") or ""
+            else:
+                combined_source = (
+                    per_agent_combined.get("SecurityAgent")
+                    or per_agent_combined.get("DevSkeptic")
+                    or per_agent_combined.get("PlatformSkeptic")
+                    or ""
+                )
             combined = combined_source
         else:
             # Already have combined from resume detection
@@ -2567,10 +2625,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         yield _sse("log", f"▶ STEP 3/3 — Parsing & persisting results")
         # Persist raw Copilot output for diagnostics
         try:
-            safe_key = re.sub(r'[^A-Za-z0-9_.-]', '_', key)
-            raw_log_dir = REPO_ROOT / 'Output' / 'AILogs'
-            raw_log_dir.mkdir(parents=True, exist_ok=True)
-            raw_file = raw_log_dir / f"{safe_key}-raw.txt"
+            raw_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 raw_file.write_text(combined, encoding='utf-8')
                 _append_ai_job_log(key, f"Raw Copilot output saved to: {raw_file}")
@@ -3524,7 +3579,7 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
             *copilot_cmd,
             "--no-color",
             "--model",
-            os.environ.get("COPILOT_MODEL", "gpt-5-mini"),
+            os.environ.get("COPILOT_MODEL", "gpt-5.4-mini"),
             "--stream",
             "off",
             *prompt_args,

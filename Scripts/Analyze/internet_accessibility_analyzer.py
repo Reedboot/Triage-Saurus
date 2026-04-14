@@ -140,20 +140,20 @@ class InternetAccessibilityAnalyzer:
         if not res:
             return False
         rtype = (res.get("resource_type") or "").lower()
-        name = (res.get("resource_name") or "").lower()
         
         # Check if it's a public IP resource type
         if any(t in rtype for t in ["public_ip", "publicip", "elastic_ip", "eip", "public_address"]):
             return True
-        
-        # Check properties for explicit internet access
-        props = self.properties_by_resource.get(resource_id, {})
-        if props.get("internet_access", "").lower() == "true":
-            return True
-        if props.get("is_internet_accessible", "").lower() == "true":
-            return True
             
         return False
+
+    def _has_explicit_public_access(self, resource_id: int) -> bool:
+        """Check whether a resource is directly internet reachable via properties, not type."""
+        props = self.properties_by_resource.get(resource_id, {})
+        return any(
+            props.get(key, "").lower() == "true"
+            for key in ("internet_access", "is_internet_accessible", "publicly_accessible", "internet_facing")
+        )
 
     def _is_public_endpoint_resource(self, resource_id: int) -> bool:
         """Check if resource is a public endpoint (API, LB, gateway)."""
@@ -167,11 +167,14 @@ class InternetAccessibilityAnalyzer:
         endpoint_keywords = [
             "api_management", "apim", "api_gateway", "application_gateway",
             "load_balancer", "alb", "nlb", "elb", "cdn", "cloudfront",
-            "front_door", "api_endpoint", "public_endpoint", "app_service",
+            "front_door", "api_endpoint", "public_endpoint", "azurerm_app_service",
             "function_app"
         ]
         
         if any(kw in rtype for kw in endpoint_keywords):
+            if "plan" in rtype:
+                return False
+
             # Verify it's actually public
             props = self.properties_by_resource.get(resource_id, {})
             
@@ -205,6 +208,11 @@ class InternetAccessibilityAnalyzer:
             elif self._is_public_endpoint_resource(res_id):
                 is_entry = True
                 via_type = "public_endpoint"
+
+            # Check for explicit public accessibility markers
+            elif self._has_explicit_public_access(res_id):
+                is_entry = True
+                via_type = "public_access"
             
             # Check for explicit Internet → Resource connections
             for conn in self.connections_list:
@@ -255,16 +263,34 @@ class InternetAccessibilityAnalyzer:
         graph = self._build_adjacency_list()
         visited: Set[int] = set()
         queue: deque = deque()
-        parent_map: Dict[int, Tuple[int, dict]] = {}  # Maps resource_id → (parent_id, connection)
         
         # Start BFS from each Internet entry point
         for entry in self.internet_entry_points:
             entry_id = entry["resource_id"]
-            queue.append((entry_id, 0, [entry["resource_name"]]))  # (resource_id, distance, path)
+            via_public_ip = entry["via_type"] == "public_ip"
+            via_endpoint = entry["via_type"] == "public_endpoint"
+
+            self.accessibility_paths[entry_id].append(
+                AccessibilityPath(
+                    resource_id=entry_id,
+                    resource_name=entry["resource_name"],
+                    resource_type=entry["resource_type"],
+                    distance=0,
+                    path_nodes=["Internet", entry["resource_name"]],
+                    entry_point=entry["resource_name"],
+                    via_public_ip=via_public_ip,
+                    via_endpoint=via_endpoint,
+                    via_managed_identity=False,
+                    confirmed=True,
+                    auth_level="none",
+                )
+            )
+
+            queue.append((entry_id, 0, ["Internet", entry["resource_name"]], entry["resource_name"], via_public_ip, via_endpoint))
             visited.add(entry_id)
         
         while queue:
-            curr_id, distance, path = queue.popleft()
+            curr_id, distance, path, entry_name, inherited_public_ip, inherited_endpoint = queue.popleft()
             
             # Traverse to all neighbors
             for next_id, conn in graph.get(curr_id, []):
@@ -282,16 +308,16 @@ class InternetAccessibilityAnalyzer:
                         resource_type=next_res.get("resource_type"),
                         distance=distance + 1,
                         path_nodes=new_path,
-                        entry_point=path[0],
-                        via_public_ip=any("public_ip" in self.resources_by_id.get(pid, {}).get("resource_type", "").lower() for pid in {curr_id}),
-                        via_endpoint=any("api_management" in self.resources_by_id.get(pid, {}).get("resource_type", "").lower() or "app_service" in self.resources_by_id.get(pid, {}).get("resource_type", "").lower() for pid in {curr_id}),
-                        via_managed_identity=any("managed_identity" in conn.get("authentication", "").lower() for conn in [conn]),
+                        entry_point=entry_name,
+                        via_public_ip=inherited_public_ip,
+                        via_endpoint=inherited_endpoint,
+                        via_managed_identity=self._determine_auth_level(conn) == "identity",
                         confirmed=conn.get("confirmed", True) if "confirmed" in conn else True,
                         auth_level=self._determine_auth_level(conn),
                     )
                     self.accessibility_paths[next_id].append(path_obj)
                     
-                    queue.append((next_id, distance + 1, new_path))
+                    queue.append((next_id, distance + 1, new_path, entry_name, inherited_public_ip, inherited_endpoint))
 
     def _determine_auth_level(self, connection: dict) -> str:
         """Determine authentication level for a connection."""
@@ -352,7 +378,7 @@ class InternetAccessibilityAnalyzer:
                         self.resources_by_id[res_id].get("resource_name"),
                         self.resources_by_id[res_id].get("resource_type"),
                         1 if is_accessible else 0,
-                        paths[0].distance if paths else None,
+                        shortest_path.distance if paths else None,
                         json.dumps(path_data) if path_data else None,
                         1 if any(p.via_public_ip for p in paths) else 0,
                         1 if any(p.via_endpoint for p in paths) else 0,

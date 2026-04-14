@@ -235,7 +235,7 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   pip install -r requirements.txt
   ```
   This installs `pycozo`, `jinja2`, `Flask`, and `PyYAML`. The virtual environment **must be located at `.venv`** in the repo root — `Scripts/run_cozo_repos.sh` will auto-activate it if it is not already active, and will print clear setup instructions if it cannot be found.
-- **Copilot CLI** — Required for the **Run AI** web UI feature (Phase 4-5 AI review):
+- **Copilot CLI** — Required for the **Run AI** / **Architecture AI** web UI features (Phase 4-5 AI review):
   - Install the standalone Copilot CLI: `npm install -g @githubnext/copilot-cli`
   - Verify: `copilot --version`
   - Alternatively, set the `COPILOT_COMMAND` environment variable to point to another Copilot CLI executable.
@@ -272,10 +272,10 @@ What the web UI does:
 - **Phase 1-3 (Scripts):** Scans repositories with OpenGrep rules, discovers context, generates baseline data
   - Stores findings, resources, and Mermaid diagrams in Cozo DB (`Output/Data/cozo.db`)
   - Creates placeholder TLDRs and severity scores from rules
-- **Phase 4-5 (AI Review via "Run AI" button):**
-  - Loads agent instructions from `Agents/` folder dynamically (DevSkeptic, PlatformSkeptic, SecurityAgent, ArchitectureAgent)
+- **Phase 4-5 (AI Review via "Run AI" and "Run AI (Architecture)" buttons):**
+  - Loads agent instructions from `Agents/` folder dynamically (DevSkeptic, PlatformSkeptic, SecurityAgent, ArchitectureValidationAgent)
   - **Reviews script baseline** rather than generating from scratch
-  - Enhances TLDRs, adjusts scores with reasoning, discovers missing assets, validates/corrects Mermaid diagrams
+  - Enhances TLDRs, adjusts scores with reasoning, discovers missing assets, validates/corrects Mermaid diagrams, and proposes code/rule fixes for architecture issues
   - Stores enhancements in DB: `repo_ai_content`, `skeptic_reviews`, updated `cloud_diagrams`
 - **Web UI Display:** Shows both script baseline and AI enhancements with comparison views
 - Presents a pre-populated dropdown from `Intake/ReposToScan.txt` to select a repository (server-side paths are resolved).

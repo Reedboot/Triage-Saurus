@@ -378,6 +378,83 @@ def build_context_extraction_prompt(
     return "\n".join(prompt_parts)
 
 
+def build_architecture_review_prompt(
+    agent_content: str,
+    baseline_data: dict,
+    repo_name: str,
+    experiment_id: str,
+) -> str:
+    """Build a focused prompt for architecture validation and diagram repair."""
+    resources = baseline_data.get("resources", [])
+    findings = baseline_data.get("findings", [])
+    diagrams = baseline_data.get("diagrams", [])
+
+    agent_excerpt = agent_content[:8000]
+    if len(agent_content) > 8000:
+        agent_excerpt += "\n\n[... remaining agent instructions truncated for prompt size ...]"
+
+    prompt_parts = [
+        "You are acting as the Architecture Validation Agent for a security triage portal.",
+        "Your job is to validate the generated architecture diagrams, identify missing or incorrect resources and relationships, and recommend concrete code or rule changes that would fix the source of truth.",
+        "Focus on architecture fidelity: hierarchy, grouping, Internet exposure, missing edges, and direct vs indirect access.",
+        "",
+        "# AGENT INSTRUCTIONS (excerpt — architecture and validation scope):",
+        agent_excerpt,
+        "",
+        "---",
+        "",
+        "# SCRIPT-EXTRACTED BASELINE:",
+        f"Repository: {repo_name}  |  Experiment: {experiment_id}",
+        "",
+        f"## Resources detected by scripts ({len(resources)} total — showing top 30):",
+    ]
+
+    for r in resources[:30]:
+        prompt_parts.append(
+            f"- {r.get('resource_type', 'unknown')}: {r.get('resource_name', 'unnamed')} "
+            f"[{r.get('provider', '?')}]"
+        )
+    if len(resources) > 30:
+        prompt_parts.append(f"  ... and {len(resources) - 30} more")
+
+    if diagrams:
+        prompt_parts.append(f"\n## Architecture diagrams ({len(diagrams)}):")
+        for d in diagrams[:3]:
+            prompt_parts.append(f"### {d.get('title', 'Diagram')}")
+            prompt_parts.append("```mermaid")
+            prompt_parts.append(d.get("mermaid_code", "") or d.get("code_snippet", "") or d.get("code", ""))
+            prompt_parts.append("```")
+
+    if findings:
+        prompt_parts.append(f"\n## Findings summary ({len(findings)} detected by OpenGrep):")
+        for f in findings[:10]:
+            prompt_parts.append(f"- [{f.get('severity_score', '?')}/10] {f.get('title', 'Untitled')}")
+        if len(findings) > 10:
+            prompt_parts.append(f"  ... and {len(findings) - 10} more")
+
+    prompt_parts.extend([
+        "",
+        "# YOUR TASK:",
+        "1. Validate hierarchy, connectivity, and Internet exposure in the diagrams.",
+        "2. Identify missing assets, missing edges, and incorrect parent-child relationships.",
+        "3. If the issue should be fixed in code or rules, call out the concrete file or rule and the change needed.",
+        "4. Return JSON only.",
+        "",
+        "```json",
+        "{",
+        '  "architecture_summary": "<2-3 sentence summary of the architecture and validation outcome>",',
+        '  "new_assets": [{"name": "<name>", "type": "<type>", "confidence": "high|medium|low", "how_discovered": "<why>"}],',
+        '  "diagram_corrections": [{"diagram_title": "<title>", "issue_type": "missing_asset|missing_connection|incorrect_hierarchy|incorrect_grouping|internet_exposure", "correction": "<what to change>", "original_snippet": "<original snippet>", "corrected_mermaid_code": "<full corrected diagram or null>"}],',
+        '  "learning_suggestions": [{"kind": "rule_change|code_change|diagram_fix", "target": "<file or rule>", "rationale": "<why>", "example_evidence": "<evidence>", "proposed_change": "<specific change>"}],',
+        '  "open_questions": [{"question": "<question>", "file": "<path>", "line": <line or null>, "asset": "<asset>"}],',
+        '  "fixed_information": ["<correction or clarification>"]',
+        "}",
+        "```",
+    ])
+
+    return "\n".join(prompt_parts)
+
+
 def build_focused_prompt(
     agent_name: str,
     agent_content: str,

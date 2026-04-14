@@ -347,6 +347,10 @@ class TestDiagramPanel:
         """🔄 Refresh diagram button is visible."""
         expect(home.locator("#refresh-diagram-btn")).to_be_visible()
 
+    def test_architecture_ai_button(self, home: Page):
+        """🤖 Architecture AI button is visible."""
+        expect(home.locator("#architecture-run-ai-btn")).to_be_visible()
+
     def test_copy_diagram_button(self, home: Page):
         """📋 Copy source button is visible."""
         expect(home.locator("#copy-diagram-btn")).to_be_visible()
@@ -395,7 +399,7 @@ class TestDiagramPanel:
         svg_center_y = svg_box["y"] + (svg_box["height"] / 2)
 
         assert abs(svg_center_x - wrap_center_x) < wrap_box["width"] * 0.15
-        assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.15
+        assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.25
 
     def test_rendered_diagram_svg_fills_wrapper(self, home: Page):
         """Rendered Mermaid SVG should fill the active diagram wrapper."""

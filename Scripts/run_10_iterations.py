@@ -21,15 +21,36 @@ DB_PATH = WORKSPACE_ROOT / "Output" / "Data" / "cozo.db"
 EXPERIMENTS_DIR = WORKSPACE_ROOT / "Output" / "Learning" / "experiments"
 ITERATIONS = 10
 
+
+def build_wsl_env():
+    """Ensure user-local binaries (like opengrep) are available in subprocess PATH."""
+    env = os.environ.copy()
+    home = env.get("HOME", "")
+    user_local_bin = os.path.join(home, ".local", "bin") if home else ""
+    path_parts = env.get("PATH", "").split(os.pathsep)
+    if user_local_bin and user_local_bin not in path_parts:
+        env["PATH"] = user_local_bin + os.pathsep + env.get("PATH", "")
+    return env
+
 def run_command(cmd, description=""):
     """Run command and return output"""
     if description:
         print(f"\n[*] {description}")
-    
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=build_wsl_env(),
+        cwd=WORKSPACE_ROOT,
+    )
     
     if result.returncode != 0:
-        print(f"[!] Command failed: {result.stderr[:200]}")
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        detail = stderr if stderr else stdout
+        print(f"[!] Command failed: {detail[:500]}")
         return None
     
     return result.stdout
@@ -39,16 +60,25 @@ def get_latest_experiment_id():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT experiment_id FROM experiments ORDER BY experiment_id DESC LIMIT 1")
+        cursor.execute("SELECT id FROM experiments ORDER BY CAST(id AS INTEGER) DESC LIMIT 1")
         result = cursor.fetchone()
         conn.close()
         return result[0] if result else None
-    except:
+    except Exception as exc:
+        print(f"[!] Failed to query latest experiment ID: {exc}")
         return None
 
 def run_pipeline(iteration):
     """Run full pipeline for iteration"""
-    cmd = f"cd {WORKSPACE_ROOT} && ./.venv/bin/python Scripts/Utils/run_pipeline.py --repo {REPO_PATH} --name iter_{iteration} --skip-phase2"
+    cmd = [
+        "./.venv/bin/python",
+        "Scripts/Utils/run_pipeline.py",
+        "--repo",
+        REPO_PATH,
+        "--name",
+        f"iter_{iteration}",
+        "--skip-phase2",
+    ]
     
     output = run_command(cmd, f"Pipeline: Iteration {iteration}")
     
@@ -65,7 +95,12 @@ def run_pipeline(iteration):
 
 def run_analyzer(experiment_id):
     """Run internet accessibility analyzer"""
-    cmd = f"cd {WORKSPACE_ROOT} && ./.venv/bin/python Scripts/Analyze/internet_accessibility_analyzer.py --experiment-id {experiment_id}"
+    cmd = [
+        "./.venv/bin/python",
+        "Scripts/Analyze/internet_accessibility_analyzer.py",
+        "--experiment-id",
+        str(experiment_id),
+    ]
     
     output = run_command(cmd, f"Analyzer: Experiment {experiment_id}")
     

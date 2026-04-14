@@ -10,6 +10,9 @@
   let resetBtn = null;
   let currentExperimentId = null;  // Track active experiment for section tabs
   let currentRepoName = null;  // Track current repo for API ops refetching
+  let architectureAiStream = null;
+  let architectureAiBtn = null;
+  let architectureAiStopInFlight = false;
 
   // API ops visibility mode state
   let apiOpsMode = 'auto'; // 'auto' | 'all' | 'hide'
@@ -59,6 +62,36 @@
     if (currentEventSource) {
       currentEventSource.close();
       currentEventSource = null;
+    }
+  }
+
+  function updateArchitectureAiButton(isRunning) {
+    if (!architectureAiBtn) return;
+    architectureAiBtn.disabled = !!isRunning;
+    architectureAiBtn.textContent = isRunning ? '⏳ Architecture AI…' : '🤖 Run AI (Architecture)';
+    architectureAiBtn.title = isRunning
+      ? 'Architecture AI is running'
+      : 'Run AI against the architecture diagram and suggest code/rule changes';
+  }
+
+  function closeArchitectureAiStream() {
+    if (architectureAiStream) {
+      try {
+        architectureAiStream.close();
+      } catch (err) {}
+      architectureAiStream = null;
+    }
+    architectureAiStopInFlight = false;
+    updateArchitectureAiButton(false);
+    if (window._triage && typeof window._triage.setToolbarStopState === 'function') {
+      window._triage.setToolbarStopState({
+        enabled: false,
+        visible: false,
+        label: '⏹ Stop AI Scan',
+      });
+    }
+    if (window._triage && typeof window._triage.setStatusBusy === 'function') {
+      window._triage.setStatusBusy(false);
     }
   }
 
@@ -444,6 +477,7 @@
 
   // Start a new scan (helper function)
   function startScan(repoPath) {
+    closeArchitectureAiStream();
     closeEventSource();
     clearLog();
 
@@ -592,6 +626,7 @@
 
   // Handle reset button
   function handleReset() {
+    closeArchitectureAiStream();
     closeEventSource();
     if (currentPollInterval) {
       clearInterval(currentPollInterval);
@@ -1063,7 +1098,7 @@
     btn.textContent = buttonText;
   }
 
-  function refetchDiagramsWithApiOpsMode() {
+  function refetchDiagramsWithApiOpsMode(quiet = false) {
     if (!currentExperimentId) {
       showToast('No experiment loaded');
       return;
@@ -1085,7 +1120,9 @@
         const diags = Array.isArray(data.diagrams) ? data.diagrams : [];
         if (diags.length > 0) {
           renderDiagrams(diags.map(d => ({ title: d.title || d.diagram_title, code: d.code || d.mermaid_code })));
-          showToast(`API ops: ${apiOpsMode}`);
+          if (!quiet) {
+            showToast(`API ops: ${apiOpsMode}`);
+          }
         } else {
           showToast('No diagrams available');
         }
@@ -1108,6 +1145,223 @@
 
     updateApiOpsButtonText();
     refetchDiagramsWithApiOpsMode();
+  }
+
+  function runArchitectureAiReview() {
+    const experimentId = currentExperimentId;
+    const repoName = currentRepoName || getCurrentRepoName();
+    if (!experimentId || !repoName) {
+      showToast('Load a completed scan first');
+      return;
+    }
+
+    if (!document.querySelector('#diagram-views svg')) {
+      showToast('Load a completed scan first');
+      return;
+    }
+
+    closeArchitectureAiStream();
+    architectureAiStopInFlight = false;
+    updateArchitectureAiButton(true);
+
+    if (window._triage && typeof window._triage.showLog === 'function') {
+      window._triage.showLog();
+    }
+    if (window._triage && typeof window._triage.setStatus === 'function') {
+      window._triage.setStatus('Running architecture AI…', 'info');
+    }
+    if (window._triage && typeof window._triage.setStatusBusy === 'function') {
+      window._triage.setStatusBusy(true);
+    }
+    if (window._triage && typeof window._triage.appendLog === 'function') {
+      window._triage.appendLog(`[Architecture] Starting analysis for ${repoName} (experiment ${experimentId})`);
+    }
+
+    if (window._triage && typeof window._triage.setToolbarStopState === 'function') {
+      window._triage.setToolbarStopState({
+        enabled: true,
+        visible: true,
+        label: '⏹ Stop Architecture AI',
+      });
+    }
+
+    if (window._triage && typeof window._triage.registerToolbarStop === 'function') {
+      window._triage.registerToolbarStop(async () => {
+        if (architectureAiStopInFlight) return;
+        architectureAiStopInFlight = true;
+
+        if (window._triage && typeof window._triage.setToolbarStopState === 'function') {
+          window._triage.setToolbarStopState({
+            enabled: false,
+            visible: true,
+            label: '⏳ Stopping Architecture AI…',
+          });
+        }
+
+        try {
+          const resp = await fetch(
+            `/api/analysis/stop/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`,
+            { method: 'POST' }
+          );
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            throw new Error(data.error || `HTTP ${resp.status}`);
+          }
+          if (window._triage && typeof window._triage.appendLog === 'function') {
+            window._triage.appendLog('[Architecture] Stop requested');
+          }
+          streamDone = true;
+          clearPolling();
+          closeArchitectureAiStream();
+          if (window._triage && typeof window._triage.setStatus === 'function') {
+            window._triage.setStatus('Stopped', 'warn');
+          }
+        } catch (err) {
+          architectureAiStopInFlight = false;
+          if (window._triage && typeof window._triage.setToolbarStopState === 'function') {
+            window._triage.setToolbarStopState({
+              enabled: true,
+              visible: true,
+              label: '⏹ Stop Architecture AI',
+            });
+          }
+          if (window._triage && typeof window._triage.setStatus === 'function') {
+            window._triage.setStatus('Stop failed', 'error');
+          }
+          if (window._triage && typeof window._triage.appendLog === 'function') {
+            window._triage.appendLog(`[Architecture] Stop failed: ${err.message}`);
+          }
+        }
+      });
+    }
+
+    const streamUrl = `/api/analysis/copilot/stream/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}?mode=architecture`;
+    if (window._triage && typeof window._triage.appendLog === 'function') {
+      window._triage.appendLog('[Architecture] Connecting stream...');
+    }
+
+    let streamDone = false;
+    let pollTimer = null;
+
+    const clearPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const finishSuccess = () => {
+      streamDone = true;
+      clearPolling();
+      closeArchitectureAiStream();
+      if (window._triage && typeof window._triage.setStatus === 'function') {
+        window._triage.setStatus('Completed', 'success');
+      }
+      if (window._triage && typeof window._triage.appendLog === 'function') {
+        window._triage.appendLog('[Architecture] Architecture review completed');
+      }
+      refetchDiagramsWithApiOpsMode(true);
+    };
+
+    const finishFailure = (detail) => {
+      streamDone = true;
+      clearPolling();
+      closeArchitectureAiStream();
+      if (window._triage && typeof window._triage.setStatus === 'function') {
+        window._triage.setStatus(detail || 'Architecture AI failed', 'error');
+      }
+      if (window._triage && typeof window._triage.appendLog === 'function' && detail) {
+        window._triage.appendLog(`[Architecture] ${detail}`);
+      }
+    };
+
+    const pollStatus = async () => {
+      try {
+        const resp = await fetch(`/api/analysis/status/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`);
+        const data = await resp.json().catch(() => ({}));
+        if (data.status === 'running') {
+          const label = (data.active_agent_label || data.active_agent || 'Architecture validation').toString();
+          if (window._triage && typeof window._triage.setStatus === 'function') {
+            window._triage.setStatus(`Running: ${label}…`, 'info');
+          }
+          if (window._triage && typeof window._triage.setStatusBusy === 'function') {
+            window._triage.setStatusBusy(true);
+          }
+          if (window._triage && typeof window._triage.setToolbarStopState === 'function') {
+            window._triage.setToolbarStopState({
+              enabled: true,
+              visible: true,
+              label: '⏹ Stop Architecture AI',
+            });
+          }
+          return;
+        }
+        if (data.status === 'completed') {
+          finishSuccess();
+          return;
+        }
+        if (data.status === 'failed' || data.status === 'stopped') {
+          finishFailure((data.error || (data.status === 'stopped' ? 'Stopped' : 'Failed')).toString());
+          return;
+        }
+      } catch (err) {
+        if (window._triage && typeof window._triage.setStatus === 'function') {
+          window._triage.setStatus('Architecture status check failed', 'warn');
+        }
+      }
+    };
+
+    architectureAiStream = new EventSource(streamUrl);
+
+    architectureAiStream.addEventListener('log', (evt) => {
+      try {
+        const line = JSON.parse(evt.data);
+        if (window._triage && typeof window._triage.appendLog === 'function') {
+          window._triage.appendLog(`[Architecture] ${line}`);
+        }
+      } catch (err) {}
+    });
+
+    architectureAiStream.addEventListener('done', () => {
+      finishSuccess();
+    });
+
+    architectureAiStream.addEventListener('error', async () => {
+      if (streamDone) {
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/analysis/status/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`);
+        const data = await resp.json().catch(() => ({}));
+        if (data.status === 'completed') {
+          finishSuccess();
+          return;
+        }
+        if (data.status === 'failed' || data.status === 'stopped') {
+          finishFailure((data.error || (data.status === 'stopped' ? 'Stopped' : 'Failed')).toString());
+          return;
+        }
+      } catch (err) {}
+
+      if (architectureAiStream) {
+        try {
+          architectureAiStream.close();
+        } catch (closeErr) {}
+        architectureAiStream = null;
+      }
+      clearPolling();
+      pollTimer = setInterval(pollStatus, 2000);
+      if (window._triage && typeof window._triage.setStatus === 'function') {
+        window._triage.setStatus('Streaming disconnected (polling...)', 'warn');
+      }
+      if (window._triage && typeof window._triage.setStatusBusy === 'function') {
+        window._triage.setStatusBusy(true);
+      }
+    });
+
+    clearPolling();
+    pollTimer = setInterval(pollStatus, 2000);
   }
 
   function exportDiagramSvg() {
@@ -1420,7 +1674,9 @@
     scanBtn = document.getElementById('scan-btn');
     resetBtn = document.getElementById('reset-btn');
     logAutoScrollBtn = document.getElementById('toggle-log-autoscroll-btn');
+    architectureAiBtn = document.getElementById('architecture-run-ai-btn');
     updateLogAutoScrollButton();
+    updateArchitectureAiButton(false);
 
     const scanForm = document.getElementById('scan-form');
 
@@ -1518,6 +1774,11 @@
       refreshDiagramBtn.addEventListener('click', refreshDiagram);
     }
 
+    const architectureAiBtnEl = document.getElementById('architecture-run-ai-btn');
+    if (architectureAiBtnEl) {
+      architectureAiBtnEl.addEventListener('click', runArchitectureAiReview);
+    }
+
     // Handle diagram copy source button
     const copyDiagramBtn = document.getElementById('copy-diagram-btn');
     if (copyDiagramBtn) {
@@ -1572,6 +1833,7 @@
       repoSelect.addEventListener('change', function() {
         if (this.value) {
           // Reset log output
+          closeArchitectureAiStream();
           closeEventSource();
           if (currentPollInterval) {
             clearInterval(currentPollInterval);
