@@ -7,7 +7,7 @@
   let spinner = null;
   let logOutput = null;
   let scanBtn = null;
-  let resetBtn = null;
+ 
   let currentExperimentId = null;  // Track active experiment for section tabs
   let currentRepoName = null;  // Track current repo for API ops refetching
   let architectureAiStream = null;
@@ -32,8 +32,11 @@
 
   // Pan interaction state
   let isPanning = false;
+  let activePanPointerId = null;
   let panStartX = 0;
   let panStartY = 0;
+  let panOriginX = 0;
+  let panOriginY = 0;
   let currentDiagramIndex = 0;
 
   // Track whether live scan output should stay pinned to the bottom.
@@ -100,6 +103,7 @@
     const zoomInner = document.getElementById('diagram-zoom-inner');
     if (zoomInner) {
       requestAnimationFrame(() => {
+        zoomInner.style.transition = isPanning ? 'none' : '';
         zoomInner.style.transform = `scale(${zoomState.scale}) translate(${zoomState.panX}px, ${zoomState.panY}px)`;
         zoomInner.style.transformOrigin = 'top left';
       });
@@ -270,38 +274,97 @@
       if (svg.__panZoomInitialized) return;
       svg.__panZoomInitialized = true;
 
-      // Enable dragging for pan
-      svg.addEventListener('mousedown', (e) => {
+      // Enable dragging for pan with pointer capture where available, and keep a
+      // mouse fallback for browsers/tests that do not emit pointer events here.
+      let panInputType = null;
+      const onMouseWindowMove = (e) => updatePan('mouse', e.clientX, e.clientY);
+      const onMouseWindowUp = () => finishPan('mouse');
+
+      const beginPan = (inputType, clientX, clientY, pointerId = null) => {
+        if (isPanning) return;
         isPanning = true;
-        panStartX = e.clientX - zoomState.panX;
-        panStartY = e.clientY - zoomState.panY;
+        panInputType = inputType;
+        activePanPointerId = pointerId;
+        panStartX = clientX;
+        panStartY = clientY;
+        panOriginX = zoomState.panX;
+        panOriginY = zoomState.panY;
         svg.style.cursor = 'grabbing';
+        if (inputType === 'mouse') {
+          window.addEventListener('mousemove', onMouseWindowMove);
+          window.addEventListener('mouseup', onMouseWindowUp);
+        }
+      };
+
+      const updatePan = (inputType, clientX, clientY, pointerId = null) => {
+        if (!isPanning || panInputType !== inputType) return;
+        if (inputType === 'pointer' && activePanPointerId !== pointerId) return;
+        const scale = zoomState.scale || 1;
+        zoomState.panX = panOriginX + ((clientX - panStartX) / scale);
+        zoomState.panY = panOriginY + ((clientY - panStartY) / scale);
+        applyTransform();
+      };
+
+      const finishPan = (inputType, pointerId = null) => {
+        if (!isPanning || panInputType !== inputType) return;
+        if (inputType === 'pointer' && activePanPointerId !== null && pointerId !== activePanPointerId) return;
+        if (inputType === 'pointer' && svg.releasePointerCapture && activePanPointerId !== null) {
+          try {
+            if (svg.hasPointerCapture && svg.hasPointerCapture(activePanPointerId)) {
+              svg.releasePointerCapture(activePanPointerId);
+            }
+          } catch (err) {}
+        }
+        isPanning = false;
+        panInputType = null;
+        activePanPointerId = null;
+        if (inputType === 'mouse') {
+          window.removeEventListener('mousemove', onMouseWindowMove);
+          window.removeEventListener('mouseup', onMouseWindowUp);
+        }
+        svg.style.cursor = 'grab';
+        saveDiagramState(currentDiagramIndex);
+        applyTransform();
+      };
+
+      svg.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        beginPan('pointer', e.clientX, e.clientY, e.pointerId);
+        if (svg.setPointerCapture) {
+          try {
+            svg.setPointerCapture(e.pointerId);
+          } catch (err) {}
+        }
+        e.preventDefault();
+      });
+
+      svg.addEventListener('pointermove', (e) => {
+        updatePan('pointer', e.clientX, e.clientY, e.pointerId);
+      });
+
+      svg.addEventListener('pointerup', (e) => finishPan('pointer', e.pointerId));
+      svg.addEventListener('pointercancel', (e) => finishPan('pointer', e.pointerId));
+      svg.addEventListener('lostpointercapture', (e) => finishPan('pointer', e.pointerId));
+
+      svg.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        beginPan('mouse', e.clientX, e.clientY);
+        e.preventDefault();
       });
 
       svg.addEventListener('mousemove', (e) => {
-        if (!isPanning) return;
-        zoomState.panX = e.clientX - panStartX;
-        zoomState.panY = e.clientY - panStartY;
-        applyTransform();
+        updatePan('mouse', e.clientX, e.clientY);
       });
 
-      svg.addEventListener('mouseup', () => {
-        isPanning = false;
-        svg.style.cursor = 'grab';
-        saveDiagramState(currentDiagramIndex);
-      });
-
-      svg.addEventListener('mouseleave', () => {
-        isPanning = false;
-        svg.style.cursor = 'grab';
-        saveDiagramState(currentDiagramIndex);
-      });
+      svg.addEventListener('mouseup', () => finishPan('mouse'));
+      svg.addEventListener('mouseleave', () => finishPan('mouse'));
 
       // Mouse wheel zoom
       svg.addEventListener('wheel', (e) => {
         e.preventDefault();
         const delta = e.deltaY > 0 ? 0.909 : 1.1;
-        const newScale = zoomState.scale * delta;
+        const currentScale = zoomState.scale || 1;
+        const newScale = currentScale * delta;
         
         if (newScale >= zoomState.minScale && newScale <= zoomState.maxScale) {
           // Calculate zoom center point
@@ -310,8 +373,8 @@
           const y = e.clientY - rect.top;
           
           // Adjust pan to zoom towards cursor
-          zoomState.panX -= x * (delta - 1);
-          zoomState.panY -= y * (delta - 1);
+          zoomState.panX += (x * (1 - delta)) / (currentScale * delta);
+          zoomState.panY += (y * (1 - delta)) / (currentScale * delta);
           zoomState.scale = newScale;
           applyTransform();
           saveDiagramState(currentDiagramIndex);
@@ -1006,10 +1069,14 @@
 
       // Store zoom/pan state if it exists
       const zoomWrap = document.getElementById('diagram-zoom-wrap');
-      const zoomState = zoomWrap ? {
+      const savedZoomState = {
+        scale: zoomState.scale,
+        panX: zoomState.panX,
+        panY: zoomState.panY
+      };
+      const savedScrollState = zoomWrap ? {
         scrollLeft: zoomWrap.scrollLeft,
-        scrollTop: zoomWrap.scrollTop,
-        scale: parseFloat(document.getElementById('diagram-zoom-inner')?.style.transform?.match(/scale\(([^)]+)\)/)?.[1] || 1)
+        scrollTop: zoomWrap.scrollTop
       } : null;
 
       // Clear rendered diagram by removing SVG
@@ -1023,14 +1090,15 @@
         window.mermaid.init(undefined, preEl);
         
         // Restore zoom/pan state
-        if (zoomState && zoomWrap) {
+        if (savedScrollState && zoomWrap) {
           setTimeout(() => {
-            zoomWrap.scrollLeft = zoomState.scrollLeft;
-            zoomWrap.scrollTop = zoomState.scrollTop;
-            const zoomInner = document.getElementById('diagram-zoom-inner');
-            if (zoomInner && zoomState.scale !== 1) {
-              zoomInner.style.transform = `scale(${zoomState.scale})`;
-            }
+            zoomWrap.scrollLeft = savedScrollState.scrollLeft;
+            zoomWrap.scrollTop = savedScrollState.scrollTop;
+            zoomState.scale = savedZoomState.scale;
+            zoomState.panX = savedZoomState.panX;
+            zoomState.panY = savedZoomState.panY;
+            initPanZoom();
+            applyTransform();
           }, 100);
         }
         
@@ -1672,7 +1740,7 @@
     spinner = document.getElementById('spinner');
     logOutput = document.getElementById('log-output');
     scanBtn = document.getElementById('scan-btn');
-    resetBtn = document.getElementById('reset-btn');
+
     logAutoScrollBtn = document.getElementById('toggle-log-autoscroll-btn');
     architectureAiBtn = document.getElementById('architecture-run-ai-btn');
     updateLogAutoScrollButton();
@@ -1682,10 +1750,6 @@
 
     if (scanForm) {
       scanForm.addEventListener('submit', handleScanSubmit);
-    }
-
-    if (resetBtn) {
-      resetBtn.addEventListener('click', handleReset);
     }
 
     if (logAutoScrollBtn) {
@@ -1728,9 +1792,13 @@
     if (toggleLogBtn) {
       toggleLogBtn.addEventListener('click', function() {
         const logPanel = document.getElementById('log-panel');
+        const workspace = document.querySelector('.workspace');
         if (!logPanel) return;
         const isHidden = logPanel.style.display === 'none';
         logPanel.style.display = isHidden ? '' : 'none';
+        if (workspace) {
+          workspace.classList.toggle('collapsed', !isHidden);
+        }
         toggleLogBtn.textContent = isHidden ? '📜 Hide scan' : '📜 Show scan';
         toggleLogBtn.title = isHidden ? 'Hide scan output' : 'Show scan output';
       });

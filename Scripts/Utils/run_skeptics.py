@@ -139,6 +139,7 @@ def main():
     for row in findings:
         fid = row["id"]
         adjusted_scores = []
+        reviewer_scores = {}
 
         for reviewer in reviewers:
             # Skip if review already exists

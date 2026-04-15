@@ -1619,6 +1619,7 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   padding: 8px 12px; /* mirror log-panel padding */
   background: var(--bg-base);
   cursor: grab;
+  touch-action: none;
   min-width: 0; /* ensure it can shrink/fill inside split layout */
   width: 100%;
   display: flex;

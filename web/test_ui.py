@@ -133,9 +133,6 @@ class TestScanForm:
         expect(btn).to_be_visible()
         expect(btn).to_be_enabled()
 
-    def test_reset_button(self, home: Page):
-        """↺ New Scan button is visible."""
-        expect(home.locator("#reset-btn")).to_be_visible()
 
     def test_hide_diagram_button(self, home: Page):
         """Hide/show diagram toggle button is visible."""
@@ -443,6 +440,86 @@ class TestDiagramPanel:
         assert sizes["viewWidth"] - sizes["mermaidWidth"] < 24
         assert sizes["viewHeight"] - sizes["mermaidHeight"] < 24
 
+    def test_high_zoom_pan_moves_by_drag_distance(self, home: Page):
+        """Dragging at high zoom should move the diagram by the cursor distance."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Pan test',
+                code: 'flowchart LR; A[Start] --> B[Step 1] --> C[Step 2] --> D[Step 3] --> E[Step 4] --> F[Step 5] --> G[Step 6] --> H[End]'
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+        home.wait_for_timeout(1000)
+
+        zoom_btn = home.locator("#zoom-in-btn")
+
+        def current_scale() -> float:
+            return home.evaluate(
+                """
+                () => {
+                  const transform = document.getElementById('diagram-zoom-inner')?.style.transform || '';
+                  const match = transform.match(/scale\\(([^)]+)\\)/);
+                  return match ? parseFloat(match[1]) : 1;
+                }
+                """
+            )
+
+        for _ in range(25):
+            if current_scale() >= 3.0:
+                break
+            zoom_btn.click()
+            home.wait_for_timeout(50)
+
+        assert current_scale() >= 3.0, "Expected the diagram to reach 300%+ zoom"
+
+        svg = home.locator("#diagram-views svg")
+        before = svg.bounding_box()
+        assert before, "Expected SVG to have a layout box"
+
+        home.evaluate(
+            """
+            () => {
+              const svg = document.querySelector('#diagram-views svg');
+              const rect = svg.getBoundingClientRect();
+              const startX = rect.left + 20;
+              const startY = rect.top + 20;
+              svg.dispatchEvent(new MouseEvent('mousedown', {
+                bubbles: true,
+                cancelable: true,
+                clientX: startX,
+                clientY: startY,
+                button: 0,
+              }));
+              svg.dispatchEvent(new MouseEvent('mousemove', {
+                bubbles: true,
+                cancelable: true,
+                clientX: startX + 20,
+                clientY: startY,
+                buttons: 1,
+              }));
+              svg.dispatchEvent(new MouseEvent('mouseup', {
+                bubbles: true,
+                cancelable: true,
+                clientX: startX + 20,
+                clientY: startY,
+                button: 0,
+              }));
+            }
+            """
+        )
+        home.wait_for_timeout(250)
+
+        after = svg.bounding_box()
+        assert after, "Expected diagram SVG to still have a layout box after dragging"
+
+        moved_x = after["x"] - before["x"]
+        assert 12 <= moved_x <= 30, f"Unexpected drag movement at high zoom: {moved_x}px"
+
 
 # ---------------------------------------------------------------------------
 # Tests — API smoke tests (no browser needed, plain HTTP)
@@ -492,18 +569,29 @@ class TestInteractions:
         )
 
     def test_hide_log_toggle(self, home: Page):
-        """Clicking the 'Hide scan' button hides the log panel."""
+        """Clicking the 'Hide scan' button hides the log panel and expands the diagram."""
         btn = home.locator("#toggle-log-btn")
         log_panel = home.locator("#log-panel")
+        workspace = home.locator(".workspace")
+        diagram_panel = home.locator("#diagram-panel")
         expect(log_panel).to_be_visible()
         btn.click()
-        # Log panel should now be hidden (or have a collapsed class)
-        # Allow either display:none or a hidden/collapsed CSS class
-        is_hidden = not log_panel.is_visible()
-        classes = log_panel.get_attribute("class") or ""
-        assert is_hidden or "hidden" in classes or "collapsed" in classes, (
-            "Log panel did not hide after clicking the toggle button"
-        )
+        home.wait_for_timeout(150)
+        assert not log_panel.is_visible(), "Log panel did not hide after clicking the toggle button"
+
+        workspace_classes = workspace.get_attribute("class") or ""
+        assert "collapsed" in workspace_classes, "Workspace did not switch to the collapsed layout"
+
+        ws_box = workspace.bounding_box()
+        diagram_box = diagram_panel.bounding_box()
+        assert ws_box and diagram_box, "Expected workspace and diagram panel layout boxes"
+        assert abs(diagram_box["x"] - ws_box["x"]) < 4
+        assert diagram_box["width"] >= ws_box["width"] - 12
+
+        btn.click()
+        home.wait_for_timeout(150)
+        assert log_panel.is_visible(), "Log panel did not reappear after toggling back"
+        assert "collapsed" not in (workspace.get_attribute("class") or "")
 
     def test_run_compare_without_selection_shows_alert(self, home: Page):
         """Clicking Run Compare without choosing scans triggers a browser alert."""
