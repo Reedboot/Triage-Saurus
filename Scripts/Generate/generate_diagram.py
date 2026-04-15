@@ -699,6 +699,24 @@ def generate_architecture_diagram(
             resources.append(promoted_r)
             current_ids.add(promoted_r['id'])
 
+    # Filter parent_children to only include child relationships where both parent and child
+    # are in the filtered resource set. This prevents rendering of excluded resources (e.g., null_resource)
+    # that are children of included parents.
+    filtered_resource_ids = {r['id'] for r in resources}
+    parent_children_filtered = {}
+    for parent_id, children_list in parent_children.items():
+        if parent_id in filtered_resource_ids:
+            filtered_children = [
+                h for h in children_list
+                if h['child_id'] in filtered_resource_ids
+            ]
+            if filtered_children:
+                parent_children_filtered[parent_id] = filtered_children
+    parent_children = parent_children_filtered
+    
+    # Update child_ids to match the filtered parent_children
+    child_ids = {h['child_id'] for h_list in parent_children.values() for h in h_list}
+    
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
 
