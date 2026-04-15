@@ -3255,7 +3255,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     cmd_t = [*copilot_cmd_t, "--no-color", *prompt_args_t]
                     t0_t = time.time()
                     proc_t = subprocess.run(
-                        cmd_t, capture_output=True, text=True, timeout=120
+                        cmd_t, capture_output=True, text=True, timeout=600
                     )
                     elapsed_t = round(time.time() - t0_t, 1)
                     raw_t = (proc_t.stdout or "").strip()
@@ -3373,7 +3373,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     prompt_args_ci, _ = _prepare_copilot_prompt(img_prompt, str(tmp_dir_ci))
                     cmd_ci = [*copilot_cmd_ci, "--no-color", *prompt_args_ci]
                     t0_ci = time.time()
-                    proc_ci = subprocess.run(cmd_ci, capture_output=True, text=True, timeout=120)
+                    proc_ci = subprocess.run(cmd_ci, capture_output=True, text=True, timeout=600)
                     elapsed_ci = round(time.time() - t0_ci, 1)
                     raw_ci = (proc_ci.stdout or "").strip()
 

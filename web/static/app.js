@@ -362,7 +362,7 @@
       // Mouse wheel zoom
       svg.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.909 : 1.1;
+        const delta = e.deltaY > 0 ? 0.985 : 1.015;
         const currentScale = zoomState.scale || 1;
         const newScale = currentScale * delta;
         

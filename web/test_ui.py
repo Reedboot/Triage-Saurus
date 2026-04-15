@@ -520,6 +520,61 @@ class TestDiagramPanel:
         moved_x = after["x"] - before["x"]
         assert 12 <= moved_x <= 30, f"Unexpected drag movement at high zoom: {moved_x}px"
 
+    def test_wheel_zoom_is_gentle(self, home: Page):
+        """Mouse wheel zoom should change scale more gradually than the buttons."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Wheel zoom test',
+                code: 'flowchart LR; A[Start] --> B[End]'
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+        home.wait_for_timeout(500)
+
+        scale_before = home.evaluate(
+            """
+            () => {
+              const transform = document.getElementById('diagram-zoom-inner')?.style.transform || '';
+              const match = transform.match(/scale\\(([^)]+)\\)/);
+              return match ? parseFloat(match[1]) : 1;
+            }
+            """
+        )
+
+        home.evaluate(
+            """
+            () => {
+              const svg = document.querySelector('#diagram-views svg');
+              svg.dispatchEvent(new WheelEvent('wheel', {
+                bubbles: true,
+                cancelable: true,
+                deltaY: -100,
+              }));
+            }
+            """
+        )
+        home.wait_for_timeout(250)
+
+        scale_after = home.evaluate(
+            """
+            () => {
+              const transform = document.getElementById('diagram-zoom-inner')?.style.transform || '';
+              const match = transform.match(/scale\\(([^)]+)\\)/);
+              return match ? parseFloat(match[1]) : 1;
+            }
+            """
+        )
+
+        assert scale_after > scale_before
+        assert (scale_after / scale_before) < 1.03, (
+            f"Wheel zoom is still too aggressive: {scale_before} -> {scale_after}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests — API smoke tests (no browser needed, plain HTTP)
