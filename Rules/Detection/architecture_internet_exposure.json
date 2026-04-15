@@ -1,0 +1,65 @@
+{
+  "id": "arch_missing_internet_exposure",
+  "title": "Public Resources Without Explicit Internet Ingress in Architecture Diagram",
+  "description": "Architecture diagram contains resources with public IPs, public access policies, or internet-facing indicators, but lacks explicit Internet node or ingress connections. This hides the public attack surface from security reviewers.",
+  "severity": "CRITICAL",
+  "category": "architecture",
+  "cwe": "CWE-200",
+  "detection_method": "resource_analysis",
+  "check_type": "python",
+  "implementation": {
+    "description": "Detect resources with public access indicators that aren't connected to Internet node in diagram",
+    "logic_steps": [
+      "1. Query resources with public IP addresses",
+      "2. Query resources with public_network_access_enabled = true",
+      "3. Query load balancers with internal = false",
+      "4. Check if Internet node exists in diagram",
+      "5. Verify all public resources have Internet → Resource connections"
+    ],
+    "indicators": {
+      "azure": [
+        "azurerm_public_ip (attached to resource)",
+        "azurerm_application_gateway (default is public)",
+        "azurerm_api_management with virtual_network_type != 'Internal'",
+        "azurerm_app_service without VNet integration",
+        "azurerm_storage_account with public_network_access_enabled = true",
+        "azurerm_kubernetes_cluster with LoadBalancer service (default public)"
+      ],
+      "aws": [
+        "aws_instance with associated public IP",
+        "aws_lb with internal = false",
+        "aws_api_gateway_rest_api (default public)",
+        "aws_s3_bucket with public bucket policy",
+        "aws_rds_instance with publicly_accessible = true"
+      ],
+      "gcp": [
+        "google_compute_address (external)",
+        "google_compute_instance with external IP",
+        "google_cloud_run_service (default public)",
+        "google_storage_bucket with public IAM bindings"
+      ]
+    }
+  },
+  "remediation": [
+    "Add Internet node to architecture diagram when public resources exist",
+    "Create explicit connections: Internet → PublicResource with red styling",
+    "Use InternetExposureDetector (Scripts/Generate/internet_exposure_detector.py) to identify public resources",
+    "Add security warning annotation: 'Public Attack Surface' on public resource edges",
+    "In generate_hierarchical_diagram.py render_connections(), ensure Internet → Public edges are always created"
+  ],
+  "references": [
+    "ArchitectureValidationAgent.md - Internet Ingress Detection (CRITICAL for Security)",
+    "Scripts/Generate/internet_exposure_detector.py",
+    "Scripts/Generate/generate_hierarchical_diagram.py - render_connections() lines 2095-2116"
+  ],
+  "tags": ["diagram", "security", "internet-exposure", "ingress"],
+  "examples": {
+    "bad": "diagram shows App Service, Function App, SQL Server but no Internet node; reviewers can't see public surface",
+    "good": "diagram shows: Internet → App Service → SQL; red edges indicate public access; clear attack surface"
+  },
+  "automation": {
+    "auto_fix": true,
+    "recommended_script": "Scripts/Generate/generate_hierarchical_diagram.py render_connections()",
+    "validation_rule": "Ensure has_internet = True when exposed_resources is non-empty"
+  }
+}

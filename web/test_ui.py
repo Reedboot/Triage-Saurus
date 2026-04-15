@@ -571,9 +571,31 @@ class TestDiagramPanel:
         )
 
         assert scale_after > scale_before
-        assert (scale_after / scale_before) < 1.03, (
+        assert (scale_after / scale_before) < 1.02, (
             f"Wheel zoom is still too aggressive: {scale_before} -> {scale_after}"
         )
+
+    def test_log_lines_get_source_classes(self, home: Page):
+        """Scan log prefixes should map to distinct styling classes."""
+        home.wait_for_function("window._triage && typeof window._triage.appendLog === 'function'")
+        home.evaluate(
+            """
+            () => {
+              const el = document.getElementById('log-output');
+              el.innerHTML = '';
+              window._triage.appendLog('[Web] Reconnecting to running experiment 001...');
+              window._triage.appendLog('PHASE 1 — Detection (asset discovery)');
+              window._triage.appendLog('────────────────────────────────────────');
+            }
+            """
+        )
+
+        classes = home.locator('#log-output > div').evaluate_all(
+            "(els) => els.map(el => el.className)"
+        )
+        assert any('line-web' in c for c in classes), classes
+        assert any('phase-1' in c for c in classes), classes
+        assert any('line-sep' in c for c in classes), classes
 
 
 # ---------------------------------------------------------------------------

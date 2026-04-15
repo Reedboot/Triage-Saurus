@@ -233,6 +233,12 @@ class HierarchicalDiagramBuilder:
         
         # Detect internet-exposed resources
         self._detect_internet_exposure()
+        
+        # Detect external resource references (APIM, Key Vault, etc.)
+        self._detect_external_resource_references()
+        
+        # Infer data flow connections from metadata
+        self._infer_data_connections()
     
     def _detect_internet_exposure(self) -> None:
         """Detect internet-exposed resources using multiple detection methods."""
@@ -1415,7 +1421,10 @@ class HierarchicalDiagramBuilder:
         return lines
     
     def render_compute_hierarchy(self, compute_resources: List[dict]) -> List[str]:
-        """Render VM/compute resources with their network interfaces nested as subgraphs."""
+        """Render VM/compute resources with their network interfaces nested as subgraphs.
+        
+        Detects and prevents circular parent-child relationships and deduplicates nodes.
+        """
         if not compute_resources:
             return []
         
@@ -1423,23 +1432,43 @@ class HierarchicalDiagramBuilder:
         
         for vm in compute_resources:
             vm_name = vm['resource_name']
+            
+            # Skip if already emitted (deduplication)
+            if vm_name in self.emitted_nodes:
+                continue
+            
             vm_id = sanitize_id(vm_name)
             
             # Get child resources (NICs, disks, etc.)
             children = self.children_by_parent.get(vm['id'], [])
             
-            if children:
+            # Filter out circular references: if child has parent pointing back to vm, skip it
+            non_circular_children = []
+            for child in children:
+                child_parent_id = child.get('parent_resource_id')
+                if child_parent_id == vm['id']:
+                    # Check if this child also has vm as a child (circular)
+                    child_children = self.children_by_parent.get(child['id'], [])
+                    has_circular_ref = any(cc['id'] == vm['id'] for cc in child_children)
+                    if has_circular_ref:
+                        # Circular reference detected; skip this child in nesting
+                        continue
+                non_circular_children.append(child)
+            
+            if non_circular_children:
                 # Render VM as subgraph with children
                 lines.append(f"  subgraph {vm_id}[\"{vm_name}\"]")
                 self._emitted_mermaid_ids.add(vm_id)
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
-                for child in children:
-                    lines.append(self.render_node(child, indent="    "))
-                    self.emitted_nodes.add(child['resource_name'])
+                for child in non_circular_children:
+                    # Deduplicate: skip if child already emitted
+                    if child['resource_name'] not in self.emitted_nodes:
+                        lines.append(self.render_node(child, indent="    "))
+                        self.emitted_nodes.add(child['resource_name'])
                 lines.append("  end")
             else:
-                # No children, render as regular node
+                # No non-circular children, render as regular node
                 lines.append(self.render_node(vm))
             
             self.emitted_nodes.add(vm_name)
@@ -1447,7 +1476,10 @@ class HierarchicalDiagramBuilder:
         return lines
 
     def render_application_hierarchy(self, app_resources: List[dict]) -> List[str]:
-        """Render application-tier resources with their direct children nested."""
+        """Render application-tier resources with their direct children nested.
+        
+        Detects and prevents circular parent-child relationships and deduplicates nodes.
+        """
         if not app_resources:
             return []
 
@@ -1456,17 +1488,37 @@ class HierarchicalDiagramBuilder:
 
         for app in app_resources:
             app_name = app['resource_name']
+            
+            # Skip if already emitted (deduplication)
+            if app_name in self.emitted_nodes:
+                continue
+            
             app_id = sanitize_id(app_name)
             children = self.children_by_parent.get(app['id'], [])
 
-            if children:
+            # Filter out circular references: if child has parent pointing back to app, skip it
+            non_circular_children = []
+            for child in children:
+                child_parent_id = child.get('parent_resource_id')
+                if child_parent_id == app['id']:
+                    # Check if this child also has app as a child (circular)
+                    child_children = self.children_by_parent.get(child['id'], [])
+                    has_circular_ref = any(cc['id'] == app['id'] for cc in child_children)
+                    if has_circular_ref:
+                        # Circular reference detected; skip this child in nesting
+                        continue
+                non_circular_children.append(child)
+
+            if non_circular_children:
                 lines.append(f'    subgraph {app_id}["{app_name}"]')
                 self._emitted_mermaid_ids.add(app_id)
                 if app_id not in self._node_id_first_owner:
                     self._node_id_first_owner[app_id] = str(app.get('id', ''))
-                for child in children:
-                    lines.append(self.render_node(child, indent="      "))
-                    self.emitted_nodes.add(child['resource_name'])
+                for child in non_circular_children:
+                    # Deduplicate: skip if child already emitted
+                    if child['resource_name'] not in self.emitted_nodes:
+                        lines.append(self.render_node(child, indent="      "))
+                        self.emitted_nodes.add(child['resource_name'])
                 lines.append('    end')
             else:
                 lines.append(self.render_node(app, indent="    "))
@@ -2339,6 +2391,237 @@ class HierarchicalDiagramBuilder:
         
         return has_internet
     
+    def _detect_external_resource_references(self) -> None:
+        """Scan resources for variable references to external services and create placeholder nodes.
+        
+        Example: azurerm_api_management_api with api_management_name = var.shared_apim_name
+                 Creates a placeholder: external_apim_shared
+        """
+        external_resources = []
+        external_id_counter = 10000  # Use high IDs to avoid conflicts
+        
+        for resource in self.resources:
+            properties = resource.get('properties', {})
+            if not properties or not isinstance(properties, dict):
+                continue
+            
+            resource_type = (resource.get('resource_type') or '').lower()
+            
+            # Pattern 1: APIM API without parent APIM instance
+            if 'api_management_api' in resource_type:
+                apim_name_key = None
+                # Check common property names for APIM parent reference
+                for key in ['api_management_name', 'api_management_id', 'service_name']:
+                    if key in properties:
+                        apim_name_key = key
+                        break
+                
+                if apim_name_key:
+                    value = properties[apim_name_key]
+                    if isinstance(value, str) and (value.startswith('var.') or value.startswith('${var.')):
+                        # Extract variable name
+                        var_name = value.replace('var.', '').replace('${var.', '').replace('}', '').split('}')[0]
+                        external_id = f"ext_apim_{var_name}"
+                        if external_id not in [r['resource_name'] for r in external_resources]:
+                            external_resources.append({
+                                'id': external_id_counter,
+                                'resource_name': external_id,
+                                'resource_type': 'azurerm_api_management',
+                                'provider': 'azure',
+                                '_external': True,
+                                '_label': f'🌐 APIM: {var_name}',
+                                'properties': {}
+                            })
+                            external_id_counter += 1
+                            # Add connection from API to APIM
+                            self.connections.append({
+                                'source': resource['resource_name'],
+                                'target': external_id,
+                                'connection_type': 'parent_of',
+                                'confirmed': False,
+                                'notes': f'External parent: {apim_name_key}={value}'
+                            })
+            
+            # Pattern 2: Any resource with key_vault_id or vault_id reference
+            for key in ['key_vault_id', 'vault_id', 'key_vault_reference']:
+                if key in properties:
+                    value = properties[key]
+                    if isinstance(value, str) and (value.startswith('var.') or value.startswith('${var.')):
+                        var_name = value.replace('var.', '').replace('${var.', '').replace('}', '').split('}')[0]
+                        external_id = f"ext_keyvault_{var_name}"
+                        if external_id not in [r['resource_name'] for r in external_resources]:
+                            external_resources.append({
+                                'id': external_id_counter,
+                                'resource_name': external_id,
+                                'resource_type': 'azurerm_key_vault',
+                                'provider': 'azure',
+                                '_external': True,
+                                '_label': f'🔐 Key Vault: {var_name}',
+                                'properties': {}
+                            })
+                            external_id_counter += 1
+                            # Add connection
+                            self.connections.append({
+                                'source': resource['resource_name'],
+                                'target': external_id,
+                                'connection_type': 'depends_on',
+                                'confirmed': False,
+                                'notes': f'External dependency: {key}={value}'
+                            })
+        
+        # Add all external resources to resource list
+        self.resources.extend(external_resources)
+        for ext_res in external_resources:
+            self.resource_by_name[ext_res['resource_name']] = ext_res
+    
+    def _infer_data_connections(self) -> None:
+        """Infer data flow connections from connection strings and resource metadata.
+        
+        Extracts patterns like:
+        - connection_string -> Database target
+        - endpoint -> External service
+        - service_url -> Backend service
+        """
+        for resource in self.resources:
+            properties = resource.get('properties', {})
+            if not properties or not isinstance(properties, dict):
+                continue
+            
+            resource_name = resource['resource_name']
+            
+            # Pattern 1: Connection strings pointing to databases
+            connection_keys = ['connection_string', 'connectionstring', 'conn_string', 
+                              'primary_connection_string', 'secondary_connection_string',
+                              'database_url', 'db_connection_string']
+            
+            for key in connection_keys:
+                if key in properties:
+                    value = properties[key]
+                    if not isinstance(value, str):
+                        continue
+                    
+                    # Try to extract database name or server name
+                    # Common patterns: "Server=server.database.windows.net;Database=dbname"
+                    # or "mongodb+srv://user:pass@cluster.mongodb.net/dbname"
+                    
+                    # Extract database name
+                    import re
+                    db_match = re.search(r'[Dd]atabase=([^;,\s]+)', value)
+                    if db_match:
+                        db_name = db_match.group(1)
+                        # Try to find a database resource with this name
+                        for target_res in self.resources:
+                            if target_res['resource_name'].lower() == db_name.lower() or \
+                               db_name.lower() in target_res['resource_name'].lower():
+                                # Found matching database
+                                pair_key = (resource_name, target_res['resource_name'])
+                                # Check if connection already exists
+                                if not any(c['source'] == resource_name and c['target'] == target_res['resource_name'] 
+                                          for c in self.connections):
+                                    self.connections.append({
+                                        'source': resource_name,
+                                        'target': target_res['resource_name'],
+                                        'connection_type': 'data_access',
+                                        'confirmed': False,
+                                        'notes': f'Inferred from {key}'
+                                    })
+                                break
+            
+            # Pattern 2: Endpoints to external services
+            endpoint_keys = ['endpoint', 'api_endpoint', 'service_endpoint', 'url', 'api_url',
+                            'service_url', 'backend_url', 'base_url']
+            
+            for key in endpoint_keys:
+                if key in properties:
+                    value = properties[key]
+                    if not isinstance(value, str):
+                        continue
+                    
+                    # Extract hostname
+                    import re
+                    hostname_match = re.search(r'https?://([^/]+)', value)
+                    if hostname_match:
+                        hostname = hostname_match.group(1)
+                        # Check if hostname matches any service name
+                        for target_res in self.resources:
+                            if hostname.lower() in target_res['resource_name'].lower() or \
+                               target_res['resource_name'].lower() in hostname.lower():
+                                # Found matching service
+                                if not any(c['source'] == resource_name and c['target'] == target_res['resource_name']
+                                          for c in self.connections):
+                                    self.connections.append({
+                                        'source': resource_name,
+                                        'target': target_res['resource_name'],
+                                        'connection_type': 'calls',
+                                        'protocol': 'https',
+                                        'confirmed': False,
+                                        'notes': f'Inferred from {key}: {value}'
+                                    })
+                                break
+            
+            # Pattern 3: Redis/Cache connections
+            cache_keys = ['redis_connection_string', 'cache_connection_string', 'memcache_servers']
+            for key in cache_keys:
+                if key in properties:
+                    value = properties[key]
+                    if not isinstance(value, str):
+                        continue
+                    
+                    # Try to find redis/cache resource
+                    for target_res in self.resources:
+                        target_type = (target_res.get('resource_type') or '').lower()
+                        if 'redis' in target_type or 'cache' in target_type or 'memcached' in target_type:
+                            if not any(c['source'] == resource_name and c['target'] == target_res['resource_name']
+                                      for c in self.connections):
+                                self.connections.append({
+                                    'source': resource_name,
+                                    'target': target_res['resource_name'],
+                                    'connection_type': 'uses_cache',
+                                    'confirmed': False,
+                                    'notes': f'Inferred from {key}'
+                                })
+    
+    def _classify_resource_layer(self, resource: dict) -> str:
+        """Classify a resource into a logical architectural security layer.
+        
+        Returns one of: 'identity', 'compute', 'data', 'network', 'monitoring', 'infrastructure'
+        """
+        resource_type = (resource.get('resource_type') or '').lower()
+        resource_name = (resource.get('resource_name') or '').lower()
+        
+        # Identity & Secrets
+        if any(x in resource_type for x in ['identity', 'key_vault', 'secret', 'certificate']):
+            return 'identity'
+        if any(x in resource_name for x in ['identity', 'vault', 'secret', 'certificate']):
+            return 'identity'
+        
+        # Compute (VMs, App Services, Containers)
+        if any(x in resource_type for x in ['vm', 'instance', 'function_app', 'app_service', 'aks', 'kubernetes', 
+                                              'lambda', 'compute_instance', 'web_app', 'container']):
+            return 'compute'
+        
+        # Data (Databases, Storage, Data Lakes)
+        if any(x in resource_type for x in ['database', 'sql', 'cosmos', 'storage', 'blob', 's3', 'dynamo', 
+                                              'rds', 'redshift', 'data_lake', 'elasticsearch']):
+            return 'data'
+        
+        # Networking (VNets, Subnets, Load Balancers)
+        if any(x in resource_type for x in ['network', 'vnet', 'subnet', 'nsg', 'security_group', 'vpc', 
+                                              'load_balancer', 'lb', 'firewall', 'nat', 'route']):
+            return 'network'
+        
+        # Monitoring & Observability
+        if any(x in resource_type for x in ['monitor', 'insights', 'cloudwatch', 'logging', 'log_analytics',
+                                              'application_insights', 'alert', 'metric']):
+            return 'monitoring'
+        
+        # API Management
+        if 'api' in resource_type or 'apim' in resource_type or 'gateway' in resource_type:
+            return 'compute'  # API gateways are part of compute tier
+        
+        # Default
+        return 'infrastructure'
+    
     def generate(self) -> str:
         """Generate the complete hierarchical diagram."""
         if not self.resources:
@@ -2860,6 +3143,16 @@ class HierarchicalDiagramBuilder:
             resource = self._get_primary_resource(resource_name)
             if not resource:
                 continue
+            
+            # Check if resource is publicly exposed (HIGHEST priority)
+            if resource_name in self.exposed_resources:
+                exposure = self.exposed_resources[resource_name]
+                if exposure.is_public:
+                    # RED: Public internet exposure (CRITICAL)
+                    node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                    style_by_node_id[node_id] = (999, '#ff6b6b')  # Red, highest priority
+                    lines.append(f"  style {node_id} stroke:#ff6b6b,stroke-width:3px")
+                    continue
             
             # Get category
             category = self._get_category(resource)

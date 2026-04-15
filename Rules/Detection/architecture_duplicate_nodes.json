@@ -1,0 +1,55 @@
+{
+  "id": "arch_duplicate_nodes",
+  "title": "Duplicate Resources Rendered in Architecture Diagram",
+  "description": "The same resource appears multiple times in the architecture diagram due to dual rendering as both a subgraph container and as a nested child node. This creates visual confusion and violates the principle of single responsibility.",
+  "severity": "HIGH",
+  "category": "architecture",
+  "cwe": "CWE-1006",
+  "detection_method": "diagram_analysis",
+  "check_type": "python",
+  "implementation": {
+    "description": "Analyze generated Mermaid diagram to detect duplicate node IDs or labels",
+    "logic_steps": [
+      "1. Parse generated Mermaid diagram for node definitions",
+      "2. Extract all node IDs: id1[label], subgraph id1[label], etc.",
+      "3. Build map: node_id → count",
+      "4. Flag any node_id with count > 1",
+      "5. Also check for duplicate labels (different IDs, same label)"
+    ],
+    "examples": [
+      "VM_PublicIP appears as both: id_1[VM_PublicIP] and id_2[VM_PublicIP]",
+      "developerVMNetInt rendered as subgraph AND as child node inside parent VM",
+      "machine_dev_vm_sg is both: subgraph id AND rendered inside another subgraph with same label"
+    ]
+  },
+  "root_causes": [
+    "Parent-child rendering logic: resource rendered once as subgraph container, again as nested child in parent",
+    "Circular hierarchy handling: VM → NIC → VM creates two rendering paths for same resource",
+    "Missing deduplication: render_node() called for both parent context and child list without checking if already emitted",
+    "Hierarchy reconstruction: emitted_nodes set doesn't prevent rendering same resource in multiple contexts"
+  ],
+  "remediation": [
+    "In generate_hierarchical_diagram.py render_compute_hierarchy(): deduplicate nodes before rendering nested children",
+    "Track emitted Mermaid node IDs (not just resource names) to prevent re-rendering",
+    "Implement pre-rendering validation: scan parent-child relationships for circularity",
+    "Flatten circular hierarchies: keep resource in ONE context (either as container OR as child, not both)",
+    "Add test: verify each resource appears exactly once in generated diagram"
+  ],
+  "references": [
+    "Scripts/Generate/generate_hierarchical_diagram.py - render_compute_hierarchy() line 1417",
+    "Scripts/Generate/generate_hierarchical_diagram.py - render_application_hierarchy() line 1449",
+    "Scripts/Generate/generate_hierarchical_diagram.py - render_node() line 1479"
+  ],
+  "tags": ["diagram", "duplication", "hierarchy"],
+  "metrics": {
+    "baseline_duplicates": 2,
+    "target_duplicates": 0,
+    "baseline_nodes": 42,
+    "target_nodes": "15-20 (high-level resources only)"
+  },
+  "automation": {
+    "auto_fix": true,
+    "recommended_script": "Scripts/Generate/generate_hierarchical_diagram.py",
+    "validation_rule": "After rendering, verify: len(unique_node_ids) == count_of_mermaid_nodes"
+  }
+}

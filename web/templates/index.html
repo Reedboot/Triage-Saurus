@@ -98,7 +98,6 @@
 
     <!-- Scan form -->
     <div class="scan-card">
-      <h2>Scan</h2>
       <form id="scan-form" action="/scan" method="POST">
         <div class="form-row">
           <div class="field grow">
@@ -128,46 +127,54 @@
                   <option value="" disabled selected>— select a past scan —</option>
                 </select>
               </div>
-
             </div>
           </div>
-         <div class="field">
+          <div class="field">
             <label>&nbsp;</label>
             <button type="button" class="btn-diagram" id="toggle-diagram-btn-persistent"
               title="Hide/show architecture diagram">Hide diagram</button>
           </div>
-        </div>
 
+          <div class="field">
+            <label>&nbsp;</label>
+            <button type="button" class="btn-diagram" id="toggle-log-btn" title="Hide/show scan output">📜 Hide
+              scan</button>
+          </div>
+        </div>
         <!-- Compare row (shown when Compare is clicked) -->
 
-          <!-- Compare row: allow diffing two scans -->
-          <div class="compare-row visible" id="compare-row">
-            <div class="row-inner">
-              <span class="section-label">🔁 Compare scans</span>
-              <div class="field compact">
-                <label for="compare-from-select">From</label>
-                <select id="compare-from-select"><option value="" disabled selected>— select a scan —</option></select>
-              </div>
-              <div class="field compact">
-                <label for="compare-to-select">To</label>
-                <select id="compare-to-select"><option value="" disabled selected>— select a scan —</option></select>
-              </div>
-              <div class="field compact">
-                <label>&nbsp;</label>
-                <button type="button" id="run-compare-btn" class="btn-diagram">Run Compare</button>
-              </div>
+        <!-- Compare row: allow diffing two scans -->
+        <div class="compare-row visible" id="compare-row">
+          <div class="row-inner">
+            <span class="section-label">🔁 Compare scans</span>
+            <div class="field compact">
+              <label for="compare-from-select">From</label>
+              <select id="compare-from-select">
+                <option value="" disabled selected>— select a scan —</option>
+              </select>
+            </div>
+            <div class="field compact">
+              <label for="compare-to-select">To</label>
+              <select id="compare-to-select">
+                <option value="" disabled selected>— select a scan —</option>
+              </select>
+            </div>
+            <div class="field compact">
+              <label>&nbsp;</label>
+              <button type="button" id="run-compare-btn" class="btn-diagram">Run Compare</button>
             </div>
           </div>
+        </div>
 
-          <script>
-          document.addEventListener('DOMContentLoaded', function(){
+        <script>
+          document.addEventListener('DOMContentLoaded', function () {
             const btn = document.getElementById('run-compare-btn');
             if (!btn) return;
-            btn.addEventListener('click', async function(){
-              const from = (document.getElementById('compare-from-select')||{}).value || '';
-              const to = (document.getElementById('compare-to-select')||{}).value || '';
+            btn.addEventListener('click', async function () {
+              const from = (document.getElementById('compare-from-select') || {}).value || '';
+              const to = (document.getElementById('compare-to-select') || {}).value || '';
               const repoOpt = document.querySelector('#repo-select option:checked');
-              const repo = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) ? repoOpt.dataset.name : (document.getElementById('repo-select')||{}).value || '';
+              const repo = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) ? repoOpt.dataset.name : (document.getElementById('repo-select') || {}).value || '';
               if (!from || !to || !repo) { alert('Please select both scans to compare and select a repository.'); return; }
               try {
                 const resp = await fetch(`/api/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&repo=${encodeURIComponent(repo)}`);
@@ -176,17 +183,17 @@
                 else if (window._triage && window._triage.renderDiff) { window._triage.renderDiff(data); }
                 else {
                   let tries = 0;
-                  const waiter = setInterval(()=>{
+                  const waiter = setInterval(() => {
                     if (window.renderDiff) { clearInterval(waiter); window.renderDiff(data); }
                     else if (window._triage && window._triage.renderDiff) { clearInterval(waiter); window._triage.renderDiff(data); }
                     else if (++tries > 40) { clearInterval(waiter); alert('Compare not available.'); }
                   }, 200);
                 }
-                const dp = document.getElementById('diagram-panel'); if (dp) dp.scrollIntoView({behavior:'smooth'});
+                const dp = document.getElementById('diagram-panel'); if (dp) dp.scrollIntoView({ behavior: 'smooth' });
               } catch (e) { alert('Compare failed: ' + e); }
             });
           });
-          </script>
+        </script>
 
 
         <div class="status-bar" id="status-bar">
@@ -202,12 +209,13 @@
       <!-- Log panel -->
       <div class="panel" id="log-panel">
         <div class="panel-header">
-            <span class="panel-title">Scan Output</span>
-            <div class="panel-actions">
+          <span class="panel-title">Scan Output</span>
+          <div class="panel-actions">
             <button class="btn-small" id="toggle-log-autoscroll-btn" title="Pause auto-scroll">⏸ Auto-scroll</button>
             <button class="btn-small" id="copy-log-btn" title="Copy log">📋 Copy</button>
             <button class="btn-small" id="clear-log-btn" title="Clear log">🧹 Clear</button>
-            <button class="btn-small" id="stop-ai-toolbar-btn" title="Stop AI scan" disabled hidden>⏹ Stop AI Scan</button>
+            <button class="btn-small" id="stop-ai-toolbar-btn" title="Stop AI scan" disabled hidden>⏹ Stop AI
+              Scan</button>
             <button class="btn-small" id="toggle-sections-btn" title="Show sections">📑 Sections</button>
           </div>
         </div>
@@ -243,13 +251,18 @@
                 <button class="btn-small" id="zoom-in-btn" title="Zoom in">🔍+ Zoom</button>
                 <button class="btn-small" id="zoom-out-btn" title="Zoom out">🔍- Zoom</button>
                 <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">🎯 Fit</button>
-                <span id="zoom-level-display" style="display: inline-block; min-width: 40px; text-align: center; font-size: 0.9em; color: var(--text-subtle);">100%</span>
-                <button class="btn-small" id="refresh-diagram-btn" title="Refresh / re-render diagram">🔄 Refresh</button>
-                <button class="btn-small" id="architecture-run-ai-btn" title="Run AI against the architecture diagram and suggest code/rule changes">🤖 Run AI (Architecture)</button>
-                <button class="btn-small" id="toggle-api-ops-btn" title="API operation visibility mode">🧩 API ops: Auto (&lt;10)</button>
-                <button class="btn-small" id="toggle-log-btn" title="Hide/show scan output">📜 Hide scan</button>
+                <span id="zoom-level-display"
+                  style="display: inline-block; min-width: 40px; text-align: center; font-size: 0.9em; color: var(--text-subtle);">100%</span>
+                <button class="btn-small" id="refresh-diagram-btn" title="Refresh / re-render diagram">🔄
+                  Refresh</button>
+                <button class="btn-small" id="architecture-run-ai-btn"
+                  title="Run AI against the architecture diagram and suggest code/rule changes">🤖 Run AI
+                  (Architecture)</button>
+                <button class="btn-small" id="toggle-api-ops-btn" title="API operation visibility mode">🧩 API ops: Auto
+                  (&lt;10)</button>
                 <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">📋 Copy source</button>
-                <button class="btn-small" id="export-diagram-svg-btn" title="Export diagram as SVG (scalable vector — ideal for zoom)">⬇ SVG</button>
+                <button class="btn-small" id="export-diagram-svg-btn"
+                  title="Export diagram as SVG (scalable vector — ideal for zoom)">⬇ SVG</button>
                 <button class="btn-small" id="export-diagram-png-btn" title="Export diagram as PNG image">⬇ PNG</button>
               </div>
             </div>

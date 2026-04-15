@@ -362,15 +362,17 @@
       // Mouse wheel zoom
       svg.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.985 : 1.015;
         const currentScale = zoomState.scale || 1;
+        const wheelStep = Math.max(0.004, Math.min(0.015, 0.02 / currentScale));
+        const delta = e.deltaY > 0 ? (1 - wheelStep) : (1 + wheelStep);
         const newScale = currentScale * delta;
         
         if (newScale >= zoomState.minScale && newScale <= zoomState.maxScale) {
           // Calculate zoom center point
           const rect = svg.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          const y = e.clientY - rect.top;
+          const useCenterAnchor = currentScale >= 2;
+          const x = useCenterAnchor ? rect.width / 2 : (e.clientX - rect.left);
+          const y = useCenterAnchor ? rect.height / 2 : (e.clientY - rect.top);
           
           // Adjust pan to zoom towards cursor
           zoomState.panX += (x * (1 - delta)) / (currentScale * delta);
@@ -426,9 +428,51 @@
   // Detect phase in message and return CSS class
   function detectPhaseClass(text) {
     if (typeof text !== 'string') return null;
-    const phaseMatch = text.match(/▶\s*Phase\s*(\d+[a-z]?)/i);
+    const phaseMatch = text.match(/(?:▶\s*)?(?:PHASE|Phase)\s*(\d+[a-z]?)/i);
     if (phaseMatch) {
       return `phase-${phaseMatch[1].toLowerCase()}`;
+    }
+    return null;
+  }
+
+  function detectLogSourceClass(text) {
+    if (typeof text !== 'string') return null;
+    const sourceMatch = text.match(/^\[(Info|Web|Pipeline|Detection|Misconfigurations|Store|AzureGoat|Error|Warning|Warn|Success)\]/i);
+    if (!sourceMatch) return null;
+
+    const tag = sourceMatch[1].toLowerCase();
+    switch (tag) {
+      case 'error':
+        return 'error';
+      case 'warning':
+      case 'warn':
+        return 'warn';
+      case 'success':
+        return 'success';
+      case 'info':
+        return 'info';
+      case 'web':
+        return 'line-web';
+      case 'pipeline':
+        return 'line-pipeline';
+      case 'detection':
+        return 'line-detection';
+      case 'misconfigurations':
+        return 'line-misconfigurations';
+      case 'store':
+        return 'line-store';
+      case 'azuregoat':
+        return 'line-repo';
+      default:
+        return `line-${tag}`;
+    }
+  }
+
+  function detectSeparatorClass(text) {
+    if (typeof text !== 'string') return null;
+    const trimmed = text.trim();
+    if (/^(?:=|─|—|-){10,}$/.test(trimmed)) {
+      return 'line-sep';
     }
     return null;
   }
@@ -437,15 +481,39 @@
   function addLogLine(text, className) {
     if (!logOutput) return;
     const line = document.createElement('div');
-    
-    // Check for phase messages and add phase class
+
+    const classes = [];
     const phaseClass = detectPhaseClass(text);
-    if (phaseClass) {
-      line.className = phaseClass;
+    const sourceClass = detectLogSourceClass(text);
+    const separatorClass = detectSeparatorClass(text);
+
+    if (className && className !== 'info') {
+      classes.push(className);
     } else if (className) {
-      line.className = className;
+      classes.push(className);
     }
-    
+
+    if (phaseClass) {
+      classes.push(phaseClass);
+    }
+
+    if (sourceClass) {
+      if ((sourceClass === 'error' || sourceClass === 'warn' || sourceClass === 'success') && classes.includes('info')) {
+        classes.splice(classes.indexOf('info'), 1);
+      }
+      if (!classes.includes(sourceClass)) {
+        classes.push(sourceClass);
+      }
+    }
+
+    if (separatorClass) {
+      classes.push(separatorClass);
+    }
+
+    if (classes.length > 0) {
+      line.className = classes.join(' ');
+    }
+
     // Preserve whitespace but escape HTML
     line.textContent = text;
     logOutput.appendChild(line);

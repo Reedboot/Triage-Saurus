@@ -1,0 +1,31 @@
+{
+  "id": "arch_hierarchy_circular_nesting",
+  "title": "Circular Parent-Child Hierarchy Detected in Architecture",
+  "description": "Architecture diagram generation detected circular parent-child relationships (e.g., VM → NIC → VM). This indicates a schema issue or incorrect hierarchy definition that results in confusing visual representation.",
+  "severity": "HIGH",
+  "category": "architecture",
+  "cwe": "CWE-1025",
+  "detection_method": "schema_analysis",
+  "check_type": "python",
+  "implementation": {
+    "description": "Detect when parent_resource_id of a child resource points to the same resource as the child's parent_resource_id of the parent",
+    "sql_query": "SELECT DISTINCT child.resource_name, child.resource_type, parent.resource_name, parent.resource_type FROM resources child JOIN resources parent ON child.parent_resource_id = parent.id WHERE child.experiment_id = ? AND parent.experiment_id = ? AND parent.parent_resource_id = child.id",
+    "logic": "If query returns results, circular hierarchy exists"
+  },
+  "remediation": [
+    "Review resource hierarchy definitions in the Terraform code",
+    "Ensure parent-child relationships are acyclic (no resource can be its own ancestor)",
+    "Update generate_hierarchical_diagram.py to detect and flatten circular hierarchies before rendering",
+    "Consider whether the hierarchy represents actual AWS/Azure/GCP structure or is a modeling artifact"
+  ],
+  "references": [
+    "ArchitectureValidationAgent.md - Hierarchy Validation (CRITICAL)",
+    "Scripts/Generate/generate_hierarchical_diagram.py - render_compute_hierarchy()"
+  ],
+  "tags": ["diagram", "hierarchy", "schema"],
+  "automation": {
+    "auto_fix": false,
+    "recommended_script": "Scripts/Validate/validate_architecture.py",
+    "validation_rule": "Check for cycles using depth-first search"
+  }
+}

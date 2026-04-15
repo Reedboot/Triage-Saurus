@@ -371,6 +371,21 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output .line-warn   { color: var(--yellow); }
 #log-output .line-error  { color: var(--red); }
 #log-output .line-phase  { color: var(--accent); font-weight: 600; }
+#log-output .info,
+#log-output .line-source-info { color: var(--accent); }
+#log-output .warn,
+#log-output .line-source-warn { color: var(--yellow); }
+#log-output .error,
+#log-output .line-source-error { color: var(--red); font-weight: 600; }
+#log-output .success,
+#log-output .line-source-success { color: var(--green); }
+#log-output .line-web { color: #79c0ff; }
+#log-output .line-pipeline { color: #c678dd; }
+#log-output .line-detection { color: #58a6ff; }
+#log-output .line-misconfigurations { color: #e3b341; }
+#log-output .line-store { color: var(--green); }
+#log-output .line-repo { color: #f0883e; }
+#log-output .line-sep { color: var(--border-subtle); opacity: 0.9; }
 #log-output .line-ai-prep { color: var(--accent); font-weight: 600; }
 #log-output .line-ai-run  { color: var(--text-faint); }
 
