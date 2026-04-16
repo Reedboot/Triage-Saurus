@@ -22,8 +22,9 @@ class _FakeConn:
         self.rows_by_sql = rows_by_sql
 
     def execute(self, sql, params=None):
+        normalized_sql = sql.replace(", parent_resource_id", "")
         for marker, rows in self.rows_by_sql.items():
-            if marker in sql:
+            if marker in sql or marker in normalized_sql:
                 return SimpleNamespace(fetchall=lambda: rows, fetchone=lambda: rows[0] if rows else None)
         return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None)
 
@@ -123,3 +124,281 @@ def test_alicloud_api_gateway_is_treated_as_public(monkeypatch):
 
     assert diagram.startswith("flowchart TB")
     assert "internet -->" in diagram
+
+
+def test_structural_contains_edges_do_not_create_duplicate_app_service_plan_nodes(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "app_service_plan",
+            "resource_type": "azurerm_app_service_plan",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "function_app",
+            "resource_type": "azurerm_function_app",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "function_app_front",
+            "resource_type": "azurerm_function_app",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+    ]
+    connections = [
+        {"source": "app_service_plan", "target": "function_app", "connection_type": "contains"},
+        {"source": "app_service_plan", "target": "function_app_front", "connection_type": "contains"},
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="app_service_plan", parent_type="azurerm_app_service_plan", child_id=2, child_name="function_app", child_type="azurerm_function_app"),
+            _FakeRow(parent_id=1, parent_name="app_service_plan", parent_type="azurerm_app_service_plan", child_id=3, child_name="function_app_front", child_type="azurerm_function_app"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="app_service_plan", resource_type="azurerm_app_service_plan", provider="azure", repo_id=1),
+            _FakeRow(id=2, resource_name="function_app", resource_type="azurerm_function_app", provider="azure", repo_id=1),
+            _FakeRow(id=3, resource_name="function_app_front", resource_type="azurerm_function_app", provider="azure", repo_id=1),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *args, **kwargs: {"display_on_architecture_chart": True, "friendly_name": "App Service Plan", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *args, **kwargs: "App Service Plan")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *args, **kwargs: "Compute")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert 'subgraph app_service_plan["App Service Plan: app_service_plan (2 sub-assets)"]' in diagram
+    assert "app_service_plan_sg" not in diagram
+    assert "contains" not in diagram
+    assert diagram.count("app_service_plan -->") == 0
+
+
+def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "dev_vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "VM_PublicIP",
+            "resource_type": "azurerm_public_ip",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "vNet",
+            "resource_type": "azurerm_virtual_network",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+    connections = [
+        {"source": "VM_PublicIP", "target": "dev_vm", "connection_type": "public_ip"},
+        {"source": "vNet", "target": "VM_PublicIP", "connection_type": "contains"},
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="dev_vm", parent_type="azurerm_virtual_machine", child_id=2, child_name="VM_PublicIP", child_type="azurerm_public_ip"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="dev_vm", resource_type="azurerm_virtual_machine", provider="azure", repo_id=1),
+            _FakeRow(id=2, resource_name="VM_PublicIP", resource_type="azurerm_public_ip", provider="azure", repo_id=1),
+            _FakeRow(id=3, resource_name="vNet", resource_type="azurerm_virtual_network", provider="azure", repo_id=1),
+        ],
+    }))
+
+    def _fake_resource_type(_conn, resource_type):
+        rt = (resource_type or "").lower()
+        friendly = "Virtual Network" if "virtual_network" in rt else "Virtual Machine"
+        return {"display_on_architecture_chart": True, "friendly_name": friendly, "category": "Network" if "virtual_network" in rt else "Compute"}
+
+    def _fake_render_category(_conn, resource_type):
+        rt = (resource_type or "").lower()
+        if "virtual_network" in rt:
+            return "Network"
+        if "public_ip" in rt:
+            return "Network"
+        return "Compute"
+
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", _fake_resource_type)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", _fake_render_category)
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *args, **kwargs: "Virtual Machine")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", _fake_render_category)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "|public IP; public ip| dev_vm" in diagram
+    assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
+    assert "public IP; contains" not in diagram
+    assert "subgraph dev_vm[\"Virtual Machine: dev_vm (1 sub-asset)\"]" in diagram
+
+
+def test_internet_to_vm_via_public_ip_parent_lookup(monkeypatch):
+    """When Internet→PublicIP is the only connection, collapse to Internet→VM via parent_resource_id."""
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "dev-vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "VM_PublicIP",
+            "resource_type": "azurerm_public_ip",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+    ]
+    # Only Internet→VM_PublicIP, no VM_PublicIP→dev-vm edge
+    connections = [
+        {"source": "Internet", "target": "VM_PublicIP", "connection_type": "internet_access", "is_cross_repo": 0},
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "_add_internet_connections", lambda conns, *a, **kw: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="dev-vm", parent_type="azurerm_virtual_machine", child_id=2, child_name="VM_PublicIP", child_type="azurerm_public_ip"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="dev-vm", resource_type="azurerm_virtual_machine", provider="azure", repo_id=1),
+            _FakeRow(id=2, resource_name="VM_PublicIP", resource_type="azurerm_public_ip", provider="azure", repo_id=1),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "Virtual Machine", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "internet -->" in diagram
+    assert "dev_vm" in diagram
+    assert "public IP" in diagram
+    assert "VM_PublicIP -->" not in diagram  # public IP should not appear as an arrow source
+
+
+def test_vnet_is_rendered_as_internal_container(monkeypatch):
+    """A single VNet should be rendered as an internal container, not suppressed."""
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "dev-vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "vNet",
+            "resource_type": "azurerm_virtual_network",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id": [
+            _FakeRow(id=1, resource_name="dev-vm", resource_type="azurerm_virtual_machine", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="vNet", resource_type="azurerm_virtual_network", provider="azure", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+
+    def _fake_rt(_c, rt):
+        if "virtual_network" in (rt or ""):
+            return {"display_on_architecture_chart": True, "friendly_name": "Virtual Network", "category": "Network"}
+        return {"display_on_architecture_chart": True, "friendly_name": "Virtual Machine", "category": "Compute"}
+
+    def _fake_cat(_c, rt):
+        return "Network" if "virtual_network" in (rt or "") else "Compute"
+
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", _fake_rt)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", _fake_cat)
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", _fake_cat)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
+    assert "dev_vm" in diagram
+    assert "style vNet" in diagram
+
+
+def test_automation_account_not_nested_inside_managed_identity(monkeypatch):
+    """Automation account that USES a managed identity should not be nested inside it."""
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "user_id",
+            "resource_type": "azurerm_user_assigned_identity",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "automation_account",
+            "resource_type": "azurerm_automation_account",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+    ]
+    connections = [
+        {"source": "automation_account", "target": "user_id", "connection_type": "authenticates_via", "is_cross_repo": 0},
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="user_id", parent_type="azurerm_user_assigned_identity", child_id=2, child_name="automation_account", child_type="azurerm_automation_account"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="user_id", resource_type="azurerm_user_assigned_identity", provider="azure", repo_id=1),
+            _FakeRow(id=2, resource_name="automation_account", resource_type="azurerm_automation_account", provider="azure", repo_id=1),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "Identity", "category": "Identity"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Identity")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *a, **kw: "Identity")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    # automation_account should appear as a separate node, not nested inside user_id
+    assert "subgraph user_id" not in diagram
+    # the authenticates_via arrow should still be present
+    assert "automation_account" in diagram
+    assert "user_id" in diagram

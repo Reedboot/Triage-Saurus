@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
 import db_helpers
 from shared_utils import _severity_score
+from log_formatter import format_finding, format_scan_complete, format_summary
 
 
 def _base_severity(severity: str) -> str:
@@ -392,10 +393,10 @@ def main():
             # Record risk scores for all findings
             for finding_id, finding_data in zip(finding_ids, findings_to_insert):
                 db_helpers.record_risk_score(finding_id, finding_data['severity_score'], scored_by="script", conn=conn)
-                print(f"  [stored] finding {finding_id}: {finding_data['title']} ({finding_data['base_severity']})")
+                print(format_finding(finding_id, finding_data['title'], finding_data['base_severity']))
                 stored += 1
 
-    print(f"\nStored {stored} new findings, skipped {skipped} duplicates")
+    print(f"\n{format_summary(stored, skipped)}")
 
     # Persist language detection results
     if primary_lang or all_langs:

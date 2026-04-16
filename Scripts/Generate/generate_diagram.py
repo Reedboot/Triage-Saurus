@@ -92,9 +92,20 @@ def _display_label(resource: dict) -> str:
     name = resource['resource_name']
     rtype = resource.get('resource_type', '')
 
+    # Optional override for human-friendly role labels inferred during diagram build.
+    effective_name = str(resource.get('_display_name_override') or name)
+
+    # Function-app role labeling to avoid ambiguous Terraform aliases in diagrams.
+    if 'function_app' in (rtype or '').lower():
+        lname = (name or '').lower()
+        if any(tok in lname for tok in ('front', 'frontend', 'web')):
+            effective_name = 'Frontend Function App'
+        elif lname in {'function_app', 'api_function_app'} or 'api' in lname:
+            effective_name = 'API Function App'
+
     # Truncate long resource names to prevent diagram overflow
     MAX_NAME_LENGTH = 28
-    display_name = name if len(name) <= MAX_NAME_LENGTH else f"{name[:MAX_NAME_LENGTH-3]}..."
+    display_name = effective_name if len(effective_name) <= MAX_NAME_LENGTH else f"{effective_name[:MAX_NAME_LENGTH-3]}..."
 
     # Emoji icon based on resource type
     icon = _resource_icon(rtype)
@@ -205,7 +216,7 @@ def _render_resource_subgraph(
             friendly_type = rtype or 'Resource'
 
         label = f"{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
-        lines.append(f"{indent}subgraph {node_id}_sg[\"{label}\"]")
+        lines.append(f"{indent}subgraph {node_id}[\"{label}\"]")
         for child_row in children:
             child_resource = {
                 'id': child_row['child_id'],
@@ -562,8 +573,19 @@ def generate_architecture_diagram(
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
-    # Exclude permission-style edges (grants_access_to) from architecture diagrams
-    connections = [c for c in connections if str(c.get("connection_type") or "").strip() != "grants_access_to"]
+    # Exclude structural/administrative edges that are already represented by nesting.
+    structural_edge_types = {
+        'contains',
+        'grants_access_to',
+        'parent_of',
+        'child_of',
+        'resource_group_member',
+        'has_role',
+    }
+    connections = [
+        c for c in connections
+        if str(c.get("connection_type") or "").strip().lower() not in structural_edge_types
+    ]
 
     # If a specific repo is requested, filter resources to that repo
     if repo_name:
@@ -638,6 +660,17 @@ def generate_architecture_diagram(
         log_msg = f"No resources found for diagram generation (experiment_id={experiment_id}, repo_name={repo_name}, provider={provider})"
         _logger.warning(log_msg)
         return "flowchart TB\n  empty[No resources found]"
+
+    # Improve readability for repos that split frontend/API into multiple Function Apps.
+    _function_apps = [r for r in resources if 'function_app' in (r.get('resource_type') or '').lower()]
+    _has_frontend_function = any(any(tok in (r.get('resource_name') or '').lower() for tok in ('front', 'frontend', 'web')) for r in _function_apps)
+    if len(_function_apps) >= 2 and _has_frontend_function:
+        for _fa in _function_apps:
+            _fname = (_fa.get('resource_name') or '').lower()
+            if any(tok in _fname for tok in ('front', 'frontend', 'web')):
+                _fa['_display_name_override'] = 'Frontend Function App'
+            else:
+                _fa['_display_name_override'] = 'API Function App'
     
     lines = ["flowchart TB"]
     
@@ -660,7 +693,7 @@ def generate_architecture_diagram(
     # Build map from resource.id -> resource_type for all raw resources (before filtering)
     with get_db_connection() as _pconn:
         all_raw = _pconn.execute(
-            "SELECT id, resource_name, resource_type, provider, repo_id FROM resources WHERE experiment_id = ?",
+            "SELECT id, resource_name, resource_type, provider, repo_id, parent_resource_id FROM resources WHERE experiment_id = ?",
             [experiment_id]
         ).fetchall()
     all_raw_map = {r['id']: dict(r) for r in all_raw}
@@ -714,11 +747,74 @@ def generate_architecture_diagram(
                 parent_children_filtered[parent_id] = filtered_children
     parent_children = parent_children_filtered
     
+    # ── Strip incorrect managed-identity nesting ──────────────────────────────
+    # The context extractor sets user_assigned_identity as parent of automation_accounts /
+    # runbooks etc. because those resources reference the identity's ID via identity_ids.
+    # Architecturally, these resources USE the identity; they are not contained by it.
+    # Remove such parent-child relationships here so the automation account is promoted
+    # to root level and the authenticates_via edge still communicates the relationship.
+    _identity_parent_ids = {
+        r['id'] for r in resources
+        if 'user_assigned_identity' in (r.get('resource_type') or '').lower()
+    }
+    if _identity_parent_ids:
+        _non_identity_child_types = ('automation_account', 'automation_runbook', 'runbook')
+        for _pid in list(parent_children.keys()):
+            if _pid in _identity_parent_ids:
+                parent_children[_pid] = [
+                    h for h in parent_children[_pid]
+                    if not any(tok in (h['child_type'] if hasattr(h, '__getitem__') else '').lower()
+                               for tok in _non_identity_child_types)
+                ]
+                if not parent_children[_pid]:
+                    del parent_children[_pid]
+    # Re-derive child_ids after the identity-nesting strip
+    child_ids = {h['child_id'] for h_list in parent_children.values() for h in h_list}
+
     # Update child_ids to match the filtered parent_children
     child_ids = {h['child_id'] for h_list in parent_children.values() for h in h_list}
     
     # Group resources by type (excluding children as they'll be in parent subgraphs)
     root_resources = [r for r in resources if r['id'] not in child_ids]
+
+    # ── Infer NSG → VM security association ──────────────────────────────────
+    # The context extractor does not create a direct net_sg → VM connection.
+    # We infer it by tracing: NSG-NIC-association → parent NIC → parent VM.
+    _existing_conn_pairs = {(c.get('source'), c.get('target')) for c in connections}
+    _nsgs = [r for r in resources if 'network_security_group' in (r.get('resource_type') or '').lower()
+             and 'association' not in (r.get('resource_type') or '').lower()]
+    # Use all_raw_map so association resources found even when excluded from display filter
+    _nsg_assocs = [r for r in all_raw_map.values()
+                   if 'network_interface_security_group_association' in (r.get('resource_type') or '').lower()]
+    for _assoc in _nsg_assocs:
+        _nic_id = _assoc.get('parent_resource_id')
+        if not _nic_id:
+            continue
+        # Find which VM has this NIC in its child list (NIC may be child of VM or vice-versa)
+        _nic_res = all_raw_map.get(_nic_id)
+        _vm_res = None
+        if _nic_res:
+            # Case A: NIC is child of VM (NIC.parent_resource_id = VM.id)
+            _vm_candidate = next((r for r in resources if r['id'] == (_nic_res.get('parent_resource_id') if isinstance(_nic_res, dict) else _nic_res['parent_resource_id'])
+                                  and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+            if _vm_candidate:
+                _vm_res = _vm_candidate
+        if not _vm_res:
+            # Case B: VM is child of NIC (VM.parent_resource_id = NIC.id)
+            _vm_res = next((r for r in resources if r.get('parent_resource_id') == _nic_id
+                            and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+        if _vm_res and _nsgs:
+            for _nsg in _nsgs:
+                _pair = (_nsg['resource_name'], _vm_res['resource_name'])
+                if _pair not in _existing_conn_pairs:
+                    connections.append({
+                        'source': _nsg['resource_name'],
+                        'target': _vm_res['resource_name'],
+                        'connection_type': 'secures',
+                        'confirmed': True,
+                        'is_cross_repo': 0,
+                    })
+                    _existing_conn_pairs.add(_pair)
 
     # Group by canonical render category (provider-agnostic)
     def _in_render_cat(r: dict, *cats: str) -> bool:
@@ -782,6 +878,27 @@ def generate_architecture_diagram(
         )
         return any(kw in rt for kw in data_keywords)
 
+    def _is_virtual_network_resource(r: dict) -> bool:
+        """Return True for logical network containers that add noise as standalone nodes."""
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        return any(tok in rt for tok in ('virtual_network', 'vnet', 'subnet', 'vpc'))
+
+    def _can_receive_public_ip_edge(r: dict) -> bool:
+        """Return True for resource types where collapsing a Public IP into Internet→resource is meaningful."""
+        if not r or not r.get('resource_type'):
+            return False
+        rt = (r.get('resource_type') or '').lower()
+        edge_tokens = (
+            'virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine',
+            'ec2', 'instance',
+            'load_balancer', 'elastic_load',
+            'application_gateway', 'front_door', 'gateway',
+            'bastion', 'firewall', 'nat_gateway',
+        )
+        return any(tok in rt for tok in edge_tokens) and not _is_virtual_network_resource(r)
+
     # Exclude only orphaned (parentless) public IP resources — those with parents stay in filtered_roots for hierarchical rendering
     filtered_roots = [r for r in root_resources if not _is_public_ip_orphaned(r)]
     # Exclude resources explicitly hidden from architecture diagrams (unless already filtered as children)
@@ -792,6 +909,8 @@ def generate_architecture_diagram(
     # Compute tier: VMs and load balancers (force VMs to Compute tier regardless of parent)
     vms            = [r for r in filtered_roots if (_is_compute_tier_resource(r) or _in_render_cat(r, 'Compute')) and not _is_application_tier_resource(r) and not _is_public_ip_resource_obj(r)]
     aks            = [r for r in filtered_roots if _in_render_cat(r, 'Container')]
+    vnets          = [r for r in filtered_roots if 'virtual_network' in (r.get('resource_type') or '').lower() or 'vpc' in (r.get('resource_type') or '').lower()]
+    subnets        = [r for r in filtered_roots if 'subnet' in (r.get('resource_type') or '').lower()]
     # Data tier: ensure databases always go to Data tier
     sql_servers    = [r for r in filtered_roots if _is_data_tier_resource(r) or _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
@@ -801,7 +920,7 @@ def generate_architecture_diagram(
     # Include Load Balancers in Compute tier
     lbs            = [r for r in filtered_roots if _in_render_cat(r, 'Network') and any(tok in r.get('resource_type','').lower() for tok in ('load_balancer', 'lb', 'elastic_load'))]
     # Other resources: exclude those already categorized
-    other          = [r for r in filtered_roots if r not in app_tier + vms + aks + sql_servers + storage_accounts + nsgs + paas + lbs]
+    other          = [r for r in filtered_roots if r not in app_tier + vms + aks + vnets + subnets + sql_servers + storage_accounts + nsgs + paas + lbs]
 
     # Internet exposure is rendered through edges from the shared Internet node.
     # Keep exposed resources in their normal tiers so they remain connected to
@@ -817,6 +936,35 @@ def generate_architecture_diagram(
     # Internet is rendered at root level, not inside any zone, to avoid circular references
     lines.append("  internet[🌐 Internet]")
 
+    def _emit_simple_node(resource: dict, indent: str) -> None:
+        """Emit a single node with collision-safe Mermaid ID handling."""
+        base_nid = sanitize_id(resource['resource_name'])
+        if base_nid in _diagram_emitted_ids:
+            rtype = resource.get('resource_type', '')
+            ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
+            base_nid = sanitize_id(f"{ts}_{resource['resource_name']}")
+        _diagram_emitted_ids.add(base_nid)
+        lines.append(f"{indent}{base_nid}[{_display_label(resource)}]")
+
+    def _render_internal_contents(indent: str) -> None:
+        """Render compute/AKS/NSG internals at the specified indentation level."""
+        if vms or lbs:
+            lines.append(f"{indent}subgraph compute_tier[\"🖥️ Compute Tier\"]")
+            for vm in vms:
+                _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
+            for lb in lbs:
+                if lb['id'] in parent_children:
+                    _render_resource_subgraph(lb, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
+                else:
+                    _emit_simple_node(lb, indent + "  ")
+            lines.append(f"{indent}end")
+
+        for aks_cluster in aks:
+            _render_resource_subgraph(aks_cluster, parent_children, lines, indent=indent, _emitted_ids=_diagram_emitted_ids)
+
+        for nsg in nsgs:
+            _emit_simple_node(nsg, indent)
+
     # ── Internal Zone (Compute, Containers, Network Security) ──
     internal_resources = vms + lbs + aks + nsgs
     internal_has_children = any(
@@ -825,65 +973,35 @@ def generate_architecture_diagram(
     )
     if internal_resources and internal_has_children:
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
-        # Compute tier subgraph (VMs + Load Balancers)
-        if vms or lbs:
-            lines.append("    subgraph compute_tier[\"🖥️ Compute Tier\"]")
-            for vm in vms:
-                _render_resource_subgraph(vm, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
-            for lb in lbs:
-                if lb['id'] in parent_children:
-                    _render_resource_subgraph(lb, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
-                else:
-                    base_nid = sanitize_id(lb['resource_name'])
-                    if base_nid in _diagram_emitted_ids:
-                        rtype = lb.get('resource_type', '')
-                        ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                        base_nid = sanitize_id(f"{ts}_{lb['resource_name']}")
-                    _diagram_emitted_ids.add(base_nid)
-                    lines.append(f"      {base_nid}[{_display_label(lb)}]")
+        if len(vnets) == 1:
+            vnet = vnets[0]
+            vnet_id = sanitize_id(vnet['resource_name'])
+            _diagram_emitted_ids.add(vnet_id)
+            lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
+            for subnet in subnets:
+                _emit_simple_node(subnet, "      ")
+            _render_internal_contents("      ")
             lines.append("    end")
-        # VNet/VPC subgraph for AKS
-        if aks:
-            lines.append("    subgraph vnet[VNet]")
-            for aks_cluster in aks:
-                _render_resource_subgraph(aks_cluster, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
-            lines.append("    end")
-        # Network Security
-        for nsg in nsgs:
-            base_nid = sanitize_id(nsg['resource_name'])
-            if base_nid in _diagram_emitted_ids:
-                rtype = nsg.get('resource_type', '')
-                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                base_nid = sanitize_id(f"{ts}_{nsg['resource_name']}")
-            _diagram_emitted_ids.add(base_nid)
-            lines.append(f"      {base_nid}[{_display_label(nsg)}]")
+        else:
+            for vnet in vnets:
+                _emit_simple_node(vnet, "    ")
+            _render_internal_contents("    ")
         lines.append("  end")
     elif internal_resources:
         # No child hierarchy to wrap — render the resources directly.
-        # Still create Compute subgraph for organization
-        if vms or lbs:
-            lines.append("  subgraph compute_tier[\"🖥️ Compute Tier\"]")
-            for vm in vms:
-                _render_resource_subgraph(vm, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
-            for lb in lbs:
-                base_nid = sanitize_id(lb['resource_name'])
-                if base_nid in _diagram_emitted_ids:
-                    rtype = lb.get('resource_type', '')
-                    ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                    base_nid = sanitize_id(f"{ts}_{lb['resource_name']}")
-                _diagram_emitted_ids.add(base_nid)
-                lines.append(f"    {base_nid}[{_display_label(lb)}]")
+        if len(vnets) == 1:
+            vnet = vnets[0]
+            vnet_id = sanitize_id(vnet['resource_name'])
+            _diagram_emitted_ids.add(vnet_id)
+            lines.append(f"  subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
+            for subnet in subnets:
+                _emit_simple_node(subnet, "    ")
+            _render_internal_contents("    ")
             lines.append("  end")
-        for aks_cluster in aks:
-            _render_resource_subgraph(aks_cluster, parent_children, lines, indent="  ", _emitted_ids=_diagram_emitted_ids)
-        for nsg in nsgs:
-            base_nid = sanitize_id(nsg['resource_name'])
-            if base_nid in _diagram_emitted_ids:
-                rtype = nsg.get('resource_type', '')
-                ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                base_nid = sanitize_id(f"{ts}_{nsg['resource_name']}")
-            _diagram_emitted_ids.add(base_nid)
-            lines.append(f"  {base_nid}[{_display_label(nsg)}]")
+        else:
+            for vnet in vnets:
+                _emit_simple_node(vnet, "  ")
+            _render_internal_contents("  ")
 
     # ── Application Tier Zone (App Service Plans, Function Apps, Web Apps) ──
     if app_tier:
@@ -1074,6 +1192,20 @@ def generate_architecture_diagram(
                 public_side = tgt_name
                 real_name = src_name
 
+            real_resource = resource_map.get(real_name)
+            if str(real_name or '').strip().lower() == 'internet':
+                # src was Internet, tgt is the public IP — find the resource the IP is attached to.
+                pip_res = resource_map.get(public_side)
+                _parent_id = pip_res.get('parent_resource_id') if pip_res else None
+                _parent_res = next((r for r in resources if r['id'] == _parent_id), None) if _parent_id else None
+                if _parent_res and _can_receive_public_ip_edge(_parent_res):
+                    real_name = _parent_res['resource_name']
+                    real_resource = _parent_res
+                else:
+                    continue  # no usable parent; skip this synthetic edge
+            elif not _can_receive_public_ip_edge(real_resource):
+                continue
+
             # Ensure the real resource node exists
             _ensure_node_exists(real_name)
 
@@ -1150,6 +1282,8 @@ def generate_architecture_diagram(
     
     # Styling based on findings
     for r in resources:
+        if sanitize_id(r.get('resource_name', '')) not in _diagram_emitted_ids:
+            continue  # resource was suppressed from diagram; skip style to avoid ghost nodes
         style = get_node_style(r)
         if style:
             lines.append(f"  {style}")

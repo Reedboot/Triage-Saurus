@@ -16,6 +16,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Utils"))
+from log_formatter import format_scan_complete
 
 # ── Root paths ────────────────────────────────────────────────────────────────
 
@@ -365,7 +367,7 @@ def main() -> None:
     print(f"\n[Store] Running: {' '.join(store_cmd)}")
     subprocess.run(store_cmd, check=True, text=True, input=json.dumps(scan_data))
 
-    print("\n✓ Scan complete.")
+    print(f"\n{format_scan_complete()}")
     print("  Findings persisted directly to DB")
     print(f"\nNext steps:")
     print(f"  python3 Scripts/Enrich/enrich_findings.py --experiment {args.experiment}")
