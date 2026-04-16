@@ -283,14 +283,20 @@ _FALLBACK: dict[str, dict] = {
     "aws_kinesis_firehose_delivery_stream":       {"friendly_name": "Kinesis Firehose",         "category": "Messaging",   "icon": "🔥"},
     # GCP — Storage
     "google_storage_bucket":                      {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️"},
+    "google_storage_bucket_object":               {"friendly_name": "Storage Object",           "category": "Storage",     "icon": "🪣", "display_on_architecture_chart": False, "parent_type": "google_storage_bucket"},
     "google_storage_bucket_iam_binding":          {"friendly_name": "GCS Bucket",               "category": "Storage",     "icon": "🗄️", "display_on_architecture_chart": False, "parent_type": "google_storage_bucket"},
+    "google_storage_bucket_iam_member":           {"friendly_name": "Bucket IAM Member",        "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "google_storage_bucket"},
     # GCP — Database
     "google_sql_database_instance":               {"friendly_name": "Cloud SQL Instance",       "category": "Database",    "icon": "🗃️"},
     "google_bigquery_dataset":                    {"friendly_name": "BigQuery Dataset",         "category": "Database",    "icon": "🗃️"},
     "google_bigtable_instance":                   {"friendly_name": "Bigtable Instance",        "category": "Database",    "icon": "🗃️"},
+    "google_firestore_database":                  {"friendly_name": "Firestore Database",       "category": "Database",    "icon": "🗄️"},
+    "google_firestore_document":                  {"friendly_name": "Firestore Document",       "category": "Database",    "icon": "📄", "display_on_architecture_chart": False, "parent_type": "google_firestore_database"},
     # GCP — Compute
     "google_compute_instance":                    {"friendly_name": "Compute Instance",         "category": "Compute",     "icon": "🖥️"},
     "google_cloudfunctions_function":             {"friendly_name": "Cloud Function",           "category": "Compute",     "icon": "⚡"},
+    "google_cloudfunctions_function_iam_member":  {"friendly_name": "Function IAM Member",      "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "google_cloudfunctions_function"},
+    "google_app_engine_application":              {"friendly_name": "App Engine Application",   "category": "Compute",     "icon": "⚙️"},
     # GCP — Container
     "google_container_cluster":                   {"friendly_name": "GKE Cluster",              "category": "Container",   "icon": "☸️"},
     "google_container_node_pool":                 {"friendly_name": "GKE Node Pool",            "category": "Container",   "icon": "☸️"},
@@ -306,8 +312,12 @@ _FALLBACK: dict[str, dict] = {
     "google_compute_firewall":                    {"friendly_name": "Firewall Rule",            "category": "Security",    "icon": "🛡️"},
     # GCP — Identity
     "google_project_iam_binding":                 {"friendly_name": "IAM Binding",              "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "google_project_iam_member":                  {"friendly_name": "IAM Member",               "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "google_project_iam_custom_role":             {"friendly_name": "IAM Custom Role",          "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "google_project":                             {"friendly_name": "GCP Project",              "category": "System",      "icon": "🗂️", "display_on_architecture_chart": False},
+    "google_project_service":                     {"friendly_name": "Project Service",          "category": "System",      "icon": "🔧", "display_on_architecture_chart": False},
     "google_kms_crypto_key":                      {"friendly_name": "KMS Crypto Key",           "category": "Identity",    "icon": "🔑"},
-    "google_service_account":                     {"friendly_name": "Service Account",          "category": "Identity",    "icon": "👤"},
+    "google_service_account":                     {"friendly_name": "Service Account",          "category": "Identity",    "icon": "🔑"},
     # GCP — Messaging
     "google_pubsub_topic":                        {"friendly_name": "Pub/Sub Topic",            "category": "Messaging",   "icon": "📢"},
     "google_pubsub_subscription":                 {"friendly_name": "Pub/Sub Subscription",     "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "google_pubsub_topic"},

@@ -150,30 +150,34 @@ class GraphTraversal:
         """
         paths = {}
         queue = deque([(entry_point_id, [entry_point_id], False, [])])
+        visited: Set[int] = {entry_point_id}
 
         while queue:
             current_id, path_nodes, has_cm, cms = queue.popleft()
 
             # Explore neighbors
             for neighbor_id in self.adjacency.get(current_id, []):
-                if neighbor_id not in path_nodes:  # Avoid cycles
-                    new_path = path_nodes + [neighbor_id]
-                    new_has_cm = has_cm or (neighbor_id in self.countermeasures)
-                    new_cms = cms + ([neighbor_id] if neighbor_id in self.countermeasures else [])
+                # Standard BFS visited pruning prevents combinatorial path explosion
+                # in dense containment graphs while preserving shortest-path semantics.
+                if neighbor_id in visited:
+                    continue
 
-                    # Record path to this resource
-                    if neighbor_id not in paths or len(new_path) < paths[neighbor_id].path_length:
-                        paths[neighbor_id] = TraversalPath(
-                            source_id=entry_point_id,
-                            target_id=neighbor_id,
-                            path_nodes=new_path,
-                            path_length=len(new_path),
-                            has_countermeasure=new_has_cm,
-                            countermeasures=new_cms,
-                        )
+                new_path = path_nodes + [neighbor_id]
+                new_has_cm = has_cm or (neighbor_id in self.countermeasures)
+                new_cms = cms + ([neighbor_id] if neighbor_id in self.countermeasures else [])
 
-                    # Continue BFS
-                    queue.append((neighbor_id, new_path, new_has_cm, new_cms))
+                # Record shortest path to this resource
+                paths[neighbor_id] = TraversalPath(
+                    source_id=entry_point_id,
+                    target_id=neighbor_id,
+                    path_nodes=new_path,
+                    path_length=len(new_path),
+                    has_countermeasure=new_has_cm,
+                    countermeasures=new_cms,
+                )
+
+                visited.add(neighbor_id)
+                queue.append((neighbor_id, new_path, new_has_cm, new_cms))
 
         return paths
 

@@ -1,0 +1,120 @@
+rules:
+  - id: context-gcp-service-account
+    message: |
+      GCP Service Account detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_service_account" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, gcp, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Service Account
+        resource_type: google_service_account
+        resource_name: $NAME
+    description: |
+      Detects Google Service Accounts used for authentication and authorization.
+
+  - id: context-gcp-service-account-iam-binding
+    message: |
+      GCP Service Account IAM Binding detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_service_account_iam_binding" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, gcp, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Service Account IAM Binding
+        resource_type: google_service_account_iam_binding
+        resource_name: $NAME
+    description: |
+      Detects IAM bindings for Service Accounts.
+
+  - id: context-gcp-kms-key-ring
+    message: |
+      GCP KMS Key Ring detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_kms_key_ring" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: encryption
+      technology: [terraform, gcp, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key Ring
+        resource_type: google_kms_key_ring
+        resource_name: $NAME
+    description: |
+      Detects Google KMS Key Rings for encryption key management.
+
+  - id: context-gcp-kms-crypto-key
+    message: |
+      GCP KMS Crypto Key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_kms_crypto_key" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: encryption
+      technology: [terraform, gcp, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Crypto Key
+        resource_type: google_kms_crypto_key
+        resource_name: $NAME
+    description: |
+      Detects Google KMS Crypto Keys for encryption.
+
+  - id: context-gcp-secret-manager-secret
+    message: |
+      GCP Secret Manager Secret detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_secret_manager_secret" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: secrets
+      technology: [terraform, gcp, secrets]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Secret Manager Secret
+        resource_type: google_secret_manager_secret
+        resource_name: $NAME
+    description: |
+      Detects Google Secret Manager Secrets.

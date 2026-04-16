@@ -1,0 +1,73 @@
+rules:
+  - id: context-gcp-compute-instance
+    message: |
+      GCP Compute Engine VM instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, gcp, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Compute Instance
+        resource_type: google_compute_instance
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine VM instances.
+      These are standalone compute resources that may access storage, databases, and networks.
+
+  - id: context-gcp-compute-instance-template
+    message: |
+      GCP Compute Instance Template detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_instance_template" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, gcp, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Compute Instance Template
+        resource_type: google_compute_instance_template
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Instance Templates used for auto-scaling groups.
+
+  - id: context-gcp-compute-instance-group
+    message: |
+      GCP Instance Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_instance_group" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, gcp, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Compute Instance Group
+        resource_type: google_compute_instance_group
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Instance Groups.

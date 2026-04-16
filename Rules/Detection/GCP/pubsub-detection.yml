@@ -1,0 +1,48 @@
+rules:
+  - id: context-gcp-pubsub-topic
+    message: |
+      GCP Pub/Sub Topic detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_pubsub_topic" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: messaging
+      technology: [terraform, gcp, pubsub, messaging]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Pub/Sub Topic
+        resource_type: google_pubsub_topic
+        resource_name: $NAME
+    description: |
+      Detects Google Pub/Sub Topics for asynchronous messaging.
+
+  - id: context-gcp-pubsub-subscription
+    message: |
+      GCP Pub/Sub Subscription detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_pubsub_subscription" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: messaging
+      technology: [terraform, gcp, pubsub, messaging]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Pub/Sub Subscription
+        resource_type: google_pubsub_subscription
+        resource_name: $NAME
+    description: |
+      Detects Google Pub/Sub Subscriptions (child of topics).

@@ -86,7 +86,21 @@ class InternetExposureDetector:
             'google_compute_backend_service', 'google_compute_forwarding_rule',
             'google_compute_global_forwarding_rule', 'google_compute_target_http_proxy',
             'google_compute_target_https_proxy', 'google_compute_url_map',
-            'google_cloud_run_service',
+               'google_cloud_run_service',
+               # Serverless functions (may be unauthenticated)
+               'google_cloudfunctions_function', 'google_cloudfunctions2_function',
+               # Cloud Storage buckets (IAM-based public access)
+               'google_storage_bucket', 'google_storage_bucket_object',
+               # API Gateway APIs
+               'google_api_gateway_api', 'google_api_gateway_api_config',
+               # App Engine (inherently public)
+               'google_app_engine_application', 'google_app_engine_standard_app_version',
+               # Artifact Registry (can be public)
+               'google_artifact_registry_repository',
+               # Cloud SQL with public IP
+               'google_sql_database_instance',
+               # Load balancer backends and frontends
+               'google_compute_backend_bucket',
         },
         'oci': {
             'load_balancer', 'oci_load_balancer',

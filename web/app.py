@@ -19,6 +19,7 @@ import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from flask import Flask, Response, render_template, request, stream_with_context, jsonify
 
@@ -758,6 +759,180 @@ def _extract_json_object(text: str) -> dict | None:
         return None
 
 
+def _normalize_attack_paths(raw_value: object, reviewer: str | None = None) -> list[dict]:
+    """Normalize AI- or script-produced attack path entries into a stable schema."""
+    if not raw_value:
+        return []
+
+    items = raw_value if isinstance(raw_value, list) else [raw_value]
+    normalized: list[dict] = []
+
+    for item in items:
+        if isinstance(item, dict):
+            title = str(item.get("title") or item.get("name") or item.get("path") or "").strip()
+            path = str(item.get("path") or item.get("chain") or "").strip()
+            summary = str(item.get("summary") or item.get("detail") or item.get("description") or "").strip()
+            impact = str(item.get("impact") or item.get("risk") or item.get("severity_reason") or "").strip()
+            confidence = str(item.get("confidence") or "").strip().lower()
+            source = str(item.get("source") or item.get("kind") or "").strip()
+            reviewer_name = str(item.get("reviewer") or reviewer or "").strip()
+            evidence_raw = item.get("evidence") or item.get("references") or []
+        else:
+            title = str(item).strip()
+            path = ""
+            summary = ""
+            impact = ""
+            confidence = ""
+            source = ""
+            reviewer_name = reviewer or ""
+            evidence_raw = []
+
+        evidence: list[str] = []
+        if isinstance(evidence_raw, list):
+            for ref in evidence_raw[:6]:
+                if isinstance(ref, dict):
+                    ref_rule = str(ref.get("rule_id") or "").strip()
+                    ref_file = str(ref.get("file") or "").strip()
+                    ref_line = ref.get("line")
+                    ref_snippet = str(ref.get("snippet") or "").strip()
+                    parts = [p for p in [ref_rule, ref_file + (f":{ref_line}" if ref_file and ref_line else ref_file), ref_snippet] if p]
+                    if parts:
+                        evidence.append(" | ".join(parts))
+                else:
+                    text = str(ref).strip()
+                    if text:
+                        evidence.append(text)
+        elif isinstance(evidence_raw, dict):
+            text = "; ".join(f"{k}: {v}" for k, v in evidence_raw.items() if str(v).strip())
+            if text:
+                evidence.append(text)
+        else:
+            text = str(evidence_raw).strip()
+            if text:
+                evidence.append(text)
+
+        if confidence not in {"high", "medium", "low"}:
+            confidence = ""
+
+        if not (title or path or summary or impact):
+            continue
+
+        normalized.append({
+            "title": title or path or summary[:120] or "Attack path",
+            "path": path,
+            "summary": summary,
+            "impact": impact,
+            "confidence": confidence,
+            "source": source,
+            "reviewer": reviewer_name,
+            "evidence": evidence,
+        })
+
+    return normalized
+
+
+def _dedupe_attack_paths(paths: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for path in paths:
+        key = (
+            str(path.get("title") or "").strip().lower(),
+            str(path.get("path") or "").strip().lower(),
+            str(path.get("reviewer") or "").strip().lower(),
+        )
+        if key in seen:
+            continue
+        deduped.append(path)
+        seen.add(key)
+    return deduped
+
+
+def _derive_overview_attack_paths(facts: dict) -> list[dict]:
+    """Infer candidate attack paths from findings, RBAC, and exposure evidence."""
+    assets_by_id = {
+        str(asset.get("id")): asset
+        for asset in (facts.get("assets") or [])
+        if asset.get("id") is not None
+    }
+    derived: list[dict] = []
+
+    def _is_broad_role_name(value: object) -> bool:
+        role_text = str(value or "").strip().lower()
+        return role_text in {"owner", "contributor", "user access administrator"}
+
+    def _is_broad_scope_name(value: object) -> bool:
+        scope_text = str(value or "").strip().lower()
+        return any(token in scope_text for token in ("/subscriptions/", "/resourcegroups/", "resource group", "subscription"))
+
+    for role in (facts.get("roles") or [])[:50]:
+        role_name = str(role.get("role_name") or role.get("permissions") or "").strip()
+        scope_name = str(role.get("scope_name") or role.get("resource_name") or "").strip()
+        identity_name = str(role.get("identity_name") or role.get("principal_id") or "identity").strip()
+        role_text = role_name.lower()
+        if not role_name:
+            continue
+        if role.get("is_excessive") or (_is_broad_role_name(role_name) and _is_broad_scope_name(scope_name)):
+            derived.append({
+                "title": f"Broad {role_name} scope via {identity_name}",
+                "path": f"Compromised workload or identity -> {identity_name} -> {role_name} on {scope_name or 'assigned scope'}",
+                "summary": (
+                    f"The identity {identity_name} carries {role_name} on a broad scope, which can convert a single workload compromise into wider control."
+                ),
+                "impact": f"Potential control over {scope_name or 'the wider environment'}.",
+                "confidence": "high" if role.get("is_excessive") else "medium",
+                "source": "rbac",
+                "evidence": [f"Role assignment: {identity_name} -> {role_name} -> {scope_name or 'assigned scope'}"],
+            })
+        elif "automation" in identity_name.lower() and role_text in {"owner", "contributor"}:
+            derived.append({
+                "title": f"Automation identity with {role_name}",
+                "path": f"Modify automation -> run as {identity_name} -> {role_name} on {scope_name or 'assigned scope'}",
+                "summary": "Automation-backed identities can turn code or runbook modification into privileged control-plane access.",
+                "impact": f"Privilege escalation into {scope_name or 'the assigned scope'}.",
+                "confidence": "medium",
+                "source": "rbac",
+                "evidence": [f"Automation identity: {identity_name} has {role_name}"],
+            })
+
+    for port in (facts.get("ports") or [])[:25]:
+        resource_id = port.get("resource_id")
+        asset = assets_by_id.get(str(resource_id), {})
+        resource_name = str(asset.get("resource_name") or f"resource #{resource_id}").strip()
+        protocol = str(port.get("protocol") or "").strip()
+        port_num = str(port.get("port") or "").strip()
+        evidence = str(port.get("evidence") or "public endpoint evidence").strip()
+        derived.append({
+            "title": f"Internet reachability to {resource_name}",
+            "path": f"Internet -> {resource_name}",
+            "summary": f"The service appears reachable from the Internet via {protocol or 'network'} {port_num or 'exposure'}.",
+            "impact": "Remote attack surface is exposed directly to unauthenticated network access unless additional controls apply.",
+            "confidence": "medium",
+            "source": "exposure",
+            "evidence": [evidence],
+        })
+
+    public_keywords = ("public", "anonymous", "internet", "blob", "container", "cosmos")
+    for finding in (facts.get("findings") or [])[:60]:
+        title = str(finding.get("title") or "").strip()
+        description = str(finding.get("description") or "").strip()
+        rule_id = str(finding.get("rule_id") or "").strip()
+        resource_name = str(finding.get("resource_name") or "").strip()
+        resource_type = str(finding.get("resource_type") or "").strip()
+        haystack = f"{title} {description} {rule_id}".lower()
+        if resource_name and any(keyword in haystack for keyword in public_keywords):
+            derived.append({
+                "title": f"Public data path to {resource_name}",
+                "path": f"Internet -> {resource_name}",
+                "summary": f"The finding suggests {resource_name} ({resource_type or 'resource'}) is exposed publicly or accessible through a public endpoint.",
+                "impact": "Data exposure or remote attack surface may exist depending on authentication and network controls.",
+                "confidence": "medium",
+                "source": "findings",
+                "evidence": [text for text in [title, rule_id, description[:160]] if text],
+            })
+
+    return _dedupe_attack_paths(derived)[:8]
+
+
 def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict] | None:
     """Fetch a compact fact-set for Copilot to summarise."""
     conn = _get_db()
@@ -871,12 +1046,15 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
         if _table_exists(conn, "findings"):
             rows = conn.execute(
                 """
-                SELECT id, rule_id, title, description, severity_score, category,
+              SELECT f.id, f.resource_id, f.rule_id, f.title, f.description, f.severity_score, f.category,
                        source_file, source_line_start, evidence_location,
-                       SUBSTR(code_snippet, 1, 300) AS code_snippet
-                FROM findings
-                WHERE experiment_id = ? AND repo_id = ?
-                ORDER BY severity_score DESC, id ASC
+                  SUBSTR(f.code_snippet, 1, 300) AS code_snippet,
+                  r.resource_name,
+                  r.resource_type
+              FROM findings f
+              LEFT JOIN resources r ON f.resource_id = r.id
+              WHERE f.experiment_id = ? AND f.repo_id = ?
+              ORDER BY f.severity_score DESC, f.id ASC
                 """,
                 (experiment_id, repo_id),
             ).fetchall()
@@ -945,7 +1123,29 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
         try:
             # Roles: role assignments and identity-related resources
             role_rows = conn.execute(
-                "SELECT id, resource_name, resource_type, provider FROM resources WHERE experiment_id = ? AND repo_id = ? AND resource_type LIKE '%role%' LIMIT 200",
+                                """
+                                SELECT
+                                        res.id,
+                                        res.resource_name AS identity_name,
+                                        res.resource_type,
+                                        res.provider,
+                                        MAX(CASE WHEN LOWER(rp.property_key) IN ('role_name', 'role_definition_name', 'role_definition_id', 'role', 'permissions') THEN rp.property_value END) AS role_name,
+                                        MAX(CASE WHEN LOWER(rp.property_key) IN ('scope_resource', 'scope', 'scope_name', 'scope_id', 'resource_id', 'target_resource_name') THEN rp.property_value END) AS scope_name,
+                                        MAX(CASE WHEN LOWER(rp.property_key) = 'principal_id' THEN rp.property_value END) AS principal_id,
+                                        MAX(CASE WHEN LOWER(rp.property_key) = 'is_excessive' THEN rp.property_value END) AS is_excessive
+                                FROM resources res
+                                LEFT JOIN resource_properties rp ON rp.resource_id = res.id
+                                WHERE res.experiment_id = ? AND res.repo_id = ?
+                                    AND (
+                                        res.resource_type LIKE '%role%'
+                                        OR res.resource_type LIKE '%identity%'
+                                        OR res.resource_type LIKE '%managed_identity%'
+                                        OR res.resource_type LIKE '%user_assigned_identity%'
+                                        OR res.resource_type LIKE '%service_principal%'
+                                    )
+                                GROUP BY res.id, res.resource_name, res.resource_type, res.provider
+                                LIMIT 200
+                                """,
                 (experiment_id, repo_id),
             ).fetchall() if _table_exists(conn, "resources") else []
             roles = [dict(r) for r in role_rows]
@@ -1015,6 +1215,8 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
             facts['diagrams'] = diagrams
         except Exception:
             facts['diagrams'] = []
+
+        facts['attack_paths'] = _derive_overview_attack_paths(facts)
 
         return repo_id, facts
     finally:
@@ -1551,6 +1753,81 @@ def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from a log line for clean web rendering."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _decorate_scan_log_line(line: str) -> str:
+    """Add lightweight emoji markers to scan logs while preserving existing prefixes."""
+    if line is None:
+        return ""
+
+    clean = _strip_ansi(str(line)).rstrip("\r")
+    if not clean.strip():
+        return clean
+
+    source_emoji = {
+        "web": "🕸️",
+        "pipeline": "🧭",
+        "detection": "🔍",
+        "misconfigurations": "🛡️",
+        "store": "💾",
+        "info": "ℹ️",
+        "warning": "⚠️",
+        "warn": "⚠️",
+        "error": "❌",
+        "success": "✅",
+    }
+
+    source_match = re.match(
+        r"^\[(Info|Web|Pipeline|Detection|Misconfigurations|Store|Error|Warning|Warn|Success)\](\s*)(.*)$",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    if source_match:
+        tag, spacing, rest = source_match.groups()
+        emoji = source_emoji.get(tag.lower(), "")
+        if emoji and not rest.startswith(emoji):
+            spacer = spacing if spacing else " "
+            clean = f"[{tag}]{spacer}{emoji} {rest}"
+
+    if clean.startswith("[*]"):
+        clean = "[Info] 🔄 " + clean[3:].lstrip()
+    elif clean.startswith("[+]"):
+        clean = "[Success] ✅ " + clean[3:].lstrip()
+    elif clean.startswith("[✓]"):
+        clean = "[Success] ✅ " + clean[3:].lstrip()
+
+    if clean.startswith("[Connected to scan stream]"):
+        clean = "[Info] 🔌 Connected to scan stream"
+    elif clean.startswith("[Receiving data..."):
+        clean = "[Info] 📡 Receiving data..."
+    elif clean.startswith("[Stream closed]"):
+        clean = "[Info] 🔒 Stream closed"
+    elif clean.startswith("▶") and "Starting scan:" in clean:
+        clean = "🚀 " + clean
+    elif re.match(r"^(?:▶\s*)?Phase\s+\d", clean, re.IGNORECASE):
+        clean = "🧩 " + clean
+    elif re.match(r"^(?:▶\s*)?PHASE\s+\d", clean):
+        clean = "🧩 " + clean
+    elif "Pipeline complete" in clean and "✅" not in clean:
+        clean = clean.replace("Pipeline complete", "✅ Pipeline complete")
+    elif clean.strip().startswith("✓"):
+        clean = clean.replace("✓", "✅", 1)
+    elif clean.startswith("Info:"):
+        clean = clean.replace("Info:", "ℹ️ Info:", 1)
+    elif clean.startswith("Warning:"):
+        clean = clean.replace("Warning:", "⚠️ Warning:", 1)
+    elif clean.startswith("Next steps:"):
+        clean = clean.replace("Next steps:", "🧩 Next steps:", 1)
+
+    return clean
+
+
 def _stream_scan(repo_path: str, scan_name: str):
     """Generator yielding SSE events for the full scan pipeline.
 
@@ -1583,10 +1860,14 @@ def _stream_scan(repo_path: str, scan_name: str):
             except Exception:
                 pass
 
+    def _emit_scan_log(line: str) -> str:
+        rendered = _decorate_scan_log_line(line)
+        _write_scan_log(rendered)
+        return _sse("log", rendered)
+
     # Yield immediately to confirm connection
     first_line = f"[Web] Initializing scan for repository: {repo.name}"
-    _write_scan_log(first_line)
-    yield _sse("log", first_line)
+    yield _emit_scan_log(first_line)
 
     # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
     # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
@@ -1615,15 +1896,13 @@ def _stream_scan(repo_path: str, scan_name: str):
                         cfg = json.loads((exp_dir / "experiment.json").read_text(encoding="utf-8"))
                         if cfg.get("status") == "running":
                             experiment_id = existing
-                            _write_scan_log(f"[Web] Reusing running experiment id from lock: {experiment_id}")
-                            yield _sse("log", f"[Web] Reusing running experiment id from lock: {experiment_id}")
+                            yield _emit_scan_log(f"[Web] Reusing running experiment id from lock: {experiment_id}")
             except Exception:
                 # If lock read fails or experiment not found, fall through to normal creation
                 experiment_id = None
 
         if experiment_id is None and triage_script.exists():
-            _write_scan_log("[Web] Creating new experiment...")
-            yield _sse("log", "[Web] Creating new experiment...")
+            yield _emit_scan_log("[Web] Creating new experiment...")
             res = subprocess.run(
                 [sys.executable, str(triage_script), "new", scan_name, "--repos", str(repo)],
                 cwd=str(REPO_ROOT),
@@ -1650,8 +1929,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                 # If triage_experiment failed, include stderr in logs for diagnostics
                 if res.stderr:
                     msg = f"[Web] Failed to pre-create experiment: {res.stderr.splitlines()[0]}"
-                    _write_scan_log(msg)
-                    yield _sse("log", msg)
+                    yield _emit_scan_log(msg)
 
         # Persist lock for the experiment so concurrent requests reuse it
         if experiment_id:
@@ -1661,8 +1939,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                 pass
     except Exception as exc:
         msg = f"[Web] Experiment creation attempt failed: {exc}"
-        _write_scan_log(msg)
-        yield _sse("log", msg)
+        yield _emit_scan_log(msg)
 
     # Build pipeline command. If an experiment was created, pass it to the pipeline so all scripts use the same id.
     cmd = [
@@ -1674,8 +1951,7 @@ def _stream_scan(repo_path: str, scan_name: str):
     ]
     if experiment_id:
         cmd.extend(["--experiment", experiment_id])
-        _write_scan_log(f"[Web] Using experiment id: {experiment_id}")
-        yield _sse("log", f"[Web] Using experiment id: {experiment_id}")
+        yield _emit_scan_log(f"[Web] Using experiment id: {experiment_id}")
         # Inform the UI immediately of the experiment id so it can bind sections/queries
         yield _sse("experiment", experiment_id)
 
@@ -1687,8 +1963,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         "      Estimated duration: 5-6 minutes (detection → misconfig → code analysis)",
         "",
     ]:
-        _write_scan_log(msg)
-        yield _sse("log", msg)
+        yield _emit_scan_log(msg)
 
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -1723,8 +1998,7 @@ def _stream_scan(repo_path: str, scan_name: str):
                 if raw_line == '' and process.poll() is not None:
                     break
                 line = raw_line.rstrip()
-                _write_scan_log(line)
-                yield _sse("log", line)
+                yield _emit_scan_log(line)
 
                 # Capture experiment ID printed by run_pipeline.py
                 if experiment_id is None:
@@ -1745,16 +2019,14 @@ def _stream_scan(repo_path: str, scan_name: str):
                         hb = f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
                     else:
                         hb = f"[Web] Scan in progress — elapsed {elapsed}s"
-                    _write_scan_log(hb)
-                    yield _sse("log", hb)
+                    yield _emit_scan_log(hb)
                     last_hb = now
 
             if process.poll() is not None:
                 # Drain remaining output
                 for raw_line in process.stdout:
                     line = raw_line.rstrip()
-                    _write_scan_log(line)
-                    yield _sse("log", line)
+                    yield _emit_scan_log(line)
                     if experiment_id is None:
                         m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                         if m:
@@ -1784,8 +2056,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         if diagrams:
             yield _sse("diagrams", diagrams)
         else:
-            _write_scan_log("[Web] No architecture diagrams found in cloud_diagrams.")
-            yield _sse("log", "[Web] No architecture diagrams found in cloud_diagrams.")
+            yield _emit_scan_log("[Web] No architecture diagrams found in cloud_diagrams.")
 
     # Remove lock file if it refers to this experiment so future scans can start.
     try:
@@ -2076,8 +2347,11 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
         assets_json = json.dumps((fact_json or {}).get("assets") or [])
         findings_json = json.dumps((fact_json or {}).get("findings") or [])
+        roles_json = json.dumps((fact_json or {}).get("roles") or [])
+        ports_json = json.dumps((fact_json or {}).get("ports") or [])
+        attack_paths_json = json.dumps((fact_json or {}).get("attack_paths") or [])
         other_facts = dict(fact_json or {})
-        for k in ("global_knowledge_qna", "diagrams", "assets", "findings"):
+        for k in ("global_knowledge_qna", "diagrams", "assets", "findings", "roles", "ports", "attack_paths"):
             other_facts.pop(k, None)
         
         return (
@@ -2089,9 +2363,16 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             f"2) Architecture / diagrams JSON: {diagrams_json}\n\n"
             f"3) Assets JSON: {assets_json}\n\n"
             f"4) Detected findings (evidence) JSON: {findings_json}\n\n"
-            f"5) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
+            f"5) Roles / permissions JSON: {roles_json}\n\n"
+            f"6) Internet / exposure evidence JSON: {ports_json}\n\n"
+            f"7) Candidate attack paths JSON: {attack_paths_json}\n\n"
+            f"8) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
             f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
-            "Return compact JSON with keys: project_summary, deployment_summary, interactions_summary, auth_summary, dependencies_summary, issues_summary, skeptic_summary, action_items, open_questions, observations, asset_visibility, learning_suggestions, new_assets, fixed_information\n\n"
+            "Return compact JSON with keys: project_summary, deployment_summary, interactions_summary, auth_summary, dependencies_summary, issues_summary, skeptic_summary, attack_paths, action_items, open_questions, observations, asset_visibility, learning_suggestions, new_assets, fixed_information\n\n"
+            "In auth_summary and observations, explicitly reason about privilege escalation chains: compromised compute -> managed identity -> automation/resource control -> broader RBAC scope.\n"
+            "Refine the candidate attack paths using findings, roles, and public exposure evidence, and return the final list in attack_paths.\n"
+            "Distinguish anonymous public access from authenticated public endpoints for data services such as Storage and Cosmos DB.\n"
+            "The attack_paths array must use objects with: title, path, summary, impact, confidence, evidence.\n"
             "For the 'observations' array each item MUST follow this schema:\n"
             "  {\"title\": \"<short title>\", \"detail\": \"<1-3 sentence explanation>\", \"target\": \"<primary file/resource>\", "
             "\"references\": [{\"finding_id\": <int or null>, \"rule_id\": \"<str>\", \"file\": \"<path>\", \"line\": <int or null>, \"snippet\": \"<≤120 char excerpt>\"}]}\n"
@@ -2103,8 +2384,11 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         assets_json = json.dumps((fact_json or {}).get("assets") or [])
         diagrams_json = json.dumps((fact_json or {}).get("diagrams") or [])
         findings_json = json.dumps((fact_json or {}).get("findings") or [])
+        roles_json = json.dumps((fact_json or {}).get("roles") or [])
+        ports_json = json.dumps((fact_json or {}).get("ports") or [])
+        attack_paths_json = json.dumps((fact_json or {}).get("attack_paths") or [])
         other_facts = dict(fact_json or {})
-        for k in ("assets", "diagrams", "findings"):
+        for k in ("assets", "diagrams", "findings", "roles", "ports", "attack_paths"):
             other_facts.pop(k, None)
 
         return (
@@ -2114,10 +2398,16 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             f"1) Architecture diagrams JSON: {diagrams_json}\n\n"
             f"2) Assets JSON: {assets_json}\n\n"
             f"3) Findings JSON: {findings_json}\n\n"
-            f"4) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
+            f"4) Roles / permissions JSON: {roles_json}\n\n"
+            f"5) Internet / exposure evidence JSON: {ports_json}\n\n"
+            f"6) Candidate attack paths JSON: {attack_paths_json}\n\n"
+            f"7) Other extracted facts JSON: {json.dumps(other_facts)}\n\n"
             f"Skeptic reviews (sample): {json.dumps(skeptic_rows)}\n\n"
-            "Return compact JSON with keys: architecture_summary, new_assets, diagram_corrections, learning_suggestions, open_questions, fixed_information\n\n"
+            "Return compact JSON with keys: architecture_summary, attack_paths, new_assets, diagram_corrections, learning_suggestions, open_questions, fixed_information\n\n"
             "The 'diagram_corrections' array should list missing assets, missing connections, incorrect hierarchy, incorrect grouping, and internet exposure issues.\n"
+            "Also check privilege attack paths: if compromised compute can manage automation, managed identities, or broad Contributor/Owner scopes, require explicit diagram arrows or notes.\n"
+            "For data stores, distinguish anonymous public access from public endpoints that still require authentication.\n"
+            "The attack_paths array must use objects with: title, path, summary, impact, confidence, evidence.\n"
             "When recommending fixes, include concrete code or rule targets when known."
         )
 
@@ -2236,6 +2526,9 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             "findings": findings_data,
             "resources": assets_data,
             "diagrams": diagrams_data,
+            "roles": (fact_json or {}).get("roles", []),
+            "ports": (fact_json or {}).get("ports", []),
+            "attack_paths": (fact_json or {}).get("attack_paths", []),
             "placeholder_tldr": f"Repository with {len(assets_data)} resources, {len(findings_data)} findings",
             "skeptic_reviews": skeptic_rows,
         }
@@ -2254,6 +2547,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             ]
 
         per_agent_combined: dict[str, str] = {}
+        aggregated_attack_paths: list[dict] = []
         temp_copy_dir = None
         
         if resume_state["resume_from_step"] <= 2:
@@ -2579,6 +2873,10 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     adjustments = preview.get("score_adjustments") or []
                     if adjustments:
                         yield _sse("log", f"  ⚖️  {len(adjustments)} score adjustment(s) proposed")
+                    attack_paths = _normalize_attack_paths(preview.get("attack_paths"), reviewer=agent_name)
+                    if attack_paths:
+                        aggregated_attack_paths.extend(attack_paths)
+                        yield _sse("log", f"  🛤️  {len(attack_paths)} attack path(s) proposed")
                     questions = preview.get("open_questions") or []
                     if questions:
                         yield _sse("log", f"  ❓ {len(questions)} open question(s) raised")
@@ -2720,6 +3018,34 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                         repo_name,
                         "ai_observations",
                         json.dumps(clean_obs),
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
+                except Exception:
+                    pass
+
+            attack_paths = _dedupe_attack_paths(
+                _normalize_attack_paths(parsed.get("attack_paths")) + aggregated_attack_paths
+            )
+            if attack_paths:
+                yield _sse("log", "")
+                yield _sse("log", "Attack paths:")
+                for attack_path in attack_paths[:8]:
+                    headline = str(attack_path.get("title") or attack_path.get("path") or "Attack path").strip()
+                    path_text = str(attack_path.get("path") or "").strip()
+                    impact_text = str(attack_path.get("impact") or "").strip()
+                    suffix = f" [{attack_path.get('reviewer')}]" if attack_path.get("reviewer") else ""
+                    yield _sse("log", f"- {headline}{suffix}")
+                    if path_text:
+                        yield _sse("log", f"  path: {path_text}")
+                    if impact_text:
+                        yield _sse("log", f"  impact: {impact_text}")
+                try:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_attack_paths",
+                        json.dumps(attack_paths[:12]),
                         namespace="ai_overview",
                         source="copilot_stream",
                     )
@@ -5213,6 +5539,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 ai_context_summary_val = (_r["value"] or "").strip()
                 break
 
+        has_ai_attack_paths = False
         if ai_overview_rows:
             label_map = {
                 "ai_context_summary": "What This Repo Does",
@@ -5220,6 +5547,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 "ai_deployment_summary": "Deployment",
                 "ai_interactions_summary": "Interactions",
                 "ai_auth_summary": "Auth",
+                "ai_attack_paths": "Attack Paths",
                 "ai_dependencies_summary": "Dependencies",
                 "ai_issues_summary": "Issues",
                 "ai_skeptic_summary": "Skeptics",
@@ -5235,8 +5563,8 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 "ai_analysis_completed_at": "Analysis completed",
                 "ai_analysis_recovered": "Recovered",
             }
-            # ai_context_summary should render first, finding themes second
-            priority_keys = ["ai_context_summary", "ai_finding_themes"]
+            # ai_context_summary should render first, then findings themes, then attack paths
+            priority_keys = ["ai_context_summary", "ai_finding_themes", "ai_attack_paths"]
             # Fields that should be formatted as numbered lists (semicolon-separated)
             list_fields = {"ai_action_items", "ai_open_questions", "ai_observations", "ai_asset_visibility", "ai_learning_suggestions"}
             # Fields that contain JSON arrays (skip rendering raw JSON)
@@ -5357,6 +5685,55 @@ def api_view_overview(experiment_id: str, repo_name: str):
                                 + ''.join(cards)
                                 + '</div>'
                             )
+                    continue
+
+                if row["key"] == "ai_attack_paths":
+                    parsed_paths = None
+                    try:
+                        parsed_paths = json.loads(val)
+                    except Exception:
+                        parsed_paths = None
+
+                    normalized_paths = _normalize_attack_paths(parsed_paths)
+                    if normalized_paths:
+                        has_ai_attack_paths = True
+                        cards = []
+                        for attack_path in normalized_paths[:8]:
+                            title = esc(str(attack_path.get("title") or "Attack path"))
+                            path_text = esc(str(attack_path.get("path") or ""))
+                            summary_text = esc(str(attack_path.get("summary") or ""))
+                            impact_text = esc(str(attack_path.get("impact") or ""))
+                            confidence = esc(str(attack_path.get("confidence") or ""))
+                            reviewer = esc(str(attack_path.get("reviewer") or ""))
+                            source = esc(str(attack_path.get("source") or ""))
+                            evidence_items = []
+                            for evidence in (attack_path.get("evidence") or [])[:4]:
+                                text = str(evidence).strip()
+                                if text:
+                                    evidence_items.append(f"<li>{esc(text)}</li>")
+
+                            badges = ""
+                            if confidence:
+                                badges += f'<span class="how-badge" style="margin-left:6px">{confidence}</span>'
+                            if reviewer:
+                                badges += f'<span class="how-badge" style="margin-left:6px">{reviewer}</span>'
+                            if source:
+                                badges += f'<span class="how-badge" style="margin-left:6px">{source}</span>'
+
+                            block = f'<div class="ai-action"><h4 class="ai-action-title">{title}{badges}</h4>'
+                            if path_text:
+                                block += f'<div class="ai-action-row"><span class="ai-action-label">Path</span> <span>{path_text}</span></div>'
+                            if summary_text:
+                                block += f'<div class="ai-action-row"><span class="ai-action-label">Why it matters</span> <span>{summary_text}</span></div>'
+                            if impact_text:
+                                block += f'<div class="ai-action-row"><span class="ai-action-label">Impact</span> <span>{impact_text}</span></div>'
+                            if evidence_items:
+                                block += f'<div class="ai-action-row"><span class="ai-action-label">Evidence</span><ul>{"".join(evidence_items)}</ul></div>'
+                            block += '</div>'
+                            cards.append(block)
+
+                        if cards:
+                            ai_sections.append(f'<h3>{esc(label)}</h3><div class="ai-actions">' + ''.join(cards) + '</div>')
                     continue
                 
                 if row["key"] in list_fields:
@@ -5722,6 +6099,37 @@ def api_view_overview(experiment_id: str, repo_name: str):
             
             if ai_sections:
                 overview_sections.append("<h2>Project Overview</h2>" + ''.join(ai_sections))
+
+        if not has_ai_attack_paths:
+            try:
+                facts_for_paths = _fetch_overview_facts(resolved_exp_id, repo_name)
+                derived_paths = _normalize_attack_paths((facts_for_paths[1] or {}).get("attack_paths") if facts_for_paths else [])
+            except Exception:
+                derived_paths = []
+            if derived_paths:
+                blocks = []
+                for attack_path in derived_paths[:6]:
+                    title = esc(str(attack_path.get("title") or "Attack path"))
+                    path_text = esc(str(attack_path.get("path") or ""))
+                    summary_text = esc(str(attack_path.get("summary") or ""))
+                    impact_text = esc(str(attack_path.get("impact") or ""))
+                    confidence = esc(str(attack_path.get("confidence") or ""))
+                    source = esc(str(attack_path.get("source") or ""))
+                    badges = ""
+                    if confidence:
+                        badges += f'<span class="how-badge" style="margin-left:6px">{confidence}</span>'
+                    if source:
+                        badges += f'<span class="how-badge" style="margin-left:6px">{source}</span>'
+                    block = f'<div class="ai-action"><h4 class="ai-action-title">{title}{badges}</h4>'
+                    if path_text:
+                        block += f'<div class="ai-action-row"><span class="ai-action-label">Path</span> <span>{path_text}</span></div>'
+                    if summary_text:
+                        block += f'<div class="ai-action-row"><span class="ai-action-label">Why it matters</span> <span>{summary_text}</span></div>'
+                    if impact_text:
+                        block += f'<div class="ai-action-row"><span class="ai-action-label">Impact</span> <span>{impact_text}</span></div>'
+                    block += '</div>'
+                    blocks.append(block)
+                overview_sections.append("<h2>Likely Attack Paths</h2><div class=\"ai-actions\">" + ''.join(blocks) + "</div>")
 
         # 1) What the repo does
         purpose_rows = _safe_fetchall(
@@ -8413,6 +8821,23 @@ def api_view_traffic(experiment_id: str, repo_name: str):
 @app.route("/api/view/roles/<experiment_id>/<repo_name>")
 def api_view_roles(experiment_id: str, repo_name: str):
     """Render the roles & permissions tab HTML."""
+    def _normalize_role_name(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    def _is_broad_role(value: object) -> bool:
+        return _normalize_role_name(value) in {"owner", "contributor", "user access administrator"}
+
+    def _is_broad_scope(value: object) -> bool:
+        scope_text = str(value or "").strip().lower()
+        return any(token in scope_text for token in ("/subscriptions/", "/resourcegroups/", "resource group", "subscription"))
+
+    def _is_compute_like(resource_type: object) -> bool:
+        rt = str(resource_type or "").strip().lower()
+        return any(token in rt for token in (
+            "virtual_machine", "linux_virtual_machine", "windows_virtual_machine",
+            "app_service", "function_app", "container_app", "web_app", "compute",
+        ))
+
     def _normalize_permission_lines(raw_value: object) -> list[str]:
         if raw_value is None:
             return []
@@ -8456,6 +8881,57 @@ def api_view_roles(experiment_id: str, repo_name: str):
         if not resolved_exp_id:
             return _db_render("tab_roles.html", roles=[], error=f"No scan found for {repo_name}.")
         target_exp = resolved_exp_id
+        principal_rows = conn.execute(
+            """
+            SELECT
+                r.id,
+                r.resource_name,
+                r.resource_type,
+                MAX(CASE WHEN LOWER(rp.property_key) = 'principal_id' THEN rp.property_value END) AS principal_id,
+                MAX(CASE WHEN LOWER(rp.property_key) = 'client_id' THEN rp.property_value END) AS client_id
+            FROM resources r
+            JOIN repositories repo ON r.repo_id = repo.id
+            LEFT JOIN resource_properties rp ON rp.resource_id = r.id
+            WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
+            GROUP BY r.id, r.resource_name, r.resource_type
+            """,
+            (repo_name, target_exp),
+        ).fetchall()
+        principal_lookup: dict[str, dict] = {}
+        for row in principal_rows:
+            row_dict = dict(row)
+            for key in ("principal_id", "client_id"):
+                token = (row_dict.get(key) or "").strip()
+                if token and token not in principal_lookup:
+                    principal_lookup[token] = row_dict
+
+        identity_consumers: dict[str, list[dict]] = {}
+        try:
+            auth_rows = conn.execute(
+                """
+                SELECT
+                    src.resource_name AS consumer_name,
+                    src.resource_type AS consumer_type,
+                    tgt.resource_name AS identity_name,
+                    tgt.resource_type AS identity_type
+                FROM resource_connections rc
+                JOIN resources src ON rc.source_resource_id = src.id
+                JOIN resources tgt ON rc.target_resource_id = tgt.id
+                JOIN repositories repo ON src.repo_id = repo.id
+                WHERE LOWER(repo.repo_name) = LOWER(?)
+                  AND repo.experiment_id = ?
+                  AND LOWER(COALESCE(rc.connection_type, '')) = 'authenticates_via'
+                """,
+                (repo_name, target_exp),
+            ).fetchall()
+            for row in auth_rows:
+                row_dict = dict(row)
+                key = (row_dict.get("identity_name") or "").strip().lower()
+                if key:
+                    identity_consumers.setdefault(key, []).append(row_dict)
+        except Exception:
+            identity_consumers = {}
+
         rows = conn.execute(
             """
             SELECT
@@ -8525,10 +9001,20 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 or (prop_map.get("role_definition_id") or "").strip()
                 or (prop_map.get("role") or "").strip()
             )
+            resolved_principal = principal_lookup.get((entry.get("principal_id") or "").strip())
+            if resolved_principal:
+                entry["principal_name"] = resolved_principal.get("resource_name")
+                entry["principal_resource_type"] = resolved_principal.get("resource_type")
+                if str(entry.get("role_type") or "").lower() == "azurerm_role_assignment":
+                    entry["identity_name"] = resolved_principal.get("resource_name") or entry.get("identity_name")
 
             permission_details: list[str] = []
             if role_name:
                 permission_details.append(f"Role: {role_name}")
+            if entry.get("principal_name"):
+                permission_details.append(
+                    f"Principal resource: {entry['principal_name']} ({entry.get('principal_resource_type') or 'identity'})"
+                )
 
             for label, key in (
                 ("Allowed actions", "actions"),
@@ -8548,6 +9034,32 @@ def api_view_roles(experiment_id: str, repo_name: str):
                 permission_details.append(f"Scope: {entry['resource_name']}")
             if entry.get("principal_id"):
                 permission_details.append(f"Principal: {entry['principal_id']}")
+
+            for consumer in identity_consumers.get((entry.get("identity_name") or "").strip().lower(), []):
+                permission_details.append(
+                    f"Used by: {consumer.get('consumer_name')} ({consumer.get('consumer_type')})"
+                )
+
+            if _is_broad_role(role_name) and _is_broad_scope(entry.get("resource_name")):
+                entry["is_excessive"] = 1
+                permission_details.append("⚠️ Broad role at resource-group/subscription scope")
+
+            if _is_broad_role(role_name) and resolved_principal and _is_compute_like(resolved_principal.get("resource_type")):
+                permission_details.append(
+                    f"Attack path: compromise of {resolved_principal.get('resource_name')} may yield {role_name} over {entry.get('resource_name') or 'the assigned scope'}"
+                )
+
+            if _is_broad_role(role_name):
+                for consumer in identity_consumers.get((entry.get("identity_name") or "").strip().lower(), []):
+                    consumer_name = consumer.get("consumer_name") or "attached workload"
+                    consumer_type = str(consumer.get("consumer_type") or "")
+                    permission_details.append(
+                        f"Attack path: anyone able to control {consumer_name} can execute with {role_name} on {entry.get('resource_name') or 'the assigned scope'}"
+                    )
+                    if "automation" in consumer_type.lower() or "automation" in str(consumer_name).lower():
+                        permission_details.append(
+                            f"⚠️ Automation chain: {consumer_name} runs as this identity; compromise or modification of that automation can inherit {role_name}"
+                        )
 
             seen: set[str] = set()
             deduped_details: list[str] = []
@@ -8686,6 +9198,43 @@ def api_view_roles(experiment_id: str, repo_name: str):
             val = role.get("is_excessive")
             if val is not None:
                 role["is_excessive"] = 1 if str(val).lower() in ("1", "true", "yes") else 0
+
+        automation_owner_paths: list[dict] = []
+        for role in roles:
+            if not (_is_broad_role(role.get("permissions")) and str(role.get("resource_name") or "").strip()):
+                continue
+            for consumer in identity_consumers.get((role.get("identity_name") or "").strip().lower(), []):
+                consumer_name = consumer.get("consumer_name") or ""
+                consumer_type = str(consumer.get("consumer_type") or "")
+                if "automation" in consumer_type.lower() or "automation" in consumer_name.lower():
+                    automation_owner_paths.append({
+                        "consumer_name": consumer_name,
+                        "scope": role.get("resource_name"),
+                        "role_name": role.get("permissions"),
+                        "identity_name": role.get("identity_name"),
+                    })
+
+        for role in roles:
+            if not (_is_compute_like(role.get("principal_resource_type")) and _is_broad_role(role.get("permissions"))):
+                continue
+            details = list(role.get("permission_details") or [])
+            for path in automation_owner_paths:
+                if str(path.get("scope") or "").strip() != str(role.get("resource_name") or "").strip():
+                    continue
+                if _normalize_role_name(path.get("role_name")) != "owner":
+                    continue
+                details.append(
+                    f"Privilege chain: this principal can manage automation resource {path['consumer_name']} in the same scope; {path['identity_name']} attached to it has Owner"
+                )
+            deduped: list[str] = []
+            seen_details: set[str] = set()
+            for line in details:
+                if line and line not in seen_details:
+                    deduped.append(line)
+                    seen_details.add(line)
+            role["permission_details"] = deduped
+            if deduped:
+                role["permission_summary"] = deduped[0]
         return _db_render("tab_roles.html", roles=roles)
     except Exception as exc:
         return _db_render("tab_roles.html", roles=[], error=str(exc))

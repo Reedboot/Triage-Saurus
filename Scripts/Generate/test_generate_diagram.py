@@ -355,6 +355,70 @@ def test_vnet_is_rendered_as_internal_container(monkeypatch):
     assert "style vNet" in diagram
 
 
+def test_single_nsg_is_rendered_as_compute_container_inside_vnet(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "dev-vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "vNet",
+            "resource_type": "azurerm_virtual_network",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 3,
+            "resource_name": "dev-nsg",
+            "resource_type": "azurerm_network_security_group",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id": [
+            _FakeRow(id=1, resource_name="dev-vm", resource_type="azurerm_virtual_machine", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="vNet", resource_type="azurerm_virtual_network", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=3, resource_name="dev-nsg", resource_type="azurerm_network_security_group", provider="azure", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+
+    def _fake_rt(_c, rt):
+        rt_l = (rt or "").lower()
+        if "virtual_network" in rt_l:
+            return {"display_on_architecture_chart": True, "friendly_name": "Virtual Network", "category": "Network"}
+        if "network_security_group" in rt_l:
+            return {"display_on_architecture_chart": True, "friendly_name": "Network Security Group", "category": "Network"}
+        return {"display_on_architecture_chart": True, "friendly_name": "Virtual Machine", "category": "Compute"}
+
+    def _fake_cat(_c, rt):
+        rt_l = (rt or "").lower()
+        if "virtual_network" in rt_l or "network_security_group" in rt_l:
+            return "Network"
+        return "Compute"
+
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", _fake_rt)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", _fake_cat)
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", _fake_cat)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
+    assert "subgraph dev_nsg[\"🛡️ NSG: dev-nsg\"]" in diagram
+    assert "subgraph compute_tier[\"🖥️ Compute Tier\"]" in diagram
+    assert "dev_vm" in diagram
+
+
 def test_automation_account_not_nested_inside_managed_identity(monkeypatch):
     """Automation account that USES a managed identity should not be nested inside it."""
     resources = [

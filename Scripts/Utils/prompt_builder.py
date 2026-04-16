@@ -309,6 +309,9 @@ def build_context_extraction_prompt(
     resources = baseline_data.get("resources", [])
     findings = baseline_data.get("findings", [])
     diagrams = baseline_data.get("diagrams", [])
+    roles = baseline_data.get("roles", [])
+    ports = baseline_data.get("ports", [])
+    attack_paths = baseline_data.get("attack_paths", [])
 
     # Include only the Architecture / Discovery sections of the agent — not the
     # full 80 KB of bash scripts and output templates.  We extract the first
@@ -349,6 +352,27 @@ def build_context_extraction_prompt(
             prompt_parts.append(d.get("mermaid_code", ""))
             prompt_parts.append("```")
 
+    if roles:
+        prompt_parts.append(f"\n## Roles / permissions ({len(roles)} total — showing top 20):")
+        for role in roles[:20]:
+            prompt_parts.append(
+                f"- {role.get('identity_name', 'unknown')} | role={role.get('role_name', role.get('permissions', 'unknown'))} "
+                f"| scope={role.get('scope_name', role.get('resource_name', 'unknown'))} | principal={role.get('principal_name', role.get('principal_id', 'unknown'))}"
+            )
+    if attack_paths:
+        prompt_parts.append(f"\n## Candidate attack paths ({len(attack_paths)} total — showing top 8):")
+        for attack_path in attack_paths[:8]:
+            prompt_parts.append(
+                f"- {attack_path.get('title', 'Attack path')} | path={attack_path.get('path', 'unknown')} "
+                f"| impact={attack_path.get('impact', 'unknown')} | evidence={'; '.join((attack_path.get('evidence') or [])[:2])}"
+            )
+    if ports:
+        prompt_parts.append(f"\n## Internet/public endpoint evidence ({len(ports)} total — showing top 15):")
+        for port in ports[:15]:
+            prompt_parts.append(
+                f"- resource_id={port.get('resource_id')} port={port.get('port')} protocol={port.get('protocol')} evidence={port.get('evidence')}"
+            )
+
     prompt_parts.append(f"\n## Findings summary ({len(findings)} detected by OpenGrep):")
     for f in findings[:10]:
         prompt_parts.append(f"- [{f.get('severity_score', '?')}/10] {f.get('title', 'Untitled')}")
@@ -361,12 +385,15 @@ def build_context_extraction_prompt(
         "1. Identify resources the scripts missed (check diagram vs resource list for gaps)",
         "2. Clarify ambiguous connections (missing protocol/port, unclear auth method)",
         "3. Flag architecture patterns that need attention before security review",
+        "4. Surface privilege/identity chains that reviewers must inspect (for example: compromised compute -> managed identity -> automation/resource control -> broader role scope)",
+        "5. Surface public data endpoints separately from anonymous public access (for example: public endpoint with auth vs anonymous blob/container access)",
         "4. Do NOT score findings or make security judgements — that is for the reviewer agents",
         "",
         "Return JSON only:",
         "```json",
         "{",
         '  "context_summary": "<2-3 sentence description of what this repo does architecturally>",',
+        '  "attack_paths": [{"title": "<path title>", "path": "<A -> B -> C>", "summary": "<why this path is plausible>", "impact": "<what an attacker gets>", "confidence": "high|medium|low", "evidence": ["<finding or clue>"]}],',
         '  "new_assets": [{"name": "<name>", "type": "<type>", "confidence": "high|medium|low", "how_discovered": "<why>"}],',
         '  "connection_gaps": [{"from": "<resource>", "to": "<resource>", "missing": "protocol|port|auth|all", "inferred": "<value>"}],',
         '  "architecture_notes": ["<note about pattern, boundary, or data flow>"],',
@@ -388,6 +415,9 @@ def build_architecture_review_prompt(
     resources = baseline_data.get("resources", [])
     findings = baseline_data.get("findings", [])
     diagrams = baseline_data.get("diagrams", [])
+    roles = baseline_data.get("roles", [])
+    ports = baseline_data.get("ports", [])
+    attack_paths = baseline_data.get("attack_paths", [])
 
     agent_excerpt = agent_content[:8000]
     if len(agent_content) > 8000:
@@ -432,17 +462,43 @@ def build_architecture_review_prompt(
         if len(findings) > 10:
             prompt_parts.append(f"  ... and {len(findings) - 10} more")
 
+    if roles:
+        prompt_parts.append(f"\n## Roles / permissions ({len(roles)} total — showing top 20):")
+        for role in roles[:20]:
+            prompt_parts.append(
+                f"- {role.get('identity_name', 'unknown')} | role={role.get('role_name', role.get('permissions', 'unknown'))} "
+                f"| scope={role.get('scope_name', role.get('resource_name', 'unknown'))} | principal={role.get('principal_name', role.get('principal_id', 'unknown'))}"
+            )
+
+    if attack_paths:
+        prompt_parts.append(f"\n## Candidate attack paths ({len(attack_paths)} total — showing top 8):")
+        for attack_path in attack_paths[:8]:
+            prompt_parts.append(
+                f"- {attack_path.get('title', 'Attack path')} | path={attack_path.get('path', 'unknown')} "
+                f"| impact={attack_path.get('impact', 'unknown')} | evidence={'; '.join((attack_path.get('evidence') or [])[:2])}"
+            )
+
+    if ports:
+        prompt_parts.append(f"\n## Exposure evidence ({len(ports)} total — showing top 15):")
+        for port in ports[:15]:
+            prompt_parts.append(
+                f"- resource_id={port.get('resource_id')} port={port.get('port')} protocol={port.get('protocol')} evidence={port.get('evidence')}"
+            )
+
     prompt_parts.extend([
         "",
         "# YOUR TASK:",
         "1. Validate hierarchy, connectivity, and Internet exposure in the diagrams.",
         "2. Identify missing assets, missing edges, and incorrect parent-child relationships.",
-        "3. If the issue should be fixed in code or rules, call out the concrete file or rule and the change needed.",
-        "4. Return JSON only.",
+        "3. Validate privilege attack paths in the architecture: if compromised compute can manage automation, identities, or broad RBAC scopes, require explicit arrows/notes.",
+        "4. Distinguish anonymous public access from authenticated public endpoints for data services such as Storage and Cosmos DB.",
+        "5. If the issue should be fixed in code or rules, call out the concrete file or rule and the change needed.",
+        "6. Return JSON only.",
         "",
         "```json",
         "{",
         '  "architecture_summary": "<2-3 sentence summary of the architecture and validation outcome>",',
+        '  "attack_paths": [{"title": "<path title>", "path": "<A -> B -> C>", "summary": "<why this path matters>", "impact": "<what an attacker gets>", "confidence": "high|medium|low", "evidence": ["<finding or clue>"]}],',
         '  "new_assets": [{"name": "<name>", "type": "<type>", "confidence": "high|medium|low", "how_discovered": "<why>"}],',
         '  "diagram_corrections": [{"diagram_title": "<title>", "issue_type": "missing_asset|missing_connection|incorrect_hierarchy|incorrect_grouping|internet_exposure", "correction": "<what to change>", "original_snippet": "<original snippet>", "corrected_mermaid_code": "<full corrected diagram or null>"}],',
         '  "learning_suggestions": [{"kind": "rule_change|code_change|diagram_fix", "target": "<file or rule>", "rationale": "<why>", "example_evidence": "<evidence>", "proposed_change": "<specific change>"}],',
@@ -487,6 +543,9 @@ def build_focused_prompt(
 
     findings = baseline_data.get("findings", [])
     resources = baseline_data.get("resources", [])
+    roles = baseline_data.get("roles", [])
+    ports = baseline_data.get("ports", [])
+    attack_paths = baseline_data.get("attack_paths", [])
 
     prompt_parts = [
         f"You are acting as the **{agent_name}** reviewer for a security triage portal.",
@@ -520,13 +579,42 @@ def build_focused_prompt(
     if len(resources) > 20:
         prompt_parts.append(f"  … and {len(resources) - 20} more resources")
 
+    if roles:
+        prompt_parts.append("")
+        prompt_parts.append(f"## Roles / permissions ({len(roles)} total — showing top 15):")
+        for role in roles[:15]:
+            prompt_parts.append(
+                f"- {role.get('identity_name', 'unknown')} | role={role.get('role_name', role.get('permissions', 'unknown'))} "
+                f"| scope={role.get('scope_name', role.get('resource_name', 'unknown'))} | principal={role.get('principal_name', role.get('principal_id', 'unknown'))}"
+            )
+
+    if attack_paths:
+        prompt_parts.append("")
+        prompt_parts.append(f"## Candidate attack paths ({len(attack_paths)} total — showing top 8):")
+        for attack_path in attack_paths[:8]:
+            prompt_parts.append(
+                f"- {attack_path.get('title', 'Attack path')} | path={attack_path.get('path', 'unknown')} "
+                f"| impact={attack_path.get('impact', 'unknown')} | evidence={'; '.join((attack_path.get('evidence') or [])[:2])}"
+            )
+
+    if ports:
+        prompt_parts.append("")
+        prompt_parts.append(f"## Exposure evidence ({len(ports)} total — showing top 10):")
+        for port in ports[:10]:
+            prompt_parts.append(
+                f"- resource_id={port.get('resource_id')} port={port.get('port')} protocol={port.get('protocol')} evidence={port.get('evidence')}"
+            )
+
     prompt_parts.extend([
         "",
         "# YOUR TASK:",
+        "Before scoring findings, explicitly look for attack paths involving compromised compute, managed identities, automation accounts/runbooks, and broad Contributor/Owner scopes.",
+        "Also check whether public data services are anonymously reachable or only exposed via authenticated public endpoints, and call out missing Internet arrows or auth labels when diagrams flatten that distinction.",
         "Review the findings above using your agent instructions. Return JSON only:",
         "```json",
         "{",
         '  "enhanced_tldr": "<1-2 sentence summary from your reviewer perspective>",',
+        '  "attack_paths": [{"title": "<path title>", "path": "<A -> B -> C>", "summary": "<why this path matters>", "impact": "<what an attacker gets>", "confidence": "high|medium|low", "evidence": ["<finding or clue>"]}],',
         '  "score_adjustments": [',
         '    {"finding_id": <id>, "old_score": <1-10>, "new_score": <1-10>,',
         '     "reasoning": "<why>", "agent_used": "' + agent_name + '"}',

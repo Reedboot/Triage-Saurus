@@ -1,0 +1,49 @@
+rules:
+  - id: context-gcp-cloud-function
+    message: |
+      GCP Cloud Function detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_cloudfunctions_function" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: serverless
+      technology: [terraform, gcp, serverless, functions]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud Function
+        resource_type: google_cloudfunctions_function
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Functions (serverless compute).
+      Cloud Functions may be internet-accessible depending on authentication settings.
+
+  - id: context-gcp-cloud-function-v2
+    message: |
+      GCP Cloud Function (2nd gen) detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_cloudfunctions2_function" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: serverless
+      technology: [terraform, gcp, serverless, functions]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud Function (2nd gen)
+        resource_type: google_cloudfunctions2_function
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Functions 2nd generation (built on Cloud Run).

@@ -45,6 +45,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     # Azure — Data
     "context-azure-sql-server":                ["Azure/SQL"],
     "context-azure-sql-database":              ["Azure/SQL"],
+    "context-azure-cosmosdb-account":          ["Azure/CosmosDB"],
     "context-azure-storage-account":           ["Azure/Storage"],
     "context-azure-storage-container":         ["Azure/Storage"],
 

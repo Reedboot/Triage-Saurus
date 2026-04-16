@@ -133,6 +133,7 @@ _RESOURCE_ICONS: list[tuple[list[str], str]] = [
     (["route_table", "route", "peering"], "🔀"),
     (["sns", "sqs", "eventgrid", "pubsub", "kinesis", "mq"], "📨"),
     (["monitoring", "log_analytics", "cloudwatch", "diagnostic"], "📊"),
+    (["automation_account", "automation", "runbook"], "🤖"),
     (["key_vault", "kms", "secrets", "certificate"], "🔐"),
     (["api_gateway", "api_management", "apim"], "🔌"),
 ]
@@ -360,7 +361,7 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
         params_base.append(repo_name)
 
     with get_db_connection() as conn:
-        # Primary: metadata.internet_exposure = true (requires finding_context table)
+        # Primary: explicit internet-exposure context (legacy or metadata-backed)
         try:
             rows = conn.execute(f"""
                 SELECT DISTINCT
@@ -372,7 +373,7 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                 LEFT JOIN resources parent ON r.parent_resource_id = parent.id
                 JOIN finding_context fc ON fc.finding_id = f.id
                 WHERE f.experiment_id = ?
-                  AND fc.context_key = 'metadata.internet_exposure'
+                                    AND fc.context_key IN ('metadata.internet_exposure', 'internet_exposure')
                   AND LOWER(fc.context_value) = 'true'
                   {repo_filter}
             """, params_base).fetchall()
@@ -915,7 +916,7 @@ def generate_architecture_diagram(
     sql_servers    = [r for r in filtered_roots if _is_data_tier_resource(r) or _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
     # Network/Firewall nodes: only include true firewall/appliance devices for Network category
-    nsgs           = [r for r in filtered_roots if _in_render_cat(r, 'Firewall') or (_in_render_cat(r, 'Security') and 'nsg' in r.get('resource_type','').lower()) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
+    nsgs           = [r for r in filtered_roots if _in_render_cat(r, 'Firewall') or any(tok in r.get('resource_type','').lower() for tok in ('nsg', 'network_security_group')) or (_in_render_cat(r, 'Network') and _rtdb.is_physical_network_device(None, r.get('resource_type','')))]
     paas           = [r for r in filtered_roots if _in_render_cat(r, 'Identity') and r['id'] not in child_ids]
     # Include Load Balancers in Compute tier
     lbs            = [r for r in filtered_roots if _in_render_cat(r, 'Network') and any(tok in r.get('resource_type','').lower() for tok in ('load_balancer', 'lb', 'elastic_load'))]
@@ -946,24 +947,36 @@ def generate_architecture_diagram(
         _diagram_emitted_ids.add(base_nid)
         lines.append(f"{indent}{base_nid}[{_display_label(resource)}]")
 
-    def _render_internal_contents(indent: str) -> None:
+    def _render_compute_tier(indent: str) -> None:
+        if not (vms or lbs):
+            return
+
+        lines.append(f"{indent}subgraph compute_tier[\"🖥️ Compute Tier\"]")
+        for vm in vms:
+            _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
+        for lb in lbs:
+            if lb['id'] in parent_children:
+                _render_resource_subgraph(lb, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
+            else:
+                _emit_simple_node(lb, indent + "  ")
+        lines.append(f"{indent}end")
+
+    def _render_internal_contents(indent: str, nest_compute_in_nsg: bool) -> None:
         """Render compute/AKS/NSG internals at the specified indentation level."""
-        if vms or lbs:
-            lines.append(f"{indent}subgraph compute_tier[\"🖥️ Compute Tier\"]")
-            for vm in vms:
-                _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
-            for lb in lbs:
-                if lb['id'] in parent_children:
-                    _render_resource_subgraph(lb, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
-                else:
-                    _emit_simple_node(lb, indent + "  ")
+        if nest_compute_in_nsg and len(nsgs) == 1:
+            nsg = nsgs[0]
+            nsg_id = sanitize_id(nsg['resource_name'])
+            _diagram_emitted_ids.add(nsg_id)
+            lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ NSG: {nsg['resource_name']}\"]")
+            _render_compute_tier(indent + "  ")
             lines.append(f"{indent}end")
+        else:
+            _render_compute_tier(indent)
+            for nsg in nsgs:
+                _emit_simple_node(nsg, indent)
 
         for aks_cluster in aks:
             _render_resource_subgraph(aks_cluster, parent_children, lines, indent=indent, _emitted_ids=_diagram_emitted_ids)
-
-        for nsg in nsgs:
-            _emit_simple_node(nsg, indent)
 
     # ── Internal Zone (Compute, Containers, Network Security) ──
     internal_resources = vms + lbs + aks + nsgs
@@ -980,12 +993,12 @@ def generate_architecture_diagram(
             lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
             for subnet in subnets:
                 _emit_simple_node(subnet, "      ")
-            _render_internal_contents("      ")
+            _render_internal_contents("      ", nest_compute_in_nsg=True)
             lines.append("    end")
         else:
             for vnet in vnets:
                 _emit_simple_node(vnet, "    ")
-            _render_internal_contents("    ")
+            _render_internal_contents("    ", nest_compute_in_nsg=False)
         lines.append("  end")
     elif internal_resources:
         # No child hierarchy to wrap — render the resources directly.
@@ -996,12 +1009,12 @@ def generate_architecture_diagram(
             lines.append(f"  subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
             for subnet in subnets:
                 _emit_simple_node(subnet, "    ")
-            _render_internal_contents("    ")
+            _render_internal_contents("    ", nest_compute_in_nsg=True)
             lines.append("  end")
         else:
             for vnet in vnets:
                 _emit_simple_node(vnet, "  ")
-            _render_internal_contents("  ")
+            _render_internal_contents("  ", nest_compute_in_nsg=False)
 
     # ── Application Tier Zone (App Service Plans, Function Apps, Web Apps) ──
     if app_tier:

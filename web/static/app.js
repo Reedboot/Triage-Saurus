@@ -641,7 +641,7 @@
             return;
           }
 
-          addLogLine('[Connected to scan stream]', 'info');
+          addLogLine('[Info] 🔌 Connected to scan stream', 'info');
 
           // Read the streaming response
           if (!response.body) {
@@ -660,7 +660,7 @@
             reader.read().then(({ done, value }) => {
               if (done) {
                 // Stream ended
-                addLogLine('[Stream closed]', 'info');
+                addLogLine('[Info] 🔒 Stream closed', 'info');
                 window._triage.setStatus('Scan complete', 'success');
                 if (scanBtn) scanBtn.disabled = false;
                 if (spinner) spinner.style.display = 'none';
@@ -669,7 +669,7 @@
 
               chunkCount++;
               if (chunkCount === 1) {
-                addLogLine('[Receiving data...]', 'info');
+                addLogLine('[Info] 📡 Receiving data...', 'info');
               }
 
               // Append to buffer and process lines
@@ -807,7 +807,7 @@
           if (sectionPlaceholder) {
             sectionPlaceholder.style.display = 'none';
           }
-          addLogLine(`[Info] Reconnecting to running experiment ${data.running_experiment}...`, 'info');
+          addLogLine(`[Info] 🔄 Reconnecting to running experiment ${data.running_experiment}...`, 'info');
           if (statusBar) statusBar.style.display = 'block';
           if (spinner) spinner.style.display = 'block';
           window._triage.setStatus(`Reconnecting to experiment ${data.running_experiment}...`, '');
@@ -831,8 +831,8 @@
       currentPollInterval = null;
     }
     
-    addLogLine('[Info] Scan already in progress on server', 'info');
-    addLogLine(`[Info] Experiment ID: ${experimentId}`, 'info');
+    addLogLine('[Info] ⏳ Scan already in progress on server', 'info');
+    addLogLine(`[Info] 🧪 Experiment ID: ${experimentId}`, 'info');
 
     // Fetch and display historical log from disk before starting poll
     fetch(`/api/scan_log/${encodeURIComponent(repoName)}`)
@@ -840,15 +840,15 @@
       .then(data => {
         const lines = Array.isArray(data.lines) ? data.lines : [];
         if (lines.length > 0) {
-          addLogLine('[Info] --- Log from scan start ---', 'info');
+          addLogLine('[Info] 📜 --- Log from scan start ---', 'info');
           lines.forEach(line => addLogLine(line, ''));
-          addLogLine('[Info] --- End of historical log ---', 'info');
+          addLogLine('[Info] 📜 --- End of historical log ---', 'info');
         }
       })
       .catch(() => {})
       .finally(() => {
-        addLogLine('[Info] Waiting for scan to complete...', 'info');
-        addLogLine('[Info] Polling server every 5 seconds...', 'info');
+        addLogLine('[Info] ⏳ Waiting for scan to complete...', 'info');
+        addLogLine('[Info] 📡 Polling server every 5 seconds...', 'info');
         _startReconnectPoll(repoName, experimentId, createdAt);
       });
 
@@ -889,8 +889,8 @@
       if (elapsedSec > 420) {  // 7 minutes in seconds
         clearInterval(currentPollInterval);
         currentPollInterval = null;
-        addLogLine('[Error] Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
-        addLogLine('[Error] Lock file may be stale. You can try starting a new scan.', 'error');
+        addLogLine('[Error] ❌ Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
+        addLogLine('[Error] ⚠️ Lock file may be stale. You can try starting a new scan.', 'error');
         window._triage.setStatus('Scan timeout', 'error');
         if (spinner) spinner.style.display = 'none';
         if (scanBtn) scanBtn.disabled = false;
@@ -905,16 +905,16 @@
             // Scan completed!
             clearInterval(currentPollInterval);
             currentPollInterval = null;
-            addLogLine('[Info] Scan complete!', 'info');
+            addLogLine('[Info] ✅ Scan complete!', 'info');
             window._triage.setStatus('Scan complete', 'success');
             if (spinner) spinner.style.display = 'none';
             if (scanBtn) scanBtn.disabled = false;
             
             // Show completed message with duration
             if (elapsedMin > 0) {
-              addLogLine(`[Info] Total time: ${elapsedMin}m ${remainingSec}s`, 'info');
+              addLogLine(`[Info] ⏱️ Total time: ${elapsedMin}m ${remainingSec}s`, 'info');
             } else {
-              addLogLine(`[Info] Total time: ${elapsedSec}s`, 'info');
+              addLogLine(`[Info] ⏱️ Total time: ${elapsedSec}s`, 'info');
             }
 
             // Load section tabs now that scan is done

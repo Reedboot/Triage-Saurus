@@ -1,0 +1,144 @@
+rules:
+  - id: context-gcp-compute-backend-service
+    message: |
+      GCP Backend Service detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_backend_service" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Backend Service
+        resource_type: google_compute_backend_service
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Backend Services (load balancer backends).
+
+  - id: context-gcp-compute-url-map
+    message: |
+      GCP URL Map detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_url_map" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: URL Map
+        resource_type: google_compute_url_map
+        resource_name: $NAME
+    description: |
+      Detects Google URL Maps for path-based routing.
+
+  - id: context-gcp-compute-target-http-proxy
+    message: |
+      GCP Target HTTP Proxy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_target_http_proxy" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Target HTTP Proxy
+        resource_type: google_compute_target_http_proxy
+        resource_name: $NAME
+    description: |
+      Detects Google Target HTTP Proxies for HTTP load balancing.
+
+  - id: context-gcp-compute-target-https-proxy
+    message: |
+      GCP Target HTTPS Proxy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_target_https_proxy" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Target HTTPS Proxy
+        resource_type: google_compute_target_https_proxy
+        resource_name: $NAME
+    description: |
+      Detects Google Target HTTPS Proxies for HTTPS load balancing.
+
+  - id: context-gcp-compute-forwarding-rule
+    message: |
+      GCP Forwarding Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_forwarding_rule" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Forwarding Rule
+        resource_type: google_compute_forwarding_rule
+        resource_name: $NAME
+    description: |
+      Detects Google Forwarding Rules for load balancing.
+
+  - id: context-gcp-compute-global-forwarding-rule
+    message: |
+      GCP Global Forwarding Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_global_forwarding_rule" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load-balancing
+      technology: [terraform, gcp, load-balancing]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Global Forwarding Rule
+        resource_type: google_compute_global_forwarding_rule
+        resource_name: $NAME
+    description: |
+      Detects Google Global Forwarding Rules for global load balancing.

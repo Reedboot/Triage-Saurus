@@ -1,0 +1,49 @@
+rules:
+  - id: context-gcp-storage-bucket
+    message: |
+      GCP Cloud Storage Bucket detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_storage_bucket" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, gcp, storage, gcs]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud Storage Bucket
+        resource_type: google_storage_bucket
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Storage Buckets.
+      Cloud Storage buckets may be accessible from the internet depending on IAM policies.
+
+  - id: context-gcp-storage-bucket-object
+    message: |
+      GCP Cloud Storage Bucket Object detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_storage_bucket_object" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, gcp, storage, gcs]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud Storage Object
+        resource_type: google_storage_bucket_object
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Storage Objects/files stored in buckets.

@@ -14,3 +14,4 @@ import targeted_scan
 def test_new_azure_alias_rules_route_to_expected_folders():
     assert targeted_scan.DETECTION_TO_MISCONFIG["context-azure-function-app"] == ["Azure/AppService"]
     assert targeted_scan.DETECTION_TO_MISCONFIG["context-azure-virtual-machine"] == ["Azure/VM", "Azure/Compute"]
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-azure-cosmosdb-account"] == ["Azure/CosmosDB"]

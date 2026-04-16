@@ -1,0 +1,147 @@
+rules:
+  - id: context-gcp-compute-network
+    message: |
+      GCP VPC Network detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_network" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking, vpc]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC Network
+        resource_type: google_compute_network
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine VPC Networks.
+      These form the network boundary for compute and database resources.
+
+  - id: context-gcp-compute-subnetwork
+    message: |
+      GCP Subnetwork detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_subnetwork" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking, vpc]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnetwork
+        resource_type: google_compute_subnetwork
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine Subnetworks.
+
+  - id: context-gcp-compute-firewall
+    message: |
+      GCP Firewall Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_firewall" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Firewall Rule
+        resource_type: google_compute_firewall
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine Firewall Rules.
+      These define ingress/egress access between network resources.
+
+  - id: context-gcp-compute-route
+    message: |
+      GCP Route detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_route" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Route
+        resource_type: google_compute_route
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine Routes for network traffic routing.
+
+  - id: context-gcp-compute-address
+    message: |
+      GCP External IP Address detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_address" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: External IP
+        resource_type: google_compute_address
+        resource_name: $NAME
+    description: |
+      Detects Google Compute Engine External IP Addresses.
+      These provide internet connectivity to compute resources.
+
+  - id: context-gcp-compute-global-address
+    message: |
+      GCP Global External IP Address detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_compute_global_address" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: networking
+      technology: [terraform, gcp, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Global External IP
+        resource_type: google_compute_global_address
+        resource_name: $NAME
+    description: |
+      Detects Global External IP Addresses for load balancers and CDN.

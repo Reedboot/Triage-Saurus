@@ -1,0 +1,121 @@
+rules:
+  - id: context-gcp-sql-database-instance
+    message: |
+      GCP Cloud SQL Database Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_sql_database_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, database, cloud-sql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud SQL Instance
+        resource_type: google_sql_database_instance
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud SQL Database Instances.
+      Cloud SQL instances may be exposed on public IP depending on configuration.
+
+  - id: context-gcp-sql-database
+    message: |
+      GCP Cloud SQL Database detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_sql_database" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, database, cloud-sql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Cloud SQL Database
+        resource_type: google_sql_database
+        resource_name: $NAME
+    description: |
+      Detects databases within Google Cloud SQL Instances.
+
+  - id: context-gcp-bigtable-instance
+    message: |
+      GCP Bigtable Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_bigtable_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, database, bigtable]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Bigtable Instance
+        resource_type: google_bigtable_instance
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Bigtable (NoSQL) instances.
+
+  - id: context-gcp-firestore-database
+    message: |
+      GCP Firestore Database detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_firestore_database" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, database, firestore]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Firestore Database
+        resource_type: google_firestore_database
+        resource_name: $NAME
+    description: |
+      Detects Google Cloud Firestore (NoSQL) databases.
+
+  - id: context-gcp-bigquery-dataset
+    message: |
+      GCP BigQuery Dataset detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_bigquery_dataset" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, gcp, database, bigquery]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: BigQuery Dataset
+        resource_type: google_bigquery_dataset
+        resource_name: $NAME
+    description: |
+      Detects Google BigQuery Datasets (analytics/data warehouse).

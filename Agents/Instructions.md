@@ -43,6 +43,8 @@ This repository supports consistent security triage. The expected workflow is:
 - Rules detect patterns and extract relevant data
 - Rules MUST be scoped to specific services/resources (e.g., `azure-storage-logging-disabled`) for deterministic coverage
 - LLM reviews the concrete rule hits for context-specific assessment (severity, compensating controls, remediation urgency)
+- LLMs MUST reason about compromise chains, not just isolated findings: if a resource compromise yields an identity token, broad RBAC role, automation control, or inherited managed identity, explicitly trace the reachable attack path and blast radius.
+- LLMs MUST distinguish direct internet reachability from authenticated public endpoints: add Internet arrows for public data services and annotate whether access is anonymous/public or public-endpoint-with-authentication.
 - Example: Rule detects Ubuntu version → LLM checks if EOL or subject to CVE
 - Benefits: Rules stay precise, LLM provides fresh context without deciding what to flag
 

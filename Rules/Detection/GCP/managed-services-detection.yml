@@ -1,0 +1,96 @@
+rules:
+  - id: context-gcp-container-cluster
+    message: |
+      GCP Kubernetes Engine (GKE) Cluster detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_container_cluster" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kubernetes
+      technology: [terraform, gcp, kubernetes, gke]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: GKE Cluster
+        resource_type: google_container_cluster
+        resource_name: $NAME
+    description: |
+      Detects Google Kubernetes Engine (GKE) Clusters.
+
+  - id: context-gcp-container-node-pool
+    message: |
+      GCP GKE Node Pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_container_node_pool" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: kubernetes
+      technology: [terraform, gcp, kubernetes, gke]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: GKE Node Pool
+        resource_type: google_container_node_pool
+        resource_name: $NAME
+    description: |
+      Detects Google GKE Node Pools (compute pool within a cluster).
+
+  - id: context-gcp-app-engine-application
+    message: |
+      GCP App Engine Application detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_app_engine_application" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, gcp, appengine]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: App Engine Application
+        resource_type: google_app_engine_application
+        resource_name: $NAME
+    description: |
+      Detects Google App Engine Applications.
+
+  - id: context-gcp-redis-instance
+    message: |
+      GCP Memorystore for Redis Instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "google_redis_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: cache
+      technology: [terraform, gcp, redis, memorystore]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Redis Instance
+        resource_type: google_redis_instance
+        resource_name: $NAME
+    description: |
+      Detects Google Memorystore for Redis instances (caching).
