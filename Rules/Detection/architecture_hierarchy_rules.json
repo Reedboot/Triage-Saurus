@@ -1,0 +1,94 @@
+{
+  "rules": [
+    {
+      "id": "arch_instance_missing_subnet_parent",
+      "title": "EC2/Compute Instance Missing Subnet Parent",
+      "description": "Compute instances (EC2, GCP Compute Engine) should be children of subnets in the hierarchy. Missing parent_type indicates instances will render at root level instead of inside network boundaries.",
+      "severity": "HIGH",
+      "category": "architecture",
+      "tags": ["hierarchy", "network", "compute"],
+      "detection_logic": "Check resources where resource_type IN (aws_instance, google_compute_instance, oci_core_instance, alicloud_instance) and parent_resource_id IS NULL",
+      "remediation": [
+        "Ensure all instances have parent_resource_id pointing to their subnet/network resource",
+        "In Terraform, link instances to subnets via subnet_id or network_interface references",
+        "Verify resource_type_db.py has parent_type set correctly for instance types"
+      ]
+    },
+    {
+      "id": "arch_subnet_missing_vpc_parent",
+      "title": "Subnet Missing VPC Parent",
+      "description": "Subnets should always be children of VPCs in the hierarchy. Missing parent relationship breaks network containment visualization.",
+      "severity": "HIGH",
+      "category": "architecture",
+      "tags": ["hierarchy", "network"],
+      "detection_logic": "Check resources where resource_type IN (aws_subnet, google_compute_subnetwork, azurerm_subnet, oci_core_subnet) and parent_resource_id IS NULL",
+      "remediation": [
+        "Ensure all subnets have parent_resource_id pointing to their VPC",
+        "In Terraform, link subnets to VPCs via vpc_id or network references",
+        "Verify resource_type_db.py has parent_type set for subnet types"
+      ]
+    },
+    {
+      "id": "arch_function_wrong_tier_classification",
+      "title": "Serverless Functions Incorrectly Categorized",
+      "description": "Cloud Functions, Lambda, and other serverless compute should be categorized as 'Compute' tier, not 'Data'. Incorrect categorization causes functions to render in wrong architectural tier.",
+      "severity": "MEDIUM",
+      "category": "architecture",
+      "tags": ["tier", "compute", "serverless"],
+      "detection_logic": "Check resources where resource_type IN (google_cloudfunctions_function, aws_lambda_function, azurerm_function_app, oci_functions_function, alicloud_fc_function) and verify category field equals 'Compute'",
+      "remediation": [
+        "Verify resource_type_db.py has category='Compute' for all serverless function types",
+        "Functions are compute resources (they execute code), not data storage",
+        "Run diagram generation after fix to verify tier placement"
+      ]
+    },
+    {
+      "id": "arch_attachment_vs_containment_confusion",
+      "title": "Attachment Relationship Modeled as Containment",
+      "description": "Some relationships are attachment (e.g., Security Group to NIC) not containment. Modeling as parent_type breaks hierarchy semantics.",
+      "severity": "MEDIUM",
+      "category": "architecture",
+      "tags": ["hierarchy", "semantics", "attachment"],
+      "detection_logic": "Check if resources like Security Groups, NICs, or VPC attachments use parent_type instead of resource_connections",
+      "examples": [
+        "aws_security_group should NOT be parent of instances; instead use resource_connections with attachment semantics",
+        "aws_network_interface should be child of subnet, but Security Groups attach via separate mechanism",
+        "VPC is NOT a container for instances; instances reference VPC via subnet membership"
+      ],
+      "remediation": [
+        "Use parent_type ONLY for true hierarchical containment (VPC→Subnet→Instance)",
+        "Use resource_connections for many-to-many attachments (Security Group→NIC, VPC→Lambda)",
+        "Document attachment semantics in connection_type field (vpc_attachment, sg_attachment)"
+      ]
+    },
+    {
+      "id": "arch_zone_scoping_missing",
+      "title": "Compute Instances Not Scoped to Zones/Availability Zones",
+      "description": "Instances should be modeled as children of zones (GCP) or availability zones (AWS). Missing zone parent breaks geographic scoping in diagrams.",
+      "severity": "MEDIUM",
+      "category": "architecture",
+      "tags": ["hierarchy", "zone", "geographic"],
+      "detection_logic": "Check resources where resource_type IN (aws_instance, google_compute_instance) and parent_resource_id points to subnet instead of zone",
+      "remediation": [
+        "GCP: Instances should have parent_type=google_compute_zone",
+        "AWS: Instances could have parent_type=aws_availability_zone, but typically only show subnet parent",
+        "Consider if zone-level scoping is critical for your security analysis",
+        "If using subnets (which are zone-scoped), zone parent is often optional"
+      ]
+    },
+    {
+      "id": "arch_network_interface_hierarchy",
+      "title": "Network Interface Resource Hierarchy",
+      "description": "Network Interfaces should be children of subnets, not instances. Security Groups and other resources attach to NICs, not instances directly.",
+      "severity": "MEDIUM",
+      "category": "architecture",
+      "tags": ["hierarchy", "network"],
+      "detection_logic": "Check resources where resource_type IN (aws_network_interface, azurerm_network_interface) and verify parent_type=subnet",
+      "remediation": [
+        "Ensure NICs have parent_resource_id pointing to their subnet",
+        "Security Groups should attach to NICs via resource_connections, not be parents of instances",
+        "In diagrams, NICs can be hidden (display_on_architecture_chart: false) since they're typically transparent"
+      ]
+    }
+  ]
+}

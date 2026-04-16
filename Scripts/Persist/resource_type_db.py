@@ -224,7 +224,8 @@ _FALLBACK: dict[str, dict] = {
     "aws_elasticsearch_domain_policy":            {"friendly_name": "OpenSearch Domain",        "category": "Database",    "icon": "🔍", "display_on_architecture_chart": False},
     "aws_dynamodb_table":                         {"friendly_name": "DynamoDB Table",           "category": "Database",    "icon": "🗃️"},
     # AWS — Compute
-    "aws_instance":                               {"friendly_name": "EC2 Instance",             "category": "Compute",     "icon": "🖥️"},
+    "aws_instance":                               {"friendly_name": "EC2 Instance",             "category": "Compute",     "icon": "🖥️", "parent_type": "aws_subnet"},
+    "aws_network_interface":                      {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "aws_subnet"},
     "aws_lambda_function":                        {"friendly_name": "Lambda Function",          "category": "Compute",     "icon": "⚡"},
     "aws_ami":                                    {"friendly_name": "AMI",                      "category": "Compute",     "icon": "🖥️"},
     "aws_eks_cluster":                            {"friendly_name": "EKS Cluster",              "category": "Container",   "icon": "☸️"},
@@ -261,7 +262,7 @@ _FALLBACK: dict[str, dict] = {
     "aws_route_table_association":                {"friendly_name": "Route Table Association",  "category": "Network",     "icon": "🔗"},
 
     "aws_vpc":                                    {"friendly_name": "VPC",                      "category": "Network",     "icon": "🔷"},
-    "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷"},
+    "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷", "parent_type": "aws_vpc"},
     "aws_security_group":                         {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️"},
     "aws_security_group_rule":                    {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "🛡️"},
     "aws_internet_gateway":                       {"friendly_name": "Internet Gateway",         "category": "Network",     "icon": "🌍"},
@@ -293,7 +294,8 @@ _FALLBACK: dict[str, dict] = {
     "google_firestore_database":                  {"friendly_name": "Firestore Database",       "category": "Database",    "icon": "🗄️"},
     "google_firestore_document":                  {"friendly_name": "Firestore Document",       "category": "Database",    "icon": "📄", "display_on_architecture_chart": False, "parent_type": "google_firestore_database"},
     # GCP — Compute
-    "google_compute_instance":                    {"friendly_name": "Compute Instance",         "category": "Compute",     "icon": "🖥️"},
+    "google_compute_zone":                        {"friendly_name": "Zone",                     "category": "System",      "icon": "🗺️", "display_on_architecture_chart": False},
+    "google_compute_instance":                    {"friendly_name": "Compute Instance",         "category": "Compute",     "icon": "🖥️", "parent_type": "google_compute_zone"},
     "google_cloudfunctions_function":             {"friendly_name": "Cloud Function",           "category": "Compute",     "icon": "⚡"},
     "google_cloudfunctions_function_iam_member":  {"friendly_name": "Function IAM Member",      "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "google_cloudfunctions_function"},
     "google_app_engine_application":              {"friendly_name": "App Engine Application",   "category": "Compute",     "icon": "⚙️"},
@@ -308,7 +310,7 @@ _FALLBACK: dict[str, dict] = {
     "google_cloud_run_service":                   {"friendly_name": "Cloud Run Service",        "category": "Compute",     "icon": "🌐"},
     "google_compute_url_map":                     {"friendly_name": "Load Balancer",            "category": "Network",     "icon": "⚖️"},
     "google_compute_network":                     {"friendly_name": "VPC Network",              "category": "Network",     "icon": "🔷"},
-    "google_compute_subnetwork":                  {"friendly_name": "Subnetwork",               "category": "Network",     "icon": "🔷"},
+    "google_compute_subnetwork":                  {"friendly_name": "Subnetwork",               "category": "Network",     "icon": "🔷", "parent_type": "google_compute_network"},
     "google_compute_firewall":                    {"friendly_name": "Firewall Rule",            "category": "Security",    "icon": "🛡️"},
     # GCP — Identity
     "google_project_iam_binding":                 {"friendly_name": "IAM Binding",              "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},

@@ -2043,6 +2043,11 @@ class HierarchicalDiagramBuilder:
             'contains', 'grants_access_to', 'parent_of', 'child_of',
             'resource_group_member', 'has_role',
         })
+            # Connection types where labels add visual noise and are self-explanatory;
+            # suppress edge labels for these unless auth/protocol/port provides additional value.
+            SUPPRESS_LABEL_TYPES = frozenset({
+                'data_access', 'data access', 'uses_database', 'depends_on', 'references',
+            })
 
         lines = []
         lines.append("")
@@ -2121,17 +2126,23 @@ class HierarchicalDiagramBuilder:
         style_lines = []
         for i, conn in enumerate(self.connections):
             src = conn.get('source')
-            tgt = conn.get('target')
             
-            if not src or not tgt:
                 continue
-            if (conn.get('connection_type') or '').lower() in SKIP_EDGE_TYPES:
-                continue
-            if src == tgt or sanitize_id(src) == sanitize_id(tgt):
-                continue
-            if tgt == '__apim_subgraph__':
-                link_index += 1
-                continue
+                # Suppress labels for self-explanatory connection types unless they have auth/port info
+                conn_type = (conn.get('connection_type') or '').lower()
+                if conn_type in SUPPRESS_LABEL_TYPES and not label_parts:
+                    label = ""
+                else:
+                    label = " ".join(label_parts) if label_parts else ""
+
+                # Determine line style (solid or dashed)
+                is_confirmed = conn.get('confirmed', True)  # Default to solid if not specified
+                arrow = "-->" if is_confirmed else "-.->"  # Dashed for unconfirmed
+            
+                if label:
+                    lines.append(f"  {src_id} {arrow}|{label}| {tgt_id}")
+                else:
+                    lines.append(f"  {src_id} {arrow} {tgt_id}")
             if src != 'Internet' and src not in self.emitted_nodes:
                 continue
             if tgt != 'Internet' and tgt not in self.emitted_nodes:

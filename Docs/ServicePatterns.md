@@ -279,3 +279,92 @@ To add a new service pattern:
 4. Document ingress/egress/auth patterns
 5. Add to ServicePatternExamples.md
 
+---
+
+## Network and Compute Hierarchies
+
+This section documents correct containment hierarchies for network and compute resources across cloud providers.
+
+### VPC / Network Hierarchy
+
+**AWS:**
+```
+VPC (parent_type: account)
+├── Subnet (parent_type: VPC)
+│   ├── EC2 Instance (parent_type: Subnet)
+│   └── Network Interface (parent_type: Subnet)
+└── Route Table, Security Group, Internet Gateway (attachments, not hierarchy)
+```
+
+**Azure:**
+```
+Virtual Network (parent_type: subscription)
+├── Subnet (parent_type: VNet)
+│   └── Network Interface (parent_type: Subnet)
+│       └── VM (parent_type: NIC or Subnet, depending on model)
+└── Network Security Group (attached via resource_connections, not hierarchy)
+```
+
+**GCP:**
+```
+VPC Network (project-level resource; NOT a parent)
+├── Zone (parent_type: project)
+│   └── Compute Instance (parent_type: Zone)
+└── Subnetwork (parent_type: Network)
+```
+
+**Key Distinctions:**
+- **Containment (parent_type):** Resource logically inside parent; deletion impacts child
+    - Example: Subnet inside VPC (subnet CIDR is allocated from VPC address space)
+    - Example: Instance inside Subnet (instance has IP from subnet)
+- **Attachment (resource_connections):** Resource independently exists; linked via reference
+    - Example: Security Group attached to NIC (many SGs can attach to one NIC; one SG can attach to many NICs)
+    - Example: VPC attached to Lambda (Lambda is not "in" VPC; it references VPC for networking)
+
+### Compute Resource Tiers
+
+**Compute Tier Resources:**
+- EC2 instances (aws_instance)
+- GCP Compute Engine (google_compute_instance)
+- Azure VMs (azurerm_linux_virtual_machine, azurerm_windows_virtual_machine)
+- AKS/EKS/GKE clusters
+- App Services, App Engine
+
+**Serverless Functions (also Compute Tier, NOT Data):**
+- AWS Lambda (aws_lambda_function)
+- Google Cloud Functions (google_cloudfunctions_function)
+- Azure Function Apps (azurerm_function_app)
+- Oracle Functions (oci_functions_function)
+- Alibaba Function Compute (alicloud_fc_function)
+
+Functions are **Compute Tier** because they:
+- Execute code (not store data)
+- Are ephemeral (stateless, unless explicitly storing to external database)
+- Can be triggered (ingress), invoke other services (egress), but don't contain state themselves
+
+### Network Interface Placement
+
+Network Interfaces (NICs/ENIs) should be:
+- **Child of Subnet:** `parent_type = subnet` (NICs get IPs from subnet CIDR)
+- **Display on diagram:** Usually `false` (they're transparent layer between instance and network)
+- **Attachment point for Security Groups:** Via `resource_connections` (not hierarchy)
+
+### Cloud Functions vs App Engine
+
+These are **separate, independent services** (no parent-child relationship):
+
+**Azure:**
+- Function Apps (azurerm_function_app): Hosted on App Service Plans
+- NOT nested inside each other
+
+**GCP:**
+- Cloud Functions (google_cloudfunctions_function): Project-level service, standalone
+- App Engine (google_app_engine_application): Project-level service, standalone
+- These are mutually exclusive execution models, not hierarchical
+
+**AWS:**
+- Lambda: Project-level service, standalone
+- API Gateway can trigger Lambda (resource_connection), but Lambda is not contained by APIG
+
+---
+
