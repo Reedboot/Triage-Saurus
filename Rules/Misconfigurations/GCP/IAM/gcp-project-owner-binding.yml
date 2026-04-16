@@ -7,20 +7,18 @@ rules:
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:
-      - patterns:
-          - pattern-inside: |
-              resource "google_project_iam_member" $NAME {
-                ...
-              }
-          - pattern: |
-              role = "roles/owner"
-      - patterns:
-          - pattern-inside: |
-              resource "google_project_iam_binding" $NAME {
-                ...
-              }
-          - pattern: |
-              role = "roles/owner"
+      - pattern: |
+          resource "google_project_iam_member" $NAME {
+            ...
+            role = "roles/owner"
+            ...
+          }
+      - pattern: |
+          resource "google_project_iam_binding" $NAME {
+            ...
+            role = "roles/owner"
+            ...
+          }
     metadata:
       category: security
       subcategory: [iam, exposure, cloud]

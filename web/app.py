@@ -1060,10 +1060,10 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
             rows = conn.execute(
                 """
               SELECT f.id, f.resource_id, f.rule_id, f.title, f.description, f.severity_score, f.category,
-                       source_file, source_line_start, evidence_location,
-                  SUBSTR(f.code_snippet, 1, 300) AS code_snippet,
-                  r.resource_name,
-                  r.resource_type
+                       f.source_file, f.source_line_start, f.evidence_location,
+                   SUBSTR(f.code_snippet, 1, 300) AS code_snippet,
+                   r.resource_name,
+                   r.resource_type
               FROM findings f
               LEFT JOIN resources r ON f.resource_id = r.id
               WHERE f.experiment_id = ? AND f.repo_id = ?
