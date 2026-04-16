@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import html
+import contextvars
 import re
 import sqlite3
 import shlex
@@ -110,6 +111,7 @@ _DOCKERFILE_CACHE_MAX = 512
 _RESOLVED_REPOS_CACHE: dict[str, object] = {"sig": None, "entries": []}
 _AI_ANALYSIS_JOBS: dict[str, dict] = {}
 _AI_ANALYSIS_LOCK = threading.Lock()
+_ACTIVE_AI_JOB_KEY: contextvars.ContextVar[str | None] = contextvars.ContextVar("ACTIVE_AI_JOB_KEY", default=None)
 
 
 def _ai_job_key(experiment_id: str, repo_name: str) -> str:
@@ -120,6 +122,16 @@ def _ai_raw_output_file(key: str) -> Path:
     """Return the per-job raw Copilot output file."""
     safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
     return REPO_ROOT / "Output" / "AILogs" / f"{safe_key}-raw.txt"
+
+
+def _touch_ai_job_activity(key: str) -> None:
+    """Record that a job is still actively producing output."""
+    with _AI_ANALYSIS_LOCK:
+        job = _AI_ANALYSIS_JOBS.get(key)
+        if not job:
+            return
+        job["last_activity_at"] = time.time()
+        _AI_ANALYSIS_JOBS[key] = job
 
 
 def _extract_rules_from_llm_output(text: str) -> list[dict]:
@@ -551,6 +563,7 @@ def _append_ai_job_log(key: str, line: str) -> None:
             if len(logs) > 500:
                 logs = logs[-500:]
             job["logs"] = logs
+            job["last_activity_at"] = time.time()
             _AI_ANALYSIS_JOBS[key] = job
 
     # Append to disk logfile for post-mortem
@@ -1245,6 +1258,7 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
             "experiment_id": experiment_id,
             "repo_name": repo_name,
             "started_at": time.time(),
+            "last_activity_at": time.time(),
             "completed_at": None,
             "steps": [],
             "logs": [],
@@ -2279,16 +2293,16 @@ def api_analysis_status(experiment_id: str, repo_name: str):
         # before the completion block executes, leaving the job stuck in "running".
         if job.get("status") == "running":
             started_at = job.get("started_at") or 0
-            age_secs = time.time() - started_at
+            last_activity_at = job.get("last_activity_at") or started_at
+            age_secs = time.time() - last_activity_at
             proc = job.get("process")
             proc_alive = proc is not None and proc.poll() is None
-            # For pure SSE-generator jobs (no subprocess), use a short 60 s timeout because
-            # a client disconnect can kill the generator before the completion block runs.
-            # For subprocess-backed jobs, use a configurable timeout (seconds). Default: 3600s (1 hour).
+            # For pure SSE-generator jobs (no subprocess), use a shorter but still
+            # generous timeout because progress is tracked via last_activity_at.
             try:
-                stale_threshold = 60 if proc is None else int(os.environ.get('AI_JOB_TIMEOUT', '3600'))
+                stale_threshold = int(os.environ.get('AI_STREAM_TIMEOUT', '600')) if proc is None else int(os.environ.get('AI_JOB_TIMEOUT', '3600'))
             except Exception:
-                stale_threshold = 60 if proc is None else 3600
+                stale_threshold = 600 if proc is None else 3600
 
             if not proc_alive and age_secs > stale_threshold:
                 db_status = _get_db_job_status(resolved_exp_id, repo_name)
@@ -2412,6 +2426,30 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         )
 
     def _gen():
+        def _wait_with_heartbeats(label: str, func, interval: float = 2.0):
+            """Run a blocking step while emitting periodic SSE heartbeats."""
+            result_box: dict[str, object] = {}
+            error_box: list[BaseException] = []
+            done = threading.Event()
+
+            def _worker():
+                try:
+                    result_box["value"] = func()
+                except BaseException as exc:  # noqa: BLE001 - propagate exact failure
+                    error_box.append(exc)
+                finally:
+                    done.set()
+
+            thread = threading.Thread(target=_worker, daemon=True)
+            thread.start()
+
+            while not done.wait(interval):
+                yield _sse("log", f"[Web] {label} still running...")
+
+            if error_box:
+                raise error_box[0]
+            return result_box.get("value")
+
         conn = _get_db()
         if conn is None:
             yield _sse("error", "DB unavailable")
@@ -2436,19 +2474,25 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 yield _sse("done", {"status": "running"})
                 return
 
-            _AI_ANALYSIS_JOBS[key] = {
-                "status": "running",
-                "experiment_id": resolved_exp_id,
-                "repo_name": repo_name,
-                "started_at": time.time(),
-                "completed_at": None,
-                "steps": [],
-                "logs": [],
-                "error": "",
-                "analysis_mode": analysis_mode or "default",
-            }
+        _AI_ANALYSIS_JOBS[key] = {
+            "status": "running",
+            "experiment_id": resolved_exp_id,
+            "repo_name": repo_name,
+            "started_at": time.time(),
+            "last_activity_at": time.time(),
+            "completed_at": None,
+            "steps": [],
+            "logs": [],
+            "error": "",
+            "analysis_mode": analysis_mode or "default",
+        }
 
         _append_ai_job_log(key, "Copilot streaming job started")
+        base_sse = globals()["_sse"]
+
+        def _sse(event: str, data) -> str:
+            _touch_ai_job_activity(key)
+            return base_sse(event, data)
         
         # ═══ RESUME DETECTION ═══
         # Check if we can skip steps based on previous work
@@ -2463,8 +2507,23 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
         
         if resume_state["resume_from_step"] <= 1:
             yield _sse("log", "Step 1/3: Collecting repository facts from DB...")
-
-            facts = _fetch_overview_facts(resolved_exp_id, repo_name)
+            try:
+                facts = yield from _wait_with_heartbeats(
+                    "Collecting repository facts",
+                    lambda: _fetch_overview_facts(resolved_exp_id, repo_name),
+                )
+            except BaseException as step_exc:  # noqa: BLE001 - surface exact failure to the UI
+                err = f"Repo facts collection failed: {step_exc}"
+                _append_ai_job_log(key, err)
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["status"] = "failed"
+                    job["error"] = err
+                    job["completed_at"] = time.time()
+                    job.pop("process", None)
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("error", err)
+                return
             if not facts:
                 err = "Repo facts unavailable (missing DB rows)"
                 _append_ai_job_log(key, err)
@@ -2484,7 +2543,23 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
         else:
             # Resuming, need to fetch facts for context but skip the AI review
-            facts = _fetch_overview_facts(resolved_exp_id, repo_name)
+            try:
+                facts = yield from _wait_with_heartbeats(
+                    "Collecting repository facts for resume",
+                    lambda: _fetch_overview_facts(resolved_exp_id, repo_name),
+                )
+            except BaseException as step_exc:  # noqa: BLE001 - surface exact failure to the UI
+                err = f"Repo facts collection failed during resume: {step_exc}"
+                _append_ai_job_log(key, err)
+                with _AI_ANALYSIS_LOCK:
+                    job = _AI_ANALYSIS_JOBS.get(key, {})
+                    job["status"] = "failed"
+                    job["error"] = err
+                    job["completed_at"] = time.time()
+                    job.pop("process", None)
+                    _AI_ANALYSIS_JOBS[key] = job
+                yield _sse("error", err)
+                return
             if not facts:
                 err = "Repo facts unavailable for resume (missing DB rows)"
                 _append_ai_job_log(key, err)
@@ -2639,26 +2714,35 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             if PROMPT_BUILDER_AVAILABLE and agent_content:
                 try:
                     if agent_name == "ContextDiscoveryAgent":
-                        agent_prompt = prompt_builder.build_context_extraction_prompt(
-                            agent_content=agent_content,
-                            baseline_data=baseline_data,
-                            repo_name=repo_name,
-                            experiment_id=resolved_exp_id,
+                        agent_prompt = yield from _wait_with_heartbeats(
+                            f"Building {agent_name} prompt",
+                            lambda: prompt_builder.build_context_extraction_prompt(
+                                agent_content=agent_content,
+                                baseline_data=baseline_data,
+                                repo_name=repo_name,
+                                experiment_id=resolved_exp_id,
+                            ),
                         )
                     elif agent_name == "ArchitectureValidationAgent":
-                        agent_prompt = prompt_builder.build_architecture_review_prompt(
-                            agent_content=agent_content,
-                            baseline_data=baseline_data,
-                            repo_name=repo_name,
-                            experiment_id=resolved_exp_id,
+                        agent_prompt = yield from _wait_with_heartbeats(
+                            f"Building {agent_name} prompt",
+                            lambda: prompt_builder.build_architecture_review_prompt(
+                                agent_content=agent_content,
+                                baseline_data=baseline_data,
+                                repo_name=repo_name,
+                                experiment_id=resolved_exp_id,
+                            ),
                         )
                     else:
-                        agent_prompt = prompt_builder.build_focused_prompt(
-                            agent_name=agent_name,
-                            agent_content=agent_content,
-                            baseline_data=baseline_data,
-                            repo_name=repo_name,
-                            experiment_id=resolved_exp_id,
+                        agent_prompt = yield from _wait_with_heartbeats(
+                            f"Building {agent_name} prompt",
+                            lambda: prompt_builder.build_focused_prompt(
+                                agent_name=agent_name,
+                                agent_content=agent_content,
+                                baseline_data=baseline_data,
+                                repo_name=repo_name,
+                                experiment_id=resolved_exp_id,
+                            ),
                         )
                     yield _sse("log", f"  ↳ Prompt ready: {len(agent_prompt):,} chars ({agent_name})")
                 except Exception as build_err:
@@ -2761,7 +2845,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                             lines.append(raw.rstrip("\n"))
 
                     now = time.time()
-                    if now - last_hb >= 4.0:
+                    if now - last_hb >= 2.0:
                         elapsed = int(now - start_ts)
                         yield _sse("log", f"  ⏳ {elapsed}s — {agent_label} thinking…")
                         last_hb = now

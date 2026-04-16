@@ -153,7 +153,13 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                 
                 continue
             elif pattern_name == "storage":
-                friendly = "Storage Account" if any(rt.startswith("azurerm_") for rt in pattern_types) else "Storage"
+                if any(rt.startswith("aws_") for rt in pattern_types):
+                    friendly = "S3 Bucket"
+                elif any(rt.startswith("azurerm_") for rt in pattern_types):
+                    friendly = "Storage Account"
+                else:
+                    friendly = "Storage"
+                grouped[friendly] = pattern_types
             elif pattern_name == "messaging":
                 # Check which messaging service
                 if any("servicebus" in rt for rt in pattern_types):
@@ -1904,7 +1910,7 @@ def _build_simple_architecture_diagram(
 
             _S3_PARENT = "S3 Bucket"
             # Policy resources remain context-only; do not render policy nodes on architecture.
-            _S3_CHILDREN = {"Public Access Block"}
+            _S3_CHILDREN = {"Public Access Block", "S3 Bucket Acl", "S3 Bucket ACL", "S3 Bucket Ownership Controls"}
             s3_nested_services: set[str] = set()
             if _S3_PARENT in layer_services:
                 for s in layer_services:

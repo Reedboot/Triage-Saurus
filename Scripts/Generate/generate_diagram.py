@@ -733,6 +733,24 @@ def generate_architecture_diagram(
             resources.append(promoted_r)
             current_ids.add(promoted_r['id'])
 
+    # Keep hidden child-control resources when their parent is visible so the
+    # diagram can still render them inside the parent's subgraph. This is used
+    # for AWS S3 bucket controls (ACL, ownership controls, policy, etc.).
+    for child_id, parent_id in parent_id_of_child.items():
+        if parent_id not in display_filtered_ids:
+            continue
+        if child_id in current_ids:
+            continue
+        child_r = all_raw_map.get(child_id)
+        if not child_r:
+            continue
+        if prov_filter and (child_r.get('provider') or '').lower() != prov_filter:
+            continue
+        rt_info = _rtdb.get_resource_type(None, (child_r.get('resource_type') or '').strip())
+        if not rt_info.get('display_on_architecture_chart', True):
+            resources.append(child_r)
+            current_ids.add(child_id)
+
     # Filter parent_children to only include child relationships where both parent and child
     # are in the filtered resource set. This prevents rendering of excluded resources (e.g., null_resource)
     # that are children of included parents.

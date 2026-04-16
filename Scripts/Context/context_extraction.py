@@ -916,6 +916,8 @@ def _load_parent_type_map() -> Dict[str, str]:
         "aws_lb_target_group": "aws_lb",
         "aws_alb_target_group": "aws_alb",
         "aws_lb_target_group_attachment": "aws_lb_target_group",
+        "aws_s3_bucket_acl": "aws_s3_bucket",
+        "aws_s3_bucket_ownership_controls": "aws_s3_bucket",
         "aws_s3_bucket_public_access_block": "aws_s3_bucket",
         "aws_s3_bucket_policy": "aws_s3_bucket",
         "azurerm_lb_backend_address_pool": "azurerm_lb",

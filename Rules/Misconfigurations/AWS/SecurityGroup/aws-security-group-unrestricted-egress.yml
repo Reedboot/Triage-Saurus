@@ -1,0 +1,34 @@
+rules:
+  - id: aws-security-group-unrestricted-egress
+    message: |
+      Security group allows unrestricted egress to 0.0.0.0/0 on all ports and protocols.
+      This lets workloads reach any internet destination and makes data exfiltration
+      easier. Restrict egress to the minimum required destinations and ports.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "aws_security_group" $NAME {
+            ...
+          }
+      - pattern: |
+          egress {
+            ...
+            from_port = 0
+            ...
+            to_port = 0
+            ...
+            protocol = "-1"
+            ...
+            cidr_blocks = ["0.0.0.0/0"]
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, exposure]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, aws, security-group]
+      five_pillars: Pillar 3 (Network Security)

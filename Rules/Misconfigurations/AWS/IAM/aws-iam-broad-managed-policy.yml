@@ -1,0 +1,31 @@
+rules:
+  - id: aws-iam-broad-managed-policy
+    message: |
+      IAM role attachment uses a broad AWS-managed policy such as IAMFullAccess or
+      AdministratorAccess. These managed policies violate least privilege and give the
+      attached workload far more access than it should have. Attach only the minimal
+      policies required for the role's job.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "aws_iam_role_policy_attachment" $NAME {
+                ...
+              }
+          - pattern-either:
+              - pattern: |
+                  policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
+              - pattern: |
+                  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+              - pattern: |
+                  policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+    metadata:
+      category: security
+      subcategory: [iam, least-privilege]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, aws, iam]
+      five_pillars: Pillar 2 (Identity & Access Management)

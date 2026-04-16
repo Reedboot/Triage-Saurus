@@ -1,0 +1,32 @@
+rules:
+  - id: gcp-project-owner-binding
+    message: |
+      Project IAM assignment grants roles/owner at the project level. Owner is a full
+      administration role and should be avoided unless absolutely required. Prefer
+      narrower predefined roles or custom roles with the minimum needed permissions.
+    severity: ERROR
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              resource "google_project_iam_member" $NAME {
+                ...
+              }
+          - pattern: |
+              role = "roles/owner"
+      - patterns:
+          - pattern-inside: |
+              resource "google_project_iam_binding" $NAME {
+                ...
+              }
+          - pattern: |
+              role = "roles/owner"
+    metadata:
+      category: security
+      subcategory: [iam, exposure, cloud]
+      cwe: CWE-732
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, iam]
+      five_pillars: Pillar 2 (Identity & Access Management)

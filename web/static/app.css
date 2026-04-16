@@ -1150,7 +1150,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   display: block;
   overflow-x: auto;
-  overflow-y: auto;
+  overflow-y: visible;
   scrollbar-width: thin;
   scrollbar-color: var(--accent) transparent;
   padding: 0 12px 12px;

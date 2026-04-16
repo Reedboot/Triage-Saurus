@@ -209,6 +209,8 @@ _FALLBACK: dict[str, dict] = {
     # AWS — Storage
     "aws_s3_bucket":                              {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
     "aws_s3_bucket_object":                       {"friendly_name": "S3 Bucket",                "category": "Storage",     "icon": "🗄️"},
+    "aws_s3_bucket_acl":                          {"friendly_name": "S3 Bucket ACL",            "category": "Storage",     "icon": "🔒", "display_on_architecture_chart": False, "parent_type": "aws_s3_bucket"},
+    "aws_s3_bucket_ownership_controls":            {"friendly_name": "S3 Bucket Ownership Controls", "category": "Storage", "icon": "🔒", "display_on_architecture_chart": False, "parent_type": "aws_s3_bucket"},
     "aws_s3_bucket_public_access_block":          {"friendly_name": "Public Access Block",      "category": "Storage",     "icon": "🔒", "display_on_architecture_chart": False, "parent_type": "aws_s3_bucket"},
     "aws_s3_bucket_policy":                       {"friendly_name": "S3 Bucket Policy",         "category": "Storage",     "icon": "📜", "display_on_architecture_chart": False, "parent_type": "aws_s3_bucket"},
     "aws_ebs_volume":                             {"friendly_name": "EBS Volume",               "category": "Storage",     "icon": "💾"},
@@ -392,7 +394,12 @@ _SERVICE_PATTERNS = {
             "aws": {
                 "parent": "aws_s3_bucket",
                 "object": "aws_s3_bucket_object",
-                "auth_resources": ["aws_s3_bucket_policy", "aws_iam_policy"],
+                "auth_resources": [
+                    "aws_s3_bucket_acl",
+                    "aws_s3_bucket_ownership_controls",
+                    "aws_s3_bucket_public_access_block",
+                    "aws_s3_bucket_policy",
+                ],
             },
             "gcp": {
                 "parent": "google_storage_bucket",
@@ -1027,7 +1034,7 @@ def _derive(terraform_type: str) -> dict:
     display_on_architecture_chart = not any(token in lower for token in hidden_tokens)
 
     parent_type = None
-    if terraform_type in {"aws_s3_bucket_policy", "aws_s3_bucket_public_access_block"}:
+    if terraform_type in {"aws_s3_bucket_acl", "aws_s3_bucket_ownership_controls", "aws_s3_bucket_policy", "aws_s3_bucket_public_access_block"}:
         parent_type = "aws_s3_bucket"
     elif terraform_type == "aws_lb_listener":
         parent_type = "aws_lb"

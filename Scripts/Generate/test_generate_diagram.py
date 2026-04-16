@@ -10,6 +10,7 @@ for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
     sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
 import generate_diagram
+import resource_type_db as _rtdb
 
 
 class _FakeRow(dict):
@@ -254,6 +255,60 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
     assert "public IP; contains" not in diagram
     assert "subgraph dev_vm[\"Virtual Machine: dev_vm (1 sub-asset)\"]" in diagram
+
+
+def test_s3_bucket_controls_render_inside_bucket_subgraph(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "bucket_upload",
+            "resource_type": "aws_s3_bucket",
+            "provider": "aws",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "bucket_upload_acl",
+            "resource_type": "aws_s3_bucket_acl",
+            "provider": "aws",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "bucket_upload_ownership_controls",
+            "resource_type": "aws_s3_bucket_ownership_controls",
+            "provider": "aws",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="bucket_upload", parent_type="aws_s3_bucket", child_id=2, child_name="bucket_upload_acl", child_type="aws_s3_bucket_acl"),
+            _FakeRow(parent_id=1, parent_name="bucket_upload", parent_type="aws_s3_bucket", child_id=3, child_name="bucket_upload_ownership_controls", child_type="aws_s3_bucket_ownership_controls"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="bucket_upload", resource_type="aws_s3_bucket", provider="aws", repo_id=1),
+            _FakeRow(id=2, resource_name="bucket_upload_acl", resource_type="aws_s3_bucket_acl", provider="aws", repo_id=1),
+            _FakeRow(id=3, resource_name="bucket_upload_ownership_controls", resource_type="aws_s3_bucket_ownership_controls", provider="aws", repo_id=1),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+
+    assert _rtdb.get_resource_type(None, "aws_s3_bucket_acl")["parent_type"] == "aws_s3_bucket"
+    assert _rtdb.get_resource_type(None, "aws_s3_bucket_ownership_controls")["parent_type"] == "aws_s3_bucket"
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "subgraph zone_data[\"🗄️ Data Tier\"]" in diagram
+    assert 'subgraph bucket_upload["S3 Bucket: bucket_upload (2 sub-assets)"]' in diagram
+    assert "bucket_upload_acl[" in diagram
+    assert "bucket_upload_ownership_controls[" in diagram
 
 
 def test_internet_to_vm_via_public_ip_parent_lookup(monkeypatch):
