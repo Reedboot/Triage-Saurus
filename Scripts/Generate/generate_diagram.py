@@ -173,6 +173,36 @@ def sanitize_id(name: str) -> str:
     return sanitized
 
 
+def _normalize_provider(provider: str | None) -> str:
+    value = (provider or "").strip().lower()
+    if value == "oracle":
+        return "oci"
+    return value
+
+
+def _provider_aliases(provider: str | None) -> list[str]:
+    value = _normalize_provider(provider)
+    if not value:
+        return []
+    if value == "oci":
+        return ["oci", "oracle"]
+    return [value]
+
+
+def _provider_matches(resource_provider: str | None, requested_provider: str | None) -> bool:
+    if not requested_provider:
+        return True
+    return (resource_provider or "").strip().lower() in set(_provider_aliases(requested_provider))
+
+
+def _provider_sql_clause(provider: str | None, column: str = "r.provider") -> tuple[str, list[str]]:
+    aliases = _provider_aliases(provider)
+    if not aliases:
+        return "", []
+    placeholders = ",".join("?" for _ in aliases)
+    return f"AND LOWER(COALESCE({column}, '')) IN ({placeholders})", aliases
+
+
 def _render_resource_subgraph(
     resource: dict,
     parent_children: dict,
@@ -359,6 +389,7 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
     if repo_name:
         repo_filter = "AND LOWER(repo.repo_name) = LOWER(?)"
         params_base.append(repo_name)
+    provider_filter, provider_params = _provider_sql_clause(provider, "r.provider")
 
     with get_db_connection() as conn:
         # Primary: explicit internet-exposure context (legacy or metadata-backed)
@@ -376,7 +407,8 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                                     AND fc.context_key IN ('metadata.internet_exposure', 'internet_exposure')
                   AND LOWER(fc.context_value) = 'true'
                   {repo_filter}
-            """, params_base).fetchall()
+                    {provider_filter}
+                """, params_base + provider_params).fetchall()
             for row in rows:
                 name = row['target_name']
                 if name and name not in existing_internet_targets:
@@ -402,7 +434,8 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                   AND LOWER(fc.context_key) IN ('start_ip_address', 'start_ip', '$val')
                   AND fc.context_value = '0.0.0.0'
                   {repo_filter}
-            """, params_base).fetchall()
+                    {provider_filter}
+                """, params_base + provider_params).fetchall()
             for row in rows2:
                 name = row['target_name']
                 if name and name not in existing_internet_targets:
@@ -427,9 +460,8 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
                 repo_join3 = "JOIN repositories rp3 ON r.repo_id = rp3.id"
                 repo_where3 = "AND LOWER(rp3.repo_name) = LOWER(?)"
                 type_params.append(repo_name)
-            if provider:
-                prov_where3 = "AND LOWER(r.provider) = LOWER(?)"
-                type_params.append(provider)
+            prov_where3, prov_params3 = _provider_sql_clause(provider, "r.provider")
+            type_params.extend(prov_params3)
             rows3 = conn.execute(f"""
                 SELECT DISTINCT r.resource_name, r.resource_type
                 FROM resources r
@@ -463,9 +495,8 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
             repo_join4 = ""
             repo_where4 = ""
             ea_params: list = [experiment_id]
-            if provider:
-                prov_where4 = "AND LOWER(r.provider) = LOWER(?)"
-                ea_params.append(provider)
+            prov_where4, prov_params4 = _provider_sql_clause(provider, "r.provider")
+            ea_params.extend(prov_params4)
             if repo_name:
                 repo_join4 = "JOIN repositories rp4 ON r.repo_id = rp4.id"
                 repo_where4 = "AND LOWER(rp4.repo_name) = LOWER(?)"
@@ -503,6 +534,7 @@ def generate_architecture_diagram(
     repo_name: str | None = None,
     provider: str | None = None,
     include_operation_resources: bool | None = None,
+    strict_architecture: bool = False,
 ) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
@@ -518,10 +550,16 @@ def generate_architecture_diagram(
     """Generate full architecture diagram from database with parent-child hierarchies.
 
     Optional `provider` can be provided to limit diagram to a single cloud provider
-    (e.g., 'aws', 'azure', 'gcp', 'oracle'). When provided, resources and
+    (e.g., 'aws', 'azure', 'gcp', 'oci'). When provided, resources and
     connections are filtered to that provider so per-provider Architecture_*.md
     files can be produced.
+
+    When `strict_architecture` is True, the diagram avoids inferred/synthetic
+    node and edge generation and only renders relationships that are already
+    persisted in the database.
     """
+    provider = _normalize_provider(provider)
+    strict_mode = bool(strict_architecture)
     
     # Backfill parent_resource_id for orphaned Public IPs using connections table
     def _associate_orphaned_public_ips_to_parents():
@@ -568,7 +606,8 @@ def generate_architecture_diagram(
         except Exception:
             pass
     
-    _associate_orphaned_public_ips_to_parents()
+    if not strict_mode:
+        _associate_orphaned_public_ips_to_parents()
     
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
@@ -594,8 +633,7 @@ def generate_architecture_diagram(
 
     # If a provider filter is requested, limit resources and connections to it
     if provider:
-        prov_lower = provider.lower()
-        resources = [r for r in resources if (r.get('provider') or '').lower() == prov_lower]
+        resources = [r for r in resources if _provider_matches(r.get('provider'), provider)]
         # Only keep connections where at least one endpoint is in the filtered resource set
         resource_names = {r['resource_name'] for r in resources}
         connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
@@ -642,7 +680,8 @@ def generate_architecture_diagram(
 
     # Append synthetic Internet connections based on finding_context evidence.
     # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
-    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
+    if not strict_mode:
+        connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
 
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
@@ -721,12 +760,12 @@ def generate_architecture_diagram(
 
     # Add promoted resources to the resources list (only if same provider when filtering)
     current_ids = {r['id'] for r in resources}
-    prov_filter = provider.lower() if provider else None
+    prov_filter = provider if provider else None
     for promoted_id in promoted_child_ids:
         promoted_r = all_raw_map.get(promoted_id)
         if not promoted_r or promoted_r['id'] in current_ids:
             continue
-        if prov_filter and (promoted_r.get('provider') or '').lower() != prov_filter:
+        if prov_filter and not _provider_matches(promoted_r.get('provider'), prov_filter):
             continue
         rt_info = _rtdb.get_resource_type(None, (promoted_r.get('resource_type') or '').strip())
         if rt_info.get('display_on_architecture_chart', True):
@@ -744,7 +783,7 @@ def generate_architecture_diagram(
         child_r = all_raw_map.get(child_id)
         if not child_r:
             continue
-        if prov_filter and (child_r.get('provider') or '').lower() != prov_filter:
+        if prov_filter and not _provider_matches(child_r.get('provider'), prov_filter):
             continue
         rt_info = _rtdb.get_resource_type(None, (child_r.get('resource_type') or '').strip())
         if not rt_info.get('display_on_architecture_chart', True):
@@ -799,41 +838,42 @@ def generate_architecture_diagram(
     # ── Infer NSG → VM security association ──────────────────────────────────
     # The context extractor does not create a direct net_sg → VM connection.
     # We infer it by tracing: NSG-NIC-association → parent NIC → parent VM.
-    _existing_conn_pairs = {(c.get('source'), c.get('target')) for c in connections}
-    _nsgs = [r for r in resources if 'network_security_group' in (r.get('resource_type') or '').lower()
-             and 'association' not in (r.get('resource_type') or '').lower()]
-    # Use all_raw_map so association resources found even when excluded from display filter
-    _nsg_assocs = [r for r in all_raw_map.values()
-                   if 'network_interface_security_group_association' in (r.get('resource_type') or '').lower()]
-    for _assoc in _nsg_assocs:
-        _nic_id = _assoc.get('parent_resource_id')
-        if not _nic_id:
-            continue
-        # Find which VM has this NIC in its child list (NIC may be child of VM or vice-versa)
-        _nic_res = all_raw_map.get(_nic_id)
-        _vm_res = None
-        if _nic_res:
-            # Case A: NIC is child of VM (NIC.parent_resource_id = VM.id)
-            _vm_candidate = next((r for r in resources if r['id'] == (_nic_res.get('parent_resource_id') if isinstance(_nic_res, dict) else _nic_res['parent_resource_id'])
-                                  and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
-            if _vm_candidate:
-                _vm_res = _vm_candidate
-        if not _vm_res:
-            # Case B: VM is child of NIC (VM.parent_resource_id = NIC.id)
-            _vm_res = next((r for r in resources if r.get('parent_resource_id') == _nic_id
-                            and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
-        if _vm_res and _nsgs:
-            for _nsg in _nsgs:
-                _pair = (_nsg['resource_name'], _vm_res['resource_name'])
-                if _pair not in _existing_conn_pairs:
-                    connections.append({
-                        'source': _nsg['resource_name'],
-                        'target': _vm_res['resource_name'],
-                        'connection_type': 'secures',
-                        'confirmed': True,
-                        'is_cross_repo': 0,
-                    })
-                    _existing_conn_pairs.add(_pair)
+    if not strict_mode:
+        _existing_conn_pairs = {(c.get('source'), c.get('target')) for c in connections}
+        _nsgs = [r for r in resources if 'network_security_group' in (r.get('resource_type') or '').lower()
+                 and 'association' not in (r.get('resource_type') or '').lower()]
+        # Use all_raw_map so association resources found even when excluded from display filter
+        _nsg_assocs = [r for r in all_raw_map.values()
+                       if 'network_interface_security_group_association' in (r.get('resource_type') or '').lower()]
+        for _assoc in _nsg_assocs:
+            _nic_id = _assoc.get('parent_resource_id')
+            if not _nic_id:
+                continue
+            # Find which VM has this NIC in its child list (NIC may be child of VM or vice-versa)
+            _nic_res = all_raw_map.get(_nic_id)
+            _vm_res = None
+            if _nic_res:
+                # Case A: NIC is child of VM (NIC.parent_resource_id = VM.id)
+                _vm_candidate = next((r for r in resources if r['id'] == (_nic_res.get('parent_resource_id') if isinstance(_nic_res, dict) else _nic_res['parent_resource_id'])
+                                      and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+                if _vm_candidate:
+                    _vm_res = _vm_candidate
+            if not _vm_res:
+                # Case B: VM is child of NIC (VM.parent_resource_id = NIC.id)
+                _vm_res = next((r for r in resources if r.get('parent_resource_id') == _nic_id
+                                and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+            if _vm_res and _nsgs:
+                for _nsg in _nsgs:
+                    _pair = (_nsg['resource_name'], _vm_res['resource_name'])
+                    if _pair not in _existing_conn_pairs:
+                        connections.append({
+                            'source': _nsg['resource_name'],
+                            'target': _vm_res['resource_name'],
+                            'connection_type': 'secures',
+                            'confirmed': True,
+                            'is_cross_repo': 0,
+                        })
+                        _existing_conn_pairs.add(_pair)
 
     # Group by canonical render category (provider-agnostic)
     def _in_render_cat(r: dict, *cats: str) -> bool:
@@ -1115,7 +1155,7 @@ def generate_architecture_diagram(
         for r in get_resources_for_diagram(experiment_id)
         if _is_non_service_resource_type(r.get('resource_type') or '')
         and (not repo_name or r.get('repo_name') == repo_name)
-        and (not provider or (r.get('provider') or '').lower() == provider.lower())
+        and (not provider or _provider_matches(r.get('provider'), provider))
     }
     if not include_operation_resources:
         operation_resource_names = {
@@ -1123,7 +1163,7 @@ def generate_architecture_diagram(
             for r in get_resources_for_diagram(experiment_id)
             if _is_operation_resource_type(r.get('resource_type') or '')
             and (not repo_name or r.get('repo_name') == repo_name)
-            and (not provider or (r.get('provider') or '').lower() == provider.lower())
+            and (not provider or _provider_matches(r.get('provider'), provider))
         }
 
     # Track which resource nodes have been emitted so we can create missing endpoints
@@ -1131,6 +1171,8 @@ def generate_architecture_diagram(
 
     # Helper to ensure a resource node exists in the diagram for a given resource name
     def _ensure_node_exists(resource_name: str):
+        if strict_mode:
+            return
         if not resource_name or str(resource_name).strip().lower() == 'internet' or resource_name in node_names_present:
             return
         if resource_name in non_service_resource_names:
@@ -1140,11 +1182,16 @@ def generate_architecture_diagram(
         # Try to fetch minimal info from DB if available
         from db_helpers import get_db_connection
         with get_db_connection() as _conn:
-            row = _conn.execute("SELECT resource_name, resource_type FROM resources WHERE experiment_id = ? AND resource_name = ? LIMIT 1", [experiment_id, resource_name]).fetchone()
+            row = _conn.execute(
+                "SELECT resource_name, resource_type, provider FROM resources WHERE experiment_id = ? AND resource_name = ? LIMIT 1",
+                [experiment_id, resource_name],
+            ).fetchone()
             if row:
                 if (not include_operation_resources) and _is_operation_resource_type(row['resource_type']):
                     return
                 if _is_non_service_resource_type(row['resource_type']):
+                    return
+                if provider and not _provider_matches(row['provider'], provider):
                     return
                 node_id = sanitize_id(row['resource_name'])
                 lines.append(f"  {node_id}[{row['resource_name']}]")
@@ -1629,7 +1676,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         # Discover providers present in resources
         all_res = get_resources_for_diagram(args.experiment_id)
-        providers = sorted({(r.get('provider') or 'unknown').lower() for r in all_res})
+        providers = sorted({_normalize_provider(r.get('provider') or 'unknown') for r in all_res})
         for idx, prov in enumerate(providers):
             diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
             canonical = f"Architecture_{prov.title()}.md"

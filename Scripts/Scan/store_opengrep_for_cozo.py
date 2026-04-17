@@ -27,12 +27,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
 from shared_utils import _severity_score
 
 
+def _canonical_provider(provider: str) -> str:
+    value = (provider or "").strip().lower()
+    if value == "oracle":
+        return "oci"
+    return value or "unknown"
+
+
 def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:
     metadata = metadata or {}
     # Prefer explicit asset_provider metadata if rule provides it
     asset_provider = metadata.get("asset_provider") or metadata.get("provider")
     if isinstance(asset_provider, str) and asset_provider.strip():
-        return asset_provider.strip().lower()
+        return _canonical_provider(asset_provider)
 
     tech = metadata.get("technology") or metadata.get("technologies")
     if isinstance(tech, str):
@@ -49,6 +56,14 @@ def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:
             return "aws"
         if "gcp" in token or "google" in token:
             return "gcp"
+        if "alicloud" in token or "alibaba" in token:
+            return "alicloud"
+        if "oci" in token or "oracle" in token:
+            return "oci"
+        if "tencentcloud" in token or "tencent" in token:
+            return "tencentcloud"
+        if "huaweicloud" in token or "huawei" in token:
+            return "huaweicloud"
         if "terraform" in token:
             return "terraform"
 
@@ -59,6 +74,14 @@ def _detect_provider(check_id: str, metadata: Mapping[str, Any] | None) -> str:
         return "aws"
     if "gcp" in lower_id or "google" in lower_id:
         return "gcp"
+    if "alicloud" in lower_id or "alibaba" in lower_id:
+        return "alicloud"
+    if "oci" in lower_id or "oracle" in lower_id:
+        return "oci"
+    if "tencentcloud" in lower_id or "tencent" in lower_id:
+        return "tencentcloud"
+    if "huaweicloud" in lower_id or "huawei" in lower_id:
+        return "huaweicloud"
     if "terraform" in lower_id:
         return "terraform"
     return "unknown"

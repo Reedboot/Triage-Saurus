@@ -196,7 +196,7 @@ def is_valid_azure_resource_name(name: str) -> bool:
     if "." in name:
         return False
     # Check for resource type prefixes (indicates a reference like "azurerm_public_ip")
-    for prefix in ["azurerm_", "aws_", "google_", "azuread_", "alicloud_", "oci_", "data."]:
+    for prefix in ["azurerm_", "aws_", "google_", "azuread_", "alicloud_", "oci_", "tencentcloud_", "huaweicloud_", "data."]:
         if name.startswith(prefix):
             return False
     # Check for interpolation syntax
@@ -1136,7 +1136,8 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             for prefix, provider in [
                 ("azurerm_", "azure"), ("azuread_", "azure"),
                 ("aws_", "aws"), ("google_", "gcp"),
-                ("alicloud_", "alicloud"), ("oci_", "oracle")
+                ("alicloud_", "alicloud"), ("oci_", "oci"),
+                ("tencentcloud_", "tencentcloud"), ("huaweicloud_", "huaweicloud")
             ]:
                 if res.resource_type.startswith(prefix):
                     provider_counts[provider] = provider_counts.get(provider, 0) + 1

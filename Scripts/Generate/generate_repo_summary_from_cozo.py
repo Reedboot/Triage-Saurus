@@ -25,6 +25,7 @@ PROVIDER_TO_ARCH = {
     "azure": "Architecture_Azure.md",
     "aws": "Architecture_AWS.md",
     "gcp": "Architecture_GCP.md",
+    "oci": "Architecture_Oci.md",
     "oracle": "Architecture_ORACLE.md",
     "alicloud": "Architecture_ALICLOUD.md",
 }

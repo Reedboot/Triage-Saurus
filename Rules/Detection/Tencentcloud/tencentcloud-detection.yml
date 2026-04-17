@@ -1,0 +1,384 @@
+rules:
+  - id: context-tencentcloud-cvm-instance
+    message: |
+      Tencent Cloud CVM instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, tencentcloud, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CVM Instance
+        resource_type: tencentcloud_instance
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud CVM instances in Terraform configurations.
+
+  - id: context-tencentcloud-tke-cluster
+    message: |
+      Tencent Cloud TKE cluster detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_kubernetes_cluster" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: containers
+      technology: [terraform, tencentcloud, kubernetes]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: TKE Cluster
+        resource_type: tencentcloud_kubernetes_cluster
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud TKE clusters in Terraform configurations.
+
+  - id: context-tencentcloud-tke-node-pool
+    message: |
+      Tencent Cloud TKE node pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_kubernetes_node_pool" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: containers
+      technology: [terraform, tencentcloud, kubernetes]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: TKE Node Pool
+        resource_type: tencentcloud_kubernetes_node_pool
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud TKE node pools in Terraform configurations.
+
+  - id: context-tencentcloud-cos-bucket
+    message: |
+      Tencent Cloud COS bucket detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_cos_bucket" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, tencentcloud, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: COS Bucket
+        resource_type: tencentcloud_cos_bucket
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud COS buckets in Terraform configurations.
+
+  - id: context-tencentcloud-mysql-instance
+    message: |
+      Tencent Cloud MySQL instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_mysql_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, tencentcloud, mysql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: MySQL Instance
+        resource_type: tencentcloud_mysql_instance
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud MySQL instances in Terraform configurations.
+
+  - id: context-tencentcloud-postgresql-instance
+    message: |
+      Tencent Cloud PostgreSQL instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_postgresql_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, tencentcloud, postgresql]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: PostgreSQL Instance
+        resource_type: tencentcloud_postgresql_instance
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud PostgreSQL instances in Terraform configurations.
+
+  - id: context-tencentcloud-kms-key
+    message: |
+      Tencent Cloud KMS key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_kms_key" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: security
+      technology: [terraform, tencentcloud, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key
+        resource_type: tencentcloud_kms_key
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud KMS keys in Terraform configurations.
+
+  - id: context-tencentcloud-vpc
+    message: |
+      Tencent Cloud VPC detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_vpc" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, tencentcloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC
+        resource_type: tencentcloud_vpc
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud VPCs in Terraform configurations.
+
+  - id: context-tencentcloud-subnet
+    message: |
+      Tencent Cloud subnet detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_subnet" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, tencentcloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet
+        resource_type: tencentcloud_subnet
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud subnets in Terraform configurations.
+
+  - id: context-tencentcloud-security-group
+    message: |
+      Tencent Cloud security group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_security_group" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network_security
+      technology: [terraform, tencentcloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group
+        resource_type: tencentcloud_security_group
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud security groups in Terraform configurations.
+
+  - id: context-tencentcloud-security-group-rule
+    message: |
+      Tencent Cloud security group rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_security_group_rule" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network_security
+      technology: [terraform, tencentcloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group Rule
+        resource_type: tencentcloud_security_group_rule
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud security group rules in Terraform configurations.
+
+  - id: context-tencentcloud-clb-instance
+    message: |
+      Tencent Cloud CLB instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_clb_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load_balancing
+      technology: [terraform, tencentcloud, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CLB Instance
+        resource_type: tencentcloud_clb_instance
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud CLB instances in Terraform configurations.
+
+  - id: context-tencentcloud-apigateway-service
+    message: |
+      Tencent Cloud API Gateway service detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_api_gateway_service" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api
+      technology: [terraform, tencentcloud, api]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway Service
+        resource_type: tencentcloud_api_gateway_service
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud API Gateway services in Terraform configurations.
+
+  - id: context-tencentcloud-apigateway-api
+    message: |
+      Tencent Cloud API Gateway API detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_api_gateway_api" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api
+      technology: [terraform, tencentcloud, api]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway API
+        resource_type: tencentcloud_api_gateway_api
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud API Gateway APIs in Terraform configurations.
+
+  - id: context-tencentcloud-cam-role
+    message: |
+      Tencent Cloud CAM role detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_cam_role" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, tencentcloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CAM Role
+        resource_type: tencentcloud_cam_role
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud CAM roles in Terraform configurations.
+
+  - id: context-tencentcloud-cam-policy
+    message: |
+      Tencent Cloud CAM policy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "tencentcloud_cam_policy" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: tencentcloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, tencentcloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CAM Policy
+        resource_type: tencentcloud_cam_policy
+        resource_name: $NAME
+    description: |
+      Detects Tencent Cloud CAM policies in Terraform configurations.

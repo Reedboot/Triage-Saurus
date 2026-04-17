@@ -16,9 +16,10 @@
   'aws': '☁️ AWS',
   'azure': '☁️ Azure', 
   'gcp': '☁️ Google Cloud',
-  'oracle': '☁️ Oracle Cloud',
   'oci': '☁️ Oracle Cloud',
   'alicloud': '☁️ Alibaba Cloud',
+  'tencentcloud': '☁️ Tencent Cloud',
+  'huaweicloud': '☁️ Huawei Cloud',
   'code': '💻 Code/IaC Findings',
   'Unknown': '❓ Unknown Provider'
 } %}
@@ -49,7 +50,7 @@
          placeholder="Filter findings…" autocomplete="off" oninput="filterFindings()" />
   <select id="findings-provider-filter" class="assets-provider-filter" onchange="filterFindings()">
     <option value="">All providers</option>
-    {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'alicloud', 'Unknown'] %}
+    {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'tencentcloud', 'huaweicloud', 'code', 'Unknown'] %}
       {% if provider in provider_groups %}
         <option value="{{ provider }}">{{ provider_names.get(provider, provider) }}</option>
       {% endif %}
@@ -92,7 +93,7 @@
 
 {# Render findings grouped by provider #}
 <div id="findings-container" style="display: grid; gap: 24px; min-width: 0;">
-  {% for provider in ['aws', 'azure', 'gcp', 'oracle', 'alicloud', 'Unknown'] %}
+  {% for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud', 'tencentcloud', 'huaweicloud', 'code', 'Unknown'] %}
     {% if provider in provider_groups %}
     <div class="provider-group" data-provider="{{ provider }}" style="border: 2px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg-subtle);">
       {# Provider header with counts #}

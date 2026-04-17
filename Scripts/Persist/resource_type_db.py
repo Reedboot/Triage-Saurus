@@ -367,7 +367,7 @@ _SERVICE_PATTERNS = {
                 "api_resource": "google_api_gateway_api_config",
                 "operation": "google_api_gateway_gateway",
             },
-            "oracle": {
+            "oci": {
                 "parent": "oci_apigateway_gateway",
                 "operation": "oci_apigateway_deployment",
             },
@@ -634,7 +634,9 @@ _PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("aws_",     "aws"),
     ("google_",  "gcp"),
     ("alicloud_","alicloud"),
-    ("oci_",     "oracle"),
+    ("oci_",     "oci"),
+    ("tencentcloud_", "tencentcloud"),
+    ("huaweicloud_", "huaweicloud"),
 ]
 
 # Category keyword patterns for derive fallback — ordered by priority
@@ -646,8 +648,12 @@ _CATEGORY_KEYWORDS: list[tuple[str, str]] = [
     ("postgres", "Database"), ("mssql", "Database"), ("cosmosdb", "Database"),
     ("bigquery", "Database"), ("bigtable", "Database"), ("dynamo", "Database"),
     ("neptune", "Database"), ("elasticsearch", "Database"),
-    ("storage", "Storage"), ("bucket", "Storage"), ("blob", "Storage"),
-    ("s3", "Storage"), ("ebs", "Storage"), ("disk", "Storage"),
+    # Storage keywords: use provider-specific prefixes + known storage patterns to avoid false positives
+    # (e.g., "storage_helper" modules should not be classified as Storage tier)
+    ("azurerm_storage_", "Storage"), ("aws_s3_", "Storage"), ("google_storage_", "Storage"),
+    ("alicloud_oss_", "Storage"), ("oci_objectstorage_", "Storage"),
+    ("bucket", "Storage"), ("blob", "Storage"), ("oss_", "Storage"),
+    ("aws_ebs_", "Storage"), ("managed_disk", "Storage"),
     ("virtual_machine", "Compute"), ("instance", "Compute"), ("lambda", "Compute"),
     ("function", "Compute"), ("app_service", "Compute"), ("cloud_run", "Compute"),
     ("key_vault", "Identity"), ("kms", "Identity"), ("iam", "Identity"),
@@ -836,7 +842,10 @@ def get_render_category(conn: sqlite3.Connection | None, terraform_type: str) ->
         return 'Container'
     if any(k in lower for k in ['sql', 'rds', 'database', 'cosmos', 'postgresql', 'mysql', 'mssql', 'bigquery', 'db_']):
         return 'Database'
-    if any(k in lower for k in ['storage', 's3', 'blob', 'bucket', 'disk', 'volume']):
+    # Storage detection: match actual storage resource types, not just any resource with "storage" in the name
+    # (avoids false positives like "storage_helper" modules or other resources with "storage" in their name)
+    # Only match cloud provider-specific prefixes and known storage keywords (bucket, oss, ebs, managed_disk)
+    if any(k in lower for k in ['azurerm_storage_', 'aws_s3_', 'google_storage_', 'alicloud_oss_', 'oci_objectstorage_', 'bucket', 'oss_', 'aws_ebs_', 'managed_disk']):
         return 'Storage'
     if any(k in lower for k in ['vnet', 'virtual_network', 'subnet', 'network', 'public_ip', 'vpc', 'route', 'gateway', 'lb', 'load_balancer', 'nsg', 'network_security_group', 'security_group']):
         return 'Network'

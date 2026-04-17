@@ -323,6 +323,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   cursor: pointer;
 }
 .btn-small:hover { color: var(--text); background: var(--border); }
+.btn-small.active { color: var(--accent); background: var(--bg-elevated); border-color: var(--accent); font-weight: 600; }
 
 /* Diagram toggle button: match Run Scan sizing and give distinct style */
 .btn-diagram {

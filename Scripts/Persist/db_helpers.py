@@ -3430,6 +3430,13 @@ def get_ai_sections(experiment_id: str, repo_name: str) -> list[dict]:
 
 # ── cloud_diagrams helpers ────────────────────────────────────────────────────
 
+
+def _canonical_diagram_provider(provider: str | None) -> str:
+    value = (provider or "").strip().lower()
+    if value == "oracle":
+        return "oci"
+    return value or "unknown"
+
 def upsert_cloud_diagram(
     experiment_id: str,
     provider: str,
@@ -3446,7 +3453,7 @@ def upsert_cloud_diagram(
     experiment-scoped uniqueness.
     """
     # Skip meta-providers that shouldn't have architecture diagrams
-    provider_norm = (provider or "unknown").strip().lower()
+    provider_norm = _canonical_diagram_provider(provider)
     if provider_norm in ('terraform', 'kubernetes', 'unknown', ''):
         return  # Don't create architecture diagrams for these
     
@@ -3458,7 +3465,7 @@ def upsert_cloud_diagram(
         ).fetchone()
         primary_repo = repo_row[0] if repo_row and repo_row[0] else None
 
-        provider_norm = (provider or "unknown").strip().lower()
+        provider_norm = _canonical_diagram_provider(provider)
 
         # Backfill repo_name on existing rows for this experiment so historical
         # rows become associated with a repo (best-effort); ignore failures.
@@ -3564,9 +3571,10 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
         grouped: dict[tuple[str, str], dict] = {}
         for r in rows:
             row_dict = dict(r)
-            prov = (row_dict.get("provider") or "").strip()
+            prov = _canonical_diagram_provider(row_dict.get("provider"))
             title = (row_dict.get("diagram_title") or "").strip()
             key = (prov.lower(), title.lower())
+            row_dict["provider"] = prov
             existing = grouped.get(key)
             if not existing or (row_dict.get("updated_at") or "") > (existing.get("updated_at") or ""):
                 grouped[key] = row_dict
@@ -3575,7 +3583,15 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
         items = sorted(grouped.values(), key=lambda x: (x.get("display_order") or 0, (x.get("provider") or "").lower()))
         result: list[dict] = []
         for row in items:
-            provider_display = (row.get("provider") or "").capitalize()
+            provider_display = {
+                "aws": "AWS",
+                "azure": "Azure",
+                "gcp": "GCP",
+                "oci": "Oracle",
+                "alicloud": "Alicloud",
+                "tencentcloud": "Tencent Cloud",
+                "huaweicloud": "Huawei Cloud",
+            }.get((row.get("provider") or "").lower(), (row.get("provider") or "").capitalize())
             result.append({
                 "provider": provider_display,
                 "diagram_title": row.get("diagram_title"),

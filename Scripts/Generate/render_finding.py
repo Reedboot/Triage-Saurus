@@ -372,8 +372,18 @@ def get_finding_model_from_db(finding_id: str) -> dict:
 
     metadata = _parse_metadata(row.get("metadata_json"))
     provider_raw = metadata.get("provider") or row.get("provider") or "unknown"
-    provider = str(provider_raw).strip() or "unknown"
-    provider_display = provider.capitalize()
+    provider = str(provider_raw).strip().lower() or "unknown"
+    if provider == "oracle":
+        provider = "oci"
+    provider_display = {
+        "azure": "Azure",
+        "aws": "AWS",
+        "gcp": "GCP",
+        "oci": "Oracle",
+        "alicloud": "Alicloud",
+        "tencentcloud": "Tencent Cloud",
+        "huaweicloud": "Huawei Cloud",
+    }.get(provider, provider.capitalize())
 
     severity_label, fallback_score = severity_summary(row.get("severity"))
     raw_score = row.get("severity_score")
@@ -446,7 +456,7 @@ def get_finding_model_from_db(finding_id: str) -> dict:
 
     return {
         "version": 1,
-        "kind": "cloud" if provider.lower() in {"azure", "aws", "gcp", "alibaba", "oracle"} else "code",
+        "kind": "cloud" if provider in {"azure", "aws", "gcp", "alibaba", "alicloud", "oci", "tencentcloud", "huaweicloud"} else "code",
         "title": title,
         "description": description,
         "overall_score": {

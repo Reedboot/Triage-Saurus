@@ -347,7 +347,7 @@ def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Pa
     elif any(r.startswith("google_") for r in apim_resources):
         provider = "gcp"
     elif any(r.startswith("oci_") for r in apim_resources):
-        provider = "oracle"
+        provider = "oci"
     elif any(r.startswith("alicloud_") for r in apim_resources):
         provider = "alibaba"
     
@@ -416,7 +416,7 @@ def _group_apim_resources(service_raw: list[str], resources: list, repo_path: Pa
                     if r.resource_type in ("aws_api_gateway_api_key", "aws_api_gateway_usage_plan_key"):
                         apim_structure[api_name]["subscriptions"].append(r.name)
     
-    elif provider in ("gcp", "oracle", "alibaba"):
+    elif provider in ("gcp", "oci", "alibaba"):
         # Simple structure for other providers (no nested operations extracted yet)
         # Group all resources under a single API entry
         apim_structure["api"] = {

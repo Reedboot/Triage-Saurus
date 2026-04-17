@@ -27,7 +27,7 @@ rules:
               regex: "(?i).*oci[_-]?containerengine[_-]?node[_-]?pool.*"
     metadata:
       finding_kind: Asset
-      asset_provider: oracle
+      asset_provider: oci
       rule_type: context_discovery
       category: infrastructure
       subcategory: container

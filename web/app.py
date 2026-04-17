@@ -4115,6 +4115,9 @@ def api_diagrams(experiment_id: str):
         include_api_operations_override = True
     elif include_api_operations_raw in {"0", "false", "no", "off"}:
         include_api_operations_override = False
+    strict_architecture_raw = (request.args.get("strict_architecture") or "").strip().lower()
+    strict_architecture = strict_architecture_raw in {"1", "true", "yes", "on"}
+    force_regenerate = include_api_operations_override is not None or strict_architecture
 
     def _edge_count(code: str) -> int:
         if not code:
@@ -4139,7 +4142,7 @@ def api_diagrams(experiment_id: str):
             try:
                 # First, check for persisted per-provider diagrams for this repo/experiment.
                 db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name)
-                if db_diagrams:
+                if db_diagrams and not force_regenerate:
                     return jsonify(_response_payload(db_diagrams))
 
                 # No persisted diagrams — regenerate per-provider from DB topology.
@@ -4159,7 +4162,11 @@ def api_diagrams(experiment_id: str):
                         """,
                         (experiment_id, repo_name),
                     ).fetchall()
-                    providers = [str(row['provider']).strip() for row in prov_rows if row['provider']]
+                    providers = sorted({
+                        _canonical_provider_key(row['provider'])
+                        for row in prov_rows
+                        if row['provider']
+                    })
 
                 generated: list[dict] = []
                 for provider in providers:
@@ -4169,25 +4176,27 @@ def api_diagrams(experiment_id: str):
                             repo_name=repo_name,
                             provider=provider,
                             include_operation_resources=include_api_operations_override,
+                            strict_architecture=strict_architecture,
                         )
                     except Exception:
                         code = None
                     if code and "No resources found" not in code:
+                        provider_display = _provider_display_name(provider)
                         generated.append({
-                            "provider": provider.capitalize(),
-                            "diagram_title": f"{provider.capitalize()} Architecture",
+                            "provider": provider_display,
+                            "diagram_title": f"{provider_display} Architecture",
                             "mermaid_code": code,
-                            "display_order": 0,
+                            "display_order": len(generated),
                         })
                         # Persist the regenerated diagrams for faster subsequent responses
-                        if include_api_operations_override is None:
+                        if not force_regenerate:
                             try:
                                 db_helpers.upsert_cloud_diagram(
                                     experiment_id=experiment_id,
                                     provider=provider,
-                                    diagram_title=f"{provider.capitalize()} Architecture",
+                                    diagram_title=f"{provider_display} Architecture",
                                     mermaid_code=code,
-                                    display_order=0,
+                                    display_order=len(generated) - 1,
                                 )
                             except Exception:
                                 pass
@@ -4202,14 +4211,14 @@ def api_diagrams(experiment_id: str):
 
         # For repo-scoped requests, also fetch experiment-scoped diagrams 
         # (these may have been persisted from the initial scan before repo-filtering was added)
-        if repo_name and not db_diagrams:
+        if repo_name and not db_diagrams and not force_regenerate:
             db_diagrams = get_cloud_diagrams(experiment_id)
         
         # If still no diagrams found and repo_name was provided, fall back to regenerating
         # (diagrams may not have been persisted yet)
 
         # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
-        if repo_name and (not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
+        if repo_name and (force_regenerate or not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
             try:
                 from Scripts.Generate.generate_hierarchical_diagram import HierarchicalDiagramBuilder  # type: ignore
 
@@ -4239,7 +4248,11 @@ def api_diagrams(experiment_id: str):
                             """,
                             (experiment_id, repo_name),
                         ).fetchall()
-                        providers = [str(row['provider']).strip() for row in prov_rows if row['provider']]
+                        providers = sorted({
+                            _canonical_provider_key(row['provider'])
+                            for row in prov_rows
+                            if row['provider']
+                        })
                 except Exception:
                     pass
 
@@ -4257,34 +4270,25 @@ def api_diagrams(experiment_id: str):
                             _builder.load_data()
                             if _builder.resources:
                                 _code = _builder.generate()
-                                provider_map = {
-                                    'azure': 'Azure',
-                                    'aws': 'AWS',
-                                    'gcp': 'GCP',
-                                    'google': 'GCP',
-                                    'kubernetes': 'Kubernetes',
-                                    'terraform': 'Terraform',
-                                    'alicloud': 'Alicloud',
-                                    'oracle': 'Oracle',
-                                }
-                                provider_display = provider_map.get(provider.lower(), provider.title())
+                                provider_display = _provider_display_name(provider)
                                 if _code and "No resources found" not in _code:
                                     generated.append({
-                                        "provider": provider,
+                                        "provider": provider_display,
                                         "diagram_title": f"{provider_display} Architecture",
                                         "mermaid_code": _code,
                                         "display_order": len(generated),
                                     })
-                                    try:
-                                        db_helpers.upsert_cloud_diagram(
-                                            experiment_id=experiment_id,
-                                            provider=provider,
-                                            diagram_title=f"{provider_display} Architecture",
-                                            mermaid_code=_code,
-                                            display_order=len(generated) - 1,
-                                        )
-                                    except Exception:
-                                        pass
+                                    if not force_regenerate:
+                                        try:
+                                            db_helpers.upsert_cloud_diagram(
+                                                experiment_id=experiment_id,
+                                                provider=provider,
+                                                diagram_title=f"{provider_display} Architecture",
+                                                mermaid_code=_code,
+                                                display_order=len(generated) - 1,
+                                            )
+                                        except Exception:
+                                            pass
                         except Exception:
                             pass
                 else:
@@ -4295,25 +4299,27 @@ def api_diagrams(experiment_id: str):
                         repo_path=_repo_path,
                     )
                     _code = _builder.generate()
-                    _provider = _builder.detect_cloud_provider()
+                    _provider = _canonical_provider_key(_builder.detect_cloud_provider())
+                    _provider_display = _provider_display_name(_provider)
 
                     if _code and "No resources found" not in _code:
                         generated.append({
-                            "provider": _provider.capitalize(),
-                            "diagram_title": f"{_provider.capitalize()} Architecture",
+                            "provider": _provider_display,
+                            "diagram_title": f"{_provider_display} Architecture",
                             "mermaid_code": _code,
                             "display_order": 0,
                         })
-                        try:
-                            db_helpers.upsert_cloud_diagram(
-                                experiment_id=experiment_id,
-                                provider=_provider,
-                                diagram_title=f"{_provider.capitalize()} Architecture",
-                                mermaid_code=_code,
-                                display_order=0,
-                            )
-                        except Exception:
-                            pass
+                        if not force_regenerate:
+                            try:
+                                db_helpers.upsert_cloud_diagram(
+                                    experiment_id=experiment_id,
+                                    provider=_provider,
+                                    diagram_title=f"{_provider_display} Architecture",
+                                    mermaid_code=_code,
+                                    display_order=0,
+                                )
+                            except Exception:
+                                pass
 
                 if generated:
                     return jsonify(_response_payload(generated))
@@ -4397,12 +4403,16 @@ def api_diff():
                     """,
                     (id_from, repo),
                 ).fetchall()
-                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                providers = sorted({
+                    _canonical_provider_key(row["provider"])
+                    for row in prov_rows
+                    if row["provider"]
+                })
                 gen = []
                 for provider in providers:
                     code = generate_architecture_diagram(id_from, repo_name=repo, provider=provider)
                     if code and "No resources found" not in code:
-                        gen.append({"title": f"{provider.capitalize()} Architecture", "code": code})
+                        gen.append({"title": f"{_provider_display_name(provider)} Architecture", "code": code})
                 if gen and not diagrams_from:
                     diagrams_from = gen
             # Repeat for 'to' scan
@@ -4419,12 +4429,16 @@ def api_diff():
                     """,
                     (id_to, repo),
                 ).fetchall()
-                providers = [str(row["provider"]).strip() for row in prov_rows if row["provider"]]
+                providers = sorted({
+                    _canonical_provider_key(row["provider"])
+                    for row in prov_rows
+                    if row["provider"]
+                })
                 gen = []
                 for provider in providers:
                     code = generate_architecture_diagram(id_to, repo_name=repo, provider=provider)
                     if code and "No resources found" not in code:
-                        gen.append({"title": f"{provider.capitalize()} Architecture", "code": code})
+                        gen.append({"title": f"{_provider_display_name(provider)} Architecture", "code": code})
                 if gen and not diagrams_to:
                     diagrams_to = gen
     except Exception:
@@ -4824,7 +4838,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
             'aws': 'AWS',
             'google': 'Google Cloud', 'googlecloud': 'Google Cloud',
             'alicloud': 'Alibaba Cloud',
+            'oracle': 'Oracle Cloud',
             'oci': 'Oracle Cloud',
+            'tencentcloud': 'Tencent Cloud',
+            'huaweicloud': 'Huawei Cloud',
             'ibm': 'IBM Cloud',
             'digitalocean': 'DigitalOcean',
         }
@@ -7440,6 +7457,31 @@ def api_finding_triage(experiment_id: str, finding_id: str):
 
 
 
+def _canonical_provider_key(provider: str | None) -> str:
+    value = (provider or "").strip().lower()
+    if value == "oracle":
+        return "oci"
+    return value or "unknown"
+
+
+def _provider_display_name(provider: str | None) -> str:
+    provider_key = _canonical_provider_key(provider)
+    provider_map = {
+        "azure": "Azure",
+        "aws": "AWS",
+        "gcp": "GCP",
+        "google": "GCP",
+        "kubernetes": "Kubernetes",
+        "terraform": "Terraform",
+        "alicloud": "Alicloud",
+        "oci": "Oracle",
+        "tencentcloud": "Tencent Cloud",
+        "huaweicloud": "Huawei Cloud",
+        "unknown": "Unknown",
+    }
+    return provider_map.get(provider_key, provider_key.title())
+
+
 def _infer_provider_from_rule(rule_id: str) -> str:
     """Infer cloud provider from rule_id prefix. Returns lowercase to match resources table.
     
@@ -7463,9 +7505,13 @@ def _infer_provider_from_rule(rule_id: str) -> str:
     elif rule_lower.startswith('gcp-') or rule_lower.startswith('google-'):
         return 'gcp'
     elif rule_lower.startswith('oci-'):
-        return 'oracle'
+        return 'oci'
     elif rule_lower.startswith('alicloud-'):
         return 'alicloud'
+    elif rule_lower.startswith('tencentcloud-'):
+        return 'tencentcloud'
+    elif rule_lower.startswith('huaweicloud-'):
+        return 'huaweicloud'
     
     # IaC tools (terraform, cloudformation, etc.) - treat as code findings
     iac_patterns = {'terraform-', 'cloudformation-', 'helm-', 'kubernetes-', 'docker-'}
@@ -7532,14 +7578,25 @@ def api_view_findings(experiment_id: str, repo_name: str):
         for f in findings:
             if not f.get('provider'):
                 f['provider'] = _infer_provider_from_rule(f.get('rule_id', ''))
+            provider_key = _canonical_provider_key(f.get('provider'))
+            f['provider'] = 'Unknown' if provider_key == 'unknown' else provider_key
         
         # Sort by severity first (Critical → High → Medium → Low), then provider, then score desc
-        provider_order = {'aws': 1, 'azure': 2, 'gcp': 3, 'oracle': 4, 'alicloud': 5, 'Unknown': 6}
+        provider_order = {
+            'aws': 1,
+            'azure': 2,
+            'gcp': 3,
+            'oci': 4,
+            'alicloud': 5,
+            'tencentcloud': 6,
+            'huaweicloud': 7,
+            'Unknown': 8,
+        }
         severity_order = {'CRITICAL': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4, 'INFO': 5}
         findings.sort(key=lambda f: (
             severity_order.get((f.get('base_severity') or 'INFO').upper(), 6),
             -(f.get('severity_score', 0) or 0),
-            provider_order.get(f.get('provider', 'Unknown'), 6),
+            provider_order.get(_canonical_provider_key(f.get('provider')), provider_order['Unknown']),
         ))
 
         # Deduplicate same-rule / same-file findings: group them and attach a

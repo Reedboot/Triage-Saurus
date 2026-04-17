@@ -1,0 +1,384 @@
+rules:
+  - id: context-huaweicloud-ecs-instance
+    message: |
+      Huawei Cloud ECS instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_compute_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: compute
+      technology: [terraform, huaweicloud, compute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: ECS Instance
+        resource_type: huaweicloud_compute_instance
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud ECS instances in Terraform configurations.
+
+  - id: context-huaweicloud-cce-cluster
+    message: |
+      Huawei Cloud CCE cluster detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_cce_cluster" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: containers
+      technology: [terraform, huaweicloud, kubernetes]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CCE Cluster
+        resource_type: huaweicloud_cce_cluster
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud CCE clusters in Terraform configurations.
+
+  - id: context-huaweicloud-cce-node-pool
+    message: |
+      Huawei Cloud CCE node pool detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_cce_node_pool" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: containers
+      technology: [terraform, huaweicloud, kubernetes]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: CCE Node Pool
+        resource_type: huaweicloud_cce_node_pool
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud CCE node pools in Terraform configurations.
+
+  - id: context-huaweicloud-obs-bucket
+    message: |
+      Huawei Cloud OBS bucket detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_obs_bucket" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: storage
+      technology: [terraform, huaweicloud, storage]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: OBS Bucket
+        resource_type: huaweicloud_obs_bucket
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud OBS buckets in Terraform configurations.
+
+  - id: context-huaweicloud-rds-instance
+    message: |
+      Huawei Cloud RDS instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_rds_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, huaweicloud, database]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: RDS Instance
+        resource_type: huaweicloud_rds_instance
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud RDS instances in Terraform configurations.
+
+  - id: context-huaweicloud-gaussdb-instance
+    message: |
+      Huawei Cloud GaussDB instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_gaussdb_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, huaweicloud, database]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: GaussDB Instance
+        resource_type: huaweicloud_gaussdb_instance
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud GaussDB instances in Terraform configurations.
+
+  - id: context-huaweicloud-kms-key
+    message: |
+      Huawei Cloud KMS key detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_kms_key" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: security
+      technology: [terraform, huaweicloud, kms]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: KMS Key
+        resource_type: huaweicloud_kms_key
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud KMS keys in Terraform configurations.
+
+  - id: context-huaweicloud-vpc
+    message: |
+      Huawei Cloud VPC detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_vpc" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, huaweicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC
+        resource_type: huaweicloud_vpc
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud VPCs in Terraform configurations.
+
+  - id: context-huaweicloud-vpc-subnet
+    message: |
+      Huawei Cloud VPC subnet detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_vpc_subnet" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, huaweicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: VPC Subnet
+        resource_type: huaweicloud_vpc_subnet
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud VPC subnets in Terraform configurations.
+
+  - id: context-huaweicloud-security-group
+    message: |
+      Huawei Cloud security group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_networking_secgroup" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network_security
+      technology: [terraform, huaweicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group
+        resource_type: huaweicloud_networking_secgroup
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud security groups in Terraform configurations.
+
+  - id: context-huaweicloud-security-group-rule
+    message: |
+      Huawei Cloud security group rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_networking_secgroup_rule" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network_security
+      technology: [terraform, huaweicloud, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Security Group Rule
+        resource_type: huaweicloud_networking_secgroup_rule
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud security group rules in Terraform configurations.
+
+  - id: context-huaweicloud-elb-loadbalancer
+    message: |
+      Huawei Cloud load balancer detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_lb_loadbalancer" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: load_balancing
+      technology: [terraform, huaweicloud, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Load Balancer
+        resource_type: huaweicloud_lb_loadbalancer
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud load balancers in Terraform configurations.
+
+  - id: context-huaweicloud-apigw-instance
+    message: |
+      Huawei Cloud API Gateway instance detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_apigw_instance" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api
+      technology: [terraform, huaweicloud, api]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway Instance
+        resource_type: huaweicloud_apigw_instance
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud API Gateway instances in Terraform configurations.
+
+  - id: context-huaweicloud-apigw-group
+    message: |
+      Huawei Cloud API Gateway group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_apigw_group" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: api
+      technology: [terraform, huaweicloud, api]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: API Gateway Group
+        resource_type: huaweicloud_apigw_group
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud API Gateway groups in Terraform configurations.
+
+  - id: context-huaweicloud-iam-group
+    message: |
+      Huawei Cloud IAM group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_identity_group" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, huaweicloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: IAM Group
+        resource_type: huaweicloud_identity_group
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud IAM groups in Terraform configurations.
+
+  - id: context-huaweicloud-iam-role
+    message: |
+      Huawei Cloud IAM role detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "huaweicloud_identity_role" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: huaweicloud
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: identity
+      technology: [terraform, huaweicloud, iam]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: IAM Role
+        resource_type: huaweicloud_identity_role
+        resource_name: $NAME
+    description: |
+      Detects Huawei Cloud IAM roles in Terraform configurations.

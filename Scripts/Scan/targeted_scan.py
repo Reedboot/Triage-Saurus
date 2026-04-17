@@ -207,6 +207,42 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-oci-logging":                         [],
     "context-oci-identity-policy":                 ["OCI/IAM"],
     "context-oci-container-registry":              [],
+
+    # Tencent Cloud detection rules
+    "context-tencentcloud-cvm-instance":           [],
+    "context-tencentcloud-tke-cluster":            ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
+    "context-tencentcloud-tke-node-pool":          ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
+    "context-tencentcloud-cos-bucket":             ["Secrets"],
+    "context-tencentcloud-mysql-instance":         ["SQL"],
+    "context-tencentcloud-postgresql-instance":    ["SQL"],
+    "context-tencentcloud-kms-key":                ["Secrets"],
+    "context-tencentcloud-vpc":                    [],
+    "context-tencentcloud-subnet":                 [],
+    "context-tencentcloud-security-group":         [],
+    "context-tencentcloud-security-group-rule":    [],
+    "context-tencentcloud-clb-instance":           [],
+    "context-tencentcloud-apigateway-service":     ["Secrets"],
+    "context-tencentcloud-apigateway-api":         ["Secrets"],
+    "context-tencentcloud-cam-role":               [],
+    "context-tencentcloud-cam-policy":             [],
+
+    # Huawei Cloud detection rules
+    "context-huaweicloud-ecs-instance":            [],
+    "context-huaweicloud-cce-cluster":             ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
+    "context-huaweicloud-cce-node-pool":           ["Kubernetes/Workload", "Kubernetes/RBAC", "Kubernetes/Ingress", "Kubernetes/Service"],
+    "context-huaweicloud-obs-bucket":              ["Secrets"],
+    "context-huaweicloud-rds-instance":            ["SQL"],
+    "context-huaweicloud-gaussdb-instance":        ["SQL"],
+    "context-huaweicloud-kms-key":                 ["Secrets"],
+    "context-huaweicloud-vpc":                     [],
+    "context-huaweicloud-vpc-subnet":              [],
+    "context-huaweicloud-security-group":          [],
+    "context-huaweicloud-security-group-rule":     [],
+    "context-huaweicloud-elb-loadbalancer":        [],
+    "context-huaweicloud-apigw-instance":          ["Secrets"],
+    "context-huaweicloud-apigw-group":             ["Secrets"],
+    "context-huaweicloud-iam-group":               [],
+    "context-huaweicloud-iam-role":                [],
 }
 
 # ── Always-on folders (run regardless of what was detected) ──────────────────

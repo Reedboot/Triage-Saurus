@@ -33,7 +33,7 @@ rules:
               regex: "(?i).*oci[_-]?kms[_-]?key.*"
     metadata:
       finding_kind: Asset
-      asset_provider: oracle
+      asset_provider: oci
       rule_type: context_discovery
       category: infrastructure
       subcategory: kms

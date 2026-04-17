@@ -21,7 +21,7 @@ rules:
               regex: "(?i).*oci[_-]?core[_-]?network[_-]?security[_-]?group.*"
     metadata:
       finding_kind: Asset
-      asset_provider: oracle
+      asset_provider: oci
       rule_type: context_discovery
       category: infrastructure
       subcategory: network

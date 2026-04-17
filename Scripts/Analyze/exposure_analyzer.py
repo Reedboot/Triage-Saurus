@@ -489,7 +489,16 @@ class InternetExposureAnalyzer:
                 continue
 
             provider = vpc_dict.get("provider", "unknown")
-            friendly_type = {"aws": "VPC", "azure": "VNet", "gcp": "VPC Network", "oracle": "VCN", "alicloud": "VPC"}.get(provider, "VPC")
+            friendly_type = {
+                "aws": "VPC",
+                "azure": "VNet",
+                "gcp": "VPC Network",
+                "oci": "VCN",
+                "oracle": "VCN",
+                "alicloud": "VPC",
+                "tencentcloud": "VPC",
+                "huaweicloud": "VPC",
+            }.get(provider, "VPC")
             cursor.execute(
                 """INSERT INTO trust_boundaries
                    (experiment_id, name, boundary_type, provider, description)

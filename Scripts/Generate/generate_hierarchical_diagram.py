@@ -2043,11 +2043,11 @@ class HierarchicalDiagramBuilder:
             'contains', 'grants_access_to', 'parent_of', 'child_of',
             'resource_group_member', 'has_role',
         })
-            # Connection types where labels add visual noise and are self-explanatory;
-            # suppress edge labels for these unless auth/protocol/port provides additional value.
-            SUPPRESS_LABEL_TYPES = frozenset({
-                'data_access', 'data access', 'uses_database', 'depends_on', 'references',
-            })
+        # Connection types where labels add visual noise and are self-explanatory;
+        # suppress edge labels for these unless auth/protocol/port provides additional value.
+        SUPPRESS_LABEL_TYPES = frozenset({
+            'data_access', 'data access', 'uses_database', 'depends_on', 'references',
+        })
 
         lines = []
         lines.append("")
@@ -2110,7 +2110,11 @@ class HierarchicalDiagramBuilder:
             if port:
                 label_parts.append(f":{port}")
             
-            label = " ".join(label_parts) if label_parts else ""
+            conn_type = (conn.get('connection_type') or '').lower()
+            if conn_type in SUPPRESS_LABEL_TYPES and not label_parts:
+                label = ""
+            else:
+                label = " ".join(label_parts) if label_parts else ""
             
             # Determine line style (solid or dashed)
             is_confirmed = conn.get('confirmed', True)  # Default to solid if not specified
@@ -2126,23 +2130,19 @@ class HierarchicalDiagramBuilder:
         style_lines = []
         for i, conn in enumerate(self.connections):
             src = conn.get('source')
-            
+            tgt = conn.get('target')
+            if not src or not tgt:
                 continue
-                # Suppress labels for self-explanatory connection types unless they have auth/port info
-                conn_type = (conn.get('connection_type') or '').lower()
-                if conn_type in SUPPRESS_LABEL_TYPES and not label_parts:
-                    label = ""
-                else:
-                    label = " ".join(label_parts) if label_parts else ""
-
-                # Determine line style (solid or dashed)
-                is_confirmed = conn.get('confirmed', True)  # Default to solid if not specified
-                arrow = "-->" if is_confirmed else "-.->"  # Dashed for unconfirmed
-            
-                if label:
-                    lines.append(f"  {src_id} {arrow}|{label}| {tgt_id}")
-                else:
-                    lines.append(f"  {src_id} {arrow} {tgt_id}")
+            if (conn.get('connection_type') or '').lower() in SKIP_EDGE_TYPES:
+                continue
+            if src == tgt or sanitize_id(src) == sanitize_id(tgt):
+                continue
+            if tgt == '__apim_subgraph__':
+                is_confirmed = conn.get('confirmed', True)
+                if not is_confirmed and src == 'Internet':
+                    style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
+                link_index += 1
+                continue
             if src != 'Internet' and src not in self.emitted_nodes:
                 continue
             if tgt != 'Internet' and tgt not in self.emitted_nodes:
@@ -3140,7 +3140,7 @@ class HierarchicalDiagramBuilder:
             "Monitoring": 1,
             "Other": 0,
         }
-        style_by_node_id: Dict[str, Tuple[int, str]] = {}
+        style_by_node_id: Dict[str, Tuple[int, str, int]] = {}  # (priority, color, stroke_width)
 
         # Group emitted nodes by category
         for resource_name in self.emitted_nodes:
@@ -3159,10 +3159,9 @@ class HierarchicalDiagramBuilder:
             if resource_name in self.exposed_resources:
                 exposure = self.exposed_resources[resource_name]
                 if exposure.is_public:
-                    # RED: Public internet exposure (CRITICAL)
+                    # RED: Public internet exposure (CRITICAL) — thick border
                     node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
-                    style_by_node_id[node_id] = (999, '#ff6b6b')  # Red, highest priority
-                    lines.append(f"  style {node_id} stroke:#ff6b6b,stroke-width:3px")
+                    style_by_node_id[node_id] = (999, '#ff6b6b', 3)  # Red, highest priority, thicker border
                     continue
             
             # Get category
@@ -3187,11 +3186,11 @@ class HierarchicalDiagramBuilder:
                 priority = category_priority.get(category, 0)
                 existing = style_by_node_id.get(node_id)
                 if existing is None or priority >= existing[0]:
-                    style_by_node_id[node_id] = (priority, color)
+                    style_by_node_id[node_id] = (priority, color, 2)  # 2px stroke for regular resources
 
         for node_id in sorted(style_by_node_id.keys()):
-            color = style_by_node_id[node_id][1]
-            lines.append(f"  style {node_id} stroke:{color}, stroke-width:2px")
+            priority, color, stroke_width = style_by_node_id[node_id]
+            lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")
         
         return lines
     
@@ -3320,7 +3319,10 @@ def main():
                     'kubernetes': 'Kubernetes',
                     'terraform': 'Terraform',
                     'alicloud': 'Alicloud',
+                    'oci': 'Oracle',
                     'oracle': 'Oracle',
+                    'tencentcloud': 'Tencent Cloud',
+                    'huaweicloud': 'Huawei Cloud',
                 }
                 provider_display = provider_map.get(provider.lower(), provider.title())
                 diagram_title = f"{provider_display} Architecture"

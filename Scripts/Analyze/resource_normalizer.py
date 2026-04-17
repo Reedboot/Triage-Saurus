@@ -224,6 +224,7 @@ class ResourceNormalizer:
             "azure": _AZURE_MAPPINGS,
             "gcp": _GCP_MAPPINGS,
             "alicloud": _ALICLOUD_MAPPINGS,
+            "oci": _OCI_MAPPINGS,
             "oracle": _OCI_MAPPINGS,
         }
         self._all_mappings: Dict[str, tuple] = {}
@@ -242,7 +243,7 @@ class ResourceNormalizer:
         if resource_type_lower.startswith("alicloud_"):
             return "alicloud"
         if resource_type_lower.startswith("oci_"):
-            return "oracle"
+            return "oci"
         return "unknown"
 
     def normalize(
@@ -254,6 +255,10 @@ class ResourceNormalizer:
         """Normalize a resource to a unified role."""
         if provider is None:
             provider = self.detect_provider(resource_type)
+        else:
+            provider = (provider or "unknown").lower().strip()
+            if provider == "oracle":
+                provider = "oci"
 
         normalized_type = resource_type.lower()
         mapping = self._all_mappings.get(normalized_type)

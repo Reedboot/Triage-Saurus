@@ -521,3 +521,82 @@ def test_automation_account_not_nested_inside_managed_identity(monkeypatch):
     # the authenticates_via arrow should still be present
     assert "automation_account" in diagram
     assert "user_id" in diagram
+
+
+def test_provider_filter_oci_includes_legacy_oracle_rows(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "legacy-oci",
+            "resource_type": "oci_core_instance",
+            "provider": "oracle",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "new-oci",
+            "resource_type": "oci_core_instance",
+            "provider": "oci",
+            "repo_name": "repo",
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="legacy-oci", resource_type="oci_core_instance", provider="oracle", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="new-oci", resource_type="oci_core_instance", provider="oci", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "Compute", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *a, **kw: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *a, **kw: "Compute")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1", provider="oci")
+
+    assert "legacy-oci" in diagram
+    assert "new-oci" in diagram
+
+
+def test_strict_mode_skips_synthetic_internet_edges(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "app-1",
+            "resource_type": "azurerm_linux_web_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        }
+    ]
+
+    called = {"add_internet": False}
+
+    def _fake_add_internet(connections, *args, **kwargs):
+        called["add_internet"] = True
+        return connections + [{"source": "Internet", "target": "app-1", "connection_type": "internet_access"}]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "_add_internet_connections", _fake_add_internet)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="app-1", resource_type="azurerm_linux_web_app", provider="azure", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "App Service", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *a, **kw: "App Service")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *a, **kw: "Compute")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1", strict_architecture=True)
+
+    assert called["add_internet"] is False
+    assert "internet -->" not in diagram
