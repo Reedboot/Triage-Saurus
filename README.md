@@ -3,12 +3,12 @@
 Read `AGENTS.md` first for repository-specific agent instructions.
 
 ## Session kick-off
-- In your CLI, type `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
+- In the web UI at http://127.0.0.1:9000, trigger `sessionkickoff`, **or** copy/paste the canonical prompt from [`SessionKickoff.md`](SessionKickoff.md).
 - Then provide either a single issue to triage (paste into chat) or a bulk path under `Intake/`.
 - Bulk import note: `Scripts/Generate/generate_findings_from_titles.py` now skips duplicate titles to avoid duplicate findings/risk register rows.
 
 ## Purpose
-This repository supports AI CLI tooling (e.g., Copilot CLI, Codex CLI) to run
+This repository supports AI triage tooling (e.g., the web UI at http://127.0.0.1:9000, Copilot CLI, Codex CLI) to run
 consistent security triaging. It provides agent instructions, templates, and
 workflows for analysing scanner findings, updating knowledge, producing
 findings, maintaining summaries, and regenerating the risk register.
@@ -178,8 +178,9 @@ See `LICENSE` (non-commercial internal use; no redistribution; no warranty).
 Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 
 ## Workflow Overview
-1. Start a CLI session in the repo root and paste the prompt from
+1. Open the web UI at http://127.0.0.1:9000 and paste the prompt from
    `SessionKickoff.md`.
+   - If you are using the CLI fallback, start a session in the repo root and paste the same prompt there.
 2. Provide a scanner issue to triage; the agent will confirm cloud provider or
    context as needed.
 3. The agent creates or updates findings in `Output/Findings/`, updates `Output/Knowledge/`—the live repository of environment, services, and dependency facts used to fill missing context—and refreshes relevant summaries in `Output/Summary/`.
@@ -192,16 +193,16 @@ Author: Neil Reed — <https://www.linkedin.com/in/reedneil>
 > them via git, update `.gitignore` intentionally.
 
 ## Using Copilot CLI
-1. Open a Copilot CLI session in the repository root.
-2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
+1. Open the web UI at http://127.0.0.1:9000.
+2. Trigger `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
    - The agent should first check for outstanding items under `Knowledge/` → `## Unknowns` / `## ❓ Open Questions` (present these as **refinement questions** in the UI) and offer to resume those.
    - If there are no refinement questions and `Knowledge/` is empty (first run), it should greet with: `🦖 Welcome to Triage-Saurus.`
    - Then it should ask what to triage next (single issue vs repo scan — either a specific repo or batch via Intake/ReposToScan.txt).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Using Codex CLI
-1. Open a Codex CLI session in the repository root.
-2. Type `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
+1. Open the web UI at http://127.0.0.1:9000.
+2. Trigger `sessionkickoff` (or paste the prompt from `SessionKickoff.md`).
 3. Follow the repository instructions in `AGENTS.md` and `Agents/Instructions.md`.
 
 ## Bulk processing

@@ -9,8 +9,8 @@ Purpose:
 Maintains same interface as scan_workspace.py for drop-in replacement.
 
 Usage:
-  python3 Scripts/scan_workspace_v2.py
-  python3 Scripts/scan_workspace_v2.py --intake Intake/ReposToScan.txt
+  python3 Scripts/Scan/scan_workspace.py
+  python3 Scripts/Scan/scan_workspace.py --intake Intake/ReposToScan.txt
 """
 
 from __future__ import annotations
@@ -18,9 +18,17 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_SCRIPTS_ROOT = _SCRIPT_DIR.parent
+for _path in (_SCRIPTS_ROOT, _SCRIPTS_ROOT / "Utils"):
+    _path_str = str(_path)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 from output_paths import (
     REPO_ROOT,
@@ -333,9 +341,10 @@ def scan_drafts(*, limit: int = 20) -> None:
     print("== Draft triage queue ==")
     try:
         import triage_queue as tq
+    except ImportError as e:
+        print(f"Draft triage queue helper not available: {e}")
+    else:
         tq.print_queue(limit=limit)
-    except Exception as e:
-        print(f"Unable to load triage queue helper: {e}")
     print()
 
 

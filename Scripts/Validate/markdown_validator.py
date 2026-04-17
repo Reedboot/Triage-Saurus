@@ -27,6 +27,16 @@ MERMAID_DIRECTIVE_RE = re.compile(
 
 _NODE_SQUARE_LABEL_RE = re.compile(r"(\b[A-Za-z_][A-Za-z0-9_]*\s*)\[(.*?)\]")
 _NODE_QUOTED_LABEL_RE = re.compile(r'(\b[A-Za-z_][A-Za-z0-9_]*\s*)\["(.*?)"\]')
+_STYLE_PROPERTY_REPLACEMENTS = (
+    ("stroke_width", "stroke-width"),
+    ("stroke_dasharray", "stroke-dasharray"),
+    ("stroke_opacity", "stroke-opacity"),
+    ("fill_opacity", "fill-opacity"),
+    ("font_size", "font-size"),
+    ("font_weight", "font-weight"),
+    ("text_anchor", "text-anchor"),
+    ("line_height", "line-height"),
+)
 
 
 @dataclass
@@ -75,6 +85,18 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
             if fix:
                 block = [b.replace("\t", "  ") for b in block]
                 changed = True
+
+        if any(any(bad in b for bad, _ in _STYLE_PROPERTY_REPLACEMENTS) for b in block):
+            if fix:
+                new_block0: list[str] = []
+                for b in block:
+                    bb = b
+                    for bad, good in _STYLE_PROPERTY_REPLACEMENTS:
+                        bb = bb.replace(bad, good)
+                    if bb != b:
+                        changed = True
+                    new_block0.append(bb)
+                block = new_block0
 
         # Renderer-compat fixes: replace escaped newlines / HTML breaks in labels.
         # Some Mermaid renderers reject these; prefer a single-line label for broad compatibility.

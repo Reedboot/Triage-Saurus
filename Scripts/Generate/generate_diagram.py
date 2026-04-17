@@ -6,50 +6,42 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 from internet_exposure_detector import InternetExposureDetector
 import resource_type_db as _rtdb
 from shared_utils import _normalize_optional_bool
 
-# Setup logging for diagram generation
+
 _logger = logging.getLogger(__name__)
-if not _logger.handlers:
-    _logger.addHandler(logging.StreamHandler())
-    _logger.setLevel(logging.WARNING)
+_LOOKUP_DB = None
 
-# Lazy DB connection for resource type lookups
-_lookup_conn: sqlite3.Connection | None = None
 
-def _get_lookup_db() -> sqlite3.Connection | None:
-    global _lookup_conn
-    if _lookup_conn is None:
-        # Use the configured DB_PATH from resource_type_db (prefer cozo.db)
-        db_path = None
+def _get_lookup_db():
+    global _LOOKUP_DB
+    if _LOOKUP_DB is None:
         try:
-            if getattr(_rtdb, 'DB_PATH', None) and Path(_rtdb.DB_PATH).exists():
-                db_path = Path(_rtdb.DB_PATH)
+            db_path = Path(__file__).resolve().parents[2] / "Output" / "Data" / "cozo.db"
+            if db_path.exists():
+                _LOOKUP_DB = sqlite3.connect(str(db_path))
+                _LOOKUP_DB.row_factory = sqlite3.Row
+            else:
+                _LOOKUP_DB = None
         except Exception:
-            pass
-        if db_path:
-            _lookup_conn = sqlite3.connect(str(db_path))
-            # Return rows as mappings where callers expect dict-like access
-            _lookup_conn.row_factory = sqlite3.Row
-    return _lookup_conn
+            _LOOKUP_DB = None
+    return _LOOKUP_DB
 
 
-# Category → diagram stroke colour
-_CATEGORY_COLOURS: dict[str, str] = {
-    "Compute":   "#0066cc",
-    "Container": "#0066cc",
+_CATEGORY_COLOURS = {
+    "Compute":   "#4dabf7",
+    "Container": "#4dabf7",
     "Database":  "#00aa00",
     "Storage":   "#00aa00",
     "Identity":  "#f59f00",
     "Security":  "#ff6b6b",
     "Network":   "#7e57c2",
-    "Monitoring":"#888888",
+    "Monitoring": "#888888",
     "API":       "#00b4d8",  # Teal — distinct from Identity amber (#f59f00) and alert amber (#e8a202)
 }
 
@@ -738,6 +730,43 @@ def generate_architecture_diagram(
         ).fetchall()
     all_raw_map = {r['id']: dict(r) for r in all_raw}
 
+    # Keep hidden Azure network containers when they are the only thing preserving
+    # the path from a visible workload back to the VNet.
+    current_ids = {r['id'] for r in resources}
+    promoted_ids: set[int] = set()
+    for r in list(resources):
+        ancestor_id = parent_id_of_child.get(r['id'])
+        while ancestor_id is not None:
+            ancestor = all_raw_map.get(ancestor_id)
+            if not ancestor:
+                break
+            if ancestor_id in current_ids or ancestor_id in promoted_ids:
+                ancestor_id = parent_id_of_child.get(ancestor_id)
+                continue
+            ancestor_type = (ancestor.get('resource_type') or '').strip()
+            rt_info = _rtdb.get_resource_type(None, ancestor_type)
+            if not rt_info.get('display_on_architecture_chart', True) and any(
+                tok in ancestor_type.lower() for tok in ('subnet', 'network_interface')
+            ):
+                promoted_ids.add(ancestor_id)
+                ancestor_id = parent_id_of_child.get(ancestor_id)
+                continue
+            break
+
+    if promoted_ids:
+        for promoted_id in sorted(promoted_ids):
+            promoted_r = all_raw_map.get(promoted_id)
+            if promoted_r and promoted_r['id'] not in current_ids:
+                resources.append(promoted_r)
+                current_ids.add(promoted_r['id'])
+
+        allowed_names = {r['resource_name'] for r in resources}
+        connections = [
+            c for c in connections
+            if c.get('source') in allowed_names and c.get('target') in allowed_names
+        ]
+        display_filtered_ids = {r['id'] for r in resources}
+
     def _parent_is_hidden(child_id: int) -> bool:
         """Return True if child's direct parent is filtered out (display=False or resource_group)."""
         parent_id = parent_id_of_child.get(child_id)
@@ -768,7 +797,7 @@ def generate_architecture_diagram(
         if prov_filter and not _provider_matches(promoted_r.get('provider'), prov_filter):
             continue
         rt_info = _rtdb.get_resource_type(None, (promoted_r.get('resource_type') or '').strip())
-        if rt_info.get('display_on_architecture_chart', True):
+        if rt_info.get('display_on_architecture_chart', True) or _is_promotable_hidden_network_container(promoted_r):
             resources.append(promoted_r)
             current_ids.add(promoted_r['id'])
 
@@ -969,7 +998,7 @@ def generate_architecture_diagram(
     vms            = [r for r in filtered_roots if (_is_compute_tier_resource(r) or _in_render_cat(r, 'Compute')) and not _is_application_tier_resource(r) and not _is_public_ip_resource_obj(r)]
     aks            = [r for r in filtered_roots if _in_render_cat(r, 'Container')]
     vnets          = [r for r in filtered_roots if 'virtual_network' in (r.get('resource_type') or '').lower() or 'vpc' in (r.get('resource_type') or '').lower()]
-    subnets        = [r for r in filtered_roots if 'subnet' in (r.get('resource_type') or '').lower()]
+    subnets        = [r for r in resources if 'subnet' in (r.get('resource_type') or '').lower()]
     # Data tier: ensure databases always go to Data tier
     sql_servers    = [r for r in filtered_roots if _is_data_tier_resource(r) or _in_render_cat(r, 'Database')]
     storage_accounts = [r for r in filtered_roots if _in_render_cat(r, 'Storage')]
@@ -1037,7 +1066,7 @@ def generate_architecture_diagram(
             _render_resource_subgraph(aks_cluster, parent_children, lines, indent=indent, _emitted_ids=_diagram_emitted_ids)
 
     # ── Internal Zone (Compute, Containers, Network Security) ──
-    internal_resources = vms + lbs + aks + nsgs
+    internal_resources = vms + lbs + aks + nsgs + subnets
     internal_has_children = any(
         res['id'] in parent_children and parent_children[res['id']]
         for res in internal_resources
@@ -1050,7 +1079,10 @@ def generate_architecture_diagram(
             _diagram_emitted_ids.add(vnet_id)
             lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
             for subnet in subnets:
-                _emit_simple_node(subnet, "      ")
+                if subnet['id'] in parent_children:
+                    _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
+                else:
+                    _emit_simple_node(subnet, "      ")
             _render_internal_contents("      ", nest_compute_in_nsg=True)
             lines.append("    end")
         else:
@@ -1066,7 +1098,10 @@ def generate_architecture_diagram(
             _diagram_emitted_ids.add(vnet_id)
             lines.append(f"  subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
             for subnet in subnets:
-                _emit_simple_node(subnet, "    ")
+                if subnet['id'] in parent_children:
+                    _render_resource_subgraph(subnet, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
+                else:
+                    _emit_simple_node(subnet, "    ")
             _render_internal_contents("    ", nest_compute_in_nsg=True)
             lines.append("  end")
         else:
@@ -1342,6 +1377,8 @@ def generate_architecture_diagram(
         if is_cross or conn_type in ("data_access", "mitigated"):
             # Mermaid dashed arrow with label: A -. label .-> B (no pipe characters)
             inner = label.strip('|') if label else ''
+            if conn_type == "data_access":
+                inner = inner.replace("data access", "").replace("data_access", "").strip("; ").strip()
             if inner:
                 lines.append(f"  {src} -. {inner} .-> {tgt}")
             else:
@@ -1373,9 +1410,9 @@ def generate_architecture_diagram(
     if has_internet_connections:
         lines.append("  style internet stroke:#ff0000, stroke-width:3px")
 
-    # Style security zone subgraphs
-    lines.append("  style zone_internal fill:#0a0a1a,stroke:#4444ff,stroke-width:1px")
-    lines.append("  style zone_data fill:#0a1a0a,stroke:#44aa44,stroke-width:1px")
+    # Style security zone subgraphs with stroke-only borders for theme compatibility.
+    lines.append("  style zone_internal stroke:#4444ff,stroke-width:1px")
+    lines.append("  style zone_data stroke:#44aa44,stroke-width:1px")
 
     return "\n".join(lines)
 

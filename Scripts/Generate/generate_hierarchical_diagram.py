@@ -272,7 +272,7 @@ class HierarchicalDiagramBuilder:
             findings = []
             with get_db_connection() as conn:
                 rows = conn.execute("""
-                    SELECT f.id, f.resource_id, f.category, f.finding_path
+                    SELECT f.id, f.resource_id, f.category
                     FROM findings f
                     WHERE f.experiment_id = ?
                 """, [self.experiment_id]).fetchall()
@@ -3140,7 +3140,7 @@ class HierarchicalDiagramBuilder:
             "Monitoring": 1,
             "Other": 0,
         }
-        style_by_node_id: Dict[str, Tuple[int, str, int]] = {}  # (priority, color, stroke_width)
+        style_by_node_id: Dict[str, Tuple[int, str, int]] = {}  # (priority, color, stroke-width)
 
         # Group emitted nodes by category
         for resource_name in self.emitted_nodes:
@@ -3189,8 +3189,8 @@ class HierarchicalDiagramBuilder:
                     style_by_node_id[node_id] = (priority, color, 2)  # 2px stroke for regular resources
 
         for node_id in sorted(style_by_node_id.keys()):
-            priority, color, stroke_width = style_by_node_id[node_id]
-            lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")
+            priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
+            lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
         
         return lines
     

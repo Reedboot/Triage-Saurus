@@ -34,3 +34,8 @@ def delete_relationship(*args, **kwargs):
 # Lightweight wrappers for client access (not implemented locally)
 def _open_client(*args, **kwargs):
     raise RuntimeError("pycozo Client not available in this environment")
+
+
+def fetch_findings_with_context(*args, **kwargs):
+    from Scripts.Enrich.cozo_helpers import fetch_findings_with_context as _impl
+    return _impl(*args, **kwargs)

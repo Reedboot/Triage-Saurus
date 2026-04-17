@@ -82,3 +82,40 @@ def test_network_interface_parent_type_resolves_legacy_vm(tmp_path, monkeypatch)
     nic = next(r for r in context.resources if r.resource_type == "azurerm_network_interface")
 
     assert nic.parent == "azurerm_virtual_machine.vm"
+
+
+def test_is_valid_azure_resource_name_rejects_new_provider_prefixes():
+    assert not context_extraction.is_valid_azure_resource_name("tencentcloud_instance")
+    assert not context_extraction.is_valid_azure_resource_name("huaweicloud_compute_instance")
+    assert context_extraction.is_valid_azure_resource_name("app-service-prod")
+
+
+def test_meta_resources_infer_provider_for_new_prefixes(tmp_path, monkeypatch):
+    _stub_heavy_detectors(monkeypatch)
+
+    cases = [
+        ("oci_core_instance", "oci"),
+        ("tencentcloud_instance", "tencentcloud"),
+        ("huaweicloud_compute_instance", "huaweicloud"),
+    ]
+
+    for terraform_type, expected_provider in cases:
+        case_dir = tmp_path / expected_provider
+        case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / "main.tf").write_text(
+            dedent(
+                f"""
+                resource "{terraform_type}" "workload" {{
+                  name = "workload"
+                }}
+
+                resource "terraform_data" "meta" {{
+                  input = "metadata"
+                }}
+                """
+            ).strip()
+        )
+
+        context = context_extraction.extract_context(str(case_dir))
+        meta = next(r for r in context.resources if r.resource_type == "terraform_data")
+        assert (meta.properties or {}).get("inferred_provider") == expected_provider

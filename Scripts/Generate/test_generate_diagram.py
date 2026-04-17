@@ -257,6 +257,118 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert "subgraph dev_vm[\"Virtual Machine: dev_vm (1 sub-asset)\"]" in diagram
 
 
+def test_data_access_edges_are_unlabelled(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "app",
+            "resource_type": "azurerm_linux_web_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "db",
+            "resource_type": "azurerm_mssql_server",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+    connections = [
+        {"source": "app", "target": "db", "connection_type": "data_access", "is_cross_repo": 0},
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="app", resource_type="azurerm_linux_web_app", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="db", resource_type="azurerm_mssql_server", provider="azure", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "App Service", "category": "Compute"} if "web_app" in (a[1] if len(a) > 1 else "") else {"display_on_architecture_chart": True, "friendly_name": "SQL Server", "category": "Database"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Compute" if "web_app" in (a[1] if len(a) > 1 else "") else "Database")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda _conn, rt: "App Service" if "web_app" in rt else "SQL Server")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda _conn, rt: "Compute" if "web_app" in rt else "Database")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "data access" not in diagram.lower()
+    assert " -.-> " in diagram
+
+
+def test_hidden_subnet_is_promoted_with_vm_child(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "vNet",
+            "resource_type": "azurerm_virtual_network",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "dev-subnet",
+            "resource_type": "azurerm_subnet",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "dev-vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 2,
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="vNet", parent_type="azurerm_virtual_network", child_id=2, child_name="dev-subnet", child_type="azurerm_subnet"),
+            _FakeRow(parent_id=2, parent_name="dev-subnet", parent_type="azurerm_subnet", child_id=3, child_name="dev-vm", child_type="azurerm_virtual_machine"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="vNet", resource_type="azurerm_virtual_network", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="dev-subnet", resource_type="azurerm_subnet", provider="azure", repo_id=1, parent_resource_id=1),
+            _FakeRow(id=3, resource_name="dev-vm", resource_type="azurerm_virtual_machine", provider="azure", repo_id=1, parent_resource_id=2),
+        ],
+    }))
+
+    def _fake_rt(_c, rt):
+        rt_l = (rt or "").lower()
+        if "virtual_network" in rt_l:
+            return {"display_on_architecture_chart": True, "friendly_name": "Virtual Network", "category": "Network"}
+        if "subnet" in rt_l:
+            return {"display_on_architecture_chart": False, "friendly_name": "Subnet", "category": "Network"}
+        return {"display_on_architecture_chart": True, "friendly_name": "Virtual Machine", "category": "Compute"}
+
+    def _fake_cat(_c, rt):
+        rt_l = (rt or "").lower()
+        if "virtual_network" in rt_l or "subnet" in rt_l:
+            return "Network"
+        return "Compute"
+
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", _fake_rt)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", _fake_cat)
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", _fake_cat)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
+    assert "subgraph dev_subnet[\"Subnet: dev-subnet (1 sub-asset)\"]" in diagram
+    assert "dev_vm" in diagram
+    assert diagram.index("subgraph dev_subnet") < diagram.index("dev_vm")
+
+
 def test_s3_bucket_controls_render_inside_bucket_subgraph(monkeypatch):
     resources = [
         {
@@ -408,6 +520,7 @@ def test_vnet_is_rendered_as_internal_container(monkeypatch):
     assert "subgraph vNet[\"🔷 VNet: vNet\"]" in diagram
     assert "dev_vm" in diagram
     assert "style vNet" in diagram
+    assert "fill:" not in diagram
 
 
 def test_single_nsg_is_rendered_as_compute_container_inside_vnet(monkeypatch):

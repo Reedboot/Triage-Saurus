@@ -1,7 +1,7 @@
 # 🟣 Session Kick-off
 
 ## Purpose
-This document provides the session initialization flow for Triage-Saurus. When the user types `sessionkickoff`, the agent should:
+This document provides the session initialization flow for Triage-Saurus. When the user starts `sessionkickoff` in the web UI at http://127.0.0.1:9000, the agent should:
 1. Load canonical operating rules from `AGENTS.md` and `Agents/Instructions.md`
 2. Check for experiment state (for cross-session continuity)
 3. Scan the workspace for existing context
@@ -9,6 +9,8 @@ This document provides the session initialization flow for Triage-Saurus. When t
 5. Present triage options to the user
 
 **Note:** This file contains only the kickoff flow. For detailed navigation flows and menu structures, see `Templates/Workflows.md`. All detailed operational rules (bulk processing, question formatting, repo scanning, knowledge recording, etc.) are in `Agents/Instructions.md`.
+
+**Primary interface:** The web UI at http://127.0.0.1:9000 is the normal entrypoint; CLI wording is retained here for compatibility.
 
 ## Helper Scripts
 
