@@ -911,11 +911,15 @@ def _extract_service_accounts(files: list[Path], repo: Path, provider: str) -> d
 def _load_parent_type_map() -> Dict[str, str]:
     """Load type-level parent relationships from resource_types DB (child_type → parent_type)."""
     fallback_map: Dict[str, str] = {
+        # AWS Security Groups
+        "aws_security_group_rule": "aws_security_group",
+        # AWS Load Balancers
         "aws_lb_listener": "aws_lb",
         "aws_alb_listener": "aws_alb",
         "aws_lb_target_group": "aws_lb",
         "aws_alb_target_group": "aws_alb",
         "aws_lb_target_group_attachment": "aws_lb_target_group",
+        # AWS S3
         "aws_s3_bucket_acl": "aws_s3_bucket",
         "aws_s3_bucket_ownership_controls": "aws_s3_bucket",
         "aws_s3_bucket_public_access_block": "aws_s3_bucket",

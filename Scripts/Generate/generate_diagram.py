@@ -633,6 +633,30 @@ def generate_architecture_diagram(
     resources = get_resources_for_diagram(experiment_id)
     hierarchies = []
     connections = get_connections_for_diagram(experiment_id, repo_name=repo_name)
+    
+    # Synthesize Internet→Resource connections for internet-exposed resources
+    # This handles security group rules, storage accounts, and other resources with internet_ingress_open
+    for resource in resources:
+        props = resource.get('properties') or {}
+        if props.get('internet_ingress_open') == 'true' or props.get('internet_ingress_open') is True:
+            # Create synthetic connection from Internet to this resource
+            synthetic_conn = {
+                'source': 'Internet',
+                'target': resource['resource_name'],
+                'connection_type': 'internet_ingress',
+                'protocol': props.get('protocol') or 'tcp',
+                'port': props.get('port') or props.get('from_port'),
+                'is_cross_repo': False,  # Synthetic connections are not cross-repo
+                'notes': 'Inferred from resource properties (internet_ingress_open=true)'
+            }
+            # Check if this connection already exists
+            already_exists = any(
+                c.get('source') == 'Internet' and c.get('target') == resource['resource_name']
+                for c in connections
+            )
+            if not already_exists:
+                connections.append(synthetic_conn)
+    
     # Exclude structural/administrative edges that are already represented by nesting.
     structural_edge_types = {
         'contains',
@@ -655,7 +679,9 @@ def generate_architecture_diagram(
     if provider:
         resources = [r for r in resources if _provider_matches(r.get('provider'), provider)]
         # Only keep connections where at least one endpoint is in the filtered resource set
+        # Note: 'Internet' is a synthetic node that should always be included when referenced
         resource_names = {r['resource_name'] for r in resources}
+        resource_names.add('Internet')  # Always keep Internet node for provider-filtered diagrams
         connections = [c for c in connections if (c.get('source') in resource_names or c.get('target') in resource_names)]
 
     # Exclude resource types that are explicitly marked as not to be displayed on architecture charts
@@ -692,7 +718,9 @@ def generate_architecture_diagram(
                 _display_filtered.append(r)
         resources = _display_filtered
         # Also filter connections to endpoints that remain
+        # Note: 'Internet' is a synthetic external node that should always be kept for connections
         allowed_names = {r['resource_name'] for r in resources}
+        allowed_names.add('Internet')  # Always include Internet for connectivity analysis
         connections = [c for c in connections if c.get('source') in allowed_names and c.get('target') in allowed_names]
     except Exception:
         # Best-effort: if resource_type_db lookup fails, continue without filtering
