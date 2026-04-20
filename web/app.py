@@ -2026,13 +2026,14 @@ def _stream_scan(repo_path: str, scan_name: str):
                 now = time.time()
                 if now - last_hb >= 5:
                     elapsed = int(now - start_time)
-                    # Estimate remaining time: comprehensive scans typically take 5-6 minutes
-                    est_total = 330  # 5.5 minutes in seconds
-                    est_remaining = max(0, est_total - elapsed)
-                    if est_remaining > 0:
+                    # Dynamic estimate: if elapsed > 5.5 min, assume scan has issues and just report elapsed time
+                    if elapsed < 330:  # 5.5 minutes
+                        est_total = 330
+                        est_remaining = max(0, est_total - elapsed)
                         hb = f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
                     else:
-                        hb = f"[Web] Scan in progress — elapsed {elapsed}s"
+                        # Scan has exceeded expected time — may be hung or processing large repo
+                        hb = f"[Web] ⚠️ Scan in progress — elapsed {elapsed}s (taking longer than expected)"
                     yield _emit_scan_log(hb)
                     last_hb = now
 

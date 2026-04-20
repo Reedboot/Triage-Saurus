@@ -165,20 +165,21 @@ def infer_connections(experiment_id: str, db_path=None) -> int:
             if rc[0] != rc[1]:
                 children_map.setdefault(rc[0], []).append(rc[1])
 
+        # Build parent_resource_id map (O(edges) instead of searching children_map)
+        parent_map: dict[int, int] = {}
+        for parent_id, children in children_map.items():
+            for child_id in children:
+                parent_map[child_id] = parent_id
+
         def get_vpc_for(resource_id: int) -> int | None:
-            """Walk up containment tree to find VPC parent."""
+            """Walk up containment tree to find VPC parent (optimized with parent_map)."""
             visited = set()
-            queue = [resource_id]
-            while queue:
-                rid = queue.pop()
-                if rid in visited:
-                    continue
+            rid = resource_id
+            while rid and rid not in visited:
                 visited.add(rid)
-                for parent_id, children in children_map.items():
-                    if rid in children:
-                        if parent_id in vpc_ids:
-                            return parent_id
-                        queue.append(parent_id)
+                if rid in vpc_ids:
+                    return rid
+                rid = parent_map.get(rid)
             return None
 
         resource_vpc = {r["id"]: get_vpc_for(r["id"]) for r in resources}

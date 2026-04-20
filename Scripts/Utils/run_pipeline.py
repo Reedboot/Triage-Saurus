@@ -48,19 +48,26 @@ _GEN_HIERARCHICAL = SCRIPTS / "Generate" / "generate_hierarchical_diagram.py"
 from db_helpers import get_db_connection
 
 
-def _run(cmd: list[str], label: str) -> int:
+def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
     """Run a subprocess, stream output, return exit code.
 
     Forces subprocesses to include the repo Scripts/ paths on PYTHONPATH and
     ensures they run from the repo root. This avoids import errors for
     db_helpers and other internal modules when scripts are invoked as
     subprocesses.
+    
+    Args:
+        cmd: Command to run
+        label: Label for logging
+        timeout: Timeout in seconds (default: None, no timeout)
     """
     import os
 
     print(f"\n{'─'*60}")
     print(f"▶  {label}")
     print(f"   {' '.join(cmd)}")
+    if timeout:
+        print(f"   [Timeout: {timeout}s]")
     print('─'*60)
 
     # Build environment with PYTHONPATH including Scripts and its subfolders
@@ -71,10 +78,14 @@ def _run(cmd: list[str], label: str) -> int:
         paths.append(existing)
     env['PYTHONPATH'] = ':'.join(paths)
 
-    result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
-    if result.returncode != 0:
-        print(f"\n[ERROR] {label} exited with code {result.returncode}", file=sys.stderr)
-    return result.returncode
+    try:
+        result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, timeout=timeout)
+        if result.returncode != 0:
+            print(f"\n[ERROR] {label} exited with code {result.returncode}", file=sys.stderr)
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        print(f"\n[ERROR] {label} timed out after {timeout}s", file=sys.stderr)
+        return 124  # Standard timeout exit code
 
 
 def _get_experiment_findings(experiment_id: str) -> list[int]:
@@ -273,6 +284,7 @@ def main() -> int:
             "--output", str(output_dir),
         ],
         "Phase 3d — Generate architecture diagrams (zones, severity colours, data flows)",
+        timeout=120,  # 2 minute timeout for diagram generation
     )
 
     # ── Mark experiment complete ──────────────────────────────────────────────
