@@ -557,7 +557,6 @@ def generate_architecture_diagram(
     repo_name: str | None = None,
     provider: str | None = None,
     include_operation_resources: bool | None = None,
-    strict_architecture: bool = False,
 ) -> str:
     # Support experiment folder names like '001_001' by falling back to numeric prefix if no rows
     from db_helpers import get_db_connection as _get_db_conn
@@ -577,12 +576,10 @@ def generate_architecture_diagram(
     connections are filtered to that provider so per-provider Architecture_*.md
     files can be produced.
 
-    When `strict_architecture` is True, the diagram avoids inferred/synthetic
-    node and edge generation and only renders relationships that are already
-    persisted in the database.
+    Diagrams always include inferred/synthetic nodes and edges for complete
+    architecture visualization of relationships not explicitly persisted.
     """
     provider = _normalize_provider(provider)
-    strict_mode = bool(strict_architecture)
     
     # Backfill parent_resource_id for orphaned Public IPs using connections table
     def _associate_orphaned_public_ips_to_parents():
@@ -629,8 +626,8 @@ def generate_architecture_diagram(
         except Exception:
             pass
     
-    if not strict_mode:
-        _associate_orphaned_public_ips_to_parents()
+    # Associate orphaned Public IPs to their parent VM/LB via connections
+    _associate_orphaned_public_ips_to_parents()
     
     # Prefer canonical helpers that return merged properties
     resources = get_resources_for_diagram(experiment_id)
@@ -703,8 +700,7 @@ def generate_architecture_diagram(
 
     # Append synthetic Internet connections based on finding_context evidence.
     # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
-    if not strict_mode:
-        connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
+    connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
 
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
@@ -934,42 +930,41 @@ def generate_architecture_diagram(
     # ── Infer NSG → VM security association ──────────────────────────────────
     # The context extractor does not create a direct net_sg → VM connection.
     # We infer it by tracing: NSG-NIC-association → parent NIC → parent VM.
-    if not strict_mode:
-        _existing_conn_pairs = {(c.get('source'), c.get('target')) for c in connections}
-        _nsgs = [r for r in resources if 'network_security_group' in (r.get('resource_type') or '').lower()
-                 and 'association' not in (r.get('resource_type') or '').lower()]
-        # Use all_raw_map so association resources found even when excluded from display filter
-        _nsg_assocs = [r for r in all_raw_map.values()
-                       if 'network_interface_security_group_association' in (r.get('resource_type') or '').lower()]
-        for _assoc in _nsg_assocs:
-            _nic_id = _assoc.get('parent_resource_id')
-            if not _nic_id:
-                continue
-            # Find which VM has this NIC in its child list (NIC may be child of VM or vice-versa)
-            _nic_res = all_raw_map.get(_nic_id)
-            _vm_res = None
-            if _nic_res:
-                # Case A: NIC is child of VM (NIC.parent_resource_id = VM.id)
-                _vm_candidate = next((r for r in resources if r['id'] == (_nic_res.get('parent_resource_id') if isinstance(_nic_res, dict) else _nic_res['parent_resource_id'])
-                                      and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
-                if _vm_candidate:
-                    _vm_res = _vm_candidate
-            if not _vm_res:
-                # Case B: VM is child of NIC (VM.parent_resource_id = NIC.id)
-                _vm_res = next((r for r in resources if r.get('parent_resource_id') == _nic_id
-                                and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
-            if _vm_res and _nsgs:
-                for _nsg in _nsgs:
-                    _pair = (_nsg['resource_name'], _vm_res['resource_name'])
-                    if _pair not in _existing_conn_pairs:
-                        connections.append({
-                            'source': _nsg['resource_name'],
-                            'target': _vm_res['resource_name'],
-                            'connection_type': 'secures',
-                            'confirmed': True,
-                            'is_cross_repo': 0,
-                        })
-                        _existing_conn_pairs.add(_pair)
+    _existing_conn_pairs = {(c.get('source'), c.get('target')) for c in connections}
+    _nsgs = [r for r in resources if 'network_security_group' in (r.get('resource_type') or '').lower()
+             and 'association' not in (r.get('resource_type') or '').lower()]
+    # Use all_raw_map so association resources found even when excluded from display filter
+    _nsg_assocs = [r for r in all_raw_map.values()
+                   if 'network_interface_security_group_association' in (r.get('resource_type') or '').lower()]
+    for _assoc in _nsg_assocs:
+        _nic_id = _assoc.get('parent_resource_id')
+        if not _nic_id:
+            continue
+        # Find which VM has this NIC in its child list (NIC may be child of VM or vice-versa)
+        _nic_res = all_raw_map.get(_nic_id)
+        _vm_res = None
+        if _nic_res:
+            # Case A: NIC is child of VM (NIC.parent_resource_id = VM.id)
+            _vm_candidate = next((r for r in resources if r['id'] == (_nic_res.get('parent_resource_id') if isinstance(_nic_res, dict) else _nic_res['parent_resource_id'])
+                                  and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+            if _vm_candidate:
+                _vm_res = _vm_candidate
+        if not _vm_res:
+            # Case B: VM is child of NIC (VM.parent_resource_id = NIC.id)
+            _vm_res = next((r for r in resources if r.get('parent_resource_id') == _nic_id
+                            and 'virtual_machine' in (r.get('resource_type') or '').lower()), None)
+        if _vm_res and _nsgs:
+            for _nsg in _nsgs:
+                _pair = (_nsg['resource_name'], _vm_res['resource_name'])
+                if _pair not in _existing_conn_pairs:
+                    connections.append({
+                        'source': _nsg['resource_name'],
+                        'target': _vm_res['resource_name'],
+                        'connection_type': 'secures',
+                        'confirmed': True,
+                        'is_cross_repo': 0,
+                    })
+                    _existing_conn_pairs.add(_pair)
 
     # Group by canonical render category (provider-agnostic)
     def _in_render_cat(r: dict, *cats: str) -> bool:

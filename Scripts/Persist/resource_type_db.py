@@ -329,6 +329,21 @@ _FALLBACK: dict[str, dict] = {
     # GCP — Messaging
     "google_pubsub_topic":                        {"friendly_name": "Pub/Sub Topic",            "category": "Messaging",   "icon": "📢"},
     "google_pubsub_subscription":                 {"friendly_name": "Pub/Sub Subscription",     "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "google_pubsub_topic"},
+    # Kubernetes — Cluster & Workloads
+    "kubernetes_cluster":                         {"friendly_name": "Kubernetes Cluster",       "category": "Container",   "icon": "☸️"},
+    "kubernetes_namespace":                       {"friendly_name": "Namespace",                "category": "Container",   "icon": "🗂️", "display_on_architecture_chart": False, "parent_type": "kubernetes_cluster"},
+    "kubernetes_pod":                             {"friendly_name": "Pod",                      "category": "Compute",     "icon": "📦", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_deployment":                      {"friendly_name": "Deployment",               "category": "Compute",     "icon": "🚀", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_stateful_set":                    {"friendly_name": "StatefulSet",              "category": "Compute",     "icon": "⚙️", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_daemon_set":                      {"friendly_name": "DaemonSet",                "category": "Compute",     "icon": "🔄", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_service":                         {"friendly_name": "Service",                  "category": "Network",     "icon": "🔌", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_ingress":                         {"friendly_name": "Ingress",                  "category": "Network",     "icon": "🌐", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_config_map":                      {"friendly_name": "ConfigMap",                "category": "Storage",     "icon": "⚙️", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_secret":                          {"friendly_name": "Secret",                   "category": "Identity",    "icon": "🔐", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_role":                            {"friendly_name": "Role",                     "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_clusterrole":                     {"friendly_name": "ClusterRole",              "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
+    "kubernetes_role_binding":                    {"friendly_name": "RoleBinding",              "category": "Identity",    "icon": "🔗", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_clusterrolebinding":              {"friendly_name": "ClusterRoleBinding",       "category": "Identity",    "icon": "🔗", "display_on_architecture_chart": False},
 }
 
 # ---------------------------------------------------------------------------
