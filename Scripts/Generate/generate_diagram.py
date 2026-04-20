@@ -831,9 +831,39 @@ def generate_architecture_diagram(
 
     # Keep hidden child-control resources when their parent is visible so the
     # diagram can still render them inside the parent's subgraph. This is used
-    # for AWS S3 bucket controls (ACL, ownership controls, policy, etc.).
+    # for AWS S3 bucket controls (ACL, ownership controls, policy, etc.) and
+    # storage containers with blobs.
+    # 
+    # First pass: identify hidden intermediate parents that have descendants
+    # that should be visible (e.g., storage_container with storage_blobs).
+    intermediate_parents_to_add = set()
     for child_id, parent_id in parent_id_of_child.items():
-        if parent_id not in display_filtered_ids:
+        if child_id in current_ids:
+            # This child is already visible, check if parent should be promoted
+            if parent_id not in current_ids:
+                parent_r = all_raw_map.get(parent_id)
+                if parent_r:
+                    rt_info = _rtdb.get_resource_type(None, (parent_r.get('resource_type') or '').strip())
+                    if not rt_info.get('display_on_architecture_chart', True):
+                        # Parent is hidden but has visible children
+                        # Check if parent's parent is visible
+                        grandparent_id = parent_id_of_child.get(parent_id)
+                        if grandparent_id and grandparent_id in current_ids:
+                            intermediate_parents_to_add.add(parent_id)
+    
+    # Add the intermediate hidden parents
+    for parent_id in intermediate_parents_to_add:
+        if parent_id not in current_ids:
+            parent_r = all_raw_map.get(parent_id)
+            if parent_r:
+                if prov_filter and not _provider_matches(parent_r.get('provider'), prov_filter):
+                    continue
+                resources.append(parent_r)
+                current_ids.add(parent_id)
+    
+    # Second pass: add direct children of visible parents that are hidden
+    for child_id, parent_id in parent_id_of_child.items():
+        if parent_id not in current_ids:
             continue
         if child_id in current_ids:
             continue

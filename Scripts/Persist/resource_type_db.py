@@ -64,7 +64,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_storage_account":                    {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_account_network_rules":      {"friendly_name": "Storage Account",          "category": "Storage",     "icon": "🗄️"},
     "azurerm_storage_container":                  {"friendly_name": "Storage Container",        "category": "Storage",     "icon": "📦", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
-    "azurerm_storage_blob":                       {"friendly_name": "Storage Blob",             "category": "Storage",     "icon": "📄", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
+    "azurerm_storage_blob":                       {"friendly_name": "Storage Blob",             "category": "Storage",     "icon": "📄", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_container"},
     "azurerm_storage_queue":                      {"friendly_name": "Storage Queue",            "category": "Storage",     "icon": "📋", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
     "azurerm_storage_share":                      {"friendly_name": "Storage File Share",       "category": "Storage",     "icon": "📁", "display_on_architecture_chart": False, "parent_type": "azurerm_storage_account"},
     "azurerm_managed_disk":                       {"friendly_name": "Managed Disk",             "category": "Storage",     "icon": "💾"},
