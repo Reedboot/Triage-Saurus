@@ -233,7 +233,7 @@ _FALLBACK: dict[str, dict] = {
     "aws_network_interface":                      {"friendly_name": "Network Interface",        "category": "Network",     "icon": "🔌", "display_on_architecture_chart": False, "parent_type": "aws_subnet"},
     "aws_lambda_function":                        {"friendly_name": "Lambda Function",          "category": "Compute",     "icon": "⚡"},
     "aws_ami":                                    {"friendly_name": "AMI",                      "category": "Compute",     "icon": "🖥️"},
-    "aws_eks_cluster":                            {"friendly_name": "EKS Cluster",              "category": "Container",   "icon": "☸️"},
+    "aws_eks_cluster":                            {"friendly_name": "EKS Cluster",              "category": "Container",   "icon": "☸️", "parent_type": "aws_subnet"},
     "aws_eks_addon":                              {"friendly_name": "EKS Addon",                "category": "Container",   "icon": "☸️"},
     "aws_ecs_cluster":                            {"friendly_name": "ECS Cluster",              "category": "Container",   "icon": "☸️"},
     "aws_ecs_service":                            {"friendly_name": "ECS Service",              "category": "Container",   "icon": "☸️"},
@@ -271,7 +271,7 @@ _FALLBACK: dict[str, dict] = {
     "aws_vpc":                                    {"friendly_name": "VPC",                      "category": "Network",     "icon": "🔷"},
     "aws_subnet":                                 {"friendly_name": "Subnet",                   "category": "Network",     "icon": "🔷", "parent_type": "aws_vpc"},
     "aws_security_group":                         {"friendly_name": "Security Group",           "category": "Security",    "icon": "🛡️"},
-    "aws_security_group_rule":                    {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "🛡️"},
+    "aws_security_group_rule":                    {"friendly_name": "Security Group Rule",      "category": "Security",    "icon": "🛡️", "display_on_architecture_chart": False},
     "aws_internet_gateway":                       {"friendly_name": "Internet Gateway",         "category": "Network",     "icon": "🌍"},
     # AWS — Identity
     "aws_iam_role":                               {"friendly_name": "IAM Role",                 "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},

@@ -448,8 +448,8 @@ PY
   DIAGRAM_OUT_DIR="$REPO_ROOT/Output/Data/diagrams/$scan_id"
   if [ -f "$DIAGRAM_SCRIPT" ]; then
     PYTHONPATH="$REPO_ROOT/Scripts/Persist:$REPO_ROOT/Scripts/Utils:$REPO_ROOT/Scripts/Generate" \
-      "$PYTHON_BIN" -u "$DIAGRAM_SCRIPT" "$scan_id" --split-by-provider --output "$DIAGRAM_OUT_DIR" > /dev/null 2>&1 && \
-      log "  🗺️  Architecture diagrams generated" || \
+      "$PYTHON_BIN" -u "$DIAGRAM_SCRIPT" "$scan_id" --output "$DIAGRAM_OUT_DIR" > /dev/null 2>&1 && \
+      log "  🗺️  Architecture diagram generated" || \
       log_warn "  ⚠️  Diagram generation failed (non-fatal)"
   fi
 

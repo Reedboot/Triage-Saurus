@@ -947,6 +947,13 @@ def generate_architecture_diagram(
                         'is_cross_repo': 0
                     })
 
+    # Final validation: filter out edges where source or target don't exist in resources
+    # This ensures all edges in the diagram reference valid nodes
+    valid_resource_names = {r['resource_name'] for r in resources}
+    valid_resource_names.add('Internet')  # Internet is always valid
+    connections = [c for c in connections 
+                   if c.get('source') in valid_resource_names and c.get('target') in valid_resource_names]
+
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -1462,6 +1469,15 @@ def generate_architecture_diagram(
                     _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
                 else:
                     _emit_simple_node(subnet, "      ")
+            # Render other VPC children (security groups, etc.) alongside subnets
+            other_vpc_children = [r for r in resources 
+                                   if r.get('parent_resource_id') == vnet['id'] 
+                                   and r['id'] not in {s['id'] for s in subnets}]
+            for child in other_vpc_children:
+                if child['id'] in parent_children:
+                    _render_resource_subgraph(child, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
+                else:
+                    _emit_simple_node(child, "      ")
             _render_internal_contents("      ")
             lines.append("    end")
         else:
@@ -2117,9 +2133,9 @@ def main():
         sys.exit(0)
 
     if args.type == 'architecture':
-        diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo)
-        provider = args.repo or 'all'
-        title = "Architecture"
+        diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=None)
+        provider = 'combined'
+        title = "Combined Architecture"
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
         provider = 'security'
@@ -2150,8 +2166,24 @@ def main():
             print(f"Warning: failed to persist diagram to DB: {e}", file=sys.stderr)
 
     if args.output:
-        args.output.write_text(diagram)
-        print(f"Diagram written to {args.output}")
+        # If output ends with a slash or looks like a directory, treat it as directory
+        out_path = args.output
+        # Check if output looks like a directory (doesn't end with .md)
+        if not str(out_path).endswith('.md'):
+            out_path = out_path / "Architecture_Combined.md"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            # Clean up old per-provider files
+            for old_file in out_path.parent.glob("Architecture_*.md"):
+                if old_file.name != "Architecture_Combined.md":
+                    try:
+                        old_file.unlink()
+                        print(f"Removed legacy file {old_file.name}")
+                    except Exception as e:
+                        print(f"Warning: could not remove {old_file.name}: {e}", file=sys.stderr)
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(diagram)
+        print(f"Diagram written to {out_path}")
     else:
         print(diagram)
 

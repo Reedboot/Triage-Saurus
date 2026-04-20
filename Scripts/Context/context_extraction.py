@@ -1723,6 +1723,14 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                         resource.parent = f"{candidate.resource_type}.{candidate.name}"
                         break
 
+        # Special handling: Kubernetes namespaces should be children of their EKS cluster
+        if resource.resource_type == "kubernetes_namespace" and not resource.parent:
+            # Find the EKS cluster (heuristic: usually exactly one per scan)
+            for candidate, _ in resource_blocks:
+                if candidate.resource_type == "aws_eks_cluster":
+                    resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                    break
+
         # Otherwise, use the first explicit resource reference unless this is a top-level edge
         # component where generic reference-parenting frequently misclassifies ownership.
         if resource.resource_type in no_generic_parent_types:

@@ -281,7 +281,7 @@ def main() -> int:
         [
             sys.executable, str(_GEN_DIAGRAM),
             experiment_id,
-            "--split-by-provider",
+
             "--output", str(output_dir),
         ],
         "Phase 3d — Generate architecture diagrams (zones, severity colours, data flows)",
