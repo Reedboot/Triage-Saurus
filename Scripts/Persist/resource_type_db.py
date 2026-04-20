@@ -126,6 +126,7 @@ _FALLBACK: dict[str, dict] = {
     "azurerm_resources":                          {"friendly_name": "Resources",                "category": "Other",       "icon": "📦", "display_on_architecture_chart": False},
     # Terraform meta-resources (lifecycle helpers, not actual infrastructure)
     "terraform_data":                             {"friendly_name": "Terraform Data",           "category": "Other",       "icon": "⚙️", "display_on_architecture_chart": False},
+    "terraform_module":                           {"friendly_name": "Terraform Module",         "category": "Other",       "icon": "📦", "display_on_architecture_chart": False},
     "null_resource":                              {"friendly_name": "Null Resource",            "category": "Other",       "icon": "⚙️", "display_on_architecture_chart": False},
     "random_id":                                  {"friendly_name": "Random ID",                "category": "Other",       "icon": "🎲", "display_on_architecture_chart": False},
     "random_string":                              {"friendly_name": "Random String",            "category": "Other",       "icon": "🎲", "display_on_architecture_chart": False},

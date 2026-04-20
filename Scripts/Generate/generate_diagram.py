@@ -1026,6 +1026,21 @@ def generate_architecture_diagram(
     # (e.g., Terraform test fixtures named 'bad'/'good' across resource types).
     _diagram_emitted_ids: set = set()
 
+    # ── Build NSG-to-VM mappings from "secures" connections ──
+    # This enables proper containment for threat modeling visualization
+    nsg_secures_vms: Dict[str, List[str]] = {}  # NSG resource_name → [VM resource_name]
+    vm_secured_by_nsg: Dict[str, str] = {}      # VM resource_name → NSG resource_name
+    nsg_names = {nsg['resource_name'] for nsg in nsgs}
+    vm_names = {vm['resource_name'] for vm in vms}
+    for conn in connections:
+        if conn.get('connection_type') == 'secures' and conn.get('source') in nsg_names and conn.get('target') in vm_names:
+            nsg_name = conn['source']
+            vm_name = conn['target']
+            if nsg_name not in nsg_secures_vms:
+                nsg_secures_vms[nsg_name] = []
+            nsg_secures_vms[nsg_name].append(vm_name)
+            vm_secured_by_nsg[vm_name] = nsg_name
+
     # ── Internet Node (External Reference) ──
     # Internet is rendered at root level, not inside any zone, to avoid circular references
     lines.append("  internet[🌐 Internet]")
@@ -1040,12 +1055,17 @@ def generate_architecture_diagram(
         _diagram_emitted_ids.add(base_nid)
         lines.append(f"{indent}{base_nid}[{_display_label(resource)}]")
 
-    def _render_compute_tier(indent: str) -> None:
-        if not (vms or lbs):
+    def _render_compute_tier_plain(indent: str, exclude_vm_names: set = None) -> None:
+        """Render VMs and LBs not in any NSG container."""
+        if exclude_vm_names is None:
+            exclude_vm_names = set()
+        
+        vms_to_render = [vm for vm in vms if vm['resource_name'] not in exclude_vm_names]
+        if not (vms_to_render or lbs):
             return
 
         lines.append(f"{indent}subgraph compute_tier[\"🖥️ Compute Tier\"]")
-        for vm in vms:
+        for vm in vms_to_render:
             _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
         for lb in lbs:
             if lb['id'] in parent_children:
@@ -1054,18 +1074,39 @@ def generate_architecture_diagram(
                 _emit_simple_node(lb, indent + "  ")
         lines.append(f"{indent}end")
 
-    def _render_internal_contents(indent: str, nest_compute_in_nsg: bool) -> None:
-        """Render compute/AKS/NSG internals at the specified indentation level."""
-        if nest_compute_in_nsg and len(nsgs) == 1:
-            nsg = nsgs[0]
-            nsg_id = sanitize_id(nsg['resource_name'])
-            _diagram_emitted_ids.add(nsg_id)
-            lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ NSG: {nsg['resource_name']}\"]")
-            _render_compute_tier(indent + "  ")
-            lines.append(f"{indent}end")
-        else:
-            _render_compute_tier(indent)
-            for nsg in nsgs:
+    def _render_nsg_with_vms(nsg: dict, indent: str, nsg_vms: List[dict]) -> None:
+        """Render an NSG container with its secured VMs inside."""
+        nsg_id = sanitize_id(nsg['resource_name'])
+        _diagram_emitted_ids.add(nsg_id)
+        lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ NSG: {nsg['resource_name']}\"]")
+        for vm in nsg_vms:
+            _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
+        lines.append(f"{indent}end")
+
+    def _render_internal_contents(indent: str) -> None:
+        """Render compute/AKS/NSG internals with proper threat model containment.
+        
+        NSGs are rendered as security boundaries containing their secured VMs.
+        VMs not in any NSG go in the generic Compute Tier.
+        """
+        # VMs that are secured by NSGs and should be contained within them
+        vms_in_nsgs = set()
+        
+        # Render each NSG with its secured VMs
+        for nsg in nsgs:
+            if nsg['resource_name'] in nsg_secures_vms:
+                secured_vm_names = nsg_secures_vms[nsg['resource_name']]
+                secured_vms = [vm for vm in vms if vm['resource_name'] in secured_vm_names]
+                if secured_vms:
+                    _render_nsg_with_vms(nsg, indent, secured_vms)
+                    vms_in_nsgs.update(secured_vm_names)
+        
+        # Render uncontained VMs in compute tier
+        _render_compute_tier_plain(indent, exclude_vm_names=vms_in_nsgs)
+        
+        # Render NSGs that don't secure anything as standalone nodes
+        for nsg in nsgs:
+            if nsg['resource_name'] not in nsg_secures_vms:
                 _emit_simple_node(nsg, indent)
 
         for aks_cluster in aks:
@@ -1089,12 +1130,12 @@ def generate_architecture_diagram(
                     _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
                 else:
                     _emit_simple_node(subnet, "      ")
-            _render_internal_contents("      ", nest_compute_in_nsg=True)
+            _render_internal_contents("      ")
             lines.append("    end")
         else:
             for vnet in vnets:
                 _emit_simple_node(vnet, "    ")
-            _render_internal_contents("    ", nest_compute_in_nsg=False)
+            _render_internal_contents("    ")
         lines.append("  end")
     elif internal_resources:
         # No child hierarchy to wrap — render the resources directly.
@@ -1108,12 +1149,12 @@ def generate_architecture_diagram(
                     _render_resource_subgraph(subnet, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
                 else:
                     _emit_simple_node(subnet, "    ")
-            _render_internal_contents("    ", nest_compute_in_nsg=True)
+            _render_internal_contents("    ")
             lines.append("  end")
         else:
             for vnet in vnets:
                 _emit_simple_node(vnet, "  ")
-            _render_internal_contents("  ", nest_compute_in_nsg=False)
+            _render_internal_contents("  ")
 
     # ── Application Tier Zone (App Service Plans, Function Apps, Web Apps) ──
     if app_tier:
