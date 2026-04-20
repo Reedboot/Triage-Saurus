@@ -1785,7 +1785,7 @@ def _decorate_scan_log_line(line: str) -> str:
         return clean
 
     source_emoji = {
-        "web": "🕸️",
+        "web": "🕵️",
         "pipeline": "🧭",
         "detection": "🔍",
         "misconfigurations": "🛡️",

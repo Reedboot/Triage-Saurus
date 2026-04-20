@@ -270,6 +270,16 @@ PY
     continue
   fi
 
+  # Echo the opengrep command with each --config on a new line
+  OG_CONFIGS=("--config" "$RULES_DIR")
+  echo "[Misconfigurations] 🛡️ Running: opengrep scan"
+  for ((i=0; i<${#OG_CONFIGS[@]}; i++)); do
+    if [[ "${OG_CONFIGS[$i]}" == "--config" ]]; then
+      ((i++))
+      echo "  --config ${OG_CONFIGS[$i]}"
+    fi
+  done
+  echo "  $repo_path --json --quiet"
   if ! opengrep scan --config "$RULES_DIR" "$repo_path" --json --output "$json_output"; then
     log_err "  ❌ opengrep scan failed for $repo_name (see $json_output)"
     FAILED=$((FAILED + 1))

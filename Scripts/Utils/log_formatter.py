@@ -38,7 +38,7 @@ def format_finding(finding_id: int, title: str, severity: str) -> str:
         emoji = "⚪"
         color = Color.RESET
     
-    return f"  [stored] finding {finding_id} ]: {color}{emoji} {title} ({severity}){Color.RESET}"
+    return f" 💾 [stored] finding {finding_id} ]: {color}{emoji} {title} ({severity}){Color.RESET}"
 
 
 def format_scan_complete() -> str:
