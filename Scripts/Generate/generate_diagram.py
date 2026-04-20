@@ -1118,7 +1118,8 @@ def generate_architecture_diagram(
         res['id'] in parent_children and parent_children[res['id']]
         for res in internal_resources
     )
-    if internal_resources and internal_has_children:
+    # Render zone_internal if there are internal resources OR vnets (for threat model structure)
+    if (internal_resources or vnets) and internal_has_children:
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         if len(vnets) == 1:
             vnet = vnets[0]
@@ -1137,7 +1138,7 @@ def generate_architecture_diagram(
                 _emit_simple_node(vnet, "    ")
             _render_internal_contents("    ")
         lines.append("  end")
-    elif internal_resources:
+    elif internal_resources or vnets:
         # No child hierarchy to wrap — still render inside zone_internal for threat model structure
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         if len(vnets) == 1:
