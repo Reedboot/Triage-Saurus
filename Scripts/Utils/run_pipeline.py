@@ -77,6 +77,7 @@ def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
     if existing:
         paths.append(existing)
     env['PYTHONPATH'] = ':'.join(paths)
+    env['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output for real-time streaming
 
     try:
         result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, timeout=timeout)

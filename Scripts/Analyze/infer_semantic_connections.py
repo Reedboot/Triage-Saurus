@@ -442,16 +442,23 @@ def main():
     parser.add_argument("--db-path", type=Path)
     args = parser.parse_args()
 
-    print(f"[*] Inferring semantic connections for experiment {args.experiment}")
-    count = infer_connections(args.experiment, args.db_path)
-    print(f"[+] Added {count} semantic connections")
+    try:
+        print(f"[*] Inferring semantic connections for experiment {args.experiment}", flush=True)
+        count = infer_connections(args.experiment, args.db_path)
+        print(f"[+] Added {count} semantic connections", flush=True)
 
-    print("[*] Storing data flows...")
-    flow_count = infer_data_flows(args.experiment, args.db_path)
-    print(f"[+] Stored {flow_count} data flows")
-    print("[✓] Done")
+        print("[*] Storing data flows...", flush=True)
+        flow_count = infer_data_flows(args.experiment, args.db_path)
+        print(f"[+] Stored {flow_count} data flows", flush=True)
+        print("[✓] Done", flush=True)
+        return 0
+    except Exception as e:
+        print(f"[Error] {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 
