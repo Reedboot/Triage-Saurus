@@ -1118,8 +1118,7 @@ def generate_architecture_diagram(
         res['id'] in parent_children and parent_children[res['id']]
         for res in internal_resources
     )
-    # Render zone_internal if there are internal resources OR vnets (for threat model structure)
-    if (internal_resources or vnets) and internal_has_children:
+    if internal_resources and internal_has_children:
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         if len(vnets) == 1:
             vnet = vnets[0]
@@ -1138,7 +1137,7 @@ def generate_architecture_diagram(
                 _emit_simple_node(vnet, "    ")
             _render_internal_contents("    ")
         lines.append("  end")
-    elif internal_resources or vnets:
+    elif internal_resources:
         # No child hierarchy to wrap — still render inside zone_internal for threat model structure
         lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         if len(vnets) == 1:
@@ -1184,12 +1183,6 @@ def generate_architecture_diagram(
             _render_resource_subgraph(sa, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         lines.append("  end")
 
-    # PaaS/Identity subgraph — use subgraph rendering to show children (e.g. OCI compartments with buckets)
-    if paas:
-        lines.append(f"  subgraph paas[PaaS / Identity]")
-        for p in paas:
-            _render_resource_subgraph(p, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
-        lines.append("  end")
 
     # Try to group API Management / API resources and render operations when available
     try:
