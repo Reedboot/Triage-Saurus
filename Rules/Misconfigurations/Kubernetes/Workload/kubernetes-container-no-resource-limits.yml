@@ -1,0 +1,30 @@
+rules:
+  - id: kubernetes-container-no-resource-limits
+    message: |
+      Workload (Deployment/DaemonSet/StatefulSet/Pod) has no resource limits defined.
+      Without limits a single misbehaving or compromised container can exhaust all
+      node resources (CPU starvation, OOM), causing a denial-of-service across all
+      co-located workloads. Resource limits also constrain post-compromise activities
+      such as crypto-mining or bulk data exfiltration.
+
+      Add resource limits and requests to every container:
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+      In the threat model, containers without limits have no DoS boundary.
+    severity: WARNING
+    languages: [yaml]
+    pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*\blimits\s*:)'
+    metadata:
+      category: security
+      subcategory: [kubernetes, workload, dos-protection]
+      cwe: CWE-770
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [kubernetes]

@@ -1,0 +1,39 @@
+rules:
+  - id: context-gcp-forwarding-rule-public
+    message: |
+      GCP Forwarding Rule has no load_balancing_scheme set to INTERNAL or INTERNAL_MANAGED.
+      When load_balancing_scheme is EXTERNAL, EXTERNAL_MANAGED, or omitted (defaults to
+      EXTERNAL), the forwarding rule receives a public IP and is internet-accessible.
+
+      This is a public ingress node that must appear in the threat model diagram as an
+      entry from the Internet. Ensure Cloud Armor security policies are attached to HTTP(S)
+      load balancers and that backend services have appropriate IAP or firewall controls.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  resource "google_compute_forwarding_rule" $NAME {
+                    ...
+                  }
+              - pattern-not-regex: 'load_balancing_scheme\s*=\s*"INTERNAL(?:_MANAGED)?"'
+          - patterns:
+              - pattern: |
+                  resource "google_compute_global_forwarding_rule" $NAME {
+                    ...
+                  }
+              - pattern-not-regex: 'load_balancing_scheme\s*=\s*"INTERNAL(?:_MANAGED)?"'
+    metadata:
+      finding_kind: Asset
+      asset_provider: gcp
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: [network, exposure, ingress]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, load_balancer]
+      internet_exposure: true
+      target_files: ["**/*.tf"]

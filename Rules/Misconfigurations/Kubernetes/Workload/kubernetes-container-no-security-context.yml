@@ -1,0 +1,31 @@
+rules:
+  - id: kubernetes-container-no-security-context
+    message: |
+      Workload (Deployment/DaemonSet/StatefulSet/Pod) has containers with no
+      securityContext defined. Without a securityContext the container runs as
+      root by default (UID 0) with all Linux capabilities, and with a writable
+      root filesystem. Any code-execution vulnerability immediately yields a root
+      shell with no OS-level boundary separating the attacker from host resources.
+
+      Add a container-level securityContext with at minimum:
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+
+      These controls are visible in the threat model as security boundaries
+      that slow lateral movement after a pod compromise.
+    severity: WARNING
+    languages: [yaml]
+    pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*\bsecurityContext\s*:)'
+    metadata:
+      category: security
+      subcategory: [kubernetes, workload, defense-in-depth]
+      cwe: CWE-250
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]
+      five_pillars: Pillar 1 (Network Security)

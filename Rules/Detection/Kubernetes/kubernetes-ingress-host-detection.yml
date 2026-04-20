@@ -1,0 +1,35 @@
+rules:
+  - id: context-kubernetes-ingress-host
+    message: |
+      Kubernetes Ingress rule with an explicit host field detected.
+      The hostname is captured to populate the public-facing endpoint list in the
+      threat model architecture diagram. Each distinct host represents a potential
+      internet-accessible entry point into the cluster.
+    severity: INFO
+    languages: [yaml]
+    pattern: |
+      kind: Ingress
+      ...
+      spec:
+        ...
+        rules:
+          - host: $HOSTNAME
+            ...
+    metadata:
+      finding_kind: Asset
+      asset_provider: unknown
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: [kubernetes, ingress, public-endpoint]
+      confidence: HIGH
+      technology: [kubernetes]
+      target_files: ["**/*.yml", "**/*.yaml"]
+      extracts:
+        service_type: Kubernetes Ingress
+        resource_type: ingress_host
+        resource_name: $HOSTNAME
+        properties:
+          - name: hostname
+            pattern: "host: $HOSTNAME"
+      signal: public_ingress_host
+      internet_exposure: true

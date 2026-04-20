@@ -1,0 +1,26 @@
+rules:
+  - id: kubernetes-rbac-pod-exec
+    message: |
+      RBAC Role or ClusterRole grants create on pods/exec or pods/attach subresource.
+      This allows the bound principal to exec into any running pod in scope, equivalent
+      to interactive shell access on the container. From inside a pod an attacker can:
+      - Read mounted Secrets and ServiceAccount tokens
+      - Access the node via hostPath mounts or privileged containers
+      - Reach other cluster-internal services that the pod can communicate with
+
+      Remove pods/exec and pods/attach from the role unless strictly required, and
+      scope any remaining exec permissions to specific namespaces via Role (not ClusterRole).
+
+      ATTACK: kubectl exec -it <pod> -- /bin/sh → read /var/run/secrets/ → steal service-account token → escalate
+    severity: ERROR
+    languages: [yaml]
+    pattern-regex: '(?s)kind:\s+(?:Cluster)?Role[\s\S]*?resources:[\s\S]*?\bpods/(?:exec|attach)\b[\s\S]*?verbs:[\s\S]*?\b(?:create|\*)\b'
+    metadata:
+      category: security
+      subcategory: [kubernetes, rbac, lateral-movement]
+      cwe: CWE-269
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [kubernetes]
+      five_pillars: Pillar 2 (Access Control)

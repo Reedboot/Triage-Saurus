@@ -1,0 +1,34 @@
+rules:
+  - id: context-kubernetes-service-externalname
+    message: |
+      Kubernetes Service of type ExternalName detected.
+      ExternalName services create a CNAME alias to an external DNS name, routing
+      cluster-internal traffic to an endpoint outside the cluster. This represents
+      an egress dependency that must appear in the threat model as a data-plane
+      connection from the cluster to an external service.
+
+      Capture the externalName value to document the external dependency in the
+      architecture diagram and assess whether egress filtering controls the path.
+    severity: INFO
+    languages: [yaml]
+    pattern: |
+      kind: Service
+      ...
+      spec:
+        ...
+        type: ExternalName
+        externalName: $HOSTNAME
+        ...
+    metadata:
+      finding_kind: Asset
+      asset_provider: unknown
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: [kubernetes, egress, external-dependency]
+      cwe: CWE-200
+      confidence: HIGH
+      likelihood: LOW
+      impact: MEDIUM
+      technology: [kubernetes]
+      target_files: ["**/*.yml", "**/*.yaml"]
+      signal: external_service_dependency

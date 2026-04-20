@@ -1,0 +1,33 @@
+rules:
+  - id: kubernetes-loadbalancer-no-source-ranges
+    message: |
+      Kubernetes LoadBalancer Service has no loadBalancerSourceRanges restriction.
+      Without source ranges the cloud provider provisions a load balancer that
+      accepts connections from 0.0.0.0/0 — the entire internet.
+
+      Restrict access by adding loadBalancerSourceRanges with trusted CIDR blocks,
+      or replace with a ClusterIP Service behind an Ingress controller that has
+      IP allowlisting configured. This must be visible in the threat model as an
+      unrestricted public ingress node.
+
+      ATTACK: Internet (any IP) → cloud LB (0.0.0.0/0) → Service port → application
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          kind: Service
+          ...
+          spec:
+            ...
+            type: LoadBalancer
+            ...
+      - pattern-not-regex: 'loadBalancerSourceRanges'
+    metadata:
+      category: security
+      subcategory: [kubernetes, network, exposure]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [kubernetes]
+      internet_exposure: true

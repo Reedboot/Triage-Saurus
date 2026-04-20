@@ -1,0 +1,65 @@
+rules:
+  - id: aws-alb-internet-facing
+    message: |
+      AWS Application or Network Load Balancer is configured with internal = false
+      (or internal attribute is absent, which defaults to internet-facing).
+      This means the load balancer receives a public IP and is reachable from the
+      internet without network-level IP restrictions.
+
+      If this is intentional, ensure:
+      - Security groups restrict allowed source ports and protocols
+      - WAF (aws_wafv2_web_acl) is attached for ALBs handling HTTP/S traffic
+      - Access logs are enabled to capture client IPs for forensics
+      - The load balancer appears as a public ingress node in the threat model
+
+      If this is NOT intentional, set internal = true to create a private LB.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  resource "aws_lb" $NAME {
+                    ...
+                  }
+              - pattern: |
+                  internal = false
+          - patterns:
+              - pattern-inside: |
+                  resource "aws_alb" $NAME {
+                    ...
+                  }
+              - pattern: |
+                  internal = false
+          # Absence of internal= on aws_lb defaults to internet-facing
+          - patterns:
+              - pattern: |
+                  resource "aws_lb" $NAME {
+                    ...
+                  }
+              - pattern-not: |
+                  resource "aws_lb" $NAME {
+                    ...
+                    internal = $INTERNAL
+                    ...
+                  }
+          - patterns:
+              - pattern: |
+                  resource "aws_alb" $NAME {
+                    ...
+                  }
+              - pattern-not: |
+                  resource "aws_alb" $NAME {
+                    ...
+                    internal = $INTERNAL
+                    ...
+                  }
+    metadata:
+      category: security
+      subcategory: [network, exposure, aws]
+      cwe: CWE-668
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, aws, load_balancer]
+      internet_exposure: true

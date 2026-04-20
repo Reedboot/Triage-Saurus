@@ -1,0 +1,34 @@
+rules:
+  - id: kubernetes-ingress-no-host
+    message: |
+      Ingress rule has no host field, matching ALL incoming hostnames.
+      This is a catch-all rule that exposes every path to the public internet
+      regardless of the hostname used. In a shared cluster or multi-tenant
+      environment this may accidentally expose internal services.
+
+      Add an explicit host field to each Ingress rule to restrict routing to
+      known hostnames. This also ensures the threat model diagram can accurately
+      show which services are internet-facing vs. internal.
+
+      ATTACK: Attacker uses any hostname → hits catch-all Ingress → reaches backend service
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern: |
+          kind: Ingress
+          ...
+          spec:
+            ...
+            rules:
+              - http:
+                  ...
+      - pattern-not-regex: '^\s+- host:'
+    metadata:
+      category: security
+      subcategory: [kubernetes, ingress, exposure]
+      cwe: CWE-284
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [kubernetes, nginx]
+      internet_exposure: true
