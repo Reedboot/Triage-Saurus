@@ -162,6 +162,7 @@ _FALLBACK: dict[str, dict] = {
     "alicloud_cs_managed_kubernetes":             {"friendly_name": "ACK Cluster",              "category": "Container",   "icon": "☸️",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_cs_kubernetes_node_pool":           {"friendly_name": "ACK Node Pool",            "category": "Container",   "icon": "🏊",  "display_on_architecture_chart": False, "parent_type": "alicloud_cs_managed_kubernetes"},
     "alicloud_oss_bucket":                        {"friendly_name": "OSS Bucket",               "category": "Storage",     "icon": "🪣",  "display_on_architecture_chart": True,  "parent_type": None},
+    "alicloud_oss_bucket_object":                 {"friendly_name": "OSS Bucket Object",        "category": "Storage",     "icon": "📄",  "display_on_architecture_chart": False, "parent_type": "alicloud_oss_bucket"},
     "alicloud_db_instance":                       {"friendly_name": "RDS Instance",             "category": "Database",    "icon": "🗄️",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_kms_key":                           {"friendly_name": "KMS Key",                  "category": "Security",    "icon": "🔑",  "display_on_architecture_chart": True,  "parent_type": None},
     "alicloud_kms_secret":                        {"friendly_name": "KMS Secret",               "category": "Security",    "icon": "🤫",  "display_on_architecture_chart": False, "parent_type": "alicloud_kms_key"},

@@ -4150,12 +4150,10 @@ def api_diagrams(experiment_id: str):
     repo_name = (request.args.get("repo_name") or "").strip()
     include_api_operations_raw = (request.args.get("include_api_operations") or "").strip().lower()
     include_api_operations_override: bool | None = None
-    if include_api_operations_raw in {"1", "true", "yes", "on"}:
+     if include_api_operations_raw in {"1", "true", "yes", "on"}:
         include_api_operations_override = True
     elif include_api_operations_raw in {"0", "false", "no", "off"}:
         include_api_operations_override = False
-    # Always run with strict_architecture=False (synthetic/inferred edges enabled)
-    strict_architecture = False
     force_regenerate = include_api_operations_override is not None
 
     def _edge_count(code: str) -> int:
@@ -4215,7 +4213,6 @@ def api_diagrams(experiment_id: str):
                             repo_name=repo_name,
                             provider=provider,
                             include_operation_resources=include_api_operations_override,
-                            strict_architecture=strict_architecture,
                         )
                     except Exception:
                         code = None

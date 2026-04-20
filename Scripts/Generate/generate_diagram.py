@@ -1309,8 +1309,6 @@ def generate_architecture_diagram(
 
     # Helper to ensure a resource node exists in the diagram for a given resource name
     def _ensure_node_exists(resource_name: str):
-        if strict_mode:
-            return
         if not resource_name or str(resource_name).strip().lower() == 'internet' or resource_name in node_names_present:
             return
         if resource_name in non_service_resource_names:

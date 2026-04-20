@@ -676,7 +676,8 @@ def test_provider_filter_oci_includes_legacy_oracle_rows(monkeypatch):
     assert "new-oci" in diagram
 
 
-def test_strict_mode_skips_synthetic_internet_edges(monkeypatch):
+def test_synthetic_internet_edges_always_included(monkeypatch):
+    """Test that synthetic Internet connections are always included in diagrams."""
     resources = [
         {
             "id": 1,
@@ -709,7 +710,9 @@ def test_strict_mode_skips_synthetic_internet_edges(monkeypatch):
     monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *a, **kw: "App Service")
     monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *a, **kw: "Compute")
 
-    diagram = generate_diagram.generate_architecture_diagram("exp-1", strict_architecture=True)
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
-    assert called["add_internet"] is False
-    assert "internet -->" not in diagram
+    # Synthetic Internet connections are always included
+    assert called["add_internet"] is True
+    assert diagram
+    assert "Internet" in diagram
