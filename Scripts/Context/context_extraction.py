@@ -929,6 +929,7 @@ def _load_parent_type_map() -> Dict[str, str]:
         "azurerm_function_app": "azurerm_app_service_plan|azurerm_service_plan",
         "azurerm_linux_function_app": "azurerm_app_service_plan|azurerm_service_plan",
         "azurerm_windows_function_app": "azurerm_app_service_plan|azurerm_service_plan",
+        "azurerm_network_interface_security_group_association": "azurerm_network_security_group",
         "azurerm_network_interface": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
         "azurerm_public_ip": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine|azurerm_lb",
         "azurerm_virtual_machine_extension": "azurerm_virtual_machine|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine",
@@ -1624,6 +1625,17 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 resource.parent = resolved_parent
             continue
         
+        # Special handling: NSG associations should be children of their NSG
+        if resource.resource_type == "azurerm_network_interface_security_group_association" and not resource.parent:
+            props = resource.properties or {}
+            nsg_name = props.get("network_security_group_name")
+            if nsg_name:
+                # Look for the NSG resource by name
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == "azurerm_network_security_group" and candidate.name == nsg_name:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
+
         # Special handling: NICs should be children of their subnet
         if resource.resource_type == "azurerm_network_interface" and not resource.parent:
             props = resource.properties or {}
