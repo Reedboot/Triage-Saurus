@@ -268,7 +268,13 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
         cmd += ["--config", str(config_path)]
     cmd += [str(target), "--json", "--quiet"]
 
-    print(f"\n[{label}] Running: {' '.join(cmd)}")
+    # Format output: list configs on separate indented lines
+    cmd_display = "opengrep scan"
+    for config_path in config_paths:
+        cmd_display += f"\n  --config {config_path}"
+    cmd_display += f"\n  {target} --json --quiet"
+    print(f"\n[{label}] Running: {cmd_display}")
+    
     result = subprocess.run(cmd, capture_output=True, text=True)
     # opengrep exits non-zero when findings exist — that's expected
     stdout = (result.stdout or "").strip()
