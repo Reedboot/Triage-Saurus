@@ -702,6 +702,37 @@ def generate_architecture_diagram(
     # This runs AFTER the allowed_names filter so 'Internet' is never wrongly excluded.
     connections = _add_internet_connections(connections, experiment_id, repo_name=repo_name, provider=provider)
 
+    # Propagate Internet → EC2/VM to their security groups
+    # If an EC2/VM is exposed to Internet, propagate that to its security groups
+    internet_targets = {c.get('target') for c in connections if c.get('source') == 'Internet'}
+    if internet_targets:
+        # Find instances/VMs that are internet-accessible
+        internet_exposed_instances = [r for r in resources 
+                                     if r['resource_name'] in internet_targets 
+                                     and any(tok in (r.get('resource_type') or '').lower() for tok in ('instance', 'vm', 'virtual_machine', 'ec2'))]
+        if internet_exposed_instances:
+            # Find security groups protecting these instances
+            instance_ids = {r['id'] for r in internet_exposed_instances}
+            protecting_sgs = [r for r in resources 
+                            if 'security_group' in (r.get('resource_type') or '').lower()
+                            and any(iid in (r.get('protecting_resources') or '').split(',') for iid in instance_ids)]
+            # Also check via parent relationships
+            for instance in internet_exposed_instances:
+                protecting_sgs.extend([r for r in resources 
+                                     if instance['id'] == r.get('parent_resource_id')
+                                     and 'security_group' in (r.get('resource_type') or '').lower()])
+            # Add Internet → SG connections for protecting security groups
+            existing_internet_connections = {(c.get('source'), c.get('target')) for c in connections if c.get('source') == 'Internet'}
+            for sg in set(protecting_sgs):  # deduplicate
+                if ('Internet', sg['resource_name']) not in existing_internet_connections:
+                    connections.append({
+                        'source': 'Internet',
+                        'target': sg['resource_name'],
+                        'label': 'protects exposed',
+                        'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+
     # hierarchies can be built by joining resources with parent relationships if needed
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -960,6 +991,33 @@ def generate_architecture_diagram(
                     connections.append({
                         'source': _nsg['resource_name'],
                         'target': _vm_res['resource_name'],
+                        'connection_type': 'secures',
+                        'confirmed': True,
+                        'is_cross_repo': 0,
+                    })
+                    _existing_conn_pairs.add(_pair)
+
+    # ── Infer AWS Security Group → EC2 security association ────────────────────
+    # AWS Security Groups can be directly associated with EC2 instances.
+    # We infer SG → EC2 by checking vpc_security_group_ids in connections.
+    _aws_sgs = [r for r in resources if 'aws_security_group' in (r.get('resource_type') or '').lower()]
+    _aws_instances = [r for r in resources if 'aws_instance' in (r.get('resource_type') or '').lower() or 'instance' in (r.get('resource_type') or '').lower() and 'aws' in (r.get('provider') or '').lower()]
+    if _aws_sgs and _aws_instances:
+        # Check for explicit SG-instance relationships via connections
+        _sg_instance_pairs = {(c.get('source'), c.get('target')) for c in connections 
+                             if any(tok in (c.get('connection_type') or '').lower() for tok in ('security', 'sg', 'group'))}
+        # Also check parent relationships: if EC2 has SG as parent or vice-versa
+        for _sg in _aws_sgs:
+            for _instance in _aws_instances:
+                _pair = (_sg['resource_name'], _instance['resource_name'])
+                # Skip if pair already exists
+                if _pair in _existing_conn_pairs or _pair in _sg_instance_pairs:
+                    continue
+                # Check if instance has SG as parent_resource_id or connection exists
+                if _instance.get('parent_resource_id') == _sg['id']:
+                    connections.append({
+                        'source': _sg['resource_name'],
+                        'target': _instance['resource_name'],
                         'connection_type': 'secures',
                         'confirmed': True,
                         'is_cross_repo': 0,
