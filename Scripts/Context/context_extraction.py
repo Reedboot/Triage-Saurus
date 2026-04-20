@@ -1575,6 +1575,12 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         "aws_elb",
         "azurerm_lb",
         "azurerm_application_gateway",
+        # VMs are compute tier roots, not children of NICs (even though referenced)
+        "azurerm_virtual_machine",
+        "azurerm_linux_virtual_machine",
+        "azurerm_windows_virtual_machine",
+        "aws_instance",
+        "aws_launch_template",
     }
 
     for resource, block_text in resource_blocks:
@@ -1625,14 +1631,15 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 resource.parent = resolved_parent
             continue
         
-        # Special handling: NSG associations should be children of their NSG
+        # Special handling: NSG associations should be children of their NIC (for threat model tracing)
+        # This enables diagram generation to trace NSG → NIC → VM security boundaries
         if resource.resource_type == "azurerm_network_interface_security_group_association" and not resource.parent:
             props = resource.properties or {}
-            nsg_name = props.get("network_security_group_name")
-            if nsg_name:
-                # Look for the NSG resource by name
+            nic_name = props.get("network_interface_name")
+            if nic_name:
+                # Look for the NIC resource by name
                 for candidate, _ in resource_blocks:
-                    if candidate.resource_type == "azurerm_network_security_group" and candidate.name == nsg_name:
+                    if candidate.resource_type == "azurerm_network_interface" and candidate.name == nic_name:
                         resource.parent = f"{candidate.resource_type}.{candidate.name}"
                         break
 

@@ -254,14 +254,33 @@ def _render_resource_subgraph(
 
 
 def _should_show_on_diagram(resource: dict, child_ids: set) -> bool:
-    """Return False for resources marked as hidden that aren't shown as children."""
-    if resource['id'] in child_ids:
-        return False  # Will be shown under parent
+    """Return False for resources marked as hidden on architecture charts.
+    
+    Resources that are children of parents will be rendered under their parent,
+    so we don't filter them out here. The display_on_architecture_chart setting
+    determines if a resource type should ever appear on diagrams.
+    """
     try:
         rt_meta = _rtdb.get_resource_type(None, resource.get('resource_type', ''))
         return rt_meta.get('display_on_architecture_chart', True)
     except Exception:
         return True
+
+
+def _is_promotable_hidden_network_container(resource: dict) -> bool:
+    """Return True if this is a hidden network container (VNet/Subnet) that should
+    be shown because it contains visible child resources.
+    
+    Network containers like VNets and Subnets are normally hidden from diagrams
+    (display_on_architecture_chart=False) but should be promoted to visibility
+    if they contain resources that are visible on the diagram.
+    """
+    try:
+        rt = (resource.get('resource_type') or '').lower()
+        # VNets and Subnets are promotable network containers
+        return any(tok in rt for tok in ('virtual_network', 'subnet', 'vpc', 'vnet'))
+    except Exception:
+        return False
 
 
 def _is_operation_resource_type(resource_type: str) -> bool:
