@@ -2118,3 +2118,116 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .diagram-toast {
   animation: slideIn 0.3s ease-out;
 }
+
+/* Deployment Footprint Card Styling */
+.deployment-footprint-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.footprint-summary {
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+.footprint-providers {
+  margin: 12px 0;
+}
+
+.footprint-providers strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.provider-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-pills .prov-pill {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.provider-pills .prov-pill.aws {
+  background: #FF9900;
+  color: white;
+  border-color: #FF9900;
+}
+
+.provider-pills .prov-pill.azure {
+  background: #0078D4;
+  color: white;
+  border-color: #0078D4;
+}
+
+.provider-pills .prov-pill.gcp {
+  background: #4285F4;
+  color: white;
+  border-color: #4285F4;
+}
+
+.provider-pills .prov-pill.oci {
+  background: #F80000;
+  color: white;
+  border-color: #F80000;
+}
+
+.footprint-categories {
+  margin-top: 12px;
+}
+
+.footprint-categories strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.footprint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.footprint-table tbody tr {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.footprint-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.footprint-table td {
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.footprint-table td.text-right {
+  text-align: right;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.footprint-table tbody tr:hover {
+  background: var(--bg-secondary);
+}

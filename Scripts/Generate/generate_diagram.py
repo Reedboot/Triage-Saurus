@@ -549,6 +549,44 @@ def _add_internet_connections(connections: list, experiment_id: str, repo_name: 
         except Exception:
             pass
 
+        # Property-based Internet detection: resources with public IPs/access
+        try:
+            prop_params = [experiment_id]
+            prop_filter, prop_prov_params = _provider_sql_clause(provider, "r.provider")
+            prop_params.extend(prop_prov_params)
+            
+            prop_rows = conn.execute(f"""
+                SELECT DISTINCT r.resource_name, r.resource_type
+                FROM resources r
+                WHERE r.experiment_id = ?
+                  AND (
+                    r.resource_type IN ('azurerm_public_ip', 'aws_eip', 'gcp_compute_address')
+                    OR (r.resource_type = 'aws_instance' AND EXISTS (
+                      SELECT 1 FROM resource_properties rp
+                      WHERE rp.resource_id = r.id
+                      AND rp.property_name IN ('public_ip_address', 'public_ip', 'associate_public_ip_address')
+                    ))
+                    OR (r.resource_type = 'azurerm_network_interface' AND EXISTS (
+                      SELECT 1 FROM resource_properties rp
+                      WHERE rp.resource_id = r.id
+                      AND rp.property_name LIKE '%public%'
+                    ))
+                  )
+                  {prop_filter}
+            """, prop_params).fetchall()
+            
+            for row in prop_rows:
+                name = row['resource_name']
+                if name and name not in existing_internet_targets:
+                    connections.append({
+                        'source': 'Internet', 'target': name,
+                        'label': 'public IP', 'connection_type': 'internet_access',
+                        'is_cross_repo': 0
+                    })
+                    existing_internet_targets.add(name)
+        except Exception:
+            pass
+
     return connections
 
 

@@ -778,17 +778,30 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             line_number = int((result.get("start") or {}).get("line", 1) or 1)
             resource_type = f"kubernetes_{kind.lower()}"
 
+            # Try to extract namespace from snippet for non-Namespace resources
+            namespace = None
+            if kind.lower() != "namespace":
+                snippet = str(extra.get("lines", ""))
+                ns_match = re.search(r'namespace:\s*([A-Za-z0-9\-_]+)', snippet)
+                if ns_match:
+                    namespace = ns_match.group(1)
+
             identity = (resource_type, name, rel, line_number)
             if identity in seen:
                 continue
             seen.add(identity)
+            
+            props = {"manifest_kind": kind, "source": "opengrep_detection"}
+            if namespace:
+                props["k8s_namespace"] = namespace
+            
             resources.append(
                 Resource(
                     name=name,
                     resource_type=resource_type,
                     file_path=rel,
                     line_number=line_number,
-                    properties={"manifest_kind": kind, "source": "opengrep_detection"},
+                    properties=props,
                 )
             )
         if resources:
@@ -841,13 +854,24 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             resource_type = f"kubernetes_{kind.lower()}"
             line_number = text[:offset + kind_m.start()].count("\n") + 1
 
+            # Extract namespace from metadata for non-Namespace resources
+            namespace = None
+            if kind.lower() != "namespace":
+                ns_m = re.search(r'^\s*namespace:\s*([^\s#]+)', doc, re.MULTILINE)
+                if ns_m:
+                    namespace = _clean_value(ns_m.group(1))
+
+            props = {"manifest_kind": kind, "source": "kubernetes_manifest"}
+            if namespace:
+                props["k8s_namespace"] = namespace
+
             resources.append(
                 Resource(
                     name=name,
                     resource_type=resource_type,
                     file_path=rel,
                     line_number=line_number,
-                    properties={"manifest_kind": kind, "source": "kubernetes_manifest"},
+                    properties=props,
                 )
             )
             offset += len(doc) + 1
@@ -1117,6 +1141,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         if key in known_resource_keys:
             continue
         context.resources.append(manifest_resource)
+        resource_blocks.append((manifest_resource, ""))  # Add to resource_blocks so parent assignment logic can find it
         known_resource_keys.add(key)
 
     # Infer provider for terraform_data and other meta-resources from file context
@@ -1684,6 +1709,17 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 # Look for the subnet resource by name
                 for candidate, _ in resource_blocks:
                     if candidate.resource_type == "azurerm_subnet" and candidate.name == subnet_name:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
+
+        # Special handling: Kubernetes resources should be children of their namespace
+        if resource.resource_type.startswith("kubernetes_") and not resource.parent:
+            props = resource.properties or {}
+            namespace_name = props.get("k8s_namespace")
+            if namespace_name:
+                # Look for the namespace resource by name
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == "kubernetes_namespace" and candidate.name == namespace_name:
                         resource.parent = f"{candidate.resource_type}.{candidate.name}"
                         break
 

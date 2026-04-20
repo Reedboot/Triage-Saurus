@@ -5682,6 +5682,7 @@ def api_view_overview(experiment_id: str, repo_name: str):
                 "ai_context_summary": "What This Repo Does",
                 "ai_project_summary": "Project",
                 "ai_deployment_summary": "Deployment",
+                "ai_deployment_footprint": "Deployment Footprint",
                 "ai_interactions_summary": "Interactions",
                 "ai_auth_summary": "Auth",
                 "ai_attack_paths": "Attack Paths",
@@ -5704,8 +5705,8 @@ def api_view_overview(experiment_id: str, repo_name: str):
             priority_keys = ["ai_context_summary", "ai_finding_themes", "ai_attack_paths"]
             # Fields that should be formatted as numbered lists (semicolon-separated)
             list_fields = {"ai_action_items", "ai_open_questions", "ai_observations", "ai_asset_visibility", "ai_learning_suggestions"}
-            # Fields that contain JSON arrays (skip rendering raw JSON)
-            json_fields = {"ai_new_assets", "ai_fixed_information"}
+            # Fields that contain JSON arrays or objects (skip rendering raw JSON)
+            json_fields = {"ai_new_assets", "ai_fixed_information", "ai_deployment_footprint"}
             timestamp_fields = {"ai_analysis_completed_at", "ai_analysis_recovered"}
 
             # Sort rows: priority keys first, then alphabetical
@@ -5871,6 +5872,47 @@ def api_view_overview(experiment_id: str, repo_name: str):
 
                         if cards:
                             ai_sections.append(f'<h3>{esc(label)}</h3><div class="ai-actions">' + ''.join(cards) + '</div>')
+                    continue
+                
+                if row["key"] == "ai_deployment_footprint":
+                    footprint_data = None
+                    try:
+                        footprint_data = json.loads(val)
+                    except Exception:
+                        footprint_data = None
+                    
+                    if isinstance(footprint_data, dict) and (footprint_data.get("categories") or footprint_data.get("providers")):
+                        # Build provider summary
+                        providers_html = ""
+                        if footprint_data.get("providers"):
+                            provider_items = []
+                            for prov, count in sorted(footprint_data.get("providers", {}).items(), key=lambda x: x[1], reverse=True):
+                                p_lower = prov.lower() if prov else "unknown"
+                                provider_items.append(f'<span class="prov-pill {p_lower}">{esc(prov)} ({count})</span>')
+                            providers_html = ''.join(provider_items)
+                        
+                        # Build category breakdown
+                        categories_html = ""
+                        if footprint_data.get("categories"):
+                            cat_rows = []
+                            for cat, count in sorted(footprint_data.get("categories", {}).items(), key=lambda x: x[1], reverse=True):
+                                cat_name = cat or "Other"
+                                cat_rows.append(f"<tr><td>{esc(cat_name)}</td><td class='text-right'>{count}</td></tr>")
+                            if cat_rows:
+                                categories_html = f'<table class="footprint-table"><tbody>{"".join(cat_rows)}</tbody></table>'
+                        
+                        # Build the section HTML
+                        total = footprint_data.get("total_resources", 0)
+                        section_html = f'<h3>{esc(label)}</h3>'
+                        section_html += f'<div class="deployment-footprint-card">'
+                        section_html += f'<div class="footprint-summary"><strong>Total Resources:</strong> {total}</div>'
+                        if providers_html:
+                            section_html += f'<div class="footprint-providers"><strong>Providers:</strong><div class="provider-pills">{providers_html}</div></div>'
+                        if categories_html:
+                            section_html += f'<div class="footprint-categories"><strong>By Category:</strong>{categories_html}</div>'
+                        section_html += '</div>'
+                        
+                        ai_sections.append(section_html)
                     continue
                 
                 if row["key"] in list_fields:

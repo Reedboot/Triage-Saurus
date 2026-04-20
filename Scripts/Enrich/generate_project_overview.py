@@ -52,10 +52,20 @@ def _fallback_overview(repo_name: str, facts: dict) -> dict:
     auth_signals = ", ".join(facts.get("auth_signals", [])) or "limited explicit auth metadata"
     top_issues = ", ".join(facts.get("top_findings", [])) or "no findings"
     skeptic = facts.get("skeptic_summary") or "No skeptic reviews recorded yet"
+    
+    # Build deployment footprint summary
+    footprint = facts.get("deployment_footprint", {})
+    categories_summary = ", ".join(
+        f"{cat}: {count}" for cat, count in footprint.get("categories", {}).items()
+    ) if footprint.get("categories") else "no resources identified"
+    providers_summary = ", ".join(
+        f"{prov}: {count}" for prov, count in footprint.get("providers", {}).items()
+    ) if footprint.get("providers") else "unknown"
 
     return {
         "project_summary": f"{repo_name} is an infrastructure-backed service repository with assets across {providers}.",
-        "deployment_summary": f"Deployment footprint is primarily: {top_resources}.",
+        "deployment_summary": f"Deployment footprint ({footprint.get('total_resources', 0)} total): {categories_summary}. Providers: {providers_summary}.",
+        "deployment_footprint": footprint,
         "interactions_summary": f"Observed interaction patterns include: {', '.join(facts.get('interaction_types', [])) or 'no non-containment interactions yet' }.",
         "auth_summary": f"Access-control/auth signals: {auth_signals}.",
         "dependencies_summary": f"Dependencies are represented by: {top_deps}.",
@@ -117,6 +127,58 @@ def _generate_open_questions(conn: sqlite3.Connection, repo_id: int, facts: dict
         })
     
     return questions[:5]  # Keep at most 5 questions
+
+
+def _fetch_deployment_footprint(conn: sqlite3.Connection, experiment_id: str, repo_id: int) -> dict:
+    """Generate structured deployment footprint breakdown by category and provider."""
+    
+    # Query categories and counts
+    category_rows = conn.execute(
+        """
+        SELECT render_category, COUNT(*) as count
+        FROM resources
+        WHERE experiment_id = ? AND repo_id = ?
+        GROUP BY render_category
+        ORDER BY count DESC
+        """,
+        (experiment_id, repo_id),
+    ).fetchall()
+    
+    categories = {}
+    for category, count in category_rows:
+        cat_name = category or "Other"
+        categories[cat_name] = int(count)
+    
+    # Query providers and counts
+    provider_rows = conn.execute(
+        """
+        SELECT COALESCE(provider, 'Unknown') as provider, COUNT(*) as count
+        FROM resources
+        WHERE experiment_id = ? AND repo_id = ?
+        GROUP BY COALESCE(provider, 'Unknown')
+        ORDER BY count DESC
+        """,
+        (experiment_id, repo_id),
+    ).fetchall()
+    
+    providers = {}
+    for provider, count in provider_rows:
+        providers[provider] = int(count)
+    
+    # Query total resource count
+    total_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM resources
+        WHERE experiment_id = ? AND repo_id = ?
+        """,
+        (experiment_id, repo_id),
+    ).fetchone()[0]
+    
+    return {
+        "categories": categories,
+        "providers": providers,
+        "total_resources": int(total_count),
+    }
 
 
 def _fetch_facts(conn: sqlite3.Connection, experiment_id: str, repo_name: str) -> tuple[int, dict]:
@@ -249,6 +311,9 @@ def _fetch_facts(conn: sqlite3.Connection, experiment_id: str, repo_name: str) -
     skeptic_summary = ", ".join(
         f"{r[0]} avg={r[1]} ({r[2]} reviews)" for r in skeptic_rows
     )
+    
+    # Fetch deployment footprint breakdown
+    deployment_footprint = _fetch_deployment_footprint(conn, experiment_id, repo_id)
 
     facts = {
         "providers": providers,
@@ -258,6 +323,7 @@ def _fetch_facts(conn: sqlite3.Connection, experiment_id: str, repo_name: str) -
         "auth_signals": auth_signals,
         "top_findings": top_findings,
         "skeptic_summary": skeptic_summary,
+        "deployment_footprint": deployment_footprint,
     }
     return repo_id, facts
 
@@ -286,6 +352,7 @@ def main() -> int:
     mappings = [
         ("ai_project_summary", overview.get("project_summary", "")),
         ("ai_deployment_summary", overview.get("deployment_summary", "")),
+        ("ai_deployment_footprint", json.dumps(overview.get("deployment_footprint", {}))),
         ("ai_interactions_summary", overview.get("interactions_summary", "")),
         ("ai_auth_summary", overview.get("auth_summary", "")),
         ("ai_dependencies_summary", overview.get("dependencies_summary", "")),

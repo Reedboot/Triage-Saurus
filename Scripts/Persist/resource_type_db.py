@@ -332,7 +332,7 @@ _FALLBACK: dict[str, dict] = {
     "google_pubsub_subscription":                 {"friendly_name": "Pub/Sub Subscription",     "category": "Messaging",   "icon": "📬", "display_on_architecture_chart": False, "parent_type": "google_pubsub_topic"},
     # Kubernetes — Cluster & Workloads
     "kubernetes_cluster":                         {"friendly_name": "Kubernetes Cluster",       "category": "Container",   "icon": "☸️"},
-    "kubernetes_namespace":                       {"friendly_name": "Namespace",                "category": "Container",   "icon": "🗂️", "display_on_architecture_chart": False, "parent_type": "kubernetes_cluster"},
+    "kubernetes_namespace":                       {"friendly_name": "Namespace",                "category": "Container",   "icon": "🗂️", "display_on_architecture_chart": True, "parent_type": "kubernetes_cluster"},
     "kubernetes_pod":                             {"friendly_name": "Pod",                      "category": "Compute",     "icon": "📦", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_deployment":                      {"friendly_name": "Deployment",               "category": "Compute",     "icon": "🚀", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_stateful_set":                    {"friendly_name": "StatefulSet",              "category": "Compute",     "icon": "⚙️", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},

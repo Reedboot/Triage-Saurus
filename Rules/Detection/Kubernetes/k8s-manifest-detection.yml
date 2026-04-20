@@ -1,11 +1,17 @@
 rules:
   - id: context-kubernetes-manifest
     message: |
-      Kubernetes manifest kind detected (Deployment/Pod/DaemonSet/StatefulSet/Job/CronJob/Ingress/Service/Secret/ConfigMap/ClusterRole/ClusterRoleBinding/Role/RoleBinding/ServiceAccount/NetworkPolicy).
+      Kubernetes manifest kind detected (Namespace/Deployment/Pod/DaemonSet/StatefulSet/Job/CronJob/Ingress/Service/Secret/ConfigMap/ClusterRole/ClusterRoleBinding/Role/RoleBinding/ServiceAccount/NetworkPolicy).
     severity: INFO
     languages: [yaml]
     patterns:
       - pattern-either:
+          - pattern: |
+              kind: Namespace
+              ...
+              metadata:
+                ...
+                name: $NAME
           - pattern: |
               kind: Deployment
               ...
@@ -110,7 +116,7 @@ rules:
             name: $NAME
       - metavariable-regex:
           metavariable: $KIND
-          regex: ^(Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|Service|Secret|ConfigMap|ClusterRole|ClusterRoleBinding|Role|RoleBinding|ServiceAccount|NetworkPolicy)$
+          regex: ^(Namespace|Deployment|Pod|DaemonSet|StatefulSet|Job|CronJob|Ingress|Service|Secret|ConfigMap|ClusterRole|ClusterRoleBinding|Role|RoleBinding|ServiceAccount|NetworkPolicy)$
     metadata:
       rule_type: detection
       category: infrastructure
