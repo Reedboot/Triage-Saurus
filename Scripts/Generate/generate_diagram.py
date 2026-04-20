@@ -235,10 +235,13 @@ def _render_resource_subgraph(
         try:
             rt_meta = _rtdb.get_resource_type(None, rtype)
             friendly_type = rt_meta.get('friendly_name', rtype or 'Resource')
+            icon = rt_meta.get('icon', '')
         except Exception:
             friendly_type = rtype or 'Resource'
+            icon = ''
 
-        label = f"{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
+        icon_prefix = f"{icon} " if icon else ""
+        label = f"{icon_prefix}{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
         lines.append(f"{indent}subgraph {node_id}[\"{label}\"]")
         for child_row in children:
             child_resource = {
