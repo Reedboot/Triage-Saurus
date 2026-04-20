@@ -258,6 +258,27 @@ def test_paas_identity_groups_identity_resources(monkeypatch):
     monkeypatch.setattr(builder, 'render_compute_hierarchy', lambda *args, **kwargs: [])
     monkeypatch.setattr(builder, 'render_styles', lambda *args, **kwargs: [])
 
+
+def test_long_labels_are_wrapped(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = []
+        builder.connections = []
+        builder.exposed_resources = {}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+
+    rendered = builder.render_node(
+        {
+            'id': 1,
+            'resource_name': 'dev_automation_account_test_with_extra_long_name',
+            'resource_type': 'azurerm_automation_account',
+        }
+    )
+
+    assert '<br/>' in rendered
+
     diagram = builder.generate()
 
     assert 'subgraph paas["PaaS / Identity"]' in diagram

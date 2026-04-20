@@ -2834,6 +2834,41 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             start_ts = time.time()
             last_hb = start_ts
             lines: list[str] = []
+            
+            # Provide context-specific thinking messages based on agent type
+            thinking_stages = {
+                "ContextDiscoveryAgent": [
+                    "analyzing repository structure and dependencies",
+                    "scanning for CI/CD pipelines and workflows",
+                    "extracting framework and language information",
+                    "identifying external service integrations",
+                ],
+                "SecurityAgent": [
+                    "evaluating security findings and risk scores",
+                    "analyzing access controls and permissions",
+                    "checking for secrets and credential exposure",
+                    "assessing data protection mechanisms",
+                ],
+                "ArchitectureValidationAgent": [
+                    "validating cloud architecture design",
+                    "checking resource relationships and dependencies",
+                    "verifying security zones and boundaries",
+                    "analyzing data flows and exposure paths",
+                ],
+                "DevSkeptic": [
+                    "reviewing code patterns and best practices",
+                    "analyzing configuration and deployment logic",
+                    "checking for common development vulnerabilities",
+                    "validating error handling and logging",
+                ],
+                "PlatformSkeptic": [
+                    "evaluating platform architecture and scaling",
+                    "checking infrastructure as code practices",
+                    "analyzing network configuration and security groups",
+                    "validating compliance and operational controls",
+                ],
+            }
+            stage_messages = thinking_stages.get(agent_name, ["analyzing…"])
 
             try:
                 while True:
@@ -2848,7 +2883,10 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     now = time.time()
                     if now - last_hb >= 2.0:
                         elapsed = int(now - start_ts)
-                        yield _sse("log", f"  ⏳ {elapsed}s — {agent_label} thinking…")
+                        # Cycle through thinking stages based on elapsed time
+                        stage_idx = (elapsed // 2) % len(stage_messages)
+                        thinking_msg = stage_messages[stage_idx]
+                        yield _sse("log", f"  ⏳ {elapsed}s — {thinking_msg}")
                         last_hb = now
 
                     if proc.poll() is not None:

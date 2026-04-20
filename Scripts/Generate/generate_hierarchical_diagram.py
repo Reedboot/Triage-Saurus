@@ -11,6 +11,7 @@ Creates cloud-agnostic architecture diagrams showing:
 import sys
 import re
 import json
+import textwrap
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict
@@ -147,6 +148,34 @@ class HierarchicalDiagramBuilder:
         if not self.connected_resource_names:
             return True
         return name in self.connected_resource_names
+
+    def _wrap_mermaid_label(self, label: str, width: int = 28) -> str:
+        """Wrap a Mermaid-visible label so long box titles stay inside their bounds."""
+        text = re.sub(r'\s+', ' ', str(label or '').strip())
+        if not text:
+            return text
+
+        normalized = text.replace('_', ' ').replace('/', ' / ')
+
+        if len(normalized) <= width:
+            return normalized
+
+        if ': ' in normalized:
+            prefix, suffix = normalized.split(': ', 1)
+            wrapped_suffix = self._wrap_mermaid_label(suffix, width=width)
+            if wrapped_suffix:
+                return f"{prefix}:<br/>{wrapped_suffix}"
+            return f"{prefix}:"
+
+        chunks = textwrap.wrap(
+            normalized,
+            width=width,
+            break_long_words=False,
+            break_on_hyphens=True,
+        )
+        if len(chunks) <= 1:
+            return normalized
+        return '<br/>'.join(chunks)
         
     def load_data(self):
         """Load resources and connections from database."""
@@ -1329,7 +1358,8 @@ class HierarchicalDiagramBuilder:
                 # Use server_id as the subgraph ID so that existing connection edges
                 # (which reference the server by name/id) correctly target the subgraph.
                 # Databases / children are rendered as child nodes inside.
-                label = f"SQL Server: {server_name}" if database_name or 'sql' in (res.get('resource_type') or '').lower() else server_name
+                raw_label = f"SQL Server: {server_name}" if database_name or 'sql' in (res.get('resource_type') or '').lower() else server_name
+                label = self._wrap_mermaid_label(raw_label)
                 lines.append(f"  subgraph {server_id}[\"{label}\"]")
                 if database_name:
                     lines.append(f"    {db_node_id}[\"{database_name}\"]")
@@ -1361,7 +1391,7 @@ class HierarchicalDiagramBuilder:
             return [self.render_node(resource, indent=indent)]
 
         lines: List[str] = []
-        lines.append(f'{indent}subgraph {node_id}["{name}"]')
+        lines.append(f'{indent}subgraph {node_id}["{self._wrap_mermaid_label(name)}"]')
         self._emitted_mermaid_ids.add(node_id)
         if node_id not in self._node_id_first_owner:
             self._node_id_first_owner[node_id] = str(resource.get('id', ''))
@@ -1457,7 +1487,7 @@ class HierarchicalDiagramBuilder:
             
             if non_circular_children:
                 # Render VM as subgraph with children
-                lines.append(f"  subgraph {vm_id}[\"{vm_name}\"]")
+                lines.append(f"  subgraph {vm_id}[\"{self._wrap_mermaid_label(vm_name)}\"]")
                 self._emitted_mermaid_ids.add(vm_id)
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
@@ -1510,7 +1540,7 @@ class HierarchicalDiagramBuilder:
                 non_circular_children.append(child)
 
             if non_circular_children:
-                lines.append(f'    subgraph {app_id}["{app_name}"]')
+                lines.append(f'    subgraph {app_id}["{self._wrap_mermaid_label(app_name)}"]')
                 self._emitted_mermaid_ids.add(app_id)
                 if app_id not in self._node_id_first_owner:
                     self._node_id_first_owner[app_id] = str(app.get('id', ''))
@@ -1567,6 +1597,8 @@ class HierarchicalDiagramBuilder:
         if len(label) > 50:
             label = label[:47] + "..."
 
+        label = self._wrap_mermaid_label(label)
+
         # Append test-variant badge if this node is the primary representative
         badge = resource.get('_variant_badge')
         if badge:
@@ -1585,7 +1617,7 @@ class HierarchicalDiagramBuilder:
         
         lines = []
         subgraph_id = sanitize_id(title.lower().replace(' ', '_'))
-        lines.append(f"{indent}subgraph {subgraph_id}[{title}]")
+        lines.append(f"{indent}subgraph {subgraph_id}[{self._wrap_mermaid_label(title)}]")
         
         for res in resources:
             # Check if this resource has children that should be nested
@@ -1650,7 +1682,7 @@ class HierarchicalDiagramBuilder:
 
             if ops_for_product:
                 product_id = sanitize_id(pname)
-                lines.append(f"    subgraph {product_id}[\"{pname}\"]")
+                lines.append(f"    subgraph {product_id}[\"{self._wrap_mermaid_label(pname)}\"]")
                 seen_op_ids: Set[str] = set()
                 for op in ops_for_product:
                     op_id = sanitize_id(op.get('resource_name', ''))
@@ -1684,7 +1716,7 @@ class HierarchicalDiagramBuilder:
                 ops = [op for op in ops if self._is_connected_name(op.get('resource_name', ''))]
             if ops:
                 api_id = sanitize_id(aname)
-                lines.append(f"    subgraph {api_id}[\"{aname}\"]")
+                lines.append(f"    subgraph {api_id}[\"{self._wrap_mermaid_label(aname)}\"]")
                 seen_op_ids = set()
                 for op in ops:
                     op_id = sanitize_id(op.get('resource_name', ''))
@@ -1791,11 +1823,11 @@ class HierarchicalDiagramBuilder:
                 image_is_redundant = image and name.lower().startswith(image.lower())
 
                 if image and not image_is_redundant:
-                    label = f"{name}<br/>📦 Image: {image}"
+                    label = self._wrap_mermaid_label(f"{name}<br/>📦 Image: {image}")
                 elif dockerfile:
-                    label = f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}"
+                    label = self._wrap_mermaid_label(f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}")
                 else:
-                    label = name
+                    label = self._wrap_mermaid_label(name)
 
                 lines.append(f"      {node_id}[\"{label}\"]")
                 self.emitted_nodes.add(res['resource_name'])
@@ -1927,7 +1959,7 @@ class HierarchicalDiagramBuilder:
                 continue
 
             namespace_subgraph_id = f"sb_ns_{namespace_id}"
-            lines.append(f"    subgraph {namespace_subgraph_id}[\"🚌 {namespace_name}\"]")
+            lines.append(f"    subgraph {namespace_subgraph_id}[\"{self._wrap_mermaid_label(f'🚌 {namespace_name}')}\"]")
             # Emit a plain namespace node only when it has no children to show.
             # When topics/queues are rendered, the subgraph title itself provides the label.
             should_render_namespace_node = (
@@ -1936,7 +1968,7 @@ class HierarchicalDiagramBuilder:
                 and not queues_to_render
             )
             if should_render_namespace_node:
-                lines.append(f"      {namespace_id}[\"{namespace_name}\"]")
+                lines.append(f"      {namespace_id}[\"{self._wrap_mermaid_label(namespace_name)}\"]")
                 self.emitted_nodes.add(namespace_name)
             else:
                 # Register namespace name → subgraph ID so render_connections can route
@@ -2027,7 +2059,7 @@ class HierarchicalDiagramBuilder:
                 icon = "📣"
             else:
                 icon = "📈"
-            label = f"{icon} {res['resource_name']}"
+            label = self._wrap_mermaid_label(f"{icon} {res['resource_name']}")
             # Use render_node for consistent collision-aware ID generation
             node_line = self.render_node(res, indent="    ")
             # Replace the plain label with the icon-prefixed label
