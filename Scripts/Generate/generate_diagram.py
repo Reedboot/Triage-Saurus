@@ -1127,10 +1127,14 @@ def generate_architecture_diagram(
         lines.append(f"{indent}end")
 
     def _render_nsg_with_vms(nsg: dict, indent: str, nsg_vms: List[dict]) -> None:
-        """Render an NSG container with its secured VMs inside."""
+        """Render an NSG container with its secured VMs inside.
+        
+        NSG is the security boundary that contains VMs.
+        All VMs secured by this NSG are nested inside it.
+        """
         nsg_id = sanitize_id(nsg['resource_name'])
         _diagram_emitted_ids.add(nsg_id)
-        lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ NSG: {nsg['resource_name']}\"]")
+        lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ {nsg['resource_name']}<br/>Network Security Group\"]")
         for vm in nsg_vms:
             _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
         lines.append(f"{indent}end")

@@ -1583,6 +1583,19 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         "aws_launch_template",
     }
 
+    # Parent preference order for resources with multiple valid parent types.
+    # When multiple valid parent types exist in a resource's references, the first
+    # matching type in this list is used. This ensures consistent parent assignment.
+    parent_preference_order = {
+        "aws_api_gateway_integration": ["aws_api_gateway_method", "aws_api_gateway_rest_api"],
+        "aws_api_gateway_method": ["aws_api_gateway_resource", "aws_api_gateway_rest_api"],
+        "aws_api_gateway_method_response": ["aws_api_gateway_method"],
+        "aws_api_gateway_integration_response": ["aws_api_gateway_integration"],
+        "azurerm_network_interface": ["azurerm_subnet", "azurerm_virtual_machine"],
+        "azurerm_public_ip": ["azurerm_virtual_machine", "azurerm_lb"],
+        "aws_eip": ["aws_instance", "aws_lb"],
+    }
+
     for resource, block_text in resource_blocks:
         if resource.parent:
             continue
@@ -1630,6 +1643,22 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             if resolved_parent:
                 resource.parent = resolved_parent
             continue
+        
+        # Check if resource has custom parent preference order
+        # This handles multi-parent resources by trying parents in order
+        if resource.resource_type in parent_preference_order:
+            preferred_types = parent_preference_order[resource.resource_type]
+            for parent_type in preferred_types:
+                # Try to find parent of this type in ref_candidates
+                for ref_key in ref_candidates:
+                    parts = ref_key.split(".", 1)
+                    if len(parts) == 2 and parts[0] == parent_type:
+                        resource.parent = ref_key
+                        break
+                if resource.parent:
+                    break
+            if resource.parent:
+                continue
         
         # Special handling: NSG associations should be children of their NIC (for threat model tracing)
         # This enables diagram generation to trace NSG → NIC → VM security boundaries
