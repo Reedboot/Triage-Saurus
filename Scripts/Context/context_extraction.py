@@ -1407,6 +1407,13 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 props["public_ip_address_id"] = nic_public_ip_id
                 props["has_public_ip"] = "true"
                 _append_signal(props, "nic attached to public ip")
+            
+            # Extract subnet reference to establish NIC→Subnet parent relationship
+            nic_subnet_id = attrs.get("subnet_id")
+            if nic_subnet_id:
+                subnet_names = _extract_arm_resource_names(nic_subnet_id, "subnets")
+                if subnet_names:
+                    props["subnet_name"] = subnet_names[0]
 
         if resource_type == "azurerm_network_interface_security_group_association":
             nic_names = _extract_arm_resource_names(attrs.get("network_interface_id"), "networkInterfaces")
@@ -1616,6 +1623,17 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             if resolved_parent:
                 resource.parent = resolved_parent
             continue
+        
+        # Special handling: NICs should be children of their subnet
+        if resource.resource_type == "azurerm_network_interface" and not resource.parent:
+            props = resource.properties or {}
+            subnet_name = props.get("subnet_name")
+            if subnet_name:
+                # Look for the subnet resource by name
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == "azurerm_subnet" and candidate.name == subnet_name:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
 
         # Otherwise, use the first explicit resource reference unless this is a top-level edge
         # component where generic reference-parenting frequently misclassifies ownership.
