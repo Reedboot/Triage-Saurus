@@ -262,7 +262,16 @@ def _should_show_on_diagram(resource: dict, child_ids: set) -> bool:
     Resources that are children of parents will be rendered under their parent,
     so we don't filter them out here. The display_on_architecture_chart setting
     determines if a resource type should ever appear on diagrams.
+    
+    Also filters out Terraform random generators (random_string, random_id, 
+    random_password, etc.) which are not real infrastructure.
     """
+    rt = resource.get('resource_type', '').lower()
+    
+    # Filter out Terraform random generators - they're not infrastructure
+    if any(tok in rt for tok in ('random_', 'random_string', 'random_id', 'random_password', 'random_uuid')):
+        return False
+    
     try:
         rt_meta = _rtdb.get_resource_type(None, resource.get('resource_type', ''))
         return rt_meta.get('display_on_architecture_chart', True)

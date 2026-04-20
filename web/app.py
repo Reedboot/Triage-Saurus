@@ -4154,9 +4154,9 @@ def api_diagrams(experiment_id: str):
         include_api_operations_override = True
     elif include_api_operations_raw in {"0", "false", "no", "off"}:
         include_api_operations_override = False
-    strict_architecture_raw = (request.args.get("strict_architecture") or "").strip().lower()
-    strict_architecture = strict_architecture_raw in {"1", "true", "yes", "on"}
-    force_regenerate = include_api_operations_override is not None or strict_architecture
+    # Always run with strict_architecture=False (synthetic/inferred edges enabled)
+    strict_architecture = False
+    force_regenerate = include_api_operations_override is not None
 
     def _edge_count(code: str) -> int:
         if not code:

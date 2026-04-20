@@ -16,7 +16,6 @@
 
   // API ops visibility mode state
   let apiOpsMode = 'auto'; // 'auto' | 'all' | 'hide'
-  let strictArchitectureMode = false;
   let storedDiagrams = []; // Cache original diagrams for API ops filtering
 
   // Zoom state for mermaid diagrams - now per-diagram
@@ -1235,48 +1234,6 @@
     btn.textContent = buttonText;
   }
 
-  function updateStrictArchitectureButtonText() {
-    const btn = document.getElementById('toggle-strict-architecture-btn');
-    if (!btn) return;
-    btn.textContent = strictArchitectureMode ? '🧱 Strict: On' : '🧱 Strict: Off';
-  }
-
-  function refetchDiagramsWithApiOpsMode(quiet = false) {
-    if (!currentExperimentId) {
-      showToast('No experiment loaded');
-      return;
-    }
-
-    let includeApiOpsParam = '';
-    if (apiOpsMode === 'all') {
-      includeApiOpsParam = '&include_api_operations=true';
-    } else if (apiOpsMode === 'hide') {
-      includeApiOpsParam = '&include_api_operations=false';
-    }
-    const strictArchitectureParam = strictArchitectureMode ? '&strict_architecture=true' : '';
-    // 'auto' mode: don't pass the parameter, let server decide
-
-    const url = `/api/diagrams/${encodeURIComponent(currentExperimentId)}?repo_name=${encodeURIComponent(currentRepoName || '')}${includeApiOpsParam}${strictArchitectureParam}`;
-
-    fetch(url)
-      .then(r => r.json())
-      .then(data => {
-        const diags = Array.isArray(data.diagrams) ? data.diagrams : [];
-        if (diags.length > 0) {
-          renderDiagrams(diags.map(d => ({ title: d.title || d.diagram_title, code: d.code || d.mermaid_code })));
-          if (!quiet) {
-            showToast(`API ops: ${apiOpsMode} | strict: ${strictArchitectureMode ? 'on' : 'off'}`);
-          }
-        } else {
-          showToast('No diagrams available');
-        }
-      })
-      .catch(err => {
-        console.error('[API Ops] Refetch error:', err);
-        showToast('Failed to update API ops');
-      });
-  }
-
   function handleToggleApiOps() {
     // Cycle: auto -> all -> hide -> auto
     if (apiOpsMode === 'auto') {
@@ -1288,12 +1245,6 @@
     }
 
     updateApiOpsButtonText();
-    refetchDiagramsWithApiOpsMode();
-  }
-
-  function handleToggleStrictArchitecture() {
-    strictArchitectureMode = !strictArchitectureMode;
-    updateStrictArchitectureButtonText();
     refetchDiagramsWithApiOpsMode();
   }
 
@@ -1656,9 +1607,7 @@
     currentExperimentId = experimentId;
     currentRepoName = repoName;
     apiOpsMode = 'auto'; // Reset API ops mode when loading new experiment
-    strictArchitectureMode = false;
     updateApiOpsButtonText(); // Update button text to reflect reset state
-    updateStrictArchitectureButtonText();
 
     fetch(`/api/view/tabs/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`)
       .then(r => r.json())
@@ -1947,13 +1896,7 @@
       toggleApiOpsBtn.addEventListener('click', handleToggleApiOps);
     }
 
-    const toggleStrictArchitectureBtn = document.getElementById('toggle-strict-architecture-btn');
-    if (toggleStrictArchitectureBtn) {
-      toggleStrictArchitectureBtn.addEventListener('click', handleToggleStrictArchitecture);
-    }
-
     updateApiOpsButtonText();
-    updateStrictArchitectureButtonText();
 
     // Reset zoom when switching diagram tabs
     const diagramTabs = document.getElementById('diagram-tabs');
