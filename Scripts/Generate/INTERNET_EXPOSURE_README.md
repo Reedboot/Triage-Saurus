@@ -83,7 +83,7 @@ Internet -.->|Resource type is API Gateway| api-mgt-001
 ## Provider-Specific Detection Rules
 
 ### Azure
-- **Always exposed**: App Service, API Management, App Gateway, Front Door, Function App
+ - **Always exposed**: App Service, API Management, App Gateway, Front Door, Function App, Cosmos DB
 - **Check firewall**: SQL Server (start_ip_address = 0.0.0.0)
 - **Check properties**: 
   - `public_access_enabled` (Storage)

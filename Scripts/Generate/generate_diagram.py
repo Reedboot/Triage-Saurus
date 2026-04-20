@@ -2156,8 +2156,15 @@ def main():
 
     if args.type == 'architecture':
         diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=None)
-        provider = 'combined'
-        title = "Combined Architecture"
+        # Detect providers in resources to use specific provider name when only one provider
+        all_res = get_resources_for_diagram(args.experiment_id)
+        providers = sorted({_normalize_provider(r.get('provider') or 'unknown') for r in all_res})
+        if len(providers) == 1:
+            provider = providers[0]
+            title = f"{provider.capitalize()} Architecture"
+        else:
+            provider = 'combined'
+            title = "Combined Architecture"
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
         provider = 'security'
@@ -2192,11 +2199,12 @@ def main():
         out_path = args.output
         # Check if output looks like a directory (doesn't end with .md)
         if not str(out_path).endswith('.md'):
-            out_path = out_path / "Architecture_Combined.md"
+            filename = f"Architecture_{provider.title()}.md"
+            out_path = out_path / filename
             out_path.parent.mkdir(parents=True, exist_ok=True)
             # Clean up old per-provider files
             for old_file in out_path.parent.glob("Architecture_*.md"):
-                if old_file.name != "Architecture_Combined.md":
+                if old_file.name != filename:
                     try:
                         old_file.unlink()
                         print(f"Removed legacy file {old_file.name}")

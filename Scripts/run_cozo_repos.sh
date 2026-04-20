@@ -275,7 +275,7 @@ PY
   echo "[Misconfigurations] 🛡️ Running: opengrep scan"
   for ((i=0; i<${#OG_CONFIGS[@]}; i++)); do
     if [[ "${OG_CONFIGS[$i]}" == "--config" ]]; then
-      ((i++))
+      i=$(( i + 1 ))
       echo "  --config ${OG_CONFIGS[$i]}"
     fi
   done

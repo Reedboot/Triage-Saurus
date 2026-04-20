@@ -78,6 +78,7 @@ for resource in resources:
 - `azurerm_public_ip` associated with load balancer → Public
 - `azurerm_app_service` without VNet integration → Public
 - `azurerm_storage_account` with `public_network_access_enabled = true` → Public
+- `azurerm_cosmosdb_account` with public networking enabled/default → Public
 - `azurerm_kubernetes_cluster` with `LoadBalancer` service → Public (if no internal annotation)
 
 **AWS:**

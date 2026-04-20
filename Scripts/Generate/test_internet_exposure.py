@@ -127,7 +127,8 @@ class TestInternetExposureDetector:
         resources = [
             {'id': 1, 'resource_name': 'app-gateway-001', 'resource_type': 'azurerm_application_gateway'},
             {'id': 2, 'resource_name': 'app-service-001', 'resource_type': 'azurerm_app_service'},
-            {'id': 3, 'resource_name': 'vm-001', 'resource_type': 'azurerm_virtual_machine'},
+            {'id': 3, 'resource_name': 'cosmos-001', 'resource_type': 'azurerm_cosmosdb_account'},
+            {'id': 4, 'resource_name': 'vm-001', 'resource_type': 'azurerm_virtual_machine'},
         ]
         
         exposed = detector.detect_exposed_resources(
@@ -137,6 +138,7 @@ class TestInternetExposureDetector:
         # App Gateway and App Service are public by design
         assert 'app-gateway-001' in exposed
         assert 'app-service-001' in exposed
+        assert 'cosmos-001' in exposed
         
         # VM is NOT public by default
         assert 'vm-001' not in exposed

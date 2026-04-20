@@ -76,6 +76,7 @@ class InternetExposureDetector:
             'azurerm_frontdoor', 'azurerm_front_door',
             'azurerm_public_ip', 'azurerm_public_ip_prefix',
             'azurerm_storage_account',  # Storage accounts can be publicly accessible
+            'azurerm_cosmosdb_account',  # Public network access is enabled by default
         },
         'gcp': {
             'compute_backend_service', 'compute_url_map',
