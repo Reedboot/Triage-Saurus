@@ -257,6 +257,68 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert "subgraph dev_vm[\"Virtual Machine: dev_vm (1 sub-asset)\"]" in diagram
 
 
+def test_storage_blob_is_nested_under_container(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "storage_account",
+            "resource_type": "azurerm_storage_account",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "storage_container",
+            "resource_type": "azurerm_storage_container",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+        },
+        {
+            "id": 3,
+            "resource_name": "storage_blob",
+            "resource_type": "azurerm_storage_blob",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 2,
+        },
+    ]
+    connections = []
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: connections)
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+        "JOIN resources child ON child.parent_resource_id = parent.id": [
+            _FakeRow(parent_id=1, parent_name="storage_account", parent_type="azurerm_storage_account", child_id=2, child_name="storage_container", child_type="azurerm_storage_container"),
+            _FakeRow(parent_id=2, parent_name="storage_container", parent_type="azurerm_storage_container", child_id=3, child_name="storage_blob", child_type="azurerm_storage_blob"),
+        ],
+        "SELECT id, resource_name, resource_type, provider, repo_id FROM resources": [
+            _FakeRow(id=1, resource_name="storage_account", resource_type="azurerm_storage_account", provider="azure", repo_id=1),
+            _FakeRow(id=2, resource_name="storage_container", resource_type="azurerm_storage_container", provider="azure", repo_id=1),
+            _FakeRow(id=3, resource_name="storage_blob", resource_type="azurerm_storage_blob", provider="azure", repo_id=1),
+        ],
+    }))
+    def _fake_resource_type(_conn, resource_type):
+        if resource_type == "azurerm_storage_account":
+            return {"display_on_architecture_chart": True, "friendly_name": "Storage Account", "category": "Storage"}
+        if resource_type == "azurerm_storage_container":
+            return {"display_on_architecture_chart": False, "friendly_name": "Storage Container", "category": "Storage"}
+        return {"display_on_architecture_chart": False, "friendly_name": "Storage Blob", "category": "Storage"}
+
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", _fake_resource_type)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Storage")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda conn, rt: "Storage Account" if rt == "azurerm_storage_account" else ("Storage Container" if rt == "azurerm_storage_container" else "Storage Blob"))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *args, **kwargs: "Storage")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert 'subgraph storage_account["Storage Account: storage_account (1 sub-asset)"]' in diagram
+    assert 'subgraph storage_container["Storage Container: storage_container (1 sub-asset)"]' in diagram
+    assert 'storage_blob["🪣 storage_blob<br/>Storage Blob"]' in diagram
+
+
 def test_punctuation_heavy_labels_are_quoted(monkeypatch):
     monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: [
         {

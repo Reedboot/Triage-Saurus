@@ -279,8 +279,8 @@ PY
       echo "  --config ${OG_CONFIGS[$i]}"
     fi
   done
-  echo "  $repo_path --json --quiet"
-  if ! opengrep scan --config "$RULES_DIR" "$repo_path" --json --output "$json_output"; then
+  echo "  $repo_path --json-output=$json_output"
+  if ! opengrep scan --config "$RULES_DIR" "$repo_path" --json-output="$json_output"; then
     log_err "  ❌ opengrep scan failed for $repo_name (see $json_output)"
     FAILED=$((FAILED + 1))
     echo "### $(date '+%H:%M:%S') - Repo $repo_name — FAILED (opengrep)" >> "$AUDIT_LOG"

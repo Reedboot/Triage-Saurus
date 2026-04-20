@@ -58,7 +58,7 @@ jobs:
           OUTPUT_FILE="opengrep_output.json"
 
           # Run opengrep against the expanded corpus to exercise more rules
-          opengrep scan --config Rules/ --json --output "$OUTPUT_FILE" "$SCAN_PATH" || true
+          opengrep scan --config Rules/ --json-output="$OUTPUT_FILE" "$SCAN_PATH" || true
 
           if [ ! -f "$OUTPUT_FILE" ]; then
             echo "❌ opengrep did not produce an output file: $OUTPUT_FILE"

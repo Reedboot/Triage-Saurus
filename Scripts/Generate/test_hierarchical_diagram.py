@@ -203,24 +203,33 @@ def test_data_tier_groups_storage_and_cosmos(monkeypatch):
             },
             {
                 'id': 3,
+                'resource_name': 'storage_blob',
+                'resource_type': 'azurerm_storage_blob',
+                'provider': 'azure',
+                'repo_name': 'repo',
+                'parent_resource_id': 2,
+            },
+            {
+                'id': 4,
                 'resource_name': 'db',
                 'resource_type': 'azurerm_cosmosdb_account',
                 'provider': 'azure',
                 'repo_name': 'repo',
             },
             {
-                'id': 4,
+                'id': 5,
                 'resource_name': 'env_replace',
                 'resource_type': 'azurerm_cosmosdb_sql_database',
                 'provider': 'azure',
                 'repo_name': 'repo',
-                'parent_resource_id': 3,
+                'parent_resource_id': 4,
             },
         ]
         builder.connections = []
         builder.children_by_parent = {
             1: [builder.resources[1]],
-            3: [builder.resources[3]],
+            2: [builder.resources[2]],
+            4: [builder.resources[4]],
         }
         builder.exposed_resources = {}
 
@@ -240,6 +249,7 @@ def test_data_tier_groups_storage_and_cosmos(monkeypatch):
     assert 'subgraph data_tier["🗄️ Data Tier"]' in diagram
     assert 'subgraph storage_account["storage account"]' in diagram
     assert 'storage_container["storage container"]' in diagram
+    assert 'storage_blob["storage blob"]' in diagram
     assert 'subgraph db["SQL Server: db"]' in diagram or 'subgraph db["db"]' in diagram
     assert 'env_replace["env replace"]' in diagram
 

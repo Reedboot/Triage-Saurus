@@ -498,7 +498,7 @@ def main() -> None:
             category = metadata.get("category") if isinstance(metadata, Mapping) else None
             metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
 
-            db.insert(
+            db.put(
                 "findings",
                 {
                     "finding_id": finding_id,

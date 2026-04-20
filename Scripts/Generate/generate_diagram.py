@@ -1135,21 +1135,25 @@ def generate_architecture_diagram(
                 resources.append(parent_r)
                 current_ids.add(parent_id)
     
-    # Second pass: add direct children of visible parents that are hidden
-    for child_id, parent_id in parent_id_of_child.items():
-        if parent_id not in current_ids:
-            continue
-        if child_id in current_ids:
-            continue
-        child_r = all_raw_map.get(child_id)
-        if not child_r:
-            continue
-        if prov_filter and not _provider_matches(child_r.get('provider'), prov_filter):
-            continue
-        rt_info = _rtdb.get_resource_type(None, (child_r.get('resource_type') or '').strip())
-        if not rt_info.get('display_on_architecture_chart', True):
-            resources.append(child_r)
-            current_ids.add(child_id)
+    # Second pass: add hidden descendants of visible parents.
+    # Repeat until stable so multi-level hierarchies like
+    # storage_account -> storage_container -> storage_blob are retained.
+    promoted = True
+    while promoted:
+        promoted = False
+        for child_id, parent_id in parent_id_of_child.items():
+            if parent_id not in current_ids or child_id in current_ids:
+                continue
+            child_r = all_raw_map.get(child_id)
+            if not child_r:
+                continue
+            if prov_filter and not _provider_matches(child_r.get('provider'), prov_filter):
+                continue
+            rt_info = _rtdb.get_resource_type(None, (child_r.get('resource_type') or '').strip())
+            if not rt_info.get('display_on_architecture_chart', True):
+                resources.append(child_r)
+                current_ids.add(child_id)
+                promoted = True
 
     # Filter parent_children to only include child relationships where both parent and child
     # are in the filtered resource set. This prevents rendering of excluded resources (e.g., null_resource)
