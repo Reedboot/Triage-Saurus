@@ -337,13 +337,17 @@ _FALLBACK: dict[str, dict] = {
     "kubernetes_deployment":                      {"friendly_name": "Deployment",               "category": "Compute",     "icon": "🚀", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_stateful_set":                    {"friendly_name": "StatefulSet",              "category": "Compute",     "icon": "⚙️", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_daemon_set":                      {"friendly_name": "DaemonSet",                "category": "Compute",     "icon": "🔄", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_daemonset":                       {"friendly_name": "DaemonSet",                "category": "Compute",     "icon": "🔄", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
+    "kubernetes_job":                             {"friendly_name": "Job",                      "category": "Compute",     "icon": "⏱️", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_service":                         {"friendly_name": "Service",                  "category": "Network",     "icon": "🔌", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_ingress":                         {"friendly_name": "Ingress",                  "category": "Network",     "icon": "🌐", "display_on_architecture_chart": True, "parent_type": "kubernetes_namespace"},
     "kubernetes_config_map":                      {"friendly_name": "ConfigMap",                "category": "Storage",     "icon": "⚙️", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
     "kubernetes_secret":                          {"friendly_name": "Secret",                   "category": "Identity",    "icon": "🔐", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_serviceaccount":                  {"friendly_name": "ServiceAccount",           "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
     "kubernetes_role":                            {"friendly_name": "Role",                     "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
     "kubernetes_clusterrole":                     {"friendly_name": "ClusterRole",              "category": "Identity",    "icon": "👤", "display_on_architecture_chart": False},
     "kubernetes_role_binding":                    {"friendly_name": "RoleBinding",              "category": "Identity",    "icon": "🔗", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
+    "kubernetes_rolebinding":                     {"friendly_name": "RoleBinding",              "category": "Identity",    "icon": "🔗", "display_on_architecture_chart": False, "parent_type": "kubernetes_namespace"},
     "kubernetes_clusterrolebinding":              {"friendly_name": "ClusterRoleBinding",       "category": "Identity",    "icon": "🔗", "display_on_architecture_chart": False},
 }
 
