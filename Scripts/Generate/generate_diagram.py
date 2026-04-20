@@ -736,7 +736,13 @@ def generate_architecture_diagram(
     promoted_ids: set[int] = set()
     for r in list(resources):
         ancestor_id = parent_id_of_child.get(r['id'])
+        visited_ancestors = set()  # Prevent cycles/infinite loops
         while ancestor_id is not None:
+            # Guard against circular parent_resource_id chains (e.g., A→B→A or self-loops)
+            if ancestor_id in visited_ancestors:
+                break
+            visited_ancestors.add(ancestor_id)
+            
             ancestor = all_raw_map.get(ancestor_id)
             if not ancestor:
                 break
