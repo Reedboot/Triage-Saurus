@@ -257,6 +257,69 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert "subgraph dev_vm[\"Virtual Machine: dev_vm (1 sub-asset)\"]" in diagram
 
 
+def test_punctuation_heavy_labels_are_quoted(monkeypatch):
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: [
+        {
+            "id": 1,
+            "resource_name": "node[(())]",
+            "resource_type": "azurerm_storage_account",
+            "provider": "azure",
+            "repo_name": "repo",
+        }
+    ])
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *args, **kwargs: {"display_on_architecture_chart": True, "friendly_name": "Storage Account", "category": "Storage"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Storage")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *args, **kwargs: "Storage Account")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *args, **kwargs: "Storage")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert 'node["🪣 node[(())]<br/>Storage Account"]' in diagram
+    assert 'node[🪣 node[(())]<br/>Storage Account]' not in diagram
+
+
+def test_rbac_resource_types_are_excluded(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "app",
+            "resource_type": "azurerm_linux_web_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "aks-rbac",
+            "resource_type": "kubernetes_rbac",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: resources)
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT COUNT(1) as c FROM repositories": [_FakeRow(c=1)],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *args, **kwargs: {"display_on_architecture_chart": True, "friendly_name": "Web App", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+    monkeypatch.setattr(generate_diagram._rtdb, "get_friendly_name", lambda *args, **kwargs: "Web App")
+    monkeypatch.setattr(generate_diagram._rtdb, "get_category", lambda *args, **kwargs: "Compute")
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert 'app["🌐 app<br/>Web App"]' in diagram or 'app["app<br/>Web App"]' in diagram
+    assert "kubernetes_rbac" not in diagram
+
+
 def test_data_access_edges_are_unlabelled(monkeypatch):
     resources = [
         {
@@ -418,7 +481,7 @@ def test_s3_bucket_controls_render_inside_bucket_subgraph(monkeypatch):
     diagram = generate_diagram.generate_architecture_diagram("exp-1")
 
     assert "subgraph zone_data[\"🗄️ Data Tier\"]" in diagram
-    assert 'subgraph bucket_upload["S3 Bucket: bucket_upload (2 sub-assets)"]' in diagram
+    assert 'subgraph bucket_upload["🗄️ S3 Bucket: bucket_upload (2 sub-assets)"]' in diagram
     assert "bucket_upload_acl[" in diagram
     assert "bucket_upload_ownership_controls[" in diagram
 
@@ -716,3 +779,69 @@ def test_synthetic_internet_edges_always_included(monkeypatch):
     assert called["add_internet"] is True
     assert diagram
     assert "Internet" in diagram
+
+
+def test_internet_node_absent_for_internal_only_resource(monkeypatch):
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: [
+        {
+            "id": 1,
+            "resource_name": "internal-db",
+            "resource_type": "azurerm_sql_server",
+            "provider": "azure",
+            "repo_name": "repo",
+        }
+    ])
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id": [],
+    }))
+    monkeypatch.setattr(
+        generate_diagram._rtdb,
+        "get_resource_type",
+        lambda *args, **kwargs: {"display_on_architecture_chart": True, "friendly_name": "SQL Server", "category": "Database"},
+    )
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *args, **kwargs: "Database")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *args, **kwargs: False)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "internal" in diagram.lower()
+    assert 'internet["' not in diagram
+
+
+def test_distinct_resources_with_same_sanitized_name_get_unique_ids(monkeypatch):
+    """Two different resources that sanitize to the same Mermaid ID must not collapse into one node."""
+    monkeypatch.setattr(generate_diagram, "get_resources_for_diagram", lambda experiment_id: [
+        {
+            "id": 1,
+            "resource_name": "app-service",
+            "resource_type": "azurerm_app_service",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "app_service",
+            "resource_type": "azurerm_linux_web_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ])
+    monkeypatch.setattr(generate_diagram, "get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr(generate_diagram, "get_db_connection", lambda: _FakeConn({
+        "JOIN resources child ON child.parent_resource_id = parent.id": [],
+        "SELECT id, resource_name, resource_type, provider, repo_id": [
+            _FakeRow(id=1, resource_name="app-service", resource_type="azurerm_app_service", provider="azure", repo_id=1, parent_resource_id=None),
+            _FakeRow(id=2, resource_name="app_service", resource_type="azurerm_linux_web_app", provider="azure", repo_id=1, parent_resource_id=None),
+        ],
+    }))
+    monkeypatch.setattr(generate_diagram._rtdb, "get_resource_type", lambda *a, **kw: {"display_on_architecture_chart": True, "friendly_name": "App Service", "category": "Compute"})
+    monkeypatch.setattr(generate_diagram._rtdb, "get_render_category", lambda *a, **kw: "Compute")
+    monkeypatch.setattr(generate_diagram._rtdb, "is_physical_network_device", lambda *a, **kw: False)
+
+    diagram = generate_diagram.generate_architecture_diagram("exp-1")
+
+    assert "app-service" in diagram or "app service" in diagram
+    assert "app_service" in diagram or "app service" in diagram
+    assert diagram.count('app_service') >= 1

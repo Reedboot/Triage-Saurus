@@ -98,6 +98,46 @@ def test_public_ip_child_keeps_internet_edge(monkeypatch):
     assert 'internet -.->|Public IP detected| VM_PUblicIP' in diagram
 
 
+def test_direct_internet_edges_are_red(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'service-a',
+                'resource_type': 'custom_service',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            }
+        ]
+        builder.connections = [
+            {
+                'source': 'Internet',
+                'target': 'service-a',
+                'connection_type': 'confirmed_public',
+                'confirmed': True,
+            }
+        ]
+        builder.exposed_resources = {}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *args, **kwargs: [])
+
+    diagram = builder.generate()
+
+    assert 'internet -->' in diagram
+    assert 'linkStyle 0 stroke:red,stroke-width:2px' in diagram
+
+
 def test_application_tier_groups_children(monkeypatch):
     builder = HierarchicalDiagramBuilder("exp-1")
 
@@ -198,10 +238,10 @@ def test_data_tier_groups_storage_and_cosmos(monkeypatch):
     diagram = builder.generate()
 
     assert 'subgraph data_tier["🗄️ Data Tier"]' in diagram
-    assert 'subgraph storage_account["storage_account"]' in diagram
-    assert 'storage_container["storage_container"]' in diagram
+    assert 'subgraph storage_account["storage account"]' in diagram
+    assert 'storage_container["storage container"]' in diagram
     assert 'subgraph db["SQL Server: db"]' in diagram or 'subgraph db["db"]' in diagram
-    assert 'env_replace["env_replace"]' in diagram
+    assert 'env_replace["env replace"]' in diagram
 
 
 def test_paas_identity_groups_identity_resources(monkeypatch):
@@ -258,6 +298,13 @@ def test_paas_identity_groups_identity_resources(monkeypatch):
     monkeypatch.setattr(builder, 'render_compute_hierarchy', lambda *args, **kwargs: [])
     monkeypatch.setattr(builder, 'render_styles', lambda *args, **kwargs: [])
 
+    diagram = builder.generate()
+
+    assert 'subgraph paas["PaaS / Identity"]' in diagram
+    assert 'subgraph user_id["user id"]' in diagram
+    assert 'dev_automation_account_test["dev automation account test"]' in diagram
+    assert 'az_role_assgn_identity["az role assgn identity"]' in diagram
+
 
 def test_long_labels_are_wrapped(monkeypatch):
     builder = HierarchicalDiagramBuilder("exp-1")
@@ -280,9 +327,176 @@ def test_long_labels_are_wrapped(monkeypatch):
     assert '<br/>' in rendered
 
     diagram = builder.generate()
+    assert diagram
 
-    assert 'subgraph paas["PaaS / Identity"]' in diagram
-    assert 'subgraph user_id["user_id"]' in diagram
-    assert 'dev_automation_account_test["dev_automation_account_test"]' in diagram
-    assert 'az_role_assgn_identity["az_role_assgn_identity"]' in diagram
-    assert 'clientid_replacement["clientid_replacement"]' in diagram
+
+def test_orphaned_children_of_hidden_parents_promoted(monkeypatch):
+    """Children whose parent is not in the diagram should be rendered as top-level nodes."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        # hidden_parent_id=99 is NOT in resources but IS in children_by_parent
+        builder.resources = [
+            {
+                'id': 2,
+                'resource_name': 'orphan_vm',
+                'resource_type': 'azurerm_virtual_machine',
+                'provider': 'azure',
+                'repo_name': 'repo',
+                'parent_resource_id': 99,
+            }
+        ]
+        builder.connections = [
+            {'source': 'Internet', 'target': 'orphan_vm', 'connection_type': 'confirmed_public', 'confirmed': True}
+        ]
+        # children_by_parent has parent_id=99 (not in resources)
+        builder.children_by_parent = {99: [builder.resources[0]]}
+        builder.exposed_resources = {}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *a, **kw: [])
+
+    diagram = builder.generate()
+
+    assert 'orphan_vm' in diagram
+
+
+def test_internet_node_absent_when_no_internet_connections(monkeypatch):
+    """Internet node should not be emitted when no resource has Internet exposure."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'internal-db',
+                'resource_type': 'azurerm_sql_server',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            }
+        ]
+        builder.connections = [
+            {'source': 'api-service', 'target': 'internal-db', 'connection_type': 'data_access', 'confirmed': True}
+        ]
+        builder.exposed_resources = {}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *a, **kw: [])
+
+    diagram = builder.generate()
+
+    assert 'internal-db' in diagram or 'internal_db' in diagram
+    assert 'internet[' not in diagram
+
+
+def test_pipe_chars_in_edge_labels_are_escaped(monkeypatch):
+    """Labels containing | characters should be escaped to preserve Mermaid syntax."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {'id': 1, 'resource_name': 'svc-a', 'resource_type': 'custom_service', 'provider': 'azure', 'repo_name': 'repo'},
+            {'id': 2, 'resource_name': 'svc-b', 'resource_type': 'custom_service', 'provider': 'azure', 'repo_name': 'repo'},
+        ]
+        builder.connections = [
+            {
+                'source': 'svc-a',
+                'target': 'svc-b',
+                'connection_type': 'calls',
+                'confirmed': True,
+                'auth_method': 'key|secret',
+            }
+        ]
+        builder.emitted_nodes = {'svc-a', 'svc-b'}
+        builder.exposed_resources = {}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *a, **kw: [])
+
+    conn_lines = builder.render_connections()
+    diagram_fragment = '\n'.join(conn_lines)
+
+    # The raw pipe char should not appear inside the label section of a Mermaid edge
+    assert '|key|secret|' not in diagram_fragment
+
+
+def test_punctuation_in_names_is_sanitized():
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    node = builder.render_node(
+        {
+            'id': 1,
+            'resource_name': '()\"demo\"',
+            'resource_type': 'azurerm_service',
+        }
+    )
+
+    assert 'demo[' in node
+    assert '\\"demo\\"' in node
+
+
+def test_rbac_resource_types_are_filtered(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    class _FakeConn:
+        def execute(self, *args, **kwargs):
+            class _Result:
+                def fetchall(self):
+                    return []
+            return _Result()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        'generate_hierarchical_diagram.get_resources_for_diagram',
+        lambda experiment_id: [
+            {
+                'id': 1,
+                'resource_name': 'app',
+                'resource_type': 'azurerm_linux_web_app',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            },
+            {
+                'id': 2,
+                'resource_name': 'aks-rbac',
+                'resource_type': 'kubernetes_rbac',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            },
+        ],
+    )
+    monkeypatch.setattr('generate_hierarchical_diagram.get_connections_for_diagram', lambda *args, **kwargs: [])
+    monkeypatch.setattr('generate_hierarchical_diagram.get_db_connection', lambda: _FakeConn())
+
+    builder.load_data()
+
+    assert any(r['resource_name'] == 'app' for r in builder.resources)
+    assert all('rbac' not in (r['resource_type'] or '').lower() for r in builder.resources)

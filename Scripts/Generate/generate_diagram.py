@@ -171,6 +171,17 @@ def sanitize_id(name: str) -> str:
     return sanitized
 
 
+def _quote_mermaid_label(label: str) -> str:
+    """Return a Mermaid label wrapped in quotes with embedded quotes escaped."""
+    safe = str(label or "").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{safe}"'
+
+
+def _is_internet_name(name: str | None) -> bool:
+    """Return True when a resource name refers to the synthetic Internet node."""
+    return str(name or "").strip().lower() == "internet"
+
+
 def _normalize_provider(provider: str | None) -> str:
     value = (provider or "").strip().lower()
     if value == "oracle":
@@ -262,7 +273,7 @@ def _render_resource_subgraph(
 
         icon_prefix = f"{icon} " if icon else ""
         label = f"{icon_prefix}{friendly_type}: {resource['resource_name']} ({child_count} sub-asset{'s' if child_count != 1 else ''})"
-        lines.append(f"{indent}subgraph {node_id}[\"{label}\"]")
+        lines.append(f"{indent}subgraph {node_id}[{_quote_mermaid_label(label)}]")
         for child_row in children:
             child_resource = {
                 'id': child_row['child_id'],
@@ -273,7 +284,7 @@ def _render_resource_subgraph(
         lines.append(f"{indent}end")
     else:
         label = _display_label(resource)
-        lines.append(f"{indent}{node_id}[{label}]")
+        lines.append(f"{indent}{node_id}[{_quote_mermaid_label(label)}]")
 
 
 def _should_show_on_diagram(resource: dict, child_ids: set) -> bool:
@@ -368,6 +379,7 @@ def _is_non_service_resource_type(resource_type: str) -> bool:
         'kubernetes_clusterrolebinding',
         'kubernetes_role',
         'kubernetes_rolebinding',
+        'rbac',
         # Kubernetes secrets & config - not service components (mounted as volumes)
         'kubernetes_configmap',
         'kubernetes_secret',
@@ -385,7 +397,7 @@ def _is_non_service_resource_type(resource_type: str) -> bool:
         'api_management_subscription',
         'api_management_user',
     )
-    return any(tok in rt for tok in token_exclusions)
+    return 'rbac' in rt or any(tok in rt for tok in token_exclusions)
 
 
 def _connection_label(connection: dict, *, ip_restricted: bool = False) -> str:
@@ -731,7 +743,12 @@ def generate_architecture_diagram(
                    if 'kubernetes_service' in r.get('resource_type', '').lower()}
         
         # Connect Internet to services (assuming they are entry points)
-        for svc_name in services:
+        for svc_name, svc_res in services.items():
+            # ClusterIP services are internal only and should not get Internet edges
+            svc_props = svc_res.get('properties') or {}
+            svc_type = str(svc_props.get('type') or svc_props.get('service_type') or '').strip().lower()
+            if svc_type == 'clusterip':
+                continue
             already_exists = any(
                 c.get('source') == 'Internet' and c.get('target') == svc_name
                 for c in connections
@@ -970,7 +987,7 @@ def generate_architecture_diagram(
     if not resources:
         log_msg = f"No resources found for diagram generation (experiment_id={experiment_id}, repo_name={repo_name}, provider={provider})"
         _logger.warning(log_msg)
-        return "flowchart TB\n  empty[No resources found]"
+        return f"flowchart TB\n  empty[{_quote_mermaid_label('No resources found')}]"
 
     # Improve readability for repos that split frontend/API into multiple Function Apps.
     _function_apps = [r for r in resources if 'function_app' in (r.get('resource_type') or '').lower()]
@@ -1377,8 +1394,14 @@ def generate_architecture_diagram(
             vm_secured_by_nsg[vm_name] = nsg_name
 
     # ── Internet Node (External Reference) ──
-    # Internet is rendered at root level, not inside any zone, to avoid circular references
-    lines.append("  internet[🌐 Internet]")
+    # Only emit when at least one connection involves Internet so diagrams of
+    # fully-internal infrastructure don't show a dangling Internet node.
+    if any(
+        str(c.get('source') or '').strip().lower() == 'internet'
+        or str(c.get('target') or '').strip().lower() == 'internet'
+        for c in connections
+    ):
+        lines.append(f"  internet[{_quote_mermaid_label('🌐 Internet')}]")
 
     def _emit_simple_node(resource: dict, indent: str) -> None:
         """Emit a single node with collision-safe Mermaid ID handling."""
@@ -1388,7 +1411,7 @@ def generate_architecture_diagram(
             ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
             base_nid = sanitize_id(f"{ts}_{resource['resource_name']}")
         _diagram_emitted_ids.add(base_nid)
-        lines.append(f"{indent}{base_nid}[{_display_label(resource)}]")
+        lines.append(f"{indent}{base_nid}[{_quote_mermaid_label(_display_label(resource))}]")
 
     def _render_compute_tier_plain(indent: str, exclude_vm_names: set = None) -> None:
         """Render VMs and LBs not in any NSG container."""
@@ -1399,7 +1422,7 @@ def generate_architecture_diagram(
         if not (vms_to_render or lbs):
             return
 
-        lines.append(f"{indent}subgraph compute_tier[\"🖥️ Compute Tier\"]")
+        lines.append(f"{indent}subgraph compute_tier[{_quote_mermaid_label('🖥️ Compute Tier')}]")
         for vm in vms_to_render:
             _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
         for lb in lbs:
@@ -1417,7 +1440,8 @@ def generate_architecture_diagram(
         """
         nsg_id = sanitize_id(nsg['resource_name'])
         _diagram_emitted_ids.add(nsg_id)
-        lines.append(f"{indent}subgraph {nsg_id}[\"🛡️ {nsg['resource_name']}<br/>Network Security Group\"]")
+        nsg_label = f"🛡️ {nsg['resource_name']}<br/>Network Security Group"
+        lines.append(f"{indent}subgraph {nsg_id}[{_quote_mermaid_label(nsg_label)}]")
         for vm in nsg_vms:
             _render_resource_subgraph(vm, parent_children, lines, indent=indent + "  ", _emitted_ids=_diagram_emitted_ids)
         lines.append(f"{indent}end")
@@ -1443,10 +1467,15 @@ def generate_architecture_diagram(
         # Render uncontained VMs in compute tier
         _render_compute_tier_plain(indent, exclude_vm_names=vms_in_nsgs)
         
-        # Render NSGs that don't secure anything as standalone nodes
+        # Render NSGs without secured VMs as empty container subgraphs so the
+        # security boundary is visible even without an explicit VM association.
         for nsg in nsgs:
             if nsg['resource_name'] not in nsg_secures_vms:
-                _emit_simple_node(nsg, indent)
+                nsg_id = sanitize_id(nsg['resource_name'])
+                _diagram_emitted_ids.add(nsg_id)
+                nsg_label = f"🛡️ NSG: {nsg['resource_name']}"
+                lines.append(f"{indent}subgraph {nsg_id}[{_quote_mermaid_label(nsg_label)}]")
+                lines.append(f"{indent}end")
 
         for aks_cluster in aks:
             _render_resource_subgraph(aks_cluster, parent_children, lines, indent=indent, _emitted_ids=_diagram_emitted_ids)
@@ -1457,13 +1486,15 @@ def generate_architecture_diagram(
         res['id'] in parent_children and parent_children[res['id']]
         for res in internal_resources
     )
-    if internal_resources and internal_has_children:
-        lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
+    has_network_container = bool(vnets or subnets)
+    if internal_resources and (internal_has_children or has_network_container):
+        lines.append(f"  subgraph zone_internal[{_quote_mermaid_label('🔷 Internal')}]")
         if len(vnets) == 1:
             vnet = vnets[0]
             vnet_id = sanitize_id(vnet['resource_name'])
             _diagram_emitted_ids.add(vnet_id)
-            lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
+            vnet_label = f"🔷 VNet: {vnet['resource_name']}"
+            lines.append(f"    subgraph {vnet_id}[{_quote_mermaid_label(vnet_label)}]")
             for subnet in subnets:
                 if subnet['id'] in parent_children:
                     _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
@@ -1486,29 +1517,12 @@ def generate_architecture_diagram(
             _render_internal_contents("    ")
         lines.append("  end")
     elif internal_resources:
-        # No child hierarchy to wrap — still render inside zone_internal for threat model structure
-        lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
-        if len(vnets) == 1:
-            vnet = vnets[0]
-            vnet_id = sanitize_id(vnet['resource_name'])
-            _diagram_emitted_ids.add(vnet_id)
-            lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
-            for subnet in subnets:
-                if subnet['id'] in parent_children:
-                    _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
-                else:
-                    _emit_simple_node(subnet, "      ")
-            _render_internal_contents("      ")
-            lines.append("    end")
-        else:
-            for vnet in vnets:
-                _emit_simple_node(vnet, "    ")
-            _render_internal_contents("    ")
-        lines.append("  end")
+        # No network boundary containers — render compute/security resources at root level
+        _render_internal_contents("  ")
 
     # ── Application Tier Zone (App Service Plans, Function Apps, Web Apps) ──
     if app_tier:
-        lines.append("  subgraph zone_app[\"⚙️ Application Tier\"]")
+        lines.append(f"  subgraph zone_app[{_quote_mermaid_label('⚙️ Application Tier')}]")
         for app in app_tier:
             if app['id'] in parent_children:
                 _render_resource_subgraph(app, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
@@ -1519,12 +1533,12 @@ def generate_architecture_diagram(
                     ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
                     base_nid = sanitize_id(f"{ts}_{app['resource_name']}")
                 _diagram_emitted_ids.add(base_nid)
-                lines.append(f"    {base_nid}[{_display_label(app)}]")
+                lines.append(f"    {base_nid}[{_quote_mermaid_label(_display_label(app))}]")
         lines.append("  end")
 
     # ── Data Tier Zone ──
     if sql_servers or storage_accounts:
-        lines.append("  subgraph zone_data[\"🗄️ Data Tier\"]")
+        lines.append(f"  subgraph zone_data[{_quote_mermaid_label('🗄️ Data Tier')}]")
         for db in sql_servers:
             _render_resource_subgraph(db, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
         for sa in storage_accounts:
@@ -1542,13 +1556,14 @@ def generate_architecture_diagram(
                 ops = [r for r in resources if _is_operation_resource_type(r.get('resource_type') or '') and (r.get('parent_resource_name') == api_name or r.get('parent_resource_id') == api.get('id'))]
                 if ops:
                     api_id = sanitize_id(api_name)
-                    lines.append(f"  subgraph {api_id}_api[API: {api_name}]")
+                    lines.append(f"  subgraph {api_id}_api[{_quote_mermaid_label(f'API: {api_name}')}]")
                     for op in ops:
                         op_id = sanitize_id(op['resource_name'])
                         if op_id in _diagram_emitted_ids:
                             op_id = sanitize_id(f"op_{op['resource_name']}_{op.get('id','')}")
                         _diagram_emitted_ids.add(op_id)
-                        lines.append(f"    {op_id}[Operation: {op['resource_name']}]")
+                    op_label = f"Operation: {op['resource_name']}"
+                    lines.append(f"    {op_id}[{_quote_mermaid_label(op_label)}]")
                     lines.append("  end")
     except Exception:
         pass
@@ -1565,7 +1580,7 @@ def generate_architecture_diagram(
                     ts = rtype.split('_', 2)[-1] if '_' in rtype else rtype
                     base_nid = sanitize_id(f"{ts}_{res['resource_name']}")
                 _diagram_emitted_ids.add(base_nid)
-                lines.append(f"  {base_nid}[{_display_label(res)}]")
+                lines.append(f"  {base_nid}[{_quote_mermaid_label(_display_label(res))}]")
 
     lines.append("")
     
@@ -1618,7 +1633,7 @@ def generate_architecture_diagram(
                 if provider and not _provider_matches(row['provider'], provider):
                     return
                 node_id = sanitize_id(row['resource_name'])
-                lines.append(f"  {node_id}[{row['resource_name']}]")
+                lines.append(f"  {node_id}[{_quote_mermaid_label(row['resource_name'])}]")
                 node_names_present.add(row['resource_name'])
 
     def _is_public_ip_resource_name(name: str) -> bool:
@@ -1695,7 +1710,7 @@ def generate_architecture_diagram(
                 real_name = src_name
 
             real_resource = resource_map.get(real_name)
-            if str(real_name or '').strip().lower() == 'internet':
+            if _is_internet_name(real_name):
                 # src was Internet, tgt is the public IP — find the resource the IP is attached to.
                 pip_res = resource_map.get(public_side)
                 _parent_id = pip_res.get('parent_resource_id') if pip_res else None
@@ -1713,7 +1728,7 @@ def generate_architecture_diagram(
 
             # Ensure Internet node is present
             if 'Internet' not in node_names_present and 'internet' not in node_names_present:
-                lines.append("  internet[Internet]")
+                lines.append(f"  internet[{_quote_mermaid_label('Internet')}]")
                 node_names_present.add('Internet')
 
             # Build label: include 'public IP' plus any transport/auth details
@@ -1732,7 +1747,7 @@ def generate_architecture_diagram(
             if edge not in emitted_edges:
                 emitted_edges.add(edge)
                 # direction Internet -> real resource (always use lowercase 'internet' to match node definition)
-                tgt = 'internet' if str(real_name or "").strip().lower() == 'internet' else sanitize_id(real_name)
+                tgt = 'internet' if _is_internet_name(real_name) else sanitize_id(real_name)
                 if tgt == 'internet':
                     continue
                 lines.append(f"  internet -->{new_label} {tgt}")
@@ -1745,8 +1760,8 @@ def generate_architecture_diagram(
         _ensure_node_exists(src_name)
         _ensure_node_exists(tgt_name)
 
-        src = 'internet' if str(conn['source'] or "").strip().lower() == 'internet' else sanitize_id(conn['source'])
-        tgt = 'internet' if str(conn['target'] or "").strip().lower() == 'internet' else sanitize_id(conn['target'])
+        src = 'internet' if _is_internet_name(conn['source']) else sanitize_id(conn['source'])
+        tgt = 'internet' if _is_internet_name(conn['target']) else sanitize_id(conn['target'])
 
         # If target resource has network ACLs or firewall rules, mark as IP-restricted
         ip_restricted = False
@@ -1775,7 +1790,7 @@ def generate_architecture_diagram(
         else:
             lines.append(f"  {src} -->{label} {tgt}")
 
-        if src_name == 'Internet' and tgt_name and tgt_name != 'Internet':
+        if _is_internet_name(src_name) and tgt_name and not _is_internet_name(tgt_name):
             _mark_risky_edge()
 
         edge_index += 1
@@ -1824,7 +1839,7 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
         """, [experiment_id, min_score]).fetchall()
         
         if not vulnerable:
-            return f"flowchart TB\n  empty[No resources with score >= {min_score}]"
+            return f"flowchart TB\n  empty[{_quote_mermaid_label(f'No resources with score >= {min_score}')}]"
         
         # Get connections between vulnerable resources
         vulnerable_names = {r['resource_name'] for r in vulnerable}
@@ -1853,7 +1868,9 @@ def generate_security_view(experiment_id: str, min_score: int = 7) -> str:
         node_id = sanitize_id(r['resource_name'])
         score = r['max_score']
         severity = "🔴 Critical" if score >= 9 else "🟠 High"
-        lines.append(f"  {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}<br/>{severity} {score}/10]")
+        friendly_type = _rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']
+        vuln_label = f"{r['resource_name']}<br/>{friendly_type}<br/>{severity} {score}/10"
+        lines.append(f"  {node_id}[{_quote_mermaid_label(vuln_label)}]")
     
     lines.append("")
     
@@ -1948,15 +1965,17 @@ def generate_blast_radius_diagram(experiment_id: str, compromised_resource: str)
         """, [compromised_resource, experiment_id]).fetchall()
     
     if not reachable:
-        return f"flowchart LR\n  compromised[{compromised_resource}]\n  empty[No connections found]"
+        return f"flowchart LR\n  compromised[{_quote_mermaid_label(compromised_resource)}]\n  empty[{_quote_mermaid_label('No connections found')}]"
     
     lines = ["flowchart LR"]
-    lines.append(f"  compromised[🔴 {compromised_resource}<br/>COMPROMISED]:::compromised")
+    lines.append(f"  compromised[{_quote_mermaid_label(f'🔴 {compromised_resource}<br/>COMPROMISED')}]:::compromised")
     
     # Add reachable resources
     for r in reachable:
         node_id = sanitize_id(r['resource_name'])
-        lines.append(f"  {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}<br/>Hop {r['hop_count']}]")
+        friendly_type = _rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']
+        blast_label = f"{r['resource_name']}<br/>{friendly_type}<br/>Hop {r['hop_count']}"
+        lines.append(f"  {node_id}[{_quote_mermaid_label(blast_label)}]")
     
     lines.append("")
     
@@ -1989,7 +2008,7 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
         """, [experiment_id]).fetchall()
         
         if not repos:
-            return "flowchart TB\n  empty[No repositories found]"
+            return f"flowchart TB\n  empty[{_quote_mermaid_label('No repositories found')}]"
         
         lines = ["flowchart TB"]
         
@@ -1999,7 +2018,8 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
             repo_name = repo['repo_name']
             repo_node = sanitize_id(repo_name)
             
-            lines.append(f"  subgraph {repo_node}[Repository: {repo_name}]")
+            repo_label = f"Repository: {repo_name}"
+            lines.append(f"  subgraph {repo_node}[{_quote_mermaid_label(repo_label)}]")
             
             # Get resources in this repo
             resources = conn.execute("""
@@ -2010,7 +2030,9 @@ def generate_multi_repo_diagram(experiment_id: str) -> str:
             
             for r in resources:
                 node_id = f"{repo_node}_{sanitize_id(r['resource_name'])}"
-                lines.append(f"    {node_id}[{r['resource_name']}<br/>{_rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']}]")
+                friendly_type = _rtdb.get_friendly_name(_get_lookup_db(), r['resource_type']) if _get_lookup_db() else r['resource_type']
+                repo_label = f"{r['resource_name']}<br/>{friendly_type}"
+                lines.append(f"    {node_id}[{_quote_mermaid_label(repo_label)}]")
             
             lines.append("  end")
         
