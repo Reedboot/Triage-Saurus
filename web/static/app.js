@@ -1219,6 +1219,50 @@
     }
   }
 
+  function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
+    // Fetch and render diagrams for the current experiment with API ops filtering.
+    const experimentId = currentExperimentId;
+    const repoName = currentRepoName || getCurrentRepoName();
+    
+    if (!experimentId || !repoName) {
+      console.log('[Diagrams] No experiment or repo to load');
+      return;
+    }
+
+    // Determine include_api_operations parameter based on apiOpsMode
+    let includeApiOps = undefined;
+    if (apiOpsMode === 'all') {
+      includeApiOps = '1';
+    } else if (apiOpsMode === 'hide') {
+      includeApiOps = '0';
+    }
+    // For 'auto', don't override (let server decide)
+
+    // Build URL with parameters
+    const url = new URL(`/api/diagrams/${encodeURIComponent(experimentId)}`, window.location.origin);
+    url.searchParams.set('repo_name', repoName);
+    if (includeApiOps !== undefined) {
+      url.searchParams.set('include_api_operations', includeApiOps);
+    }
+
+    fetch(url.toString())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        if (data && data.diagrams) {
+          storedDiagrams = data.diagrams;
+          renderDiagrams(data.diagrams);
+        } else {
+          console.log('[Diagrams] No diagrams in response');
+        }
+      })
+      .catch(err => {
+        console.error('[Diagrams] Failed to fetch:', err);
+      });
+  }
+
   function updateApiOpsButtonText() {
     const btn = document.getElementById('toggle-api-ops-btn');
     if (!btn) return;

@@ -1036,6 +1036,65 @@ class HierarchicalDiagramBuilder:
         vm_tokens = ['virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine', 
                      'instance', 'ec2', 'compute_instance']
         return any(tok in rtype for tok in vm_tokens)
+    
+    def is_network_resource(self, resource: dict) -> bool:
+        """Check if resource is a networking resource (VPC, subnet, security group, etc.)."""
+        rtype = (resource.get('resource_type') or '').lower()
+        net_tokens = ['vpc', 'vnet', 'subnet', 'network', 'network_interface', 'security_group', 
+                      'security_group_rule', 'internet_gateway', 'nat_gateway', 'route_table', 
+                      'network_acl', 'load_balancer', 'firewall', 'availability_zone']
+        return any(tok in rtype for tok in net_tokens)
+    
+    def is_security_group_or_rule(self, resource: dict) -> bool:
+        """Check if resource is a security group or security group rule."""
+        rtype = (resource.get('resource_type') or '').lower()
+        return 'security_group' in rtype or 'security_group_rule' in rtype
+    
+    def is_public_ec2_instance(self, resource: dict, properties: Optional[dict] = None) -> bool:
+        """Detect if an EC2 instance is publicly accessible.
+        
+        An EC2 instance is public if:
+        1. Has a public IP assigned (PublicIpAddress property)
+        2. Is in a public subnet (subnet has route to IGW)
+        3. Associated with a security group allowing inbound from 0.0.0.0/0
+        """
+        if not self.is_compute_resource(resource):
+            return False
+        
+        # Check properties for explicit public IP
+        if properties:
+            if properties.get('public_ip_address') or properties.get('PublicIpAddress'):
+                return True
+            # Check for associations indicating public access
+            if properties.get('associate_public_ip_address') == 'true' or properties.get('public_ip'):
+                return True
+        
+        # For now, assume compute in public subnets are public (heuristic)
+        # More sophisticated detection would use security group rules and route tables
+        parent_id = resource.get('parent_resource_id')
+        if parent_id:
+            parent = self.resource_by_id.get(parent_id)
+            if parent:
+                parent_type = (parent.get('resource_type') or '').lower()
+                if 'subnet' in parent_type and 'public' in (parent.get('resource_name') or '').lower():
+                    return True
+        
+        return False
+    
+    def is_terraform_metadata_resource(self, resource: dict) -> bool:
+        """Check if resource is Terraform metadata (data sources, locals, etc.) that shouldn't be rendered."""
+        rtype = (resource.get('resource_type') or '').lower()
+        name = (resource.get('resource_name') or '').lower()
+        
+        # Exclude terraform data sources and locals
+        if 'terraform_data' in rtype or 'data_source' in rtype:
+            return True
+        if name in ('zone_data', 'availability_zones', 'aws_availability_zones'):
+            return True
+        if name.startswith('data.'):
+            return True
+        
+        return False
 
     def is_application_service(self, resource: dict) -> bool:
         """Heuristic for application workloads that may connect to data stores."""
@@ -1447,6 +1506,127 @@ class HierarchicalDiagramBuilder:
         for res in paas_resources:
             lines.extend(self._render_nested_resource(res, indent="    "))
 
+        lines.append('  end')
+        return lines
+    
+
+    def render_network_hierarchy(self, network_resources: List[dict], compute_resources: Optional[List[dict]] = None) -> List[str]:
+        """Render network resources with proper parent-child hierarchy."""
+        if not network_resources:
+            return []
+        
+        lines: List[str] = []
+        lines.append('  subgraph network_tier["🌐 Network Tier"]')
+        
+        # Group resources by type
+        vpcs = [r for r in network_resources if 'vpc' in (r.get('resource_type') or '').lower()]
+        subnets = [r for r in network_resources if 'subnet' in (r.get('resource_type') or '').lower() 
+                   and 'security' not in (r.get('resource_type') or '').lower()]
+        security_groups = [r for r in network_resources if 'security_group' in (r.get('resource_type') or '').lower()
+                           and 'rule' not in (r.get('resource_type') or '').lower()]
+        gateways = [r for r in network_resources if any(x in (r.get('resource_type') or '').lower() 
+                    for x in ['gateway', 'firewall', 'nat', 'load_balancer'])]
+        
+        # Render VPCs with nested subnets
+        for vpc in vpcs:
+            if vpc['resource_name'] in self.emitted_nodes:
+                continue
+            
+            vpc_id = sanitize_id(vpc['resource_name'])
+            vpc_children = self.children_by_parent.get(vpc.get('id'), [])
+            vpc_subnets = [s for s in subnets if s.get('id') in {c.get('id') for c in vpc_children}]
+            
+            if vpc_subnets:
+                vpc_label = self._wrap_mermaid_label(vpc['resource_name'])
+                lines.append(f'    subgraph {vpc_id}["{vpc_label}"]')
+                self._emitted_mermaid_ids.add(vpc_id)
+                self._node_id_first_owner[vpc_id] = str(vpc.get('id', ''))
+                
+                # Render subnets
+                for subnet in vpc_subnets:
+                    if subnet['resource_name'] in self.emitted_nodes:
+                        continue
+                    
+                    subnet_id = sanitize_id(subnet['resource_name'])
+                    subnet_children = self.children_by_parent.get(subnet.get('id'), [])
+                    subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
+                    
+                    if subnet_computes:
+                        subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
+                        lines.append(f'      subgraph {subnet_id}["{subnet_label}"]')
+                        self._emitted_mermaid_ids.add(subnet_id)
+                        self._node_id_first_owner[subnet_id] = str(subnet.get('id', ''))
+                        
+                        for compute in subnet_computes:
+                            if compute['resource_name'] not in self.emitted_nodes:
+                                is_public = self.is_public_ec2_instance(compute)
+                                icon = "📡" if is_public else "🔒"
+                                label = f"{icon} {compute['resource_name']}"
+                                c_id = sanitize_id(compute['resource_name'])
+                                
+                                if c_id not in self._emitted_mermaid_ids:
+                                    self._emitted_mermaid_ids.add(c_id)
+                                    self._node_id_first_owner[c_id] = str(compute.get('id', ''))
+                                    c_label = self._wrap_mermaid_label(label)
+                                    lines.append(f'        {c_id}["{c_label}"]')
+                                
+                                self.emitted_nodes.add(compute['resource_name'])
+                        
+                        lines.append('      end')
+                    else:
+                        lines.append(self.render_node(subnet, indent="      "))
+                    
+                    self.emitted_nodes.add(subnet['resource_name'])
+                
+                lines.append('    end')
+            else:
+                lines.append(self.render_node(vpc, indent="    "))
+            
+            self.emitted_nodes.add(vpc['resource_name'])
+        
+        # Render standalone subnets
+        for subnet in subnets:
+            if subnet['resource_name'] not in self.emitted_nodes and subnet.get('parent_resource_id') is None:
+                lines.append(self.render_node(subnet, indent="    "))
+                self.emitted_nodes.add(subnet['resource_name'])
+        
+        # Render security groups with rules nested
+        for sg in security_groups:
+            if sg['resource_name'] in self.emitted_nodes:
+                continue
+            
+            sg_id = sanitize_id(sg['resource_name'])
+            sg_children = self.children_by_parent.get(sg.get('id'), [])
+            sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
+            
+            if sg_rules:
+                sg_label = self._wrap_mermaid_label(sg['resource_name'])
+                lines.append(f'    subgraph {sg_id}["{sg_label}"]')
+                self._emitted_mermaid_ids.add(sg_id)
+                self._node_id_first_owner[sg_id] = str(sg.get('id', ''))
+                
+                for rule in sg_rules:
+                    if rule['resource_name'] not in self.emitted_nodes:
+                        lines.append(self.render_node(rule, indent="      "))
+                        self.emitted_nodes.add(rule['resource_name'])
+                
+                lines.append('    end')
+            else:
+                lines.append(self.render_node(sg, indent="    "))
+            
+            self.emitted_nodes.add(sg['resource_name'])
+        
+        # Render gateways and other network resources
+        for gw in gateways:
+            if gw['resource_name'] not in self.emitted_nodes:
+                lines.append(self.render_node(gw, indent="    "))
+                self.emitted_nodes.add(gw['resource_name'])
+        
+        for res in network_resources:
+            if res['resource_name'] not in self.emitted_nodes:
+                lines.append(self.render_node(res, indent="    "))
+                self.emitted_nodes.add(res['resource_name'])
+        
         lines.append('  end')
         return lines
     
@@ -2929,6 +3109,28 @@ class HierarchicalDiagramBuilder:
                     'notes': 'Visibility unknown — APIM may be internal or public',
                 })
         
+        # Extract and render network resources (VPC, subnets, security groups, etc.)
+        # Filter to exclude terraform metadata (zone_data, data sources, etc.)
+        network_resources = [
+            r for r in self.resources
+            if self.is_network_resource(r)
+            and r['id'] not in all_children
+            and not self.is_terraform_metadata_resource(r)
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+        
+        network_related_ids = {r['id'] for r in network_resources}
+        for res in network_resources:
+            for child in self.children_by_parent.get(res['id'], []):
+                network_related_ids.add(child['id'])
+        
+        # Render network hierarchy
+        network_lines = self.render_network_hierarchy(network_resources)
+        if network_lines:
+            lines.extend(network_lines)
+            lines.append("")
+        
         # Render APIM hierarchy
         apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
         if apim_lines:
@@ -3046,6 +3248,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
             and r['id'] not in monitoring_related_ids
+            and r['id'] not in network_related_ids  # Skip compute already nested in networks
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
         ]
@@ -3099,6 +3302,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in data_related_ids
             and r['id'] not in paas_related_ids
             and r['id'] not in compute_related_ids
+            and r['id'] not in network_related_ids  # Exclude network resources already rendered
             and r not in sql_resources
             and not self.is_api_gateway(r)
             and not self.is_kubernetes(r)
@@ -3107,6 +3311,8 @@ class HierarchicalDiagramBuilder:
             and not self.is_api_product(r)
             and not self.is_application_tier_resource(r)
             and not self.is_paas_identity_resource(r)
+            and not self.is_network_resource(r)  # Exclude network resources (should not reach here)
+            and not self.is_terraform_metadata_resource(r)  # Exclude terraform metadata
             and 'subscription' not in r.get('resource_type', '').lower()  # Exclude subscriptions - they're metadata
             and 'resource_group' not in r.get('resource_type', '').lower()  # Exclude resource groups
             and 'terraform_data' not in r.get('resource_type', '').lower()  # Exclude terraform data

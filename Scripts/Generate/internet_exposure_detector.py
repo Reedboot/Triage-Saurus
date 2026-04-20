@@ -88,20 +88,18 @@ class InternetExposureDetector:
             'google_compute_global_forwarding_rule', 'google_compute_target_http_proxy',
             'google_compute_target_https_proxy', 'google_compute_url_map',
                'google_cloud_run_service',
-               # Serverless functions (may be unauthenticated)
+               # Serverless functions (only if trigger_http=true; check properties)
                'google_cloudfunctions_function', 'google_cloudfunctions2_function',
-               # Cloud Storage buckets (IAM-based public access)
-               'google_storage_bucket', 'google_storage_bucket_object',
                # API Gateway APIs
                'google_api_gateway_api', 'google_api_gateway_api_config',
                # App Engine (inherently public)
                'google_app_engine_application', 'google_app_engine_standard_app_version',
-               # Artifact Registry (can be public)
-               'google_artifact_registry_repository',
-               # Cloud SQL with public IP
-               'google_sql_database_instance',
                # Load balancer backends and frontends
                'google_compute_backend_bucket',
+               # Compute instances with external IPs (check access_config property)
+               'google_compute_instance', 'compute_instance',
+               # SQL instances with public_ip_address property
+               'google_sql_database_instance',
         },
         'oci': {
             'load_balancer', 'oci_load_balancer',
@@ -123,6 +121,8 @@ class InternetExposureDetector:
     # Resource types that should NOT be marked as public even if matched
     PRIVATE_OVERRIDE = {
         'azurerm_api_management': True,  # May not be public if behind APIM
+        'aws_security_group': True,  # Security Groups are filters, not services; don't mark as internet-exposed
+        'security_group': True,  # Generic name variant
     }
 
     # Properties indicating public access
@@ -388,6 +388,25 @@ class InternetExposureDetector:
                 # Additional heuristic: skip resources with "private" in name
                 if 'private' in resource_name.lower():
                     continue
+
+                # GCP-specific filters for false positives
+                if self.provider == 'gcp':
+                    # Cloud Functions require trigger_http=true to be public
+                    # Storage buckets require IAM policies to be public (skip them)
+                    if 'cloud' in resource_type and 'function' in resource_type:
+                        # For now, assume all Cloud Functions are public if no property override
+                        # In future: check trigger_http property
+                        pass
+                    elif 'storage_bucket' in resource_type:
+                        # Storage buckets are NOT inherently public - skip heuristic detection
+                        continue
+                    elif 'artifact_registry' in resource_type:
+                        # Artifact registries require IAM - skip
+                        continue
+                    elif 'compute_instance' in resource_type or 'sql_database_instance' in resource_type:
+                        # Only public if access_config or public_ip_address properties exist
+                        # Filtered by property detection method instead
+                        continue
 
                 clean_type = _clean_resource_type(matched_type)
                 exposed[resource_name] = ExposureDetail(

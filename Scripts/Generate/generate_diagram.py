@@ -8,6 +8,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Add Scripts subdirectories to path for imports
+_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_root / "Scripts" / "Persist"))
+sys.path.insert(0, str(_root / "Scripts" / "Generate"))
+sys.path.insert(0, str(_root / "Scripts" / "Utils"))
+
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 from internet_exposure_detector import InternetExposureDetector
 import resource_type_db as _rtdb
@@ -229,6 +235,20 @@ def _render_resource_subgraph(
     _emitted_ids.add(node_id)
 
     children = parent_children.get(resource['id'], [])
+    
+    # Filter children: exclude non-service resource types
+    # Children are sqlite3.Row objects, so access by index or dict-like interface
+    def get_child_type(child):
+        if hasattr(child, 'get'):
+            return child.get('child_type', '')
+        else:
+            # sqlite3.Row object - try dict access
+            try:
+                return child['child_type']
+            except (KeyError, TypeError):
+                return ''
+    
+    children = [c for c in children if not _is_non_service_resource_type(get_child_type(c))]
 
     if children and depth < max_depth:
         child_count = len(children)
@@ -343,6 +363,14 @@ def _is_non_service_resource_type(resource_type: str) -> bool:
         'azurerm_role_definition',
         'template_file',
         'kubernetes_config',
+        # Kubernetes RBAC - configuration/policy, not architecture
+        'kubernetes_clusterrole',
+        'kubernetes_clusterrolebinding',
+        'kubernetes_role',
+        'kubernetes_rolebinding',
+        # Kubernetes secrets & config - not service components (mounted as volumes)
+        'kubernetes_configmap',
+        'kubernetes_secret',
     }
     if rt in exact_exclusions:
         return True
@@ -694,6 +722,126 @@ def generate_architecture_diagram(
             )
             if not already_exists:
                 connections.append(synthetic_conn)
+    
+    # Synthesize Kubernetes connectivity: Internet → Service, Service → Pod/Deployment, etc.
+    k8s_resources = {r['resource_name']: r for r in resources if r.get('provider') == 'kubernetes'}
+    if k8s_resources:
+        # Find services (all K8s services can potentially be LoadBalancers or NodePorts)
+        services = {r['resource_name']: r for r in k8s_resources.values() 
+                   if 'kubernetes_service' in r.get('resource_type', '').lower()}
+        
+        # Connect Internet to services (assuming they are entry points)
+        for svc_name in services:
+            already_exists = any(
+                c.get('source') == 'Internet' and c.get('target') == svc_name
+                for c in connections
+            )
+            if not already_exists:
+                connections.append({
+                    'source': 'Internet',
+                    'target': svc_name,
+                    'connection_type': 'http_ingress',
+                    'protocol': 'HTTPS',
+                    'is_cross_repo': False,
+                    'notes': 'Kubernetes service exposed via ingress/LoadBalancer'
+                })
+        
+        # Connect Services to their target Deployments/Pods
+        for svc_name, svc_res in services.items():
+            # Try to find matching deployment/pod by label selector or naming pattern
+            for pod_name, pod_res in k8s_resources.items():
+                pod_type = (pod_res.get('resource_type') or '').lower()
+                if 'deployment' in pod_type or 'pod' in pod_type or 'statefulset' in pod_type:
+                    # Simple heuristic: if pod/deployment name is part of service name or vice versa
+                    if pod_name.lower() in svc_name.lower() or svc_name.lower().replace('-lb', '').replace('-service', '') == pod_name.lower():
+                        already_exists = any(
+                            c.get('source') == svc_name and c.get('target') == pod_name
+                            for c in connections
+                        )
+                        if not already_exists:
+                            connections.append({
+                                'source': svc_name,
+                                'target': pod_name,
+                                'connection_type': 'k8s_service_routing',
+                                'protocol': 'TCP',
+                                'is_cross_repo': False,
+                                'notes': 'Kubernetes service routes to deployment'
+                            })
+        
+        # Connect ConfigMaps/Secrets to Deployments (mounts)
+        config_resources = {r['resource_name']: r for r in k8s_resources.values() 
+                           if 'configmap' in r.get('resource_type', '').lower() or 'secret' in r.get('resource_type', '').lower()}
+        
+        for cfg_name, cfg_res in config_resources.items():
+            for dep_name, dep_res in k8s_resources.items():
+                if 'deployment' in (dep_res.get('resource_type') or '').lower():
+                    already_exists = any(
+                        c.get('source') == dep_name and c.get('target') == cfg_name or
+                        c.get('source') == cfg_name and c.get('target') == dep_name
+                        for c in connections
+                    )
+                    if not already_exists:
+                        connections.append({
+                            'source': dep_name,
+                            'target': cfg_name,
+                            'connection_type': 'k8s_mounts',
+                            'is_cross_repo': False,
+                            'notes': 'Deployment mounts ConfigMap/Secret'
+                        })
+    
+    # Synthesize AWS Lambda→RDS/DynamoDB connections from environment variables
+    aws_resources = {r['resource_name']: r for r in resources if r.get('provider') == 'aws'}
+    if aws_resources:
+        lambda_functions = {r['resource_name']: r for r in aws_resources.values() 
+                           if 'lambda' in r.get('resource_type', '').lower() and 'function' in r.get('resource_type', '').lower()}
+        
+        # Find RDS instances and DynamoDB tables
+        rds_instances = {r['resource_name']: r for r in aws_resources.values() 
+                        if 'db_instance' in r.get('resource_type', '').lower()}
+        dynamodb_tables = {r['resource_name']: r for r in aws_resources.values() 
+                          if 'dynamodb_table' in r.get('resource_type', '').lower()}
+        
+        # Check Lambda environment variables for DB references
+        for lambda_name, lambda_res in lambda_functions.items():
+            props = lambda_res.get('properties') or {}
+            env_vars = props.get('environment') or {}
+            if isinstance(env_vars, str):
+                env_vars_lower = env_vars.lower()
+            else:
+                env_vars_lower = str(env_vars).lower()
+            
+            # Look for RDS connections in environment
+            for rds_name in rds_instances:
+                if rds_name.lower() in env_vars_lower or 'database_name' in env_vars_lower or 'db_host' in env_vars_lower:
+                    already_exists = any(
+                        c.get('source') == lambda_name and c.get('target') == rds_name
+                        for c in connections
+                    )
+                    if not already_exists:
+                        connections.append({
+                            'source': lambda_name,
+                            'target': rds_name,
+                            'connection_type': 'database_access',
+                            'protocol': 'PostgreSQL/MySQL',
+                            'is_cross_repo': False,
+                            'notes': 'Lambda accesses RDS via environment variables'
+                        })
+            
+            # Look for DynamoDB connections
+            for table_name in dynamodb_tables:
+                if table_name.lower() in env_vars_lower or 'dynamodb' in env_vars_lower:
+                    already_exists = any(
+                        c.get('source') == lambda_name and c.get('target') == table_name
+                        for c in connections
+                    )
+                    if not already_exists:
+                        connections.append({
+                            'source': lambda_name,
+                            'target': table_name,
+                            'connection_type': 'nosql_access',
+                            'is_cross_repo': False,
+                            'notes': 'Lambda accesses DynamoDB table'
+                        })
     
     # Exclude structural/administrative edges that are already represented by nesting.
     structural_edge_types = {
