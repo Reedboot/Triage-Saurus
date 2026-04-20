@@ -1138,23 +1138,25 @@ def generate_architecture_diagram(
             _render_internal_contents("    ")
         lines.append("  end")
     elif internal_resources:
-        # No child hierarchy to wrap — render the resources directly.
+        # No child hierarchy to wrap — still render inside zone_internal for threat model structure
+        lines.append("  subgraph zone_internal[\"🔷 Internal\"]")
         if len(vnets) == 1:
             vnet = vnets[0]
             vnet_id = sanitize_id(vnet['resource_name'])
             _diagram_emitted_ids.add(vnet_id)
-            lines.append(f"  subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
+            lines.append(f"    subgraph {vnet_id}[\"🔷 VNet: {vnet['resource_name']}\"]")
             for subnet in subnets:
                 if subnet['id'] in parent_children:
-                    _render_resource_subgraph(subnet, parent_children, lines, indent="    ", _emitted_ids=_diagram_emitted_ids)
+                    _render_resource_subgraph(subnet, parent_children, lines, indent="      ", _emitted_ids=_diagram_emitted_ids)
                 else:
-                    _emit_simple_node(subnet, "    ")
-            _render_internal_contents("    ")
-            lines.append("  end")
+                    _emit_simple_node(subnet, "      ")
+            _render_internal_contents("      ")
+            lines.append("    end")
         else:
             for vnet in vnets:
-                _emit_simple_node(vnet, "  ")
-            _render_internal_contents("  ")
+                _emit_simple_node(vnet, "    ")
+            _render_internal_contents("    ")
+        lines.append("  end")
 
     # ── Application Tier Zone (App Service Plans, Function Apps, Web Apps) ──
     if app_tier:
