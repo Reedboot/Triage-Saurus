@@ -221,6 +221,9 @@ def _provider_matches_resource(resource: dict, requested_provider: str | None) -
     
     detected = _detect_provider_from_resource(resource)
     return detected.lower() in set(_provider_aliases(requested_provider))
+
+
+def _provider_sql_clause(provider: str | None, column: str = "r.provider") -> tuple[str, list[str]]:
     aliases = _provider_aliases(provider)
     if not aliases:
         return "", []
@@ -235,11 +238,7 @@ def _detect_provider_from_resource(resource: dict) -> str:
     ON TOP of a cloud provider (e.g., AWS EKS). These resources should be included in the
     diagram of their host provider, not split into separate diagrams.
     """
-    provider = _normalize_provider(resource.get('provider'))
-    if provider and provider != 'unknown':
-        return provider
-    
-    # Fallback: infer from resource_type prefix
+    # Check resource_type FIRST to handle Kubernetes specially
     rtype = (resource.get('resource_type') or '').lower()
     
     # Kubernetes resources are deployed ON cloud providers, not separate providers
@@ -248,7 +247,14 @@ def _detect_provider_from_resource(resource: dict) -> str:
         # Return 'unknown' so they don't trigger separate diagram creation
         # They'll still be rendered in the cloud provider's diagram
         return 'unknown'
-    elif rtype.startswith('aws_'):
+    
+    # For non-Kubernetes, use the provider field
+    provider = _normalize_provider(resource.get('provider'))
+    if provider and provider != 'unknown':
+        return provider
+    
+    # Fallback: infer from resource_type prefix
+    if rtype.startswith('aws_'):
         return 'aws'
     elif rtype.startswith('azurerm_') or rtype.startswith('azure_'):
         return 'azure'
@@ -2174,9 +2180,11 @@ def main():
             sys.exit(1)
         out_dir = Path(args.output)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Discover providers present in resources
+        # Discover providers present in resources (excluding 'unknown' which represents K8s workloads)
         all_res = get_resources_for_diagram(args.experiment_id)
-        providers = sorted({_detect_provider_from_resource(r) for r in all_res})
+        providers = sorted({_detect_provider_from_resource(r) for r in all_res if _detect_provider_from_resource(r) != 'unknown'})
+        if not providers:
+            providers = ['unknown']  # Fallback if only Kubernetes detected
         for idx, prov in enumerate(providers):
             diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
             canonical = f"Architecture_{prov.title()}.md"
@@ -2207,9 +2215,11 @@ def main():
         sys.exit(0)
 
     if args.type == 'architecture':
-        # Detect all providers present in resources
+        # Detect all providers present in resources (excluding 'unknown' which represents K8s workloads)
         all_res = get_resources_for_diagram(args.experiment_id)
-        providers = sorted({_detect_provider_from_resource(r) for r in all_res})
+        providers = sorted({_detect_provider_from_resource(r) for r in all_res if _detect_provider_from_resource(r) != 'unknown'})
+        if not providers:
+            providers = ['unknown']  # Fallback if only Kubernetes detected
         
         if not providers or providers == ['unknown']:
             # Fallback: no detectable providers
