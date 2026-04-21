@@ -107,10 +107,20 @@ class K8sContainerExtractor:
                 image = container.get('image', 'unknown:latest')
                 name = container.get('name', 'unnamed')
                 
+                # Collect additional properties
+                image_pull_policy = container.get('imagePullPolicy', 'IfNotPresent')
+                volume_mounts = container.get('volumeMounts', [])
+                security_context = container.get('securityContext', {})
+                env = container.get('env', [])
+                
                 self.containers.append({
                     'type': 'k8s_container',
                     'name': name,
                     'image': image,
+                    'imagePullPolicy': image_pull_policy,
+                    'volumeMounts': volume_mounts,
+                    'securityContext': security_context,
+                    'env': env,
                     'namespace': parent_info.get('namespace', 'default'),
                     'parent_kind': parent_info.get('kind'),
                     'parent_name': parent_info.get('name'),
@@ -134,10 +144,20 @@ class K8sContainerExtractor:
                 image = container.get('image', 'unknown:latest')
                 name = container.get('name', 'unnamed')
                 
+                # Collect additional properties
+                image_pull_policy = container.get('imagePullPolicy', 'IfNotPresent')
+                volume_mounts = container.get('volumeMounts', [])
+                security_context = container.get('securityContext', {})
+                env = container.get('env', [])
+                
                 self.containers.append({
                     'type': 'k8s_init_container',
                     'name': name,
                     'image': image,
+                    'imagePullPolicy': image_pull_policy,
+                    'volumeMounts': volume_mounts,
+                    'securityContext': security_context,
+                    'env': env,
                     'namespace': parent_info.get('namespace', 'default'),
                     'parent_kind': parent_info.get('kind'),
                     'parent_name': parent_info.get('name'),
@@ -227,24 +247,139 @@ class K8sContainerExtractor:
 
 
 def store_k8s_containers(conn, experiment_id: str, containers: List[Dict], links: List[Dict]) -> int:
-    """Store K8s containers in database."""
+    """Store K8s containers in database as resources with properties.
+    
+    Each container becomes a child resource under its parent Deployment/StatefulSet/CronJob/Pod.
+    Creates parent resources if they don't already exist.
+    """
     stored = 0
     
-    for i, container in enumerate(containers):
+    # First pass: collect parent resource info and create parent resources if needed
+    parent_map = {}  # (kind, name, namespace) -> resource_id
+    
+    for container in containers:
         try:
-            unique_key = f"k8s_container_{i}"
-            conn.execute(
-                """INSERT OR IGNORE INTO resource_properties 
-                   (resource_id, property_key, property_value, is_security_relevant)
-                   VALUES (0, ?, ?, 1)""",
-                (unique_key, json.dumps(container))
+            parent_kind = container.get('parent_kind', '')
+            parent_name = container.get('parent_name', 'unknown')
+            namespace = container.get('namespace', 'default')
+            container_name = container.get('name', 'unnamed')
+            image = container.get('image', 'unknown:latest')
+            
+            # Find or infer parent resource ID
+            parent_key = (parent_kind, parent_name, namespace)
+            if parent_key not in parent_map:
+                # Try to find existing parent resource
+                parent_result = conn.execute(
+                    """SELECT id FROM resources 
+                       WHERE experiment_id = ? 
+                       AND resource_type = ? 
+                       AND resource_name = ?
+                       LIMIT 1""",
+                    (experiment_id, f"k8s_{parent_kind.lower()}", parent_name)
+                ).fetchone()
+                
+                if parent_result:
+                    parent_map[parent_key] = int(parent_result[0])
+                else:
+                    # Create parent resource if it doesn't exist
+                    try:
+                        parent_cur = conn.execute(
+                            """INSERT INTO resources
+                               (experiment_id, repo_id, resource_name, resource_type, provider,
+                                discovered_by, discovery_method, source_file, status)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               RETURNING id""",
+                            (experiment_id, 0, parent_name, f"k8s_{parent_kind.lower()}", 'kubernetes',
+                             'extract_k8s_containers', 'manifest_parsing', 
+                             str(container.get('source', 'unknown')), 'active')
+                        )
+                        parent_row = parent_cur.fetchone()
+                        parent_id = int(parent_row[0]) if parent_row else None
+                        parent_map[parent_key] = parent_id
+                        
+                        if parent_id:
+                            # Store namespace as property on parent
+                            conn.execute(
+                                """INSERT OR REPLACE INTO resource_properties
+                                   (resource_id, property_key, property_value, property_type, is_security_relevant)
+                                   VALUES (?, ?, ?, ?, ?)""",
+                                (parent_id, 'namespace', namespace, 'string', 0)
+                            )
+                    except Exception as e:
+                        print(f"[WARN] Could not create parent resource {parent_kind}/{parent_name}: {e}")
+                        parent_map[parent_key] = None
+            
+            parent_id = parent_map.get(parent_key)
+            
+            # Create container as a resource
+            container_resource_type = (
+                'k8s_init_container' if container.get('init') else 'k8s_container'
             )
             
-            print(f"[K8s Container] {container.get('parent_kind')}: {container.get('parent_name')} → {container.get('name')} ({container.get('image')})")
-            stored += 1
+            # Make unique resource name: parent_name/container_name
+            resource_name = f"{parent_name}/{container_name}"
+            
+            # Check if container already exists
+            existing = conn.execute(
+                """SELECT id FROM resources 
+                   WHERE experiment_id = ? 
+                   AND resource_type = ? 
+                   AND resource_name = ?""",
+                (experiment_id, container_resource_type, resource_name)
+            ).fetchone()
+            
+            if existing:
+                container_id = int(existing[0])
+            else:
+                # Insert container as a resource
+                cur = conn.execute(
+                    """INSERT INTO resources
+                       (experiment_id, repo_id, resource_name, resource_type, provider,
+                        discovered_by, discovery_method, source_file, parent_resource_id, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       RETURNING id""",
+                    (experiment_id, 0, resource_name, container_resource_type, 'kubernetes',
+                     'extract_k8s_containers', 'manifest_parsing', 
+                     str(container.get('source', 'unknown')), parent_id, 'active')
+                )
+                row = cur.fetchone()
+                container_id = int(row[0]) if row else None
+            
+            if container_id:
+                # Store container properties
+                props = {
+                    'image': image,
+                    'container_name': container_name,
+                    'parent_kind': parent_kind,
+                    'parent_name': parent_name,
+                    'namespace': namespace,
+                }
+                
+                # Store as single JSON property
+                conn.execute(
+                    """INSERT OR REPLACE INTO resource_properties
+                       (resource_id, property_key, property_value, property_type, is_security_relevant)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (container_id, 'container_spec', json.dumps(props), 'json', 1)
+                )
+                
+                # Also store image as separate property for easy querying
+                conn.execute(
+                    """INSERT OR REPLACE INTO resource_properties
+                       (resource_id, property_key, property_value, property_type, is_security_relevant)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (container_id, 'image', image, 'string', 1)
+                )
+                
+                print(f"[K8s Container] {parent_kind}: {parent_name} → {container_name} ({image}) [ID: {container_id}]")
+                stored += 1
+            else:
+                print(f"[WARN] Could not create container resource: {container_name}")
         
         except Exception as e:
             print(f"[WARN] Could not store K8s container: {e}")
+            import traceback
+            traceback.print_exc()
     
     conn.commit()
     return stored

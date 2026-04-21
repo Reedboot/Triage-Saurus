@@ -1,0 +1,39 @@
+{
+  "id": "k8s-ssrf-metadata-001",
+  "name": "SSRF via Kubernetes Metadata Service",
+  "description": "Detects Kubernetes workloads that can access the metadata service (169.254.169.254), enabling SSRF attacks and cloud credential theft",
+  "pattern": {
+    "resource_type": ["deployment", "statefulset", "daemonset", "pod"],
+    "paths": [
+      "$.spec.template.spec.containers[*]",
+      "$.spec.containers[*]"
+    ],
+    "conditions": [
+      {
+        "type": "any_of",
+        "conditions": [
+          {
+            "type": "env_var_contains",
+            "field": "env[*].value",
+            "values": ["169.254.169.254", "metadata.google.internal", "metadata", "169.254.169.254:80"]
+          },
+          {
+            "type": "container_command_contains",
+            "field": "command",
+            "values": ["curl", "wget", "nc", "ncat"]
+          }
+        ]
+      }
+    ]
+  },
+  "severity": "HIGH",
+  "cwe": ["CWE-918", "CWE-639"],
+  "finding_type": "ssrf_risk",
+  "remediation": "Disable metadata service access. Use Pod Security Policies. Block 169.254.169.254 via network policies. Use IAM roles instead of credentials in env vars.",
+  "tags": ["kubernetes", "container", "ssrf", "metadata-service", "credential-theft", "cloud-exposure", "owasp-k8s"],
+  "references": [
+    "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/3-ssrf"
+  ]
+}

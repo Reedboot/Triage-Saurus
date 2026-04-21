@@ -50,7 +50,7 @@ _LINK_CICD_TO_IAC = SCRIPTS / "Enrich" / "link_cicd_to_iac.py"
 _ANALYZE_CICD_ARTIFACTS = SCRIPTS / "Analyze" / "analyze_cicd_artifacts.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
-from db_helpers import get_db_connection
+from db_helpers import get_db_connection, fix_nested_resource_providers
 
 
 def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
@@ -312,6 +312,20 @@ def main() -> int:
         [sys.executable, str(_ANALYZE_CICD_ARTIFACTS), "--experiment", experiment_id],
         "Phase 3c.5 — Analyze CI/CD artifacts for security vulnerabilities",
     )
+
+    # ── Phase 3c.6: Fix provider inheritance for nested resources ─────────────
+    # Docker containers should inherit from parent EC2, kubernetes resources should inherit from cloud provider
+    print(f"\n{'─'*60}")
+    print(f"▶  Phase 3c.6 — Fix provider inheritance for docker/kubernetes resources")
+    print('─'*60)
+    try:
+        fix_results = fix_nested_resource_providers(experiment_id)
+        print(f"  ✓ Docker containers fixed: {fix_results['docker_fixed']}")
+        print(f"  ✓ Kubernetes resources fixed: {fix_results['kubernetes_fixed']}")
+        if fix_results['errors']:
+            print(f"  ⚠ Errors encountered: {fix_results['errors']}")
+    except Exception as e:
+        print(f"  [WARN] Provider inheritance fix encountered error: {e}")
 
     # ── Phase 3d: Architecture diagram ───────────────────────────────────────
     # Use improved generate_diagram.py with security zones, severity colours, and data flows.

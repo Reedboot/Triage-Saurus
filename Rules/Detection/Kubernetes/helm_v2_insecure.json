@@ -1,0 +1,46 @@
+{
+  "id": "k8s-helm-v2-security-001",
+  "name": "Insecure Helm v2 Tiller Deployment",
+  "description": "Detects Helm v2 Tiller deployments without proper RBAC restrictions, enabling cluster-wide RCE",
+  "pattern": {
+    "resource_type": ["deployment", "daemonset", "pod", "serviceaccount"],
+    "paths": [
+      "$.metadata.name",
+      "$.spec.template.spec.serviceAccountName",
+      "$.spec.template.metadata.labels"
+    ],
+    "conditions": [
+      {
+        "type": "any_of",
+        "conditions": [
+          {
+            "type": "field_contains",
+            "field": "metadata.name",
+            "values": ["tiller", "helm"]
+          },
+          {
+            "type": "field_contains",
+            "field": "spec.template.metadata.labels.app",
+            "values": ["helm", "tiller"]
+          },
+          {
+            "type": "container_image_contains",
+            "field": "spec.template.spec.containers[*].image",
+            "values": ["helm:v2", "tiller", "gcr.io/kubernetes-helm"]
+          }
+        ]
+      }
+    ]
+  },
+  "severity": "CRITICAL",
+  "cwe": ["CWE-269", "CWE-276"],
+  "finding_type": "privilege_escalation",
+  "related_rbac_pattern": "cluster-admin",
+  "remediation": "Migrate to Helm v3+ (Tiller removed). If Helm v2 required, restrict Tiller RBAC to minimal permissions. Use TLS verification. Deploy in isolated namespace.",
+  "tags": ["kubernetes", "helm", "rbac", "privilege-escalation", "remote-code-execution", "package-manager", "owasp-k8s"],
+  "references": [
+    "https://helm.sh/docs/",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/9-helm-tiller"
+  ]
+}

@@ -276,6 +276,16 @@ class ContainerExtractor:
                 if existing:
                     continue
                 
+                # Inherit provider from parent resource if it exists
+                provider = 'docker'  # default
+                if container.parent_resource_id:
+                    parent = cursor.execute(
+                        "SELECT provider FROM resources WHERE id=?",
+                        (container.parent_resource_id,)
+                    ).fetchone()
+                    if parent and parent['provider']:
+                        provider = parent['provider']
+                
                 # Insert container resource
                 cursor.execute(
                     """INSERT INTO resources 
@@ -288,7 +298,7 @@ class ContainerExtractor:
                         self._get_repo_id(),
                         container.name,
                         'docker_container',
-                        'docker',
+                        provider,
                         'ContainerExtractor',
                         'UserData',
                         container.source_file,

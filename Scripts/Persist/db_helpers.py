@@ -3676,3 +3676,107 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
         _logger.error(f"Failed to retrieve cloud diagrams for experiment_id={experiment_id}, repo_name={repo_name}: {e}", exc_info=True)
         return []
 
+
+
+def fix_nested_resource_providers(experiment_id: str, repo_id: Optional[int] = None) -> Dict[str, int]:
+     """Fix provider assignment for nested resources (docker_container, kubernetes_*).
+     
+     Docker containers should inherit provider from parent EC2 instance.
+     Kubernetes resources should inherit provider from parent kubernetes cluster or experiment cloud provider.
+     
+     Returns dict with counts: {'docker_fixed': int, 'kubernetes_fixed': int, 'errors': int}
+     """
+     results = {"docker_fixed": 0, "kubernetes_fixed": 0, "errors": 0}
+     
+     with get_db_connection() as conn:
+         cursor = conn.cursor()
+         
+         # Fix docker_container resources - inherit from parent EC2 instance
+         try:
+             docker_resources = cursor.execute(
+                 """SELECT r.id, r.parent_resource_id, r.provider 
+                    FROM resources r
+                    WHERE r.experiment_id = ? AND r.resource_type = 'docker_container' AND r.provider = 'docker'
+                    """ + (f"AND r.repo_id = {repo_id} " if repo_id else ""),
+                 (experiment_id,)
+             ).fetchall()
+             
+             for docker_id, parent_id, current_provider in docker_resources:
+                 if parent_id:
+                     parent = cursor.execute(
+                         "SELECT provider FROM resources WHERE id = ?",
+                         (parent_id,)
+                     ).fetchone()
+                     if parent and parent['provider'] and parent['provider'] != 'docker':
+                         cursor.execute(
+                             "UPDATE resources SET provider = ? WHERE id = ?",
+                             (parent['provider'], docker_id)
+                         )
+                         results["docker_fixed"] += 1
+             
+             conn.commit()
+         except Exception as e:
+             _logger.error(f"Error fixing docker provider for experiment {experiment_id}: {e}")
+             results["errors"] += 1
+         
+         # Fix kubernetes_* resources - inherit from parent cluster or experiment provider
+         try:
+             k8s_types = [
+                 'kubernetes_cluster', 'kubernetes_namespace', 'kubernetes_pod',
+                 'kubernetes_deployment', 'kubernetes_stateful_set', 'kubernetes_daemon_set',
+                 'kubernetes_daemonset', 'kubernetes_job', 'kubernetes_cronjob',
+                 'kubernetes_service', 'kubernetes_ingress', 'kubernetes_config_map',
+                 'kubernetes_secret', 'kubernetes_serviceaccount', 'kubernetes_role',
+                 'kubernetes_clusterrole', 'kubernetes_role_binding', 'kubernetes_rolebinding',
+                 'kubernetes_clusterrolebinding'
+             ]
+             
+             k8s_resources = cursor.execute(
+                 f"""SELECT r.id, r.resource_type, r.parent_resource_id, r.provider 
+                     FROM resources r
+                     WHERE r.experiment_id = ? AND r.resource_type IN ({','.join(['?']*len(k8s_types))}) 
+                     AND r.provider = 'kubernetes'
+                     """ + (f"AND r.repo_id = {repo_id} " if repo_id else ""),
+                 [experiment_id] + k8s_types
+             ).fetchall()
+             
+             for k8s_id, rtype, parent_id, current_provider in k8s_resources:
+                 new_provider = None
+                 
+                 # First try to inherit from parent
+                 if parent_id:
+                     parent = cursor.execute(
+                         "SELECT provider FROM resources WHERE id = ?",
+                         (parent_id,)
+                     ).fetchone()
+                     if parent and parent['provider'] and parent['provider'] != 'kubernetes':
+                         new_provider = parent['provider']
+                 
+                 # If no parent or parent is also kubernetes, infer from experiment context
+                 if not new_provider:
+                     # Get the most common cloud provider in this experiment
+                     provider_counts = cursor.execute(
+                         """SELECT provider, COUNT(*) as cnt FROM resources
+                            WHERE experiment_id = ? AND provider NOT IN ('kubernetes', 'docker', 'terraform', 'unknown', '')
+                            """ + (f"AND r.repo_id = {repo_id} " if repo_id else "") + 
+                            """GROUP BY provider ORDER BY cnt DESC LIMIT 1""",
+                         (experiment_id,)
+                     ).fetchone()
+                     
+                     if provider_counts and provider_counts['provider']:
+                         new_provider = provider_counts['provider']
+                 
+                 # Update if we found a cloud provider
+                 if new_provider:
+                     cursor.execute(
+                         "UPDATE resources SET provider = ? WHERE id = ?",
+                         (new_provider, k8s_id)
+                     )
+                     results["kubernetes_fixed"] += 1
+             
+             conn.commit()
+         except Exception as e:
+             _logger.error(f"Error fixing kubernetes provider for experiment {experiment_id}: {e}")
+             results["errors"] += 1
+     
+     return results

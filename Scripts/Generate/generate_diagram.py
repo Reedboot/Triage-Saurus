@@ -1706,40 +1706,13 @@ class HierarchicalDiagramBuilder:
                 self.emitted_nodes.add(subnet['resource_name'])
         
         # Render security groups with rules nested
-        # NOTE: SG rules are now rendered nested UNDER their associated compute resources
-        # This section only renders standalone SGs (not attached to any compute)
+        # NOTE: SG rules are attached to compute resources but rendered at network tier for clarity
+        # The Internet→Port connections show the attack surface
         for sg in security_groups:
             if sg['resource_name'] in self.emitted_nodes:
                 continue
             
-            # Check if this SG is attached to any compute - if so, skip it here
-            # (it will be rendered nested under compute instead)
             sg_id = sanitize_id(sg['resource_name'])
-            is_attached = False
-            for compute in compute_resources:
-                props = {}
-                try:
-                    import json
-                    if compute.get('properties'):
-                        props = json.loads(compute.get('properties', '{}')) or {}
-                except:
-                    pass
-                sg_ids = props.get('security_group_refs', [])
-                if isinstance(sg_ids, str):
-                    try:
-                        sg_ids = json.loads(sg_ids)
-                    except:
-                        sg_ids = []
-                if sg.get('id') in sg_ids:
-                    is_attached = True
-                    break
-            
-            if is_attached:
-                # This SG is attached to a compute resource, will be rendered there
-                self.emitted_nodes.add(sg['resource_name'])
-                continue
-            
-            # Standalone SG - render at network tier level
             sg_children = self.children_by_parent.get(sg.get('id'), [])
             sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
             
@@ -1794,20 +1767,6 @@ class HierarchicalDiagramBuilder:
                     self._emitted_mermaid_ids.add(compute_id)
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
-                    
-                    # Render Security Group Rules nested under compute (port/protocol layer)
-                    # SG rules should be children of the EC2 instance they protect
-                    sg_rules_for_compute = self._get_sg_rules_for_compute(compute, security_groups)
-                    if sg_rules_for_compute:
-                        for rule in sg_rules_for_compute:
-                            if rule['resource_name'] not in self.emitted_nodes:
-                                rule_label = self._format_sg_rule_label(rule)
-                                rule_id = sanitize_id(rule['resource_name'])
-                                if rule_id not in self._emitted_mermaid_ids:
-                                    lines.append(f'      {rule_id}[{self._quote_mermaid_label(rule_label)}]')
-                                    self._emitted_mermaid_ids.add(rule_id)
-                                    self._node_id_first_owner[rule_id] = str(rule.get('id', ''))
-                                self.emitted_nodes.add(rule['resource_name'])
                     
                     # Render docker containers inside compute
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
@@ -2014,80 +1973,6 @@ class HierarchicalDiagramBuilder:
 
         lines.append('  end')
         return lines
-    
-    def _get_sg_rules_for_compute(self, compute: dict, security_groups: List[dict]) -> List[dict]:
-        """Get security group rules associated with a compute resource.
-        
-        Searches for rules where the SG is attached to this compute resource
-        via security_group_refs in properties.
-        """
-        if not compute or not security_groups:
-            return []
-        
-        rules = []
-        props = {}
-        try:
-            import json
-            if compute.get('properties'):
-                props = json.loads(compute.get('properties', '{}')) or {}
-        except:
-            pass
-        
-        # Get SGs referenced by this compute resource
-        sg_ids = props.get('security_group_refs', [])
-        if isinstance(sg_ids, str):
-            try:
-                sg_ids = json.loads(sg_ids)
-            except:
-                sg_ids = []
-        
-        # Find rules for those SGs
-        for sg_id in sg_ids:
-            # Find SG with this ID
-            for sg in security_groups:
-                if sg.get('id') == sg_id:
-                    # Get children of this SG (which should include rules)
-                    sg_children = self.children_by_parent.get(sg.get('id'), [])
-                    sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
-                    rules.extend(sg_rules)
-        
-        return rules
-    
-    def _format_sg_rule_label(self, rule: dict) -> str:
-        """Format a security group rule as a readable label for diagrams."""
-        props = {}
-        try:
-            import json
-            if rule.get('properties'):
-                props = json.loads(rule.get('properties', '{}')) or {}
-        except:
-            pass
-        
-        from_port = props.get('from_port') or rule.get('from_port') or '?'
-        to_port = props.get('to_port') or rule.get('to_port') or from_port
-        protocol = props.get('protocol') or rule.get('protocol') or 'tcp'
-        
-        # Get CIDR/source
-        source = props.get('cidr_block') or props.get('source') or 'internal'
-        if source == '0.0.0.0/0':
-            source_icon = '🌐'
-        else:
-            source_icon = '🔒'
-        
-        rule_type = props.get('type') or 'ingress'
-        
-        if from_port == to_port:
-            port_label = str(from_port)
-        else:
-            port_label = f"{from_port}-{to_port}"
-        
-        label = f"{source_icon} {rule_type.upper()} {protocol}/{port_label}"
-        
-        # If from internet (0.0.0.0/0) and no auth detected, add red warning
-        if source == '0.0.0.0/0':
-            label += " (no auth)"
-        
-        return label
 
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node.
@@ -2264,6 +2149,46 @@ class HierarchicalDiagramBuilder:
         lines.append("  end")
         return lines
     
+    def _render_containers_for_workload(self, workload: dict, indent: str = "        ") -> List[str]:
+        """Render K8s containers nested under a workload (Deployment, StatefulSet, etc)."""
+        lines = []
+        
+        # Find child containers for this workload
+        containers = self.children_by_parent.get(workload['id'], [])
+        containers = [c for c in containers if 'container' in (c.get('resource_type') or '').lower()]
+        
+        if not containers:
+            return lines
+        
+        # Create a containers subgraph
+        lines.append(f'{indent}subgraph containers[{self._quote_mermaid_label("🐳 Containers")}]')
+        
+        for container in containers:
+            container_id = "k8s_cont_" + sanitize_id(container['resource_name'])
+            
+            # Try to extract image from properties
+            image = container['resource_name']
+            try:
+                props = container.get('properties', {})
+                if isinstance(props, str):
+                    props = json.loads(props)
+                if 'image' in props:
+                    image = props['image']
+            except:
+                pass
+            
+            container_label = self._wrap_mermaid_label(f"🐳 {image}")
+            
+            if container_id not in self._emitted_mermaid_ids:
+                lines.append(f'{indent}  {container_id}[{self._quote_mermaid_label(container_label)}]')
+                self._emitted_mermaid_ids.add(container_id)
+                self._node_id_first_owner[container_id] = str(container.get('id', ''))
+            
+            self.emitted_nodes.add(container['resource_name'])
+        
+        lines.append(f'{indent}end')
+        return lines
+    
     def render_kubernetes_cluster(self, k8s_resources: List[dict]) -> List[str]:
         """Render Kubernetes/AKS cluster with namespace subgraphs and workloads."""
         if not k8s_resources:
@@ -2288,6 +2213,18 @@ class HierarchicalDiagramBuilder:
                 if child['id'] not in workload_ids_seen:
                     workload_ids_seen.add(child['id'])
                     workload_resources.append(child)
+        
+        # For pure K8s (no cluster resource), also collect workloads from namespace children
+        if not cluster_resources:
+            namespace_resources = [
+                r for r in k8s_resources
+                if (r.get('resource_type') or '').lower() == 'kubernetes_namespace'
+            ]
+            for ns in namespace_resources:
+                for child in self.children_by_parent.get(ns['id'], []):
+                    if child['id'] not in workload_ids_seen:
+                        workload_ids_seen.add(child['id'])
+                        workload_resources.append(child)
 
         # Fallback: non-cluster K8s resources.
         # Skip catalog-info metadata types (kubernetes_component, kubernetes_api,
@@ -2385,7 +2322,7 @@ class HierarchicalDiagramBuilder:
                 
                 return self._wrap_mermaid_label(label)
 
-            # Render Deployments as subgraphs (can contain pods)
+            # Render Deployments as subgraphs (can contain pods and containers)
             for dep in deployments:
                 dep_id = "k8s_dep_" + sanitize_id(dep['resource_name'])
                 dep_label = _render_workload_label(dep, "Deployment")
@@ -2401,14 +2338,20 @@ class HierarchicalDiagramBuilder:
                         pod_label = self._wrap_mermaid_label(pod['resource_name'])
                         lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
-                    # If no pods found, show pod template placeholder
-                    lines.append(f"        k8s_dep_pod_tpl[📦 Pod Template]")
+                    # If no pods found, show container templates
+                    container_lines = self._render_containers_for_workload(dep, indent="        ")
+                    if container_lines:
+                        for line in container_lines:
+                            lines.append(line)
+                    else:
+                        # If no containers either, show pod template placeholder
+                        lines.append(f"        k8s_dep_pod_tpl[📦 Pod Template]")
                 
                 lines.append("      end")
                 self.emitted_nodes.add(dep['resource_name'])
                 self.node_id_override[dep['resource_name']] = dep_id
 
-            # Render StatefulSets as subgraphs (similar to Deployment)
+            # Render StatefulSets as subgraphs (similar to Deployment, can contain containers)
             for ss in statefulsets:
                 ss_id = "k8s_ss_" + sanitize_id(ss['resource_name'])
                 ss_label = _render_workload_label(ss, "StatefulSet")
@@ -2423,13 +2366,20 @@ class HierarchicalDiagramBuilder:
                         pod_label = self._wrap_mermaid_label(pod['resource_name'])
                         lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
-                    lines.append(f"        k8s_ss_pod_tpl[📦 Pod Template]")
+                    # If no pods found, show container templates
+                    container_lines = self._render_containers_for_workload(ss, indent="        ")
+                    if container_lines:
+                        for line in container_lines:
+                            lines.append(line)
+                    else:
+                        # If no containers either, show pod template placeholder
+                        lines.append(f"        k8s_ss_pod_tpl[📦 Pod Template]")
                 
                 lines.append("      end")
                 self.emitted_nodes.add(ss['resource_name'])
                 self.node_id_override[ss['resource_name']] = ss_id
 
-            # Render CronJobs separately (different scheduling model)
+            # Render CronJobs separately (different scheduling model, can contain containers)
             for cj in cronjobs:
                 cj_id = "k8s_cron_" + sanitize_id(cj['resource_name'])
                 cj_label = _render_workload_label(cj, "CronJob")
@@ -2444,7 +2394,14 @@ class HierarchicalDiagramBuilder:
                         job_label = self._wrap_mermaid_label(job['resource_name'])
                         lines.append(f"        {job_id}[{self._quote_mermaid_label(job_label)}]")
                 else:
-                    lines.append(f"        k8s_cron_job_tpl[⏰ Job Pod]")
+                    # If no jobs found, show container templates
+                    container_lines = self._render_containers_for_workload(cj, indent="        ")
+                    if container_lines:
+                        for line in container_lines:
+                            lines.append(line)
+                    else:
+                        # If no containers either, show job template placeholder
+                        lines.append(f"        k8s_cron_job_tpl[⏰ Job Pod]")
                 
                 lines.append("      end")
                 self.emitted_nodes.add(cj['resource_name'])
@@ -3639,9 +3596,11 @@ class HierarchicalDiagramBuilder:
         for compute in compute_resources:
             self.emitted_nodes.add(compute['resource_name'])
         
-        # Mark K8s resources as emitted since they're rendered in compute (inside network)
-        for k8s in k8s_resources:
-            self.emitted_nodes.add(k8s['resource_name'])
+        # Mark K8s resources as emitted only if they were rendered in compute (inside network).
+        # For standalone K8s (no compute resources), mark them after rendering.
+        if compute_resources:
+            for k8s in k8s_resources:
+                self.emitted_nodes.add(k8s['resource_name'])
         
         # Render APIM hierarchy
         apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
@@ -3649,8 +3608,17 @@ class HierarchicalDiagramBuilder:
             lines.extend(apim_lines)
             lines.append("")
         
-        # Note: Kubernetes cluster will be rendered as children of compute resources (EC2 worker nodes)
-        # because K8s workloads run ON the compute instances. Don't render K8s separately.
+        # Render Kubernetes cluster standalone if there are K8s resources but no compute resources
+        # (pure K8s repositories with no cloud provider infrastructure).
+        # If compute resources exist, K8s is already rendered nested inside them (line 1907).
+        if k8s_resources and not compute_resources:
+            k8s_lines = self.render_kubernetes_cluster(k8s_resources)
+            if k8s_lines:
+                lines.extend(k8s_lines)
+                lines.append("")
+            # Mark K8s resources as emitted after standalone rendering
+            for k8s in k8s_resources:
+                self.emitted_nodes.add(k8s['resource_name'])
         
         # Render Service Bus
         sb_lines = self.render_service_bus(sb_resources)
