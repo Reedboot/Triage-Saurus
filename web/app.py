@@ -9283,6 +9283,22 @@ def api_view_roles(experiment_id: str, repo_name: str):
             if _is_broad_role(role_name) and _is_broad_scope(entry.get("resource_name")):
                 entry["is_excessive"] = 1
                 permission_details.append("⚠️ Broad role at resource-group/subscription scope")
+            
+            # Check for Kubernetes RBAC security findings
+            if not entry.get("is_excessive"):
+                k8s_findings = conn.execute(
+                    """
+                    SELECT DISTINCT f.title, f.rule_id, f.base_severity
+                    FROM findings f
+                    WHERE f.resource_id = ? AND f.rule_id LIKE 'kubernetes-%'
+                    """,
+                    (resource_id,),
+                ).fetchall()
+                if k8s_findings:
+                    entry["is_excessive"] = 1
+                    for f in k8s_findings:
+                        permission_details.append(f"⚠️ {f['title']} ({f['rule_id']})")
+
 
             if _is_broad_role(role_name) and resolved_principal and _is_compute_like(resolved_principal.get("resource_type")):
                 permission_details.append(
