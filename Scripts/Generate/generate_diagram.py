@@ -3706,12 +3706,10 @@ class HierarchicalDiagramBuilder:
             
             # Check if resource is publicly exposed (HIGHEST priority)
             if resource_name in self.exposed_resources:
-                exposure = self.exposed_resources[resource_name]
-                if exposure.is_public:
-                    # RED: Public internet exposure (CRITICAL) — thick border
-                    node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
-                    style_by_node_id[node_id] = (999, '#ff6b6b', 3)  # Red, highest priority, thicker border
-                    continue
+                # RED: Public internet exposure (CRITICAL) — thick border
+                node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                style_by_node_id[node_id] = (999, '#ff6b6b', 3)  # Red, highest priority, thicker border
+                continue
             
             # Get category
             category = self._get_category(resource)
