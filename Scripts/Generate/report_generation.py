@@ -2325,7 +2325,19 @@ def _build_simple_architecture_diagram(
                     node_id = f"{layer_id}_Svc_{p_idx}"
                     names = service_instances.get(service, [])
                     name_suffix = f" ({names[0]})" if len(names) == 1 else ""
-                    lines.append(f'      {node_id}["{service}{name_suffix}"]')
+                    
+                    # Check if this node will be internet-exposed to avoid Mermaid scoping issues
+                    is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
+                    will_be_internet_exposed = not _is_edge_gateway_service(service) and is_public
+                    
+                    # For internet-exposed single-node services, define outside layer subgraph
+                    # to avoid Mermaid error: "node defined inside subgraph, referenced outside"
+                    if will_be_internet_exposed:
+                        # Define at provider level (4 spaces inside provider subgraph)
+                        lines.append(f'    {node_id}["{service}{name_suffix}"]')
+                    else:
+                        # For non-exposed nodes, keep inside layer subgraph (6 spaces)
+                        lines.append(f'      {node_id}["{service}{name_suffix}"]')
                     style_id(node_id, layer_cat)
                     exposure_target = node_id
                 elif apim_structure:
