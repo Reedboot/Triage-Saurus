@@ -1706,11 +1706,40 @@ class HierarchicalDiagramBuilder:
                 self.emitted_nodes.add(subnet['resource_name'])
         
         # Render security groups with rules nested
+        # NOTE: SG rules are now rendered nested UNDER their associated compute resources
+        # This section only renders standalone SGs (not attached to any compute)
         for sg in security_groups:
             if sg['resource_name'] in self.emitted_nodes:
                 continue
             
+            # Check if this SG is attached to any compute - if so, skip it here
+            # (it will be rendered nested under compute instead)
             sg_id = sanitize_id(sg['resource_name'])
+            is_attached = False
+            for compute in compute_resources:
+                props = {}
+                try:
+                    import json
+                    if compute.get('properties'):
+                        props = json.loads(compute.get('properties', '{}')) or {}
+                except:
+                    pass
+                sg_ids = props.get('security_group_refs', [])
+                if isinstance(sg_ids, str):
+                    try:
+                        sg_ids = json.loads(sg_ids)
+                    except:
+                        sg_ids = []
+                if sg.get('id') in sg_ids:
+                    is_attached = True
+                    break
+            
+            if is_attached:
+                # This SG is attached to a compute resource, will be rendered there
+                self.emitted_nodes.add(sg['resource_name'])
+                continue
+            
+            # Standalone SG - render at network tier level
             sg_children = self.children_by_parent.get(sg.get('id'), [])
             sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
             
@@ -1765,6 +1794,20 @@ class HierarchicalDiagramBuilder:
                     self._emitted_mermaid_ids.add(compute_id)
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
+                    
+                    # Render Security Group Rules nested under compute (port/protocol layer)
+                    # SG rules should be children of the EC2 instance they protect
+                    sg_rules_for_compute = self._get_sg_rules_for_compute(compute, security_groups)
+                    if sg_rules_for_compute:
+                        for rule in sg_rules_for_compute:
+                            if rule['resource_name'] not in self.emitted_nodes:
+                                rule_label = self._format_sg_rule_label(rule)
+                                rule_id = sanitize_id(rule['resource_name'])
+                                if rule_id not in self._emitted_mermaid_ids:
+                                    lines.append(f'      {rule_id}[{self._quote_mermaid_label(rule_label)}]')
+                                    self._emitted_mermaid_ids.add(rule_id)
+                                    self._node_id_first_owner[rule_id] = str(rule.get('id', ''))
+                                self.emitted_nodes.add(rule['resource_name'])
                     
                     # Render docker containers inside compute
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
@@ -1972,6 +2015,80 @@ class HierarchicalDiagramBuilder:
         lines.append('  end')
         return lines
     
+    def _get_sg_rules_for_compute(self, compute: dict, security_groups: List[dict]) -> List[dict]:
+        """Get security group rules associated with a compute resource.
+        
+        Searches for rules where the SG is attached to this compute resource
+        via security_group_refs in properties.
+        """
+        if not compute or not security_groups:
+            return []
+        
+        rules = []
+        props = {}
+        try:
+            import json
+            if compute.get('properties'):
+                props = json.loads(compute.get('properties', '{}')) or {}
+        except:
+            pass
+        
+        # Get SGs referenced by this compute resource
+        sg_ids = props.get('security_group_refs', [])
+        if isinstance(sg_ids, str):
+            try:
+                sg_ids = json.loads(sg_ids)
+            except:
+                sg_ids = []
+        
+        # Find rules for those SGs
+        for sg_id in sg_ids:
+            # Find SG with this ID
+            for sg in security_groups:
+                if sg.get('id') == sg_id:
+                    # Get children of this SG (which should include rules)
+                    sg_children = self.children_by_parent.get(sg.get('id'), [])
+                    sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
+                    rules.extend(sg_rules)
+        
+        return rules
+    
+    def _format_sg_rule_label(self, rule: dict) -> str:
+        """Format a security group rule as a readable label for diagrams."""
+        props = {}
+        try:
+            import json
+            if rule.get('properties'):
+                props = json.loads(rule.get('properties', '{}')) or {}
+        except:
+            pass
+        
+        from_port = props.get('from_port') or rule.get('from_port') or '?'
+        to_port = props.get('to_port') or rule.get('to_port') or from_port
+        protocol = props.get('protocol') or rule.get('protocol') or 'tcp'
+        
+        # Get CIDR/source
+        source = props.get('cidr_block') or props.get('source') or 'internal'
+        if source == '0.0.0.0/0':
+            source_icon = '🌐'
+        else:
+            source_icon = '🔒'
+        
+        rule_type = props.get('type') or 'ingress'
+        
+        if from_port == to_port:
+            port_label = str(from_port)
+        else:
+            port_label = f"{from_port}-{to_port}"
+        
+        label = f"{source_icon} {rule_type.upper()} {protocol}/{port_label}"
+        
+        # If from internet (0.0.0.0/0) and no auth detected, add red warning
+        if source == '0.0.0.0/0':
+            label += " (no auth)"
+        
+        return label
+
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node.
 

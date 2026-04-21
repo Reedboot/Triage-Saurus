@@ -1,0 +1,46 @@
+{
+  "id": "k8s-rbac-wildcard-001",
+  "name": "RBAC Wildcard Resource Permissions",
+  "description": "Detects Kubernetes Roles/ClusterRoles with wildcard (*) resources or verbs, allowing excessive permissions",
+  "pattern": {
+    "resource_type": ["role", "clusterrole"],
+    "paths": [
+      "$.rules[*]"
+    ],
+    "conditions": [
+      {
+        "type": "any_of",
+        "conditions": [
+          {
+            "type": "array_contains",
+            "field": "resources",
+            "value": "*",
+            "description": "Allows access to ANY resource"
+          },
+          {
+            "type": "array_contains",
+            "field": "verbs",
+            "value": "*",
+            "description": "Allows ANY verb/action"
+          },
+          {
+            "type": "array_contains_without_restriction",
+            "field": "resources",
+            "excluding_resource_names": true,
+            "description": "Resources without resourceNames restriction on sensitive resources"
+          }
+        ]
+      }
+    ]
+  },
+  "severity": "HIGH",
+  "cwe": ["CWE-276", "CWE-269"],
+  "finding_type": "rbac_misconfiguration",
+  "remediation": "Apply principle of least privilege. Specify explicit resources and verbs. Use resourceNames to restrict scope. Audit existing roles with 'kubectl describe role'.",
+  "tags": ["kubernetes", "rbac", "access-control", "privilege-escalation", "least-privilege", "owasp-k8s"],
+  "references": [
+    "https://kubernetes.io/docs/reference/access-authn-authz/rbac/",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/16-rbac"
+  ]
+}

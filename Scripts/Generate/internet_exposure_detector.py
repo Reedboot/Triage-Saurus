@@ -26,6 +26,12 @@ class ExposureDetail:
     reason: str        # Human-readable explanation
     color: str         # Hex color code
     detection_methods: List[str] = None  # Multiple detections can apply
+    # Enhanced for diagram rendering
+    port: Optional[int] = None  # Port number if rule-based exposure
+    protocol: Optional[str] = None  # 'tcp', 'udp', etc
+    auth_required: Optional[bool] = None  # True if auth detected, False if unauthenticated
+    sg_rule_id: Optional[int] = None  # Parent SG rule resource ID for nesting
+    target_service: Optional[str] = None  # Service running on port (jenkins, ssh, http, etc)
 
     def __post_init__(self):
         if self.detection_methods is None:

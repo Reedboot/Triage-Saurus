@@ -1,0 +1,30 @@
+{
+  "id": "k8s-dind-001",
+  "name": "Docker-in-Docker (DIND) Exploitation",
+  "description": "Detects Kubernetes Pods with mounted docker.sock, enabling container escape and node compromise",
+  "pattern": {
+    "resource_type": ["deployment", "statefulset", "daemonset", "pod"],
+    "paths": [
+      "$.spec.template.spec.volumes[*]",
+      "$.spec.volumes[*]"
+    ],
+    "conditions": [
+      {
+        "type": "volume_hostpath_docker_sock",
+        "field": "hostPath.path",
+        "operator": "contains",
+        "value": "docker.sock"
+      }
+    ]
+  },
+  "severity": "CRITICAL",
+  "cwe": ["CWE-95", "CWE-269"],
+  "finding_type": "container_escape_risk",
+  "remediation": "Remove docker.sock volumes. Use Pod Security Policies to forbid HostPath volumes. Use container registries instead of docker-in-docker for builds.",
+  "tags": ["kubernetes", "container", "privilege-escalation", "dind", "pod-escape", "owasp-k8s"],
+  "references": [
+    "https://kubernetes.io/docs/concepts/security/pod-security-policy/",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/2-dind"
+  ]
+}

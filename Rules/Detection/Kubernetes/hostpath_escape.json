@@ -1,0 +1,44 @@
+{
+  "id": "k8s-hostpath-escape-001",
+  "name": "Unrestricted HostPath Volume Access",
+  "description": "Detects Kubernetes Pods with hostPath volumes mounting sensitive host paths (/ /etc /var /lib), enabling host escape and data exfiltration",
+  "pattern": {
+    "resource_type": ["deployment", "statefulset", "daemonset", "pod"],
+    "paths": [
+      "$.spec.template.spec.volumes[*]",
+      "$.spec.volumes[*]"
+    ],
+    "conditions": [
+      {
+        "type": "volume_hostpath_sensitive",
+        "field": "hostPath.path",
+        "operator": "any_of_sensitive_paths",
+        "values": [
+          "/",
+          "/root",
+          "/etc",
+          "/var",
+          "/var/lib",
+          "/var/lib/etcd",
+          "/var/lib/kubelet",
+          "/etc/kubernetes",
+          "/lib",
+          "/sys",
+          "/proc",
+          "/boot",
+          "/dev"
+        ]
+      }
+    ]
+  },
+  "severity": "CRITICAL",
+  "cwe": ["CWE-639", "CWE-552"],
+  "finding_type": "container_escape_risk",
+  "remediation": "Avoid hostPath volumes. Use persistent volumes, emptyDir, or configMaps. Apply Pod Security Policies. Restrict host filesystem access.",
+  "tags": ["kubernetes", "container", "privilege-escalation", "hostpath", "pod-escape", "data-exfiltration", "owasp-k8s"],
+  "references": [
+    "https://kubernetes.io/docs/concepts/storage/volumes/#hostpath",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/5-system-monitor"
+  ]
+}
