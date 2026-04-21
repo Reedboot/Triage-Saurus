@@ -965,7 +965,7 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
             return None
         repo_id = int(repo_row["id"])
 
-        # Ensure inferred AKS cluster exists (so facts/AI can see it) when only k8s workloads are present.
+        # Ensure inferred cluster exists (AKS/EKS/GKE) when only k8s workloads are present.
         try:
             from Scripts.Persist import db_helpers as _dbh  # type: ignore
             _dbh.ensure_inferred_aks_cluster(experiment_id, repo_name)
@@ -7273,8 +7273,8 @@ def api_view_assets(experiment_id: str, repo_name: str):
             )
         experiment_target = resolved_exp_id
 
-        # Best-effort: if k8s workloads exist but no AKS cluster is defined in this repo,
-        # create an inferred cluster so Assets can nest correctly.
+        # Best-effort: if k8s workloads exist but no cluster is defined in this repo,
+        # create an inferred cluster (AKS/EKS/GKE) so Assets can nest correctly.
         try:
             from Scripts.Persist import db_helpers as _dbh  # type: ignore
             _dbh.ensure_inferred_aks_cluster(experiment_target, repo_name)
