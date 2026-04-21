@@ -1673,6 +1673,65 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 resource.parent = resolved_parent
             continue
         
+        # Special handling: AWS security group rules should be children of their EC2 instances
+        # Linking: SG rule → (referenced SG) → EC2 instance that uses that SG
+        # Do this BEFORE type-level parent map to override the default aws_security_group parent
+        if resource.resource_type == "aws_security_group_rule":
+            props = resource.properties or {}
+            # Extract security group ID/name reference from the rule
+            sg_ref = props.get("security_group_id")
+            if not sg_ref:
+                # Try to extract from block_text if not in props
+                sg_match = re.search(r'security_group_id\s*=\s*["\']?([^"\'\s,}]+)', block_text)
+                if sg_match:
+                    sg_ref = sg_match.group(1).strip()
+            
+            if sg_ref:
+                # Find the security group name referenced by this rule
+                # Handle both direct name references (sg_name) and data source references (data.aws_security_group.default.id)
+                sg_name = None
+                if "." in sg_ref:
+                    # data.aws_security_group.default.id → extract "default"
+                    parts = sg_ref.split(".")
+                    if len(parts) >= 3 and parts[0] == "data" and parts[1] == "aws_security_group":
+                        sg_name = parts[2]
+                else:
+                    sg_name = sg_ref
+                
+                if sg_name:
+                    # Find the EC2 instance (or other compute resource) that uses this security group
+                    for candidate, candidate_block in resource_blocks:
+                        if candidate.resource_type == "aws_instance" and candidate is not resource:
+                            # Check if this instance uses the security group
+                            # Look for vpc_security_group_ids or security_groups references
+                            if f"data.aws_security_group.{sg_name}" in candidate_block or \
+                               f'"{sg_name}"' in candidate_block or \
+                               f"aws_security_group.{sg_name}" in candidate_block:
+                                resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                                break
+                    
+                    # If no EC2 instance found, try ENIs or LBs
+                    if not resource.parent:
+                        for candidate, candidate_block in resource_blocks:
+                            if candidate.resource_type in ("aws_network_interface", "aws_lb", "aws_elb", "aws_alb") and candidate is not resource:
+                                if f"data.aws_security_group.{sg_name}" in candidate_block or \
+                                   f'"{sg_name}"' in candidate_block or \
+                                   f"aws_security_group.{sg_name}" in candidate_block:
+                                    resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                                    break
+                    
+                    # If still no parent found but we have a security group, try to find it and use it as parent
+                    # (fallback to original logic)
+                    if not resource.parent:
+                        for candidate, _ in resource_blocks:
+                            if candidate.resource_type == "aws_security_group" and candidate.name == sg_name:
+                                resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                                break
+            
+            # If parent was set, skip to next resource
+            if resource.parent:
+                continue
+        
         # Check if resource has custom parent preference order
         # This handles multi-parent resources by trying parents in order
         if resource.resource_type in parent_preference_order:
