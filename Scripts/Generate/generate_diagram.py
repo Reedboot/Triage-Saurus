@@ -1741,16 +1741,51 @@ class HierarchicalDiagramBuilder:
                 lines.append(self.render_node(res, indent="    "))
                 self.emitted_nodes.add(res['resource_name'])
         
+        # Render compute resources (EC2 instances) at network tier level (inside network subgraph)
+        # They belong in the network tier because they're deployed in VPCs/networks
+        if compute_resources:
+            for compute in compute_resources:
+                if compute['resource_name'] not in self.emitted_nodes:
+                    # For compute, render as subgraph with K8s nested inside
+                    # (K8s workloads run ON the EC2 instances)
+                    compute_name = compute['resource_name']
+                    compute_id = sanitize_id(compute_name)
+                    
+                    # Start compute subgraph
+                    lines.append(f'    subgraph {compute_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(compute_name))}]')
+                    self._emitted_mermaid_ids.add(compute_id)
+                    if compute_id not in self._node_id_first_owner:
+                        self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
+                    
+                    # Render K8s workloads inside compute (they run on it)
+                    k8s_to_render = getattr(self, '_k8s_for_compute', [])
+                    if k8s_to_render:
+                        k8s_lines = self.render_kubernetes_cluster(k8s_to_render)
+                        for line in k8s_lines:
+                            # Indent to be inside compute subgraph
+                            if line.startswith("  "):
+                                lines.append("    " + line)
+                            else:
+                                lines.append(line)
+                    
+                    lines.append('    end')
+                    self.emitted_nodes.add(compute_name)
+        
         lines.append('  end')
         return lines
     
-    def render_compute_hierarchy(self, compute_resources: List[dict]) -> List[str]:
-        """Render VM/compute resources with their network interfaces nested as subgraphs.
+    def render_compute_hierarchy(self, compute_resources: List[dict], k8s_resources: List[dict] = None) -> List[str]:
+        """Render VM/compute resources with their network interfaces and Kubernetes workloads nested.
         
         Detects and prevents circular parent-child relationships and deduplicates nodes.
+        If k8s_resources provided, they are rendered as nested workloads inside the compute resource
+        (representing K8s workloads running on the VM/EC2 worker node).
         """
         if not compute_resources:
             return []
+        
+        if k8s_resources is None:
+            k8s_resources = []
         
         lines: List[str] = []
         
@@ -1779,20 +1814,37 @@ class HierarchicalDiagramBuilder:
                         continue
                 non_circular_children.append(child)
             
-            if non_circular_children:
+            # Check if we have K8s workloads or children to nest
+            has_k8s = bool(k8s_resources)
+            has_children = bool(non_circular_children)
+            
+            if has_k8s or has_children:
                 # Render VM as subgraph with children
                 lines.append(f"  subgraph {vm_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(vm_name))}]")
                 self._emitted_mermaid_ids.add(vm_id)
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
+                
+                # Render regular children (NICs, disks, etc.)
                 for child in non_circular_children:
                     # Deduplicate: skip if child already emitted
                     if child['resource_name'] not in self.emitted_nodes:
                         lines.append(self.render_node(child, indent="    "))
                         self.emitted_nodes.add(child['resource_name'])
+                
+                # Render Kubernetes workloads inside the compute resource (K8s runs on EC2 worker node)
+                if has_k8s:
+                    k8s_lines = self.render_kubernetes_cluster(k8s_resources)
+                    for line in k8s_lines:
+                        # Indent K8s lines to be inside the compute subgraph
+                        if line.startswith("  "):
+                            lines.append("  " + line)
+                        else:
+                            lines.append(line)
+                
                 lines.append("  end")
             else:
-                # No non-circular children, render as regular node
+                # No children, render as regular node
                 lines.append(self.render_node(vm))
             
             self.emitted_nodes.add(vm_name)
@@ -3354,16 +3406,39 @@ class HierarchicalDiagramBuilder:
             and not r.get('resource_name', '').startswith('${local.')
         ]
         
+        # Also collect compute resources early (EC2 instances, VMs, etc.) - they'll be rendered inside network tier
+        compute_resources = [
+            r for r in self.resources
+            if self.is_compute_resource(r)
+            and r['id'] not in all_children
+            and r['id'] not in apim_related_ids
+            and r['id'] not in sb_related_ids
+            and r['id'] not in k8s_related_ids
+            and r['id'] not in monitoring_related_ids
+            and not r.get('resource_name', '').startswith('${var.')
+            and not r.get('resource_name', '').startswith('${local.')
+        ]
+        
         network_related_ids = {r['id'] for r in network_resources}
         for res in network_resources:
             for child in self.children_by_parent.get(res['id'], []):
                 network_related_ids.add(child['id'])
         
-        # Render network hierarchy
-        network_lines = self.render_network_hierarchy(network_resources)
+        # Render network hierarchy with compute resources nested inside (EC2 instances run in network/VPC)
+        # Store K8s resources temporarily so render_network_hierarchy can access them
+        self._k8s_for_compute = k8s_resources
+        network_lines = self.render_network_hierarchy(network_resources, compute_resources)
         if network_lines:
             lines.extend(network_lines)
             lines.append("")
+        
+        # Mark compute resources as emitted since they're rendered in network hierarchy
+        for compute in compute_resources:
+            self.emitted_nodes.add(compute['resource_name'])
+        
+        # Mark K8s resources as emitted since they're rendered in compute (inside network)
+        for k8s in k8s_resources:
+            self.emitted_nodes.add(k8s['resource_name'])
         
         # Render APIM hierarchy
         apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
@@ -3371,11 +3446,8 @@ class HierarchicalDiagramBuilder:
             lines.extend(apim_lines)
             lines.append("")
         
-        # Render Kubernetes cluster
-        k8s_lines = self.render_kubernetes_cluster(k8s_resources)
-        if k8s_lines:
-            lines.extend(k8s_lines)
-            lines.append("")
+        # Note: Kubernetes cluster will be rendered as children of compute resources (EC2 worker nodes)
+        # because K8s workloads run ON the compute instances. Don't render K8s separately.
         
         # Render Service Bus
         sb_lines = self.render_service_bus(sb_resources)
@@ -3475,19 +3547,7 @@ class HierarchicalDiagramBuilder:
         # Render other resources not in above categories (exclude subscriptions which are metadata)
         connected_resource_names = set(self.connected_resource_names)
 
-        # Collect compute/VM IDs
-        compute_resources = [
-            r for r in self.resources
-            if self.is_compute_resource(r)
-            and r['id'] not in all_children
-            and r['id'] not in apim_related_ids
-            and r['id'] not in sb_related_ids
-            and r['id'] not in k8s_related_ids
-            and r['id'] not in monitoring_related_ids
-            and r['id'] not in network_related_ids  # Skip compute already nested in networks
-            and not r.get('resource_name', '').startswith('${var.')
-            and not r.get('resource_name', '').startswith('${local.')
-        ]
+        # Collect compute-related IDs (they're already in compute_resources from earlier)
         compute_related_ids = {r['id'] for r in compute_resources}
         # Also add children of compute resources
         for vm in compute_resources:
@@ -3508,11 +3568,8 @@ class HierarchicalDiagramBuilder:
             and not r.get('resource_name', '').startswith('${local.')
         ]
 
-        # Render compute hierarchy
-        compute_lines = self.render_compute_hierarchy(compute_resources)
-        if compute_lines:
-            lines.extend(compute_lines)
-            lines.append("")
+        # Note: Compute and K8s resources are already rendered in network hierarchy above
+        # No need to render them again
 
         sql_lines = self.render_sql_hierarchy(sql_resources)
         if sql_lines:
