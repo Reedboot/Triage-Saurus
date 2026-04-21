@@ -209,7 +209,8 @@ class HierarchicalDiagramBuilder:
     def _should_include_resource_type(self, resource_type: str) -> bool:
         """Return True when a resource type should appear in the diagram."""
         rt = (resource_type or "").lower()
-        return rt not in _ARCHITECTURE_DIAGRAM_EXCLUSIONS and "rbac" not in rt
+        return rt not in _ARCHITECTURE_DIAGRAM_EXCLUSIONS
+
 
 
     def _is_connected_name(self, name: str) -> bool:
@@ -2114,11 +2115,11 @@ class HierarchicalDiagramBuilder:
         for r in k8s_resources:
             if r in cluster_resources or r['id'] in workload_ids_seen:
                 continue
-            if any(t in (r.get('resource_type') or '').lower() for t in _CATALOG_TYPES):
+            if any(t == (r.get('resource_type') or '').lower() for t in _CATALOG_TYPES):
                 continue
             
             res_type = (r.get('resource_type') or '').lower()
-            is_workload_type = any(wt in res_type for wt in _WORKLOAD_TYPES)
+            is_workload_type = any(res_type == wt or res_type.endswith('_' + wt) for wt in _WORKLOAD_TYPES)
             is_connected = self._is_connected_name(r.get('resource_name', ''))
             is_significant = self._is_architecturally_significant(r)
             
@@ -2578,6 +2579,22 @@ class HierarchicalDiagramBuilder:
                 continue
             if not _is_internet(tgt) and tgt not in self.emitted_nodes:
                 continue
+            
+            # Skip connections to excluded resource types (RBAC, ServiceAccount, etc.)
+            # These resources shouldn't appear in the diagram, so their connections shouldn't either
+            if tgt in self.resource_by_name:
+                tgt_resources = self.resource_by_name[tgt]
+                if not isinstance(tgt_resources, list):
+                    tgt_resources = [tgt_resources]
+                for tgt_res in tgt_resources:
+                    if not self._should_include_resource_type(tgt_res.get('resource_type') or ''):
+                        break
+                else:
+                    # All target resources are includable, proceed
+                    pass
+                if not any(self._should_include_resource_type(tr.get('resource_type') or '') for tr in tgt_resources):
+                    # Target resource type should be excluded, skip this connection
+                    continue
             
             src_id = self.node_id_override.get(src) or (sanitize_id(src) if not _is_internet(src) else 'internet')
             tgt_id = self.node_id_override.get(tgt) or (sanitize_id(tgt) if not _is_internet(tgt) else 'internet')
