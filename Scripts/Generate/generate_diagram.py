@@ -1752,8 +1752,16 @@ class HierarchicalDiagramBuilder:
                     compute_name = compute['resource_name']
                     compute_id = sanitize_id(compute_name)
                     
+                    # Add resource type to label for clarity (EC2, RDS, etc.)
+                    resource_type = compute.get('resource_type', '')
+                    type_label = get_friendly_type(resource_type) if resource_type else ''
+                    if type_label:
+                        display_label = f"{type_label} - {compute_name}"
+                    else:
+                        display_label = compute_name
+                    
                     # Start compute subgraph
-                    lines.append(f'    subgraph {compute_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(compute_name))}]')
+                    lines.append(f'    subgraph {compute_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(display_label))}]')
                     self._emitted_mermaid_ids.add(compute_id)
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
@@ -2163,7 +2171,9 @@ class HierarchicalDiagramBuilder:
 
         for namespace, namespace_resources in resources_by_namespace.items():
             namespace_id = f"k8s_ns_{sanitize_id(namespace)}"
-            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace)}]")
+            # Add resource type to label for clarity (Namespace)
+            namespace_display = f"Namespace - {namespace}"
+            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]")
 
             # Separate resources by type for proper nesting (use exact type matching, not substrings)
             services = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_service']
