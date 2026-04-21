@@ -1632,9 +1632,14 @@ def insert_resource(
 
 
 def ensure_inferred_aks_cluster(experiment_id: str, repo_name: str) -> Optional[int]:
-    """Ensure a synthetic AKS cluster exists when k8s workloads exist but no cluster was scanned.
+    """Ensure a synthetic cluster exists when k8s workloads exist but no cluster was scanned.
 
-    This happens when a repo deploys to AKS via a remote Terraform module (e.g., terraform-aks)
+    Detects the provider (AWS/Azure/GCP) and creates the appropriate cluster type:
+    - Azure: azurerm_kubernetes_cluster (AKS)
+    - AWS: aws_eks_cluster (EKS)
+    - GCP: google_container_cluster (GKE)
+
+    This happens when a repo deploys to a cluster via a remote Terraform module
     and only Skaffold/K8s workloads are visible locally.
 
     NOTE: We do NOT parent kubernetes_* resources under the cluster in DB because some
@@ -1657,17 +1662,65 @@ def ensure_inferred_aks_cluster(experiment_id: str, repo_name: str) -> Optional[
             if not has_k8s:
                 return None
 
-            existing = conn.execute(
-                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' LIMIT 1",
+            # Detect primary provider by counting resources per provider
+            # Exclude kubernetes and docker as they don't indicate a cloud provider
+            provider_counts = conn.execute(
+                """
+                SELECT provider, COUNT(*) as cnt FROM resources
+                WHERE experiment_id=? AND repo_id=? AND provider IS NOT NULL
+                AND provider NOT IN ('kubernetes', 'docker')
+                GROUP BY provider ORDER BY cnt DESC
+                """,
                 (experiment_id, repo_id),
+            ).fetchall()
+
+            # Determine cluster type based on primary cloud provider
+            # If no cloud providers found, look for any provider hints
+            if not provider_counts:
+                # Fall back to checking for any cloud-specific resources
+                aws_check = conn.execute(
+                    "SELECT 1 FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type LIKE 'aws_%' LIMIT 1",
+                    (experiment_id, repo_id),
+                ).fetchone()
+                if aws_check:
+                    primary_provider = "aws"
+                else:
+                    gcp_check = conn.execute(
+                        "SELECT 1 FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type LIKE 'google_%' LIMIT 1",
+                        (experiment_id, repo_id),
+                    ).fetchone()
+                    if gcp_check:
+                        primary_provider = "gcp"
+                    else:
+                        primary_provider = "azure"
+            else:
+                primary_provider = provider_counts[0][0].lower()
+            
+            if primary_provider.startswith("aws"):
+                cluster_type = "aws_eks_cluster"
+                provider = "aws"
+                cluster_suffix = "eks-cluster"
+            elif primary_provider.startswith("gcp") or primary_provider.startswith("google"):
+                cluster_type = "google_container_cluster"
+                provider = "gcp"
+                cluster_suffix = "gke-cluster"
+            else:
+                cluster_type = "azurerm_kubernetes_cluster"
+                provider = "azure"
+                cluster_suffix = "aks-cluster"
+
+            # Check if any real cluster already exists for this provider
+            existing = conn.execute(
+                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type=? LIMIT 1",
+                (experiment_id, repo_id, cluster_type),
             ).fetchone()
             if existing:
                 return int(existing[0])
 
-            inferred_name = f"__inferred__{repo_name}-aks-cluster"
+            inferred_name = f"__inferred__{repo_name}-{cluster_suffix}"
             inferred_existing = conn.execute(
-                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' AND resource_name=? LIMIT 1",
-                (experiment_id, repo_id, inferred_name),
+                "SELECT id FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type=? AND resource_name=? LIMIT 1",
+                (experiment_id, repo_id, cluster_type, inferred_name),
             ).fetchone()
             if inferred_existing:
                 cluster_id = int(inferred_existing[0])
@@ -1677,10 +1730,10 @@ def ensure_inferred_aks_cluster(experiment_id: str, repo_name: str) -> Optional[
                     INSERT INTO resources
                       (experiment_id, repo_id, resource_name, resource_type, provider, discovered_by, discovery_method, source_file, source_line_start, status)
                     VALUES
-                      (?, ?, ?, 'azurerm_kubernetes_cluster', 'azure', 'Inference', 'k8s_workloads', 'inferred:k8s_workloads', 1, 'active')
+                      (?, ?, ?, ?, ?, 'Inference', 'k8s_workloads', 'inferred:k8s_workloads', 1, 'active')
                     RETURNING id
                     """,
-                    (experiment_id, repo_id, inferred_name),
+                    (experiment_id, repo_id, inferred_name, cluster_type, provider),
                 )
                 row = cur.fetchone()
                 cluster_id = int(row[0]) if row else None
@@ -1704,9 +1757,11 @@ def ensure_inferred_aks_cluster(experiment_id: str, repo_name: str) -> Optional[
 
 
 def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
-    """Try to link an inferred AKS cluster to a real AKS cluster from a scanned module repo.
+    """Try to link an inferred cluster to a real cluster from a scanned module repo.
 
-    If we can't resolve a single cluster, store an AI-suggested open question in ai_open_questions.
+    Detects the cluster type (AKS/EKS/GKE) from the inferred resource and finds matching
+    clusters in candidate module repos. If we can't resolve a single cluster, store an 
+    AI-suggested open question in ai_open_questions.
     """
     try:
         with get_db_connection() as conn:
@@ -1718,14 +1773,32 @@ def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
                 return
             repo_id = int(repo_row[0])
 
+            # Find any inferred cluster (AKS, EKS, or GKE)
             inferred_row = conn.execute(
-                "SELECT id, resource_name FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' AND resource_name LIKE '__inferred__%' LIMIT 1",
+                """
+                SELECT id, resource_name, resource_type FROM resources 
+                WHERE experiment_id=? AND repo_id=? AND resource_name LIKE '__inferred__%'
+                AND resource_type IN ('azurerm_kubernetes_cluster', 'aws_eks_cluster', 'google_container_cluster')
+                LIMIT 1
+                """,
                 (experiment_id, repo_id),
             ).fetchone()
             if not inferred_row:
                 return
             inferred_cluster_id = int(inferred_row[0])
             inferred_cluster_name = str(inferred_row[1] or '').strip()
+            inferred_cluster_type = str(inferred_row[2] or 'azurerm_kubernetes_cluster').strip()
+
+            # Determine cluster type name for user messaging
+            if inferred_cluster_type == 'aws_eks_cluster':
+                cluster_type_name = "EKS"
+                search_type = "aws_eks_cluster"
+            elif inferred_cluster_type == 'google_container_cluster':
+                cluster_type_name = "GKE"
+                search_type = "google_container_cluster"
+            else:
+                cluster_type_name = "AKS"
+                search_type = "azurerm_kubernetes_cluster"
 
             # If we already have a cross-repo link from this inferred cluster, do nothing.
             existing_link = conn.execute(
@@ -1778,8 +1851,8 @@ def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
                     continue
                 cand_repo_id = int(rr[0])
                 clusters = conn.execute(
-                    "SELECT id, resource_name FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type='azurerm_kubernetes_cluster' LIMIT 5",
-                    (experiment_id, cand_repo_id),
+                    "SELECT id, resource_name FROM resources WHERE experiment_id=? AND repo_id=? AND resource_type=? LIMIT 5",
+                    (experiment_id, cand_repo_id, search_type),
                 ).fetchall()
                 if len(clusters) == 1:
                     resolved.append((cand_repo, int(clusters[0][0]), str(clusters[0][1] or '').strip()))
@@ -1795,7 +1868,7 @@ def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
                         connection_type='equivalent_to',
                         source_repo=repo_name,
                         target_repo=cand_repo,
-                        notes='Inferred: repo uses Terraform module that likely provisions AKS cluster',
+                        notes=f'Inferred: repo uses Terraform module that likely provisions {cluster_type_name} cluster',
                     )
                 except Exception:
                     pass
@@ -1819,7 +1892,7 @@ def infer_aks_cluster_link(experiment_id: str, repo_name: str) -> None:
                 trigger_file, trigger_line = candidate_repos[0][1], candidate_repos[0][2]
 
             question = (
-                f"Which AKS cluster do the Kubernetes workloads in repo '{repo_name}' run on (cluster name + owning repo/module)?"
+                f"Which {cluster_type_name} cluster do the Kubernetes workloads in repo '{repo_name}' run on (cluster name + owning repo/module)?"
             )
             if candidate_repos:
                 cands = ", ".join([cr for cr, _, _ in candidate_repos[:4]])
@@ -3603,3 +3676,107 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
         _logger.error(f"Failed to retrieve cloud diagrams for experiment_id={experiment_id}, repo_name={repo_name}: {e}", exc_info=True)
         return []
 
+
+
+def fix_nested_resource_providers(experiment_id: str, repo_id: Optional[int] = None) -> Dict[str, int]:
+     """Fix provider assignment for nested resources (docker_container, kubernetes_*).
+     
+     Docker containers should inherit provider from parent EC2 instance.
+     Kubernetes resources should inherit provider from parent kubernetes cluster or experiment cloud provider.
+     
+     Returns dict with counts: {'docker_fixed': int, 'kubernetes_fixed': int, 'errors': int}
+     """
+     results = {"docker_fixed": 0, "kubernetes_fixed": 0, "errors": 0}
+     
+     with get_db_connection() as conn:
+         cursor = conn.cursor()
+         
+         # Fix docker_container resources - inherit from parent EC2 instance
+         try:
+             docker_resources = cursor.execute(
+                 """SELECT r.id, r.parent_resource_id, r.provider 
+                    FROM resources r
+                    WHERE r.experiment_id = ? AND r.resource_type = 'docker_container' AND r.provider = 'docker'
+                    """ + (f"AND r.repo_id = {repo_id} " if repo_id else ""),
+                 (experiment_id,)
+             ).fetchall()
+             
+             for docker_id, parent_id, current_provider in docker_resources:
+                 if parent_id:
+                     parent = cursor.execute(
+                         "SELECT provider FROM resources WHERE id = ?",
+                         (parent_id,)
+                     ).fetchone()
+                     if parent and parent['provider'] and parent['provider'] != 'docker':
+                         cursor.execute(
+                             "UPDATE resources SET provider = ? WHERE id = ?",
+                             (parent['provider'], docker_id)
+                         )
+                         results["docker_fixed"] += 1
+             
+             conn.commit()
+         except Exception as e:
+             _logger.error(f"Error fixing docker provider for experiment {experiment_id}: {e}")
+             results["errors"] += 1
+         
+         # Fix kubernetes_* resources - inherit from parent cluster or experiment provider
+         try:
+             k8s_types = [
+                 'kubernetes_cluster', 'kubernetes_namespace', 'kubernetes_pod',
+                 'kubernetes_deployment', 'kubernetes_stateful_set', 'kubernetes_daemon_set',
+                 'kubernetes_daemonset', 'kubernetes_job', 'kubernetes_cronjob',
+                 'kubernetes_service', 'kubernetes_ingress', 'kubernetes_config_map',
+                 'kubernetes_secret', 'kubernetes_serviceaccount', 'kubernetes_role',
+                 'kubernetes_clusterrole', 'kubernetes_role_binding', 'kubernetes_rolebinding',
+                 'kubernetes_clusterrolebinding'
+             ]
+             
+             k8s_resources = cursor.execute(
+                 f"""SELECT r.id, r.resource_type, r.parent_resource_id, r.provider 
+                     FROM resources r
+                     WHERE r.experiment_id = ? AND r.resource_type IN ({','.join(['?']*len(k8s_types))}) 
+                     AND r.provider = 'kubernetes'
+                     """ + (f"AND r.repo_id = {repo_id} " if repo_id else ""),
+                 [experiment_id] + k8s_types
+             ).fetchall()
+             
+             for k8s_id, rtype, parent_id, current_provider in k8s_resources:
+                 new_provider = None
+                 
+                 # First try to inherit from parent
+                 if parent_id:
+                     parent = cursor.execute(
+                         "SELECT provider FROM resources WHERE id = ?",
+                         (parent_id,)
+                     ).fetchone()
+                     if parent and parent['provider'] and parent['provider'] != 'kubernetes':
+                         new_provider = parent['provider']
+                 
+                 # If no parent or parent is also kubernetes, infer from experiment context
+                 if not new_provider:
+                     # Get the most common cloud provider in this experiment
+                     provider_counts = cursor.execute(
+                         """SELECT provider, COUNT(*) as cnt FROM resources
+                            WHERE experiment_id = ? AND provider NOT IN ('kubernetes', 'docker', 'terraform', 'unknown', '')
+                            """ + (f"AND r.repo_id = {repo_id} " if repo_id else "") + 
+                            """GROUP BY provider ORDER BY cnt DESC LIMIT 1""",
+                         (experiment_id,)
+                     ).fetchone()
+                     
+                     if provider_counts and provider_counts['provider']:
+                         new_provider = provider_counts['provider']
+                 
+                 # Update if we found a cloud provider
+                 if new_provider:
+                     cursor.execute(
+                         "UPDATE resources SET provider = ? WHERE id = ?",
+                         (new_provider, k8s_id)
+                     )
+                     results["kubernetes_fixed"] += 1
+             
+             conn.commit()
+         except Exception as e:
+             _logger.error(f"Error fixing kubernetes provider for experiment {experiment_id}: {e}")
+             results["errors"] += 1
+     
+     return results

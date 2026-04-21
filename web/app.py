@@ -965,7 +965,7 @@ def _fetch_overview_facts(experiment_id: str, repo_name: str) -> tuple[int, dict
             return None
         repo_id = int(repo_row["id"])
 
-        # Ensure inferred AKS cluster exists (so facts/AI can see it) when only k8s workloads are present.
+        # Ensure inferred cluster exists (AKS/EKS/GKE) when only k8s workloads are present.
         try:
             from Scripts.Persist import db_helpers as _dbh  # type: ignore
             _dbh.ensure_inferred_aks_cluster(experiment_id, repo_name)
@@ -7273,8 +7273,8 @@ def api_view_assets(experiment_id: str, repo_name: str):
             )
         experiment_target = resolved_exp_id
 
-        # Best-effort: if k8s workloads exist but no AKS cluster is defined in this repo,
-        # create an inferred cluster so Assets can nest correctly.
+        # Best-effort: if k8s workloads exist but no cluster is defined in this repo,
+        # create an inferred cluster (AKS/EKS/GKE) so Assets can nest correctly.
         try:
             from Scripts.Persist import db_helpers as _dbh  # type: ignore
             _dbh.ensure_inferred_aks_cluster(experiment_target, repo_name)
@@ -7658,8 +7658,28 @@ def api_view_findings(experiment_id: str, repo_name: str):
                 f['provider'] = _infer_provider_from_rule(f.get('rule_id', ''))
             provider_key = _canonical_provider_key(f.get('provider'))
             f['provider'] = 'Unknown' if provider_key == 'unknown' else provider_key
+            
+            # Determine discovery type (Container/Kubernetes, IaC, or Code)
+            rule_id = (f.get('rule_id') or '').lower()
+            source_file = (f.get('source_file') or '').lower()
+            
+            if rule_id.startswith('kubernetes-') or '.yaml' in source_file or '.yml' in source_file:
+                if rule_id.startswith('kubernetes-'):
+                    f['discovery_type'] = 'Container/Kubernetes'
+                else:
+                    # YAML could be Kubernetes or IaC; if kubernetes-like, treat as Kubernetes
+                    f['discovery_type'] = 'IaC'
+            elif any(ext in source_file for ext in ['.tf', '.json', '.hcl', 'terraform', 'cloudformation']):
+                f['discovery_type'] = 'IaC'
+            else:
+                f['discovery_type'] = 'Code'
         
-        # Sort by severity first (Critical → High → Medium → Low), then provider, then score desc
+        # Sort by discovery type, severity, then provider and score
+        discovery_type_order = {
+            'Container/Kubernetes': 1,
+            'IaC': 2,
+            'Code': 3,
+        }
         provider_order = {
             'aws': 1,
             'azure': 2,
@@ -7672,6 +7692,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
         }
         severity_order = {'CRITICAL': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4, 'INFO': 5}
         findings.sort(key=lambda f: (
+            discovery_type_order.get(f.get('discovery_type', 'Code'), 4),
             severity_order.get((f.get('base_severity') or 'INFO').upper(), 6),
             -(f.get('severity_score', 0) or 0),
             provider_order.get(_canonical_provider_key(f.get('provider')), provider_order['Unknown']),
@@ -9262,6 +9283,22 @@ def api_view_roles(experiment_id: str, repo_name: str):
             if _is_broad_role(role_name) and _is_broad_scope(entry.get("resource_name")):
                 entry["is_excessive"] = 1
                 permission_details.append("⚠️ Broad role at resource-group/subscription scope")
+            
+            # Check for Kubernetes RBAC security findings
+            if not entry.get("is_excessive"):
+                k8s_findings = conn.execute(
+                    """
+                    SELECT DISTINCT f.title, f.rule_id, f.base_severity
+                    FROM findings f
+                    WHERE f.resource_id = ? AND f.rule_id LIKE 'kubernetes-%'
+                    """,
+                    (resource_id,),
+                ).fetchall()
+                if k8s_findings:
+                    entry["is_excessive"] = 1
+                    for f in k8s_findings:
+                        permission_details.append(f"⚠️ {f['title']} ({f['rule_id']})")
+
 
             if _is_broad_role(role_name) and resolved_principal and _is_compute_like(resolved_principal.get("resource_type")):
                 permission_details.append(

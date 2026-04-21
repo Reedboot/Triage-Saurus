@@ -1,0 +1,47 @@
+{
+  "id": "ci-exposed-jenkins-001",
+  "name": "Exposed Jenkins on Port 8080",
+  "description": "Detects Jenkins service exposed on port 8080 to internet without authentication, enabling remote code execution",
+  "pattern": {
+    "resource_type": ["security_group_rule", "firewall_rule", "network_security_group_rule"],
+    "paths": [
+      "$"
+    ],
+    "conditions": [
+      {
+        "type": "all_of",
+        "conditions": [
+          {
+            "type": "field_value",
+            "field": "from_port",
+            "operator": "equals",
+            "value": 8080
+          },
+          {
+            "type": "field_value",
+            "field": "cidr_blocks[0]",
+            "operator": "equals",
+            "value": "0.0.0.0/0"
+          },
+          {
+            "type": "field_value",
+            "field": "protocol",
+            "operator": "equals",
+            "value": "tcp"
+          }
+        ]
+      }
+    ]
+  },
+  "severity": "CRITICAL",
+  "cwe": ["CWE-434", "CWE-552"],
+  "finding_type": "exposed_service",
+  "related_container_pattern": "jenkins:.*",
+  "remediation": "Restrict access to port 8080. Use VPN/bastion host. Enable authentication on Jenkins. Use reverse proxy with auth. Disable JNLP agent port 50000.",
+  "tags": ["jenkins", "ci-cd", "remote-code-execution", "exposure", "authentication", "owasp-top10"],
+  "references": [
+    "https://www.jenkins.io/doc/book/security/",
+    "https://owasp.org/www-community/attacks/Unsafe_use_of_Reflection",
+    "https://eksgoat.peachycloudsecurity.com/"
+  ]
+}

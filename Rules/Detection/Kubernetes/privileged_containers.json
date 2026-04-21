@@ -1,0 +1,31 @@
+{
+  "id": "k8s-privileged-container-001",
+  "name": "Privileged Containers",
+  "description": "Detects Kubernetes containers running with privileged security context, enabling host escape",
+  "pattern": {
+    "resource_type": ["deployment", "statefulset", "daemonset", "pod", "job", "cronjob"],
+    "paths": [
+      "$.spec.template.spec.containers[*]",
+      "$.spec.containers[*]",
+      "$.spec.jobTemplate.spec.template.spec.containers[*]"
+    ],
+    "conditions": [
+      {
+        "type": "field_value",
+        "field": "securityContext.privileged",
+        "operator": "equals",
+        "value": true
+      }
+    ]
+  },
+  "severity": "CRITICAL",
+  "cwe": ["CWE-95", "CWE-269"],
+  "finding_type": "privilege_escalation_risk",
+  "remediation": "Set privileged: false. Use capabilities instead of privileged mode. Apply Pod Security Policies. Use restrictive securityContext.",
+  "tags": ["kubernetes", "container", "privilege-escalation", "security-context", "pod-escape", "owasp-k8s"],
+  "references": [
+    "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/",
+    "https://kubesec.io/",
+    "https://madhuakula.com/kubernetes-goat/scenarios/5-container-escape"
+  ]
+}
