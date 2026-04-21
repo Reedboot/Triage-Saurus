@@ -44,6 +44,9 @@ _INFER_SEMANTIC   = SCRIPTS / "Analyze"  / "infer_semantic_connections.py"
 _RELINK        = SCRIPTS / "Persist"    / "relink_findings_to_resources.py"
 _EXTRACT_SG_CONN = SCRIPTS / "Enrich"    / "extract_sg_connections.py"
 _EXTRACT_CONTAINERS = SCRIPTS / "Enrich" / "extract_containers.py"
+_EXTRACT_CICD_ARTIFACTS = SCRIPTS / "Enrich" / "extract_cicd_artifacts.py"
+_LINK_CICD_TO_IAC = SCRIPTS / "Enrich" / "link_cicd_to_iac.py"
+_ANALYZE_CICD_ARTIFACTS = SCRIPTS / "Analyze" / "analyze_cicd_artifacts.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
 from db_helpers import get_db_connection
@@ -283,6 +286,24 @@ def main() -> int:
     _run(
         [sys.executable, str(_EXTRACT_CONTAINERS), "--experiment", experiment_id, "--repo", str(repo_path)],
         "Phase 3c.2 — Extract container definitions from user_data",
+    )
+
+    # ── Phase 3c.3: Extract CI/CD artifacts and deployment targets ──────────────
+    _run(
+        [sys.executable, str(_EXTRACT_CICD_ARTIFACTS), "--experiment", experiment_id, "--repo", str(repo_path)],
+        "Phase 3c.3 — Extract CI/CD artifacts and deployment targets",
+    )
+
+    # ── Phase 3c.4: Link CI/CD artifacts to IaC resources ──────────────────────
+    _run(
+        [sys.executable, str(_LINK_CICD_TO_IAC), "--experiment", experiment_id],
+        "Phase 3c.4 — Link CI/CD artifacts to IaC deployment targets",
+    )
+
+    # ── Phase 3c.5: Analyze CI/CD artifacts for security issues ────────────────
+    _run(
+        [sys.executable, str(_ANALYZE_CICD_ARTIFACTS), "--experiment", experiment_id],
+        "Phase 3c.5 — Analyze CI/CD artifacts for security vulnerabilities",
     )
 
     # ── Phase 3d: Architecture diagram ───────────────────────────────────────
