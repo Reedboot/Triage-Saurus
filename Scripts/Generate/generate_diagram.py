@@ -205,9 +205,20 @@ def _provider_matches(resource_provider: str | None, requested_provider: str | N
 
 
 def _provider_matches_resource(resource: dict, requested_provider: str | None) -> bool:
-    """Check if resource matches requested provider, inferring from resource_type if needed."""
+    """Check if resource matches requested provider, inferring from resource_type if needed.
+    
+    Kubernetes resources are matched to the cloud provider they run on. So if requesting
+    'aws', Kubernetes resources are INCLUDED (they run on AWS EKS).
+    """
     if not requested_provider:
         return True
+    
+    # Kubernetes resources are included in all cloud provider diagrams
+    # (they represent workloads deployed ON that provider)
+    rtype = (resource.get('resource_type') or '').lower()
+    if rtype.startswith('kubernetes_'):
+        return requested_provider.lower() in _provider_aliases(requested_provider)  # Always include for any provider
+    
     detected = _detect_provider_from_resource(resource)
     return detected.lower() in set(_provider_aliases(requested_provider))
     aliases = _provider_aliases(provider)
@@ -218,15 +229,25 @@ def _provider_matches_resource(resource: dict, requested_provider: str | None) -
 
 
 def _detect_provider_from_resource(resource: dict) -> str:
-    """Detect cloud provider from resource, checking both provider field and resource_type."""
+    """Detect cloud provider from resource, checking both provider field and resource_type.
+    
+    NOTE: Kubernetes resources are NOT treated as a separate provider because K8s is deployed
+    ON TOP of a cloud provider (e.g., AWS EKS). These resources should be included in the
+    diagram of their host provider, not split into separate diagrams.
+    """
     provider = _normalize_provider(resource.get('provider'))
     if provider and provider != 'unknown':
         return provider
     
     # Fallback: infer from resource_type prefix
     rtype = (resource.get('resource_type') or '').lower()
+    
+    # Kubernetes resources are deployed ON cloud providers, not separate providers
+    # So we don't treat them as a provider split point
     if rtype.startswith('kubernetes_'):
-        return 'kubernetes'
+        # Return 'unknown' so they don't trigger separate diagram creation
+        # They'll still be rendered in the cloud provider's diagram
+        return 'unknown'
     elif rtype.startswith('aws_'):
         return 'aws'
     elif rtype.startswith('azurerm_') or rtype.startswith('azure_'):
