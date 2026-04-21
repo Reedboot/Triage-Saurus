@@ -985,6 +985,35 @@ class HierarchicalDiagramBuilder:
         provider = (resource.get('provider') or '').lower()
         return provider == 'kubernetes' or 'kubernetes' in rtype or 'aks' in rtype
 
+    def is_native_eks(self) -> bool:
+        """Check if this is native EKS (aws_eks_cluster present) vs VM-based self-hosted K8s.
+        
+        Returns:
+            True if native EKS is detected (aws_eks_cluster resources exist)
+            False if VM-based K8s (EC2 + K8s manifests) or pure K8s provider
+        """
+        # Look for aws_eks_cluster resources
+        for r in self.resources:
+            rtype = (r.get('resource_type') or '').lower()
+            if 'eks_cluster' in rtype or 'eks' == rtype:
+                return True
+        return False
+    
+    def is_vm_based_kubernetes(self) -> bool:
+        """Check if K8s resources are running on VMs (self-hosted on EC2/instances).
+        
+        Returns:
+            True if both EC2 instances AND K8s manifests are present (but no EKS cluster)
+            False if pure K8s or native EKS
+        """
+        if self.is_native_eks():
+            return False
+        
+        has_compute = any(self.is_compute_resource(r) for r in self.resources)
+        has_k8s = any(self.is_kubernetes(r) for r in self.resources)
+        
+        return has_compute and has_k8s
+
     def get_kubernetes_namespace(self, resource: dict) -> str:
         """Resolve Kubernetes namespace from resource properties with sane fallbacks."""
         props = resource.get('properties') or {}
@@ -3215,13 +3244,27 @@ class HierarchicalDiagramBuilder:
                 continue  # Parent not rendered; treat children as top-level nodes.
             all_children.update(c['id'] for c in children)
         
-        # Categorize resources  
+        # Categorize resources
+        # Detect if this is VM-based K8s (EC2 + K8s manifests) vs pure/native K8s
+        is_vm_based_k8s = self.is_vm_based_kubernetes()
+        
         apim_apis = [r for r in self.resources if self.is_api_gateway(r) and r['id'] not in all_children
                     and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
         apim_products = [r for r in self.resources if self.is_api_product(r) and r['id'] not in all_children
                         and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
-        k8s_resources = [r for r in self.resources if self.is_kubernetes(r) and r['id'] not in all_children
-                        and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+        
+        # For VM-based K8s: K8s resources should be nested inside compute, not separated
+        # For pure/native K8s: K8s resources are rendered in standalone K8s cluster tier
+        if is_vm_based_k8s:
+            # Don't treat K8s as a separate tier; they'll be nested in compute
+            k8s_resources = []
+            k8s_related_ids = set()
+        else:
+            # Pure/native K8s: render as separate tier
+            k8s_resources = [r for r in self.resources if self.is_kubernetes(r) and r['id'] not in all_children
+                            and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
+            k8s_related_ids = {r['id'] for r in k8s_resources}
+        
         # Don't filter SB by all_children - we'll handle parent-child internally
         sb_resources = [r for r in self.resources if self.is_service_bus(r)
                        and not r.get('resource_name', '').startswith('${var.') and not r.get('resource_name', '').startswith('${local.')]
@@ -3242,9 +3285,6 @@ class HierarchicalDiagramBuilder:
         # Collect Service Bus IDs
         sb_related_ids = {r['id'] for r in sb_resources}
         
-        # Collect K8s IDs
-        k8s_related_ids = {r['id'] for r in k8s_resources}
-
         # Collect monitoring IDs (handled by dedicated subgraph)
         monitoring_related_ids = {r['id'] for r in monitoring_resources}
 
@@ -3451,9 +3491,15 @@ class HierarchicalDiagramBuilder:
             for child in self.children_by_parent.get(res['id'], []):
                 network_related_ids.add(child['id'])
         
+        # Collect ALL K8s resources (whether nested or standalone) for potential nesting in compute
+        all_k8s_resources = [r for r in self.resources if self.is_kubernetes(r) 
+                            and not r.get('resource_name', '').startswith('${var.') 
+                            and not r.get('resource_name', '').startswith('${local.')]
+        
         # Render network hierarchy with compute resources nested inside (EC2 instances run in network/VPC)
         # Store K8s resources temporarily so render_network_hierarchy can access them
-        self._k8s_for_compute = k8s_resources
+        # For VM-based K8s: they'll be nested inside compute; for pure K8s they'll be ignored here
+        self._k8s_for_compute = all_k8s_resources if is_vm_based_k8s else []
         network_lines = self.render_network_hierarchy(network_resources, compute_resources)
         if network_lines:
             lines.extend(network_lines)
@@ -3463,9 +3509,10 @@ class HierarchicalDiagramBuilder:
         for compute in compute_resources:
             self.emitted_nodes.add(compute['resource_name'])
         
-        # Mark K8s resources as emitted since they're rendered in compute (inside network)
-        for k8s in k8s_resources:
-            self.emitted_nodes.add(k8s['resource_name'])
+        # Mark K8s resources as emitted if they were nested in compute (VM-based K8s)
+        if is_vm_based_k8s:
+            for k8s in all_k8s_resources:
+                self.emitted_nodes.add(k8s['resource_name'])
         
         # Render APIM hierarchy
         apim_lines = self.render_apim_hierarchy(apim_apis, apim_products)
@@ -3473,8 +3520,20 @@ class HierarchicalDiagramBuilder:
             lines.extend(apim_lines)
             lines.append("")
         
-        # Note: Kubernetes cluster will be rendered as children of compute resources (EC2 worker nodes)
-        # because K8s workloads run ON the compute instances. Don't render K8s separately.
+        # Render Kubernetes cluster standalone (not nested in compute)
+        # This applies to:
+        # - Pure K8s (no compute resources at all)
+        # - Native EKS (has compute/node groups but K8s is a separate managed service, not nested)
+        # NOT rendered: VM-based K8s (already nested inside compute, k8s_resources is empty)
+        if k8s_resources:
+            # Pure/native K8s: render as separate tier
+            k8s_lines = self.render_kubernetes_cluster(k8s_resources)
+            if k8s_lines:
+                lines.extend(k8s_lines)
+                lines.append("")
+            # Mark K8s resources as emitted after standalone rendering
+            for k8s in k8s_resources:
+                self.emitted_nodes.add(k8s['resource_name'])
         
         # Render Service Bus
         sb_lines = self.render_service_bus(sb_resources)
