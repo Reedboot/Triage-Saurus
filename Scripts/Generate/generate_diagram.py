@@ -1766,6 +1766,34 @@ class HierarchicalDiagramBuilder:
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
                     
+                    # Render docker containers inside compute
+                    compute_children = self.children_by_parent.get(compute.get('id'), [])
+                    docker_containers = [c for c in compute_children if 'docker_container' in (c.get('resource_type') or '').lower()]
+                    if docker_containers:
+                        lines.append('      subgraph containers["🐳 Docker Containers"]')
+                        for container in docker_containers:
+                            if container['resource_name'] not in self.emitted_nodes:
+                                image = container.get('resource_name', 'Container')
+                                import json
+                                try:
+                                    # Try to load image from properties
+                                    props = json.loads(container.get('properties', '{}') or '{}') if hasattr(container, 'get') else {}
+                                    if 'image' in props:
+                                        image = props['image']
+                                        if 'image_tag' in props and props['image_tag']:
+                                            image = f"{image}:{props['image_tag']}"
+                                except:
+                                    pass
+                                
+                                container_id = sanitize_id(container['resource_name'])
+                                container_label = f"🐳 {image}"
+                                if container_id not in self._emitted_mermaid_ids:
+                                    lines.append(f"        {container_id}[{self._quote_mermaid_label(container_label)}]")
+                                    self._emitted_mermaid_ids.add(container_id)
+                                    self._node_id_first_owner[container_id] = str(container.get('id', ''))
+                                self.emitted_nodes.add(container['resource_name'])
+                        lines.append('      end')
+                    
                     # Render K8s workloads inside compute (they run on it)
                     k8s_to_render = getattr(self, '_k8s_for_compute', [])
                     if k8s_to_render:
@@ -1827,7 +1855,12 @@ class HierarchicalDiagramBuilder:
             has_k8s = bool(k8s_resources)
             has_children = bool(non_circular_children)
             
-            if has_k8s or has_children:
+            # Check for docker containers as children
+            docker_containers = [c for c in non_circular_children if 'docker_container' in (c.get('resource_type') or '').lower()]
+            other_children = [c for c in non_circular_children if 'docker_container' not in (c.get('resource_type') or '').lower()]
+            has_containers = bool(docker_containers)
+            
+            if has_k8s or has_children or has_containers:
                 # Render VM as subgraph with children
                 lines.append(f"  subgraph {vm_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(vm_name))}]")
                 self._emitted_mermaid_ids.add(vm_id)
@@ -1835,11 +1868,37 @@ class HierarchicalDiagramBuilder:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
                 
                 # Render regular children (NICs, disks, etc.)
-                for child in non_circular_children:
+                for child in other_children:
                     # Deduplicate: skip if child already emitted
                     if child['resource_name'] not in self.emitted_nodes:
                         lines.append(self.render_node(child, indent="    "))
                         self.emitted_nodes.add(child['resource_name'])
+                
+                # Render Docker containers as subgraph
+                if has_containers:
+                    lines.append('    subgraph containers["🐳 Docker Containers"]')
+                    for container in docker_containers:
+                        if container['resource_name'] not in self.emitted_nodes:
+                            # Get image and ports from properties if available
+                            image = container.get('resource_name', 'Container')
+                            try:
+                                import json
+                                props = json.loads(container.get('properties', '{}') or '{}')
+                                if 'image' in props:
+                                    image = props['image']
+                                if 'image_tag' in props and props['image_tag']:
+                                    image = f"{image}:{props['image_tag']}"
+                            except:
+                                pass
+                            
+                            container_id = sanitize_id(container['resource_name'])
+                            container_label = f"🐳 {image}"
+                            if container_id not in self._emitted_mermaid_ids:
+                                lines.append(f"      {container_id}[{self._quote_mermaid_label(container_label)}]")
+                                self._emitted_mermaid_ids.add(container_id)
+                                self._node_id_first_owner[container_id] = str(container.get('id', ''))
+                            self.emitted_nodes.add(container['resource_name'])
+                    lines.append('    end')
                 
                 # Render Kubernetes workloads inside the compute resource (K8s runs on EC2 worker node)
                 if has_k8s:

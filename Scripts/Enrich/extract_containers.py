@@ -125,32 +125,52 @@ class ContainerExtractor:
                 continue
             
             # Extract everything after "docker run"
-            match = re.search(r'docker\s+run\s+(.+)$', line, re.IGNORECASE)
+            match = re.search(r'(sudo\s+)?docker\s+run\s+(.+)$', line, re.IGNORECASE)
             if not match:
                 continue
             
-            args = match.group(1)
+            args = match.group(2)
             
             # Parse flags and image from args
-            # Strategy: find the last non-flag token (the image)
-            # Flags start with - 
+            # Strategy: Parse Docker flags properly
+            # Single-letter flags like -p, -e, -v need value from next token
+            # Long flags use = like --name=value
             tokens = args.split()
             
-            # Find image - first token that doesn't start with -
             image = None
             flags_str = ''
-            image_idx = -1
+            i = 0
             
-            for i, token in enumerate(tokens):
-                if not token.startswith('-') and image is None:
+            while i < len(tokens):
+                token = tokens[i]
+                
+                # Short flag that takes a value (-p 8080:8080, -e KEY=VAL, -v /path)
+                if token.startswith('-') and len(token) == 2 and token[1] not in 'dD':
+                    # Most single-letter flags take a value
+                    flags_str += token + ' '
+                    if i + 1 < len(tokens):
+                        flags_str += tokens[i + 1] + ' '
+                        i += 2
+                    else:
+                        i += 1
+                # -d flag (detach, no value)
+                elif token in ['-d', '--detach']:
+                    flags_str += token + ' '
+                    i += 1
+                # Long flag
+                elif token.startswith('--'):
+                    flags_str += token + ' '
+                    if '=' not in token and i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
+                        flags_str += tokens[i + 1] + ' '
+                        i += 2
+                    else:
+                        i += 1
+                # Image or command
+                else:
                     image = token
-                    image_idx = i
                     break
-                flags_str += token + ' '
-            
-            # Handle multi-token flags like "-p 8080:8080"
-            if image_idx >= 0:
-                flags_str = ' '.join(tokens[:image_idx])
+                
+            # Everything after image is command/args (we don't need it for name)
             
             if not image:
                 continue
@@ -352,13 +372,55 @@ def extract_and_store_containers(repo_path: Path, experiment_id: str, db_path: P
 
 if __name__ == '__main__':
     import sys
+    import argparse
     
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <repo_path> <experiment_id> [db_path]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Extract container definitions from infrastructure code.",
+    )
+    parser.add_argument(
+        "--experiment",
+        required=True,
+        help="Experiment ID to process",
+    )
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="Repository path (auto-detected if not provided)",
+    )
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="Database path (default: Output/Data/cozo.db)",
+    )
     
-    repo_path = Path(sys.argv[1])
-    experiment_id = sys.argv[2]
-    db_path = Path(sys.argv[3]) if len(sys.argv) > 3 else Path.cwd() / 'Output/Data/cozo.db'
+    args = parser.parse_args()
     
-    extract_and_store_containers(repo_path, experiment_id, db_path)
+    # Determine repo path from database or use provided
+    if args.db:
+        db_path = Path(args.db)
+    else:
+        db_path = Path.cwd() / 'Output/Data/cozo.db'
+    
+    if args.repo:
+        repo_path = Path(args.repo)
+    else:
+        # Try to find repo from database experiment record
+        import sqlite3
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            result = conn.execute(
+                "SELECT target_repo FROM experiments WHERE id=? LIMIT 1",
+                (args.experiment,)
+            ).fetchone()
+            conn.close()
+            if result and result['target_repo']:
+                repo_path = Path(result['target_repo'])
+            else:
+                print(f"Error: Could not determine repo path. Provide with --repo", file=sys.stderr)
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error: Could not read database: {e}", file=sys.stderr)
+            sys.exit(1)
+    
+    extract_and_store_containers(repo_path, args.experiment, db_path)

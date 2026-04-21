@@ -42,6 +42,8 @@ _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
 _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
 _INFER_SEMANTIC   = SCRIPTS / "Analyze"  / "infer_semantic_connections.py"
 _RELINK        = SCRIPTS / "Persist"    / "relink_findings_to_resources.py"
+_EXTRACT_SG_CONN = SCRIPTS / "Enrich"    / "extract_sg_connections.py"
+_EXTRACT_CONTAINERS = SCRIPTS / "Enrich" / "extract_containers.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
 from db_helpers import get_db_connection
@@ -269,6 +271,18 @@ def main() -> int:
     _run(
         [sys.executable, str(_INFER_SEMANTIC), "--experiment", experiment_id],
         "Phase 3c — Infer semantic connections and data flows",
+    )
+
+    # ── Phase 3c.1: Extract security group connections (Internet exposure) ─────
+    _run(
+        [sys.executable, str(_EXTRACT_SG_CONN), "--experiment", experiment_id],
+        "Phase 3c.1 — Extract SG rules and create Internet exposure connections",
+    )
+
+    # ── Phase 3c.2: Extract container definitions from user_data ────────────────
+    _run(
+        [sys.executable, str(_EXTRACT_CONTAINERS), "--experiment", experiment_id, "--repo", str(repo_path)],
+        "Phase 3c.2 — Extract container definitions from user_data",
     )
 
     # ── Phase 3d: Architecture diagram ───────────────────────────────────────
