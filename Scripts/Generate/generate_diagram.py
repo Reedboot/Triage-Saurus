@@ -2159,16 +2159,54 @@ def main():
         sys.exit(0)
 
     if args.type == 'architecture':
-        diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=None)
-        # Detect providers in resources to use specific provider name when only one provider
+        # Detect all providers present in resources
         all_res = get_resources_for_diagram(args.experiment_id)
         providers = sorted({_normalize_provider(r.get('provider') or 'unknown') for r in all_res})
-        if len(providers) == 1:
+        
+        if not providers or providers == ['unknown']:
+            # Fallback: no detectable providers
+            diagram = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=None)
+            provider = 'unknown'
+            title = "Architecture Overview"
+        elif len(providers) == 1:
+            # Single provider: generate that provider's diagram
             provider = providers[0]
+            diagram = generate_architecture_diagram(
+                args.experiment_id, 
+                repo_name=args.repo, 
+                provider=provider  # Pass provider filter
+            )
             title = f"{provider.capitalize()} Architecture"
         else:
-            provider = 'combined'
-            title = "Combined Architecture"
+            # Multiple providers: generate separate diagram per provider instead of combining
+            print(f"Detected {len(providers)} cloud providers: {', '.join(providers)}", file=sys.stderr)
+            print(f"Generating separate diagram per provider...", file=sys.stderr)
+            
+            if not args.output:
+                args.output = Path(".")  # Default to current directory
+            out_dir = Path(args.output)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            
+            for idx, prov in enumerate(providers):
+                diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
+                canonical = f"Architecture_{prov.title()}.md"
+                fname = out_dir / canonical
+                fname.write_text(diag)
+                print(f"Wrote {fname}")
+                
+                if _upsert_diagram:
+                    try:
+                        _upsert_diagram(
+                            experiment_id=args.experiment_id,
+                            provider=prov,
+                            diagram_title=f"{prov.capitalize()} Architecture",
+                            mermaid_code=diag,
+                            display_order=idx,
+                        )
+                        print(f"Persisted {prov} diagram to cloud_diagrams table")
+                    except Exception as e:
+                        print(f"Warning: failed to persist {prov} diagram to DB: {e}", file=sys.stderr)
+            sys.exit(0)
     elif args.type == 'security':
         diagram = generate_security_view(args.experiment_id, args.min_score)
         provider = 'security'

@@ -1548,7 +1548,30 @@ class HierarchicalDiagramBuilder:
     
 
     def render_network_hierarchy(self, network_resources: List[dict], compute_resources: Optional[List[dict]] = None) -> List[str]:
-        """Render network resources with proper parent-child hierarchy."""
+        """Render network resources with proper parent-child hierarchy.
+        
+        Filters out empty zones (terraform metadata like zone_internal, zone_data).
+        """
+        if not network_resources:
+            return []
+        
+        # Filter out zone resources that are terraform metadata
+        # Zone names to exclude if they have no meaningful children
+        _ZONE_NAMES = {'zone_internal', 'zone_data', 'availability_zones', 'aws_availability_zones'}
+        
+        filtered_resources = []
+        for res in network_resources:
+            res_name_lower = (res.get('resource_name', '') or '').lower()
+            
+            # Skip terraform metadata zones entirely - they're not architectural elements
+            if res_name_lower in _ZONE_NAMES:
+                continue
+            
+            filtered_resources.append(res)
+        
+        # Update network_resources to use filtered list
+        network_resources = filtered_resources
+        
         if not network_resources:
             return []
         
@@ -2025,30 +2048,127 @@ class HierarchicalDiagramBuilder:
             namespace_id = f"k8s_ns_{sanitize_id(namespace)}"
             lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace)}]")
 
-            for res in namespace_resources:
+            # Separate resources by type for proper nesting
+            services = [r for r in namespace_resources if 'service' in (r.get('resource_type') or '').lower()]
+            deployments = [r for r in namespace_resources if 'deployment' in (r.get('resource_type') or '').lower()]
+            cronjobs = [r for r in namespace_resources if 'cronjob' in (r.get('resource_type') or '').lower()]
+            statefulsets = [r for r in namespace_resources if 'statefulset' in (r.get('resource_type') or '').lower()]
+            other_workloads = [r for r in namespace_resources 
+                              if 'service' not in (r.get('resource_type') or '').lower()
+                              and 'deployment' not in (r.get('resource_type') or '').lower()
+                              and 'cronjob' not in (r.get('resource_type') or '').lower()
+                              and 'statefulset' not in (r.get('resource_type') or '').lower()]
+
+            # Helper function to render workload label
+            def _render_workload_label(res, workload_type_suffix=''):
                 props = res.get('properties', {})
                 image = str(props.get('image', '') or '').strip()
                 dockerfile = str(props.get('dockerfile', '') or '').strip()
+                name = res['resource_name']
+                
+                image_is_redundant = image and name.lower().startswith(image.lower())
+                
+                if image and not image_is_redundant:
+                    label = f"{name}<br/>📦 Image: {image}"
+                elif dockerfile:
+                    label = f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}"
+                else:
+                    label = name
+                
+                if workload_type_suffix:
+                    label = f"{label}<br/>{workload_type_suffix}"
+                
+                return self._wrap_mermaid_label(label)
 
+            # Render Deployments as subgraphs (can contain pods)
+            for dep in deployments:
+                dep_id = "k8s_dep_" + sanitize_id(dep['resource_name'])
+                dep_label = _render_workload_label(dep, "Deployment")
+                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
+                
+                # Add pods as children (if present in DB)
+                dep_children = self.children_by_parent.get(dep['id'], [])
+                pods = [c for c in dep_children if 'pod' in (c.get('resource_type') or '').lower()]
+                
+                if pods:
+                    for pod in pods:
+                        pod_id = "k8s_pod_" + sanitize_id(pod['resource_name'])
+                        pod_label = self._wrap_mermaid_label(pod['resource_name'])
+                        lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
+                else:
+                    # If no pods found, show pod template placeholder
+                    lines.append(f"        k8s_dep_pod_tpl[📦 Pod Template]")
+                
+                lines.append("      end")
+                self.emitted_nodes.add(dep['resource_name'])
+                self.node_id_override[dep['resource_name']] = dep_id
+
+            # Render StatefulSets as subgraphs (similar to Deployment)
+            for ss in statefulsets:
+                ss_id = "k8s_ss_" + sanitize_id(ss['resource_name'])
+                ss_label = _render_workload_label(ss, "StatefulSet")
+                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
+                
+                ss_children = self.children_by_parent.get(ss['id'], [])
+                pods = [c for c in ss_children if 'pod' in (c.get('resource_type') or '').lower()]
+                
+                if pods:
+                    for pod in pods:
+                        pod_id = "k8s_pod_" + sanitize_id(pod['resource_name'])
+                        pod_label = self._wrap_mermaid_label(pod['resource_name'])
+                        lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
+                else:
+                    lines.append(f"        k8s_ss_pod_tpl[📦 Pod Template]")
+                
+                lines.append("      end")
+                self.emitted_nodes.add(ss['resource_name'])
+                self.node_id_override[ss['resource_name']] = ss_id
+
+            # Render CronJobs separately (different scheduling model)
+            for cj in cronjobs:
+                cj_id = "k8s_cron_" + sanitize_id(cj['resource_name'])
+                cj_label = _render_workload_label(cj, "CronJob")
+                lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]")
+                
+                cj_children = self.children_by_parent.get(cj['id'], [])
+                jobs = [c for c in cj_children if 'job' in (c.get('resource_type') or '').lower()]
+                
+                if jobs:
+                    for job in jobs:
+                        job_id = "k8s_job_" + sanitize_id(job['resource_name'])
+                        job_label = self._wrap_mermaid_label(job['resource_name'])
+                        lines.append(f"        {job_id}[{self._quote_mermaid_label(job_label)}]")
+                else:
+                    lines.append(f"        k8s_cron_job_tpl[⏰ Job Pod]")
+                
+                lines.append("      end")
+                self.emitted_nodes.add(cj['resource_name'])
+                self.node_id_override[cj['resource_name']] = cj_id
+
+            # Render Services (network layer - NOT nested in deployments)
+            for svc in services:
+                svc_id = "k8s_svc_" + sanitize_id(svc['resource_name'])
+                svc_label = self._wrap_mermaid_label(svc['resource_name'] + "<br/>Service")
+                lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
+                self.emitted_nodes.add(svc['resource_name'])
+                self.node_id_override[svc['resource_name']] = svc_id
+
+            # Render other workloads (DaemonSet, Job, etc.)
+            for res in other_workloads:
                 node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
                 name = res['resource_name']
-
-                # Only show image when it adds information beyond the resource name.
-                # If the image tag is already a prefix of the workload name (e.g.
-                # image="aks-helloworld" and name="aks-helloworld-dr-testapp-api"),
-                # the label would appear to repeat part of the name, so suppress it.
+                props = res.get('properties', {})
+                image = str(props.get('image', '') or '').strip()
+                
                 image_is_redundant = image and name.lower().startswith(image.lower())
-
+                
                 if image and not image_is_redundant:
                     label = self._wrap_mermaid_label(f"{name}<br/>📦 Image: {image}")
-                elif dockerfile:
-                    label = self._wrap_mermaid_label(f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}")
                 else:
                     label = self._wrap_mermaid_label(name)
-
+                
                 lines.append(f"      {node_id}[{self._quote_mermaid_label(label)}]")
                 self.emitted_nodes.add(res['resource_name'])
-                # Record the prefixed node ID so render_connections uses the right ID.
                 self.node_id_override[res['resource_name']] = node_id
 
             lines.append("    end")
