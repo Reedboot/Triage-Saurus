@@ -7410,7 +7410,7 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 'azurerm_role_assignment', 'azurerm_role_definition',
                 'aws_iam_role', 'aws_iam_policy', 'aws_iam_user_policy',
                 'google_project_iam_member', 'google_project_iam_binding',
-                'kubernetes_cluster_role', 'kubernetes_role_binding', 'kubernetes_cluster_role_binding',
+                'kubernetes_clusterrole', 'kubernetes_rolebinding', 'kubernetes_clusterrolebinding', 'kubernetes_role', 'kubernetes_serviceaccount',
                 'managed_identity', 'user_assigned_identity', 'service_account', 'service_principal'
             }
             rtype_lower = (rtype or '').lower()
@@ -9181,8 +9181,8 @@ def api_view_roles(experiment_id: str, repo_name: str):
                     'aws_iam_role', 'aws_iam_policy', 'aws_iam_user_policy',
                     'google_project_iam_member', 'google_project_iam_binding',
                     'google_service_account', 'google_service_account_key',
-                    'kubernetes_cluster_role', 'kubernetes_role_binding',
-                    'kubernetes_cluster_role_binding', 'kubernetes_service_account',
+                    'kubernetes_clusterrole', 'kubernetes_rolebinding',
+                    'kubernetes_clusterrolebinding', 'kubernetes_serviceaccount',
                     'managed_identity', 'user_assigned_identity',
                     'service_account', 'service_principal'
               )
