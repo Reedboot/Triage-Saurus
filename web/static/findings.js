@@ -87,11 +87,12 @@
     container.dataset.findingsExperimentId = experimentId || container.dataset.findingsExperimentId || '';
 
     const searchInput = container.querySelector('#findings-search');
+    const discoverySelect = container.querySelector('#findings-discovery-filter');
     const providerSelect = container.querySelector('#findings-provider-filter');
     const sevSelect = container.querySelector('#findings-sev-filter');
     const emptyEl = container.querySelector('#findings-empty');
     const cards = Array.from(container.querySelectorAll('.finding-card'));
-    const groups = Array.from(container.querySelectorAll('.provider-group'));
+    const groups = Array.from(container.querySelectorAll('.provider-subgroup, .provider-group'));
 
     function getCurrentRepoName() {
       return container.dataset.findingsRepoName || repoName || '';
@@ -112,6 +113,7 @@
 
     function filterFindings() {
       const q = toLower(searchInput && searchInput.value);
+      const d = toLower(document.getElementById('findings-discovery-filter') && document.getElementById('findings-discovery-filter').value);
       const p = toLower(providerSelect && providerSelect.value);
       const s = (sevSelect && sevSelect.value || '').toUpperCase();
 
@@ -119,9 +121,10 @@
 
       cards.forEach((card) => {
         const matchQ = !q || toLower(card.dataset.search).includes(q);
+        const matchD = !d || toLower(card.dataset.discoveryType || 'code') === d;
         const matchP = !p || toLower(card.dataset.provider) === p;
         const matchS = !s || card.dataset.sev === s;
-        const show = matchQ && matchP && matchS;
+        const show = matchQ && matchD && matchP && matchS;
         card.style.display = show ? '' : 'none';
         if (show) anyVisible = true;
       });
@@ -130,6 +133,14 @@
         const visibleCards = Array.from(group.querySelectorAll('.finding-card')).filter((card) => card.style.display !== 'none').length;
         const providerEmpty = group.querySelector('.provider-empty');
         if (providerEmpty) providerEmpty.style.display = visibleCards === 0 ? '' : 'none';
+      });
+
+      // Also check for discovery-type level empty states
+      const discoveryGroups = container.querySelectorAll('.discovery-group');
+      discoveryGroups.forEach((dGroup) => {
+        const visibleCards = Array.from(dGroup.querySelectorAll('.finding-card')).filter((card) => card.style.display !== 'none').length;
+        const discoveryEmpty = dGroup.querySelector('.discovery-empty');
+        if (discoveryEmpty) discoveryEmpty.style.display = visibleCards === 0 ? '' : 'none';
       });
 
       if (emptyEl) emptyEl.style.display = anyVisible ? 'none' : '';
@@ -171,6 +182,18 @@
 
     if (!container.__findingsClickBound) {
       container.addEventListener('click', function (event) {
+        const discoveryToggle = event.target.closest('[data-discovery-toggle]');
+        if (discoveryToggle && container.contains(discoveryToggle)) {
+          const discoveryType = discoveryToggle.getAttribute('data-discovery-toggle');
+          const group = container.querySelector('.discovery-group[data-discovery-type="' + String(discoveryType || '').replace(/"/g, '\\"') + '"]');
+          if (group) {
+            group.classList.toggle('collapsed');
+            const icon = group.querySelector('[data-toggle-icon]');
+            if (icon) icon.textContent = group.classList.contains('collapsed') ? '▶' : '▼';
+          }
+          return;
+        }
+
         const toggle = event.target.closest('[data-provider-toggle]');
         if (toggle && container.contains(toggle)) {
           toggleProviderGroup(toggle.getAttribute('data-provider-toggle'));
@@ -198,6 +221,7 @@
     }
 
     if (searchInput) searchInput.oninput = filterFindings;
+    if (discoverySelect) discoverySelect.onchange = filterFindings;
     if (providerSelect) providerSelect.onchange = filterFindings;
     if (sevSelect) sevSelect.onchange = filterFindings;
 
