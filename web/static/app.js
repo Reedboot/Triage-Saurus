@@ -2036,6 +2036,18 @@
               if (pastRow) {
                 pastRow.classList.toggle('visible', scans.length > 0);
               }
+
+              // Auto-select the most recent scan (by scanned_at timestamp) and load its data
+              if (pastSelect && scans.length > 0) {
+                const mostRecentScan = scans.reduce((latest, current) => {
+                  const latestTime = new Date(latest.scanned_at).getTime();
+                  const currentTime = new Date(current.scanned_at).getTime();
+                  return currentTime > latestTime ? current : latest;
+                });
+                pastSelect.value = mostRecentScan.experiment_id;
+                // Trigger change event to load section tabs and relevant data
+                pastSelect.dispatchEvent(new Event('change'));
+              }
             })
             .catch(err => console.log('[Repo] Could not load past scans:', err));
 
