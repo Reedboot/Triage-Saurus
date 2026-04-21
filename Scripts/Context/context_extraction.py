@@ -1583,6 +1583,8 @@ def _load_parent_type_map() -> Dict[str, str]:
         "kubernetes_role": "kubernetes_namespace",
         "kubernetes_role_binding": "kubernetes_namespace",
         "kubernetes_rolebinding": "kubernetes_namespace",
+        "kubernetes_clusterrole": "kubernetes_cluster",
+        "kubernetes_clusterrolebinding": "kubernetes_clusterrole",
         "kubernetes_secret": "kubernetes_namespace",
         "kubernetes_service": "kubernetes_namespace",
         "kubernetes_serviceaccount": "kubernetes_namespace",
