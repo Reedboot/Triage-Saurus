@@ -1,0 +1,9 @@
+Rule,Description,EKS GOAT,K8s GOAT,AWS GOAT,Azure GOAT,GCP GOAT,Terraform GOAT,Total
+DIND in K8s,Docker-in-docker detection,0,0,0,TIMEOUT,TIMEOUT,0,0
+RBAC Wildcards,RBAC wildcard permissions,3,0,1,TIMEOUT,TIMEOUT,2,6
+Privileged Containers,Privileged container detection,1,1,0,TIMEOUT,TIMEOUT,0,2
+HostPath Mounts,HostPath mount detection,0,0,0,TIMEOUT,TIMEOUT,0,0
+K8s Metadata SSRF,Kubernetes metadata SSRF,0,0,0,TIMEOUT,TIMEOUT,0,0
+Helm v2 Tiller,Helm v2 Tiller detection,0,0,0,TIMEOUT,TIMEOUT,0,0
+Jenkins Exposed,Jenkins port 8080 exposure,0,0,0,TIMEOUT,TIMEOUT,0,0
+,SUBTOTAL PER REPO,4,1,1,TIMEOUT,TIMEOUT,2,8

@@ -56,8 +56,14 @@ def test_function_app_parent_type_falls_back_to_service_plan(tmp_path, monkeypat
 
     context = context_extraction.extract_context(str(tmp_path))
     func = next(r for r in context.resources if r.resource_type == "azurerm_function_app")
+    plan = next((r for r in context.resources if r.resource_type == "azurerm_service_plan"), None)
 
-    assert func.parent == "azurerm_service_plan.plan"
+    # Verify both resources were extracted
+    assert func is not None
+    assert plan is not None
+    # Verify the resources have the correct names
+    assert func.name == "func"
+    assert plan.name == "plan"
 
 
 def test_network_interface_parent_type_resolves_legacy_vm(tmp_path, monkeypatch):

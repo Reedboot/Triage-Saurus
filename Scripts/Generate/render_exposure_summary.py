@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
 import db_helpers
@@ -76,38 +75,15 @@ class ExposureMermaidRenderer:
 
         lines = [f"graph TD", f"    subgraph {provider.upper()}[\"{provider.upper()} Environment\"]"]
 
-        # Group by normalized role
-        by_role = defaultdict(list)
+        # Render resources directly without role-based grouping
         for r in resources:
-            role = r.get("normalized_role", "unknown")
-            by_role[role].append(r)
-
-        # Render subgraphs by role
-        role_order = ["entry_point", "countermeasure", "load_balancer", "compute", "data"]
-        role_labels = {
-            "entry_point": "🌐 Entry Points",
-            "countermeasure": "🛡️ Countermeasures",
-            "load_balancer": "⚖️ Load Balancers",
-            "compute": "⚙️ Compute",
-            "data": "💾 Data",
-        }
-
-        for role in role_order:
-            if role not in by_role:
-                continue
-            role_resources = by_role[role]
-            if role_resources:
-                role_label = role_labels.get(role, role)
-                lines.append(f"        subgraph {role}[\"{role_label}\"]")
-                for r in role_resources:
-                    node_id = ExposureMermaidRenderer.sanitize_id(r["resource_name"])
-                    exposure = r.get("exposure_level", "unknown")
-                    has_violation = bool(r.get("opengrep_violations") and json.loads(r["opengrep_violations"]))
-                    
-                    # Node label with resource type
-                    label = f"{r['resource_name']}<br/>({r['resource_type']})"
-                    lines.append(f"            {node_id}[\"{label}\"]")
-                lines.append(f"        end")
+            node_id = ExposureMermaidRenderer.sanitize_id(r["resource_name"])
+            exposure = r.get("exposure_level", "unknown")
+            has_violation = bool(r.get("opengrep_violations") and json.loads(r["opengrep_violations"]))
+            
+            # Node label with resource type
+            label = f"{r['resource_name']}<br/>({r['resource_type']})"
+            lines.append(f"        {node_id}[\"{label}\"]")
 
         lines.append(f"    end")
 
