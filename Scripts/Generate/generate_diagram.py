@@ -3920,22 +3920,49 @@ def main():
             print(f"Warning: Failed to persist diagram to DB: {e}", file=sys.stderr)
     
     if args.output:
-        # If single output file, write first diagram
-        if len(diagrams) == 1:
-            args.output.write_text(diagrams[0][2])
-            print(f"Diagram written to {args.output}")
+        output_path = Path(args.output)
+        output_str = str(args.output)
+        
+        # Determine if output is a directory or file path
+        # It's a directory if: no file extension, or ends with /
+        is_directory = (not output_path.suffix) or output_str.endswith('/')
+        
+        if is_directory:
+            # Output is a directory - create files inside it
+            output_path.mkdir(parents=True, exist_ok=True)
+            
+            # Write diagrams to directory with names based on provider
+            for i, (provider_key, diagram_title, diagram) in enumerate(diagrams):
+                if len(diagrams) == 1:
+                    # Single diagram: use generic Architecture_<Provider>.md
+                    filename = f"Architecture_{provider_key.title()}.md"
+                else:
+                    # Multiple diagrams: use provider suffix
+                    filename = f"Architecture_{provider_key.title()}_{i:02d}.md"
+                
+                file_path = output_path / filename
+                file_path.write_text(diagram)
+                print(f"Diagram written to {file_path}")
         else:
-            # Write diagrams to separate files with provider suffix
-            for provider_key, _, diagram in diagrams:
-                output_path = args.output.parent / f"{args.output.stem}_{provider_key}{args.output.suffix}"
-                output_path.write_text(diagram)
+            # Output is a file path
+            if len(diagrams) == 1:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(diagrams[0][2])
                 print(f"Diagram written to {output_path}")
+            else:
+                # Write diagrams to separate files with provider suffix
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                for provider_key, _, diagram in diagrams:
+                    file_path = output_path.parent / f"{output_path.stem}_{provider_key}{output_path.suffix}"
+                    file_path.write_text(diagram)
+                    print(f"Diagram written to {file_path}")
     else:
         for _, diagram_title, diagram in diagrams:
             print(f"\n{'='*60}")
             print(f"{diagram_title}")
             print(f"{'='*60}\n")
             print(diagram)
+
 
 
 if __name__ == "__main__":
