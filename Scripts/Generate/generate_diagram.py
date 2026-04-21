@@ -2037,7 +2037,7 @@ class HierarchicalDiagramBuilder:
         # namespace-bucketed workload nodes inside it.
         cluster_resources = [
             r for r in k8s_resources
-            if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
+            if (r.get('resource_type') or '').lower() == 'kubernetes_cluster'
         ]
 
         # Collect workloads via parent-child DB links (primary source).
@@ -2052,16 +2052,26 @@ class HierarchicalDiagramBuilder:
                     workload_ids_seen.add(child['id'])
                     workload_resources.append(child)
 
-        # Fallback: non-cluster K8s resources that participate in known connections.
+        # Fallback: non-cluster K8s resources.
         # Skip catalog-info metadata types (kubernetes_component, kubernetes_api,
-        # kubernetes_config) — these are service catalogue entries, not running pods.
+        # kubernetes_config) — these are service catalogue entries, not running workloads.
+        # BUT: Always include K8s workload types (deployment, pod, service, cronjob, daemonset, statefulset)
+        # because they are architecturally essential parts of the cluster infrastructure.
         _CATALOG_TYPES = ('component', 'kubernetes_api', 'kubernetes_config')
+        _WORKLOAD_TYPES = ('deployment', 'pod', 'service', 'cronjob', 'daemonset', 'statefulset', 'job', 'replicaset')
         for r in k8s_resources:
             if r in cluster_resources or r['id'] in workload_ids_seen:
                 continue
             if any(t in (r.get('resource_type') or '').lower() for t in _CATALOG_TYPES):
                 continue
-            if self._is_connected_name(r.get('resource_name', '')):
+            
+            res_type = (r.get('resource_type') or '').lower()
+            is_workload_type = any(wt in res_type for wt in _WORKLOAD_TYPES)
+            is_connected = self._is_connected_name(r.get('resource_name', ''))
+            is_significant = self._is_architecturally_significant(r)
+            
+            # Include if: (1) is a workload type (always shown), (2) is connected, or (3) is architecturally significant
+            if is_workload_type or is_connected or is_significant:
                 workload_ids_seen.add(r['id'])
                 workload_resources.append(r)
 
@@ -2102,16 +2112,18 @@ class HierarchicalDiagramBuilder:
             namespace_id = f"k8s_ns_{sanitize_id(namespace)}"
             lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace)}]")
 
-            # Separate resources by type for proper nesting
-            services = [r for r in namespace_resources if 'service' in (r.get('resource_type') or '').lower()]
-            deployments = [r for r in namespace_resources if 'deployment' in (r.get('resource_type') or '').lower()]
-            cronjobs = [r for r in namespace_resources if 'cronjob' in (r.get('resource_type') or '').lower()]
-            statefulsets = [r for r in namespace_resources if 'statefulset' in (r.get('resource_type') or '').lower()]
+            # Separate resources by type for proper nesting (use exact type matching, not substrings)
+            services = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_service']
+            deployments = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_deployment']
+            cronjobs = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_cronjob']
+            statefulsets = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_statefulset']
+            
+            # other_workloads is everything else (RBAC, service accounts, etc.) - but we'll filter these later
             other_workloads = [r for r in namespace_resources 
-                              if 'service' not in (r.get('resource_type') or '').lower()
-                              and 'deployment' not in (r.get('resource_type') or '').lower()
-                              and 'cronjob' not in (r.get('resource_type') or '').lower()
-                              and 'statefulset' not in (r.get('resource_type') or '').lower()]
+                              if (r.get('resource_type') or '').lower() not in (
+                                  'kubernetes_service', 'kubernetes_deployment', 
+                                  'kubernetes_cronjob', 'kubernetes_statefulset'
+                              )]
 
             # Helper function to render workload label
             def _render_workload_label(res, workload_type_suffix=''):
@@ -2208,7 +2220,14 @@ class HierarchicalDiagramBuilder:
                 self.node_id_override[svc['resource_name']] = svc_id
 
             # Render other workloads (DaemonSet, Job, etc.)
+            # But skip RBAC/account types (role, rolebinding, clusterrole, clusterrolebinding, serviceaccount)
+            _SKIP_TYPES = ('kubernetes_role', 'kubernetes_rolebinding', 'kubernetes_clusterrole', 
+                          'kubernetes_clusterrolebinding', 'kubernetes_serviceaccount')
             for res in other_workloads:
+                res_type = (res.get('resource_type') or '').lower()
+                if res_type in _SKIP_TYPES:
+                    continue
+                    
                 node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
                 name = res['resource_name']
                 props = res.get('properties', {})
