@@ -12,7 +12,7 @@ into existing code (web UI, diagrams, etc.).
 def example_diagram_integration():
     """Show how to enrich diagram nodes with accessibility info."""
     
-    # In generate_hierarchical_diagram.py, modify the generate() method:
+    # In generate_diagram.py, modify the generate() method:
     
     from Scripts.Generate.internet_accessibility_ui import (
         InternetAccessibilityHelper,

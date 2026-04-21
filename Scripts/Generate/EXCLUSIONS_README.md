@@ -41,7 +41,7 @@ When reviewing scan results, if you notice a resource type that:
 
 ## How It Works
 
-1. Load: The exclusion list is loaded at startup by `generate_hierarchical_diagram.py`
+1. Load: The exclusion list is loaded at startup by `generate_diagram.py`
 2. Filter: During `load_data()`, resources matching excluded types are removed
 3. Result: Only meaningful infrastructure resources appear in the final diagram
 

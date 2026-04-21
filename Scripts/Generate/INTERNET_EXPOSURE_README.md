@@ -254,7 +254,7 @@ for resource_name in exposed_resources:
 
 - `Scripts/Generate/internet_exposure_detector.py` - Core detection module (new)
 - `Scripts/Generate/test_internet_exposure.py` - Comprehensive test suite (new)
-- `Scripts/Generate/generate_hierarchical_diagram.py` - Integration + rendering
+- `Scripts/Generate/generate_diagram.py` - Integration + rendering
 
 ## References
 
@@ -267,4 +267,4 @@ for resource_name in exposed_resources:
 For questions or issues:
 1. Check test suite for examples: `test_internet_exposure.py`
 2. Review comments in `internet_exposure_detector.py`
-3. Enable debug output in `generate_hierarchical_diagram.py`
+3. Enable debug output in `generate_diagram.py`

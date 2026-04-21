@@ -43,7 +43,6 @@ _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
 _INFER_SEMANTIC   = SCRIPTS / "Analyze"  / "infer_semantic_connections.py"
 _RELINK        = SCRIPTS / "Persist"    / "relink_findings_to_resources.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
-_GEN_HIERARCHICAL = SCRIPTS / "Generate" / "generate_hierarchical_diagram.py"
 
 from db_helpers import get_db_connection
 

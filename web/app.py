@@ -4256,7 +4256,7 @@ def api_diagrams(experiment_id: str):
         # If persisted diagrams are missing/skeletal for this repo, regenerate from DB topology.
         if repo_name and (force_regenerate or not db_diagrams or max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) == 0):
             try:
-                from Scripts.Generate.generate_hierarchical_diagram import HierarchicalDiagramBuilder  # type: ignore
+                from Scripts.Generate.generate_diagram import HierarchicalDiagramBuilder  # type: ignore
 
                 _repo_path: Optional[str] = None
                 try:

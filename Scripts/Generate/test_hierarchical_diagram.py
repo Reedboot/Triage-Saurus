@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for hierarchical Mermaid diagram generation."""
 
-from generate_hierarchical_diagram import HierarchicalDiagramBuilder, ExposureDetail
+from generate_diagram import HierarchicalDiagramBuilder, ExposureDetail
 
 
 def test_internet_node_emitted_once(monkeypatch):
@@ -485,7 +485,7 @@ def test_rbac_resource_types_are_filtered(monkeypatch):
             return False
 
     monkeypatch.setattr(
-        'generate_hierarchical_diagram.get_resources_for_diagram',
+        'generate_diagram.get_resources_for_diagram',
         lambda experiment_id: [
             {
                 'id': 1,
@@ -503,8 +503,8 @@ def test_rbac_resource_types_are_filtered(monkeypatch):
             },
         ],
     )
-    monkeypatch.setattr('generate_hierarchical_diagram.get_connections_for_diagram', lambda *args, **kwargs: [])
-    monkeypatch.setattr('generate_hierarchical_diagram.get_db_connection', lambda: _FakeConn())
+    monkeypatch.setattr('generate_diagram.get_connections_for_diagram', lambda *args, **kwargs: [])
+    monkeypatch.setattr('generate_diagram.get_db_connection', lambda: _FakeConn())
 
     builder.load_data()
 
