@@ -3807,13 +3807,21 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Generate hierarchical architecture diagrams")
-    parser.add_argument("--experiment-id", required=True, help="Experiment ID")
+    # Accept experiment_id as positional argument or --experiment-id
+    parser.add_argument("experiment_id", nargs='?', help="Experiment ID")
+    parser.add_argument("--experiment-id", dest="experiment_id_flag", help="Experiment ID (alternative)")
     parser.add_argument("--repo", help="Filter to specific repository")
     parser.add_argument("--output", type=Path, help="Output file path")
     parser.add_argument("--persist-db", action="store_true", help="Persist diagram to cloud_diagrams table")
     parser.add_argument("--provider", help="Filter to specific cloud provider")
     
     args = parser.parse_args()
+    
+    # Use positional if provided, otherwise use --experiment-id flag
+    experiment_id = args.experiment_id or args.experiment_id_flag
+    if not experiment_id:
+        parser.error("the following arguments are required: experiment_id or --experiment-id")
+
     
     # Get list of providers to generate diagrams for
     providers_to_process = []
@@ -3839,7 +3847,7 @@ def main():
     
     if not providers_to_process:
         # Fallback to single diagram
-        builder = HierarchicalDiagramBuilder(args.experiment_id, repo_name=args.repo)
+        builder = HierarchicalDiagramBuilder(experiment_id, repo_name=args.repo)
         diagram = builder.generate()
         provider = builder.detect_cloud_provider()
         diagram_title = f"{provider} Architecture"
@@ -3849,7 +3857,7 @@ def main():
         for provider in providers_to_process:
             # Create builder with provider filter
             builder = HierarchicalDiagramBuilder(
-                args.experiment_id,
+                experiment_id,
                 repo_name=args.repo,
                 provider_filter=provider
             )
@@ -3889,7 +3897,7 @@ def main():
                     # Check if diagram already exists
                     existing = conn.execute(
                         "SELECT id FROM cloud_diagrams WHERE experiment_id = ? AND provider = ?",
-                        [args.experiment_id, provider_key]
+                        [experiment_id, provider_key]
                     ).fetchone()
                     
                     if existing:
@@ -3903,7 +3911,7 @@ def main():
                         conn.execute(
                             """INSERT INTO cloud_diagrams (experiment_id, provider, diagram_title, mermaid_code, display_order)
                                VALUES (?, ?, ?, ?, ?)""",
-                            [args.experiment_id, provider_key, diagram_title, diagram, display_order]
+                            [experiment_id, provider_key, diagram_title, diagram, display_order]
                         )
                     display_order += 1
                 conn.commit()
