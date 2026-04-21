@@ -151,6 +151,10 @@ class InternetExposureAnalyzer:
         print("[*] Applying property-based exposure overrides...")
         self._apply_property_based_exposure(resources)
 
+        # Propagate exposure from children to parents (e.g., VM with public IP child)
+        print("[*] Propagating exposure from children to parents...")
+        self._propagate_exposure_from_children()
+
         # Persist internet exposure paths (B2)
         print("[*] Persisting internet exposure paths...")
         self._persist_internet_exposure_paths(classifications)
@@ -265,6 +269,80 @@ class InternetExposureAnalyzer:
                 print(f"[+] Property-based exposure: upgraded {upgraded} resource(s) to direct_exposure")
         except Exception as e:
             print(f"[WARN] Property-based exposure detection failed: {e}", file=sys.stderr)
+
+    def _propagate_exposure_from_children(self) -> None:
+        """Propagate exposure from children to parents.
+        
+        If a child resource has direct_exposure or mitigated exposure,
+        its parent should inherit at least the same exposure level.
+        """
+        conn = self.connect()
+        try:
+            # Build child → parent map
+            child_parent_rows = conn.execute("""
+                SELECT child.id, child.parent_resource_id, 
+                       parent.resource_name, parent.resource_type
+                FROM resources child
+                JOIN resources parent ON child.parent_resource_id = parent.id
+                WHERE child.experiment_id = ? AND child.parent_resource_id IS NOT NULL
+            """, (self.experiment_id,)).fetchall()
+            
+            if not child_parent_rows:
+                return
+            
+            upgraded = 0
+            for child_id, parent_id, parent_name, parent_type in child_parent_rows:
+                # Get child's exposure level
+                child_exp = conn.execute("""
+                    SELECT exposure_level FROM exposure_analysis
+                    WHERE experiment_id = ? AND resource_id = ?
+                """, (self.experiment_id, child_id)).fetchone()
+                
+                if not child_exp or child_exp[0] == 'isolated':
+                    continue  # Skip if child has no exposure or is isolated
+                
+                child_exposure = child_exp[0]  # 'direct_exposure' or 'mitigated'
+                
+                # Check parent's current exposure
+                parent_exp = conn.execute("""
+                    SELECT exposure_level FROM exposure_analysis
+                    WHERE experiment_id = ? AND resource_id = ?
+                """, (self.experiment_id, parent_id)).fetchone()
+                
+                if not parent_exp:
+                    # Parent has no exposure_analysis entry — create one
+                    parent_resource = conn.execute("""
+                        SELECT resource_name, resource_type, provider FROM resources
+                        WHERE id = ?
+                    """, (parent_id,)).fetchone()
+                    if parent_resource:
+                        normalized = self.normalizer.normalize(parent_resource[0], parent_resource[1], parent_resource[2])
+                        conn.execute("""
+                            INSERT INTO exposure_analysis
+                              (experiment_id, resource_id, resource_name, resource_type, provider,
+                               normalized_role, is_entry_point, is_countermeasure, is_compute_or_data,
+                               exposure_level, has_internet_path, notes)
+                            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, ?, 1,
+                                    'inherited-from-child')
+                        """, (self.experiment_id, parent_id, parent_resource[0], parent_resource[1],
+                              parent_resource[2], normalized.normalized_role.value, child_exposure))
+                        upgraded += 1
+                elif parent_exp[0] == 'isolated' and child_exposure in ('direct_exposure', 'mitigated'):
+                    # Parent is isolated but child is exposed — upgrade parent
+                    conn.execute("""
+                        UPDATE exposure_analysis
+                        SET exposure_level = ?,
+                            has_internet_path = 1,
+                            notes = COALESCE(notes || ' | ', '') || 'inherited-from-child'
+                        WHERE experiment_id = ? AND resource_id = ?
+                    """, (child_exposure, self.experiment_id, parent_id))
+                    upgraded += 1
+            
+            if upgraded:
+                conn.commit()
+                print(f"[+] Exposure propagation: upgraded {upgraded} parent resource(s)")
+        except Exception as e:
+            print(f"[WARN] Exposure propagation failed: {e}", file=sys.stderr)
 
     def _persist_exposure_analysis(
         self,
