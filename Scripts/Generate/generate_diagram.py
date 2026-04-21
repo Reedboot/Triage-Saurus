@@ -204,12 +204,39 @@ def _provider_matches(resource_provider: str | None, requested_provider: str | N
     return (resource_provider or "").strip().lower() in set(_provider_aliases(requested_provider))
 
 
-def _provider_sql_clause(provider: str | None, column: str = "r.provider") -> tuple[str, list[str]]:
+def _provider_matches_resource(resource: dict, requested_provider: str | None) -> bool:
+    """Check if resource matches requested provider, inferring from resource_type if needed."""
+    if not requested_provider:
+        return True
+    detected = _detect_provider_from_resource(resource)
+    return detected.lower() in set(_provider_aliases(requested_provider))
     aliases = _provider_aliases(provider)
     if not aliases:
         return "", []
     placeholders = ",".join("?" for _ in aliases)
     return f"AND LOWER(COALESCE({column}, '')) IN ({placeholders})", aliases
+
+
+def _detect_provider_from_resource(resource: dict) -> str:
+    """Detect cloud provider from resource, checking both provider field and resource_type."""
+    provider = _normalize_provider(resource.get('provider'))
+    if provider and provider != 'unknown':
+        return provider
+    
+    # Fallback: infer from resource_type prefix
+    rtype = (resource.get('resource_type') or '').lower()
+    if rtype.startswith('kubernetes_'):
+        return 'kubernetes'
+    elif rtype.startswith('aws_'):
+        return 'aws'
+    elif rtype.startswith('azurerm_') or rtype.startswith('azure_'):
+        return 'azure'
+    elif rtype.startswith('google_') or rtype.startswith('gcp_'):
+        return 'gcp'
+    elif rtype.startswith('oci_'):
+        return 'oci'
+    
+    return 'unknown'
 
 
 def _render_resource_subgraph(
@@ -880,7 +907,7 @@ def generate_architecture_diagram(
 
     # If a provider filter is requested, limit resources and connections to it
     if provider:
-        resources = [r for r in resources if _provider_matches(r.get('provider'), provider)]
+        resources = [r for r in resources if _provider_matches_resource(r, provider)]
         # Only keep connections where at least one endpoint is in the filtered resource set
         # Note: 'Internet' is a synthetic node that should always be included when referenced
         resource_names = {r['resource_name'] for r in resources}
@@ -2128,7 +2155,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         # Discover providers present in resources
         all_res = get_resources_for_diagram(args.experiment_id)
-        providers = sorted({_normalize_provider(r.get('provider') or 'unknown') for r in all_res})
+        providers = sorted({_detect_provider_from_resource(r) for r in all_res})
         for idx, prov in enumerate(providers):
             diag = generate_architecture_diagram(args.experiment_id, repo_name=args.repo, provider=prov)
             canonical = f"Architecture_{prov.title()}.md"
@@ -2161,7 +2188,7 @@ def main():
     if args.type == 'architecture':
         # Detect all providers present in resources
         all_res = get_resources_for_diagram(args.experiment_id)
-        providers = sorted({_normalize_provider(r.get('provider') or 'unknown') for r in all_res})
+        providers = sorted({_detect_provider_from_resource(r) for r in all_res})
         
         if not providers or providers == ['unknown']:
             # Fallback: no detectable providers

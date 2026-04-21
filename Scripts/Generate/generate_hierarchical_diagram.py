@@ -1126,7 +1126,7 @@ class HierarchicalDiagramBuilder:
         # Exclude terraform data sources and locals
         if 'terraform_data' in rtype or 'data_source' in rtype:
             return True
-        if name in ('zone_data', 'availability_zones', 'aws_availability_zones'):
+        if name in ('zone_data', 'zone_internal', 'availability_zones', 'aws_availability_zones'):
             return True
         if name.startswith('data.'):
             return True
