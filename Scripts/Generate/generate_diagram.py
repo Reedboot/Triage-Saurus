@@ -3690,7 +3690,9 @@ class HierarchicalDiagramBuilder:
             lines.extend(data_lines)
             lines.append("")
 
-        # Render PaaS / Identity (managed identities, key vaults, automation accounts)
+        # PaaS / Identity resources (managed identities, key vaults, automation accounts) are not rendered
+        # in diagrams as they don't contribute to threat model visualization. They're tracked in
+        # Assets tab only for reference and compliance purposes.
         paas_resources = [
             r for r in self.resources
             if self.is_paas_identity_resource(r)
@@ -3709,11 +3711,6 @@ class HierarchicalDiagramBuilder:
         for res in paas_resources:
             for child in self.children_by_parent.get(res['id'], []):
                 paas_related_ids.add(child['id'])
-
-        paas_lines = self.render_paas_identity_hierarchy(paas_resources)
-        if paas_lines:
-            lines.extend(paas_lines)
-            lines.append("")
         
         # Render other resources not in above categories (exclude subscriptions which are metadata)
         connected_resource_names = set(self.connected_resource_names)
