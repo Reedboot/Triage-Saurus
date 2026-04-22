@@ -10,7 +10,7 @@
  * 
  * Architecture:
  *   1. Find all text elements in rendered Mermaid SVG (these are node labels)
- *   2. Extract resource type from text (or via data attributes)
+ *   2. Extract resource type from CSS class (e.g., "icon-azurerm-app-service" → "azurerm_app_service")
  *   3. Look up icon path in iconMap
  *   4. Inject <image> SVG element to the left of the text
  *   5. Position and size consistently across all nodes
@@ -29,7 +29,7 @@ const MermaidIconInjector = (() => {
    * Main entry point: inject icons into a rendered Mermaid diagram
    * @param {SVGElement} svgElement - The rendered Mermaid diagram SVG
    * @param {Object} iconMap - Mapping of resource_type to icon file paths
-   *                          Example: { "azurerm_app_service": "/static/assets/icons/azure/app-service.svg" }
+   *                          Example: { "azurerm_app_service": "/static/assets/icons/azure/web/app-service.svg" }
    */
   function injectIcons(svgElement, iconMap) {
     if (!svgElement || !iconMap) return;
@@ -61,32 +61,22 @@ const MermaidIconInjector = (() => {
   }
 
   /**
-   * Extract the resource type from a node
-   * Tries multiple strategies:
-   *   1. data-resource-type attribute (if present)
-   *   2. Text content analysis (e.g., "azurerm_app_service: My App" → "azurerm_app_service")
-   *   3. Node ID analysis
+   * Extract the resource type from a node's CSS class
+   * Mermaid applies classes like "icon-azurerm-app-service" to nodes
+   * We need to convert: "icon-azurerm-app-service" → "azurerm_app_service"
    */
-  function extractResourceType(node, textContent) {
-    // Strategy 1: data attribute
-    const dataAttr = node.getAttribute('data-resource-type');
-    if (dataAttr) return dataAttr;
-
-    // Strategy 2: Parse from text content
-    // Format can be: "resource_type: Label" or just "Label"
-    if (textContent) {
-      const match = textContent.match(/^([a-z_0-9]+)\s*:/i);
-      if (match) return match[1].toLowerCase();
+  function extractResourceTypeFromClass(node) {
+    const classList = node.className.baseVal || node.className || '';
+    
+    // Look for class starting with "icon-"
+    const classes = classList.split(/\s+/);
+    for (const cls of classes) {
+      if (cls.startsWith('icon-')) {
+        // Remove "icon-" prefix and convert hyphens to underscores
+        const resourceType = cls.substring(5).replace(/-/g, '_');
+        return resourceType;
+      }
     }
-
-    // Strategy 3: Derive from node ID if available
-    const nodeId = node.id || '';
-    if (nodeId) {
-      // Mermaid node IDs might contain type info
-      const idMatch = nodeId.match(/([a-z_0-9]+)/);
-      if (idMatch) return idMatch[1].toLowerCase();
-    }
-
     return null;
   }
 
@@ -101,9 +91,12 @@ const MermaidIconInjector = (() => {
     const textContent = textElement.textContent || '';
     if (!textContent) return;
 
-    // Extract resource type from text or node attributes
-    const resourceType = extractResourceType(node, textContent);
-    if (!resourceType) return;
+    // Extract resource type from the CSS class applied to the node
+    const resourceType = extractResourceTypeFromClass(node);
+    if (!resourceType) {
+      console.debug('[MermaidIconInjector] No icon class found on node');
+      return;
+    }
 
     // Look up icon path in the provided map
     const iconPath = iconMap[resourceType];

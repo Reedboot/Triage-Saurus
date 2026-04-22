@@ -4140,24 +4140,26 @@ def api_icon_mappings():
         provider = (request.args.get("provider") or "azure").strip().lower()
         
         sys.path.insert(0, str(REPO_ROOT))
-        from Scripts.Generate.icon_resolver import get_icon_path  # type: ignore
-        from Scripts.Generate.icon_resolver import get_all_available_icons  # type: ignore
+        from Scripts.Generate.icon_resolver import (  # type: ignore
+            AZURE_RESOURCE_TYPE_TO_ICON,
+            AWS_RESOURCE_TYPE_TO_ICON,
+            GCP_RESOURCE_TYPE_TO_ICON
+        )
         
-        # Build mapping from all available icons for this provider
+        # Select the appropriate mapping for the provider
+        mappings = {
+            'azure': AZURE_RESOURCE_TYPE_TO_ICON,
+            'aws': AWS_RESOURCE_TYPE_TO_ICON,
+            'gcp': GCP_RESOURCE_TYPE_TO_ICON
+        }
+        
+        resource_to_icon = mappings.get(provider, AZURE_RESOURCE_TYPE_TO_ICON)
+        
+        # Build icon_map: resource_type -> relative path to icon
         icon_map = {}
-        available_icons = get_all_available_icons(provider)
-        
-        # For each category and its icons, build the resource_type -> path mapping
-        for category, icons in available_icons.items():
-            for icon_name in icons:
-                # Construct likely resource type from icon name
-                # Format: category_icon_name (e.g., "app_service" from app_service.svg in azure)
-                resource_type = f"{provider}_{category}_{icon_name}".replace("-", "_")
-                icon_path = get_icon_path(resource_type, provider)
-                if icon_path:
-                    # Return relative path from web root
-                    rel_path = f"/static/assets/icons/{provider}/{icon_path.name}"
-                    icon_map[resource_type] = rel_path
+        for resource_type, (category, icon_name) in resource_to_icon.items():
+            rel_path = f"/static/assets/icons/{provider}/{category}/{icon_name}.svg"
+            icon_map[resource_type] = rel_path
         
         return jsonify(icon_map)
     except Exception as exc:

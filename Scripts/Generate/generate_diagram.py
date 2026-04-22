@@ -3148,9 +3148,13 @@ class HierarchicalDiagramBuilder:
                 if resource_name not in self.emitted_nodes:
                     continue
                 
+                # Handle duplicate resource names (returns list when duplicates exist)
+                resource = self.resource_by_name.get(resource_name)
+                if isinstance(resource, list):
+                    resource = resource[0]  # Use first resource if duplicates
+                
                 # Check if this resource has children that are exposed (for containers/blobs)
                 # If the parent is a storage account or similar container, drill down to children
-                resource = self.resource_by_name.get(resource_name)
                 targets_to_connect = []
                 
                 if resource and resource.get('id') in self.children_by_parent:
