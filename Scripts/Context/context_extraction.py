@@ -2180,6 +2180,82 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 if protocol:
                     props["protocol"] = str(protocol).lower()
 
+        # AliCloud security group rule
+        if resource_type == "alicloud_security_group_rule":
+            rule_type = str(attrs.get("type", "")).strip().lower()
+            if rule_type == "ingress" and _is_world_source(block_text):
+                props["internet_ingress_open"] = "true"
+                _append_signal(props, "security group rule ingress from internet")
+                
+                # Extract port information for better labeling
+                from_port = attrs.get("from_port")
+                to_port = attrs.get("to_port")
+                protocol = attrs.get("ip_protocol", "")
+                
+                if from_port:
+                    props["from_port"] = str(from_port)
+                if to_port:
+                    props["to_port"] = str(to_port)
+                if protocol:
+                    props["protocol"] = str(protocol).lower()
+
+        # GCP firewall rule
+        if resource_type == "google_compute_firewall":
+            direction = str(attrs.get("direction", "")).strip().upper()
+            if direction == "INGRESS" and _is_world_source(block_text):
+                props["internet_ingress_open"] = "true"
+                _append_signal(props, "firewall rule ingress from internet")
+                
+                # Extract port information if specified
+                # GCP uses source_ranges and allowed/denied blocks
+                allowed_blocks = re.findall(r'allowed\s*\{(.*?)\}', block_text, re.S | re.I)
+                if allowed_blocks:
+                    ports = []
+                    for allowed_body in allowed_blocks:
+                        port_matches = re.findall(r'ports\s*=\s*\[(.*?)\]', allowed_body, re.S)
+                        for port_match in port_matches:
+                            ports.extend([p.strip().strip('"').strip("'") for p in port_match.split(',')])
+                    if ports:
+                        props["ports"] = ",".join(ports)
+
+        # Huawei security group rule
+        if resource_type == "huaweicloud_networking_secgroup_rule":
+            direction = str(attrs.get("direction", "")).strip().lower()
+            if direction == "ingress" and _is_world_source(block_text):
+                props["internet_ingress_open"] = "true"
+                _append_signal(props, "security group rule ingress from internet")
+                
+                # Extract port information for better labeling
+                from_port = attrs.get("from_port")
+                to_port = attrs.get("to_port")
+                protocol = attrs.get("protocol", "")
+                
+                if from_port:
+                    props["from_port"] = str(from_port)
+                if to_port:
+                    props["to_port"] = str(to_port)
+                if protocol:
+                    props["protocol"] = str(protocol).lower()
+
+        # Tencent Cloud security group rule
+        if resource_type == "tencentcloud_security_group_rule":
+            rule_type = str(attrs.get("type", "")).strip().lower()
+            if rule_type == "ingress" and _is_world_source(block_text):
+                props["internet_ingress_open"] = "true"
+                _append_signal(props, "security group rule ingress from internet")
+                
+                # Extract port information for better labeling
+                from_port = attrs.get("from_port")
+                to_port = attrs.get("to_port")
+                protocol = attrs.get("protocol", "")
+                
+                if from_port:
+                    props["from_port"] = str(from_port)
+                if to_port:
+                    props["to_port"] = str(to_port)
+                if protocol:
+                    props["protocol"] = str(protocol).lower()
+
         if resource_type == "aws_instance":
             if "associate_public_ip_address" in attrs:
                 if _normalize_bool(attrs.get("associate_public_ip_address")) is True:
@@ -2455,6 +2531,18 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             _append_signal(parent_props, "s3 public access block relaxed")
 
         if resource.resource_type == "aws_security_group_rule" and _is_prop_true(props, "internet_ingress_open"):
+            parent_props["internet_ingress_open"] = "true"
+            _append_signal(parent_props, "security group ingress rule allows internet")
+
+        if resource.resource_type == "alicloud_security_group_rule" and _is_prop_true(props, "internet_ingress_open"):
+            parent_props["internet_ingress_open"] = "true"
+            _append_signal(parent_props, "security group ingress rule allows internet")
+
+        if resource.resource_type == "huaweicloud_networking_secgroup_rule" and _is_prop_true(props, "internet_ingress_open"):
+            parent_props["internet_ingress_open"] = "true"
+            _append_signal(parent_props, "security group ingress rule allows internet")
+
+        if resource.resource_type == "tencentcloud_security_group_rule" and _is_prop_true(props, "internet_ingress_open"):
             parent_props["internet_ingress_open"] = "true"
             _append_signal(parent_props, "security group ingress rule allows internet")
 

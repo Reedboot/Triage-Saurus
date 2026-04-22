@@ -123,6 +123,20 @@ class InternetExposureDetector:
             'alicloud_cdn_domain',
             'alicloud_eip', 'alicloud_eip_association',
         },
+        'huaweicloud': {
+            'huaweicloud_lb_loadbalancer', 'huaweicloud_elb_loadbalancer',
+            'huaweicloud_apig_api',
+            'huaweicloud_cdn_domain',
+            'huaweicloud_compute_eip', 'huaweicloud_vpc_eip', 'huaweicloud_compute_eip_associate',
+            'huaweicloud_obs_bucket',  # Object Storage is publicly accessible by default
+        },
+        'tencentcloud': {
+            'tencentcloud_clb_instance',
+            'tencentcloud_apigateway_service',
+            'tencentcloud_eip', 'tencentcloud_eip_association',
+            'tencentcloud_cdn_domain',
+            'tencentcloud_cos_bucket',  # COS buckets can be publicly accessible
+        },
     }
 
     # Resource types that should NOT be marked as public even if matched
@@ -345,7 +359,7 @@ class InternetExposureDetector:
                     # Normalize boolean values
                     if prop_value and str(prop_value).lower() in ('true', '1', 'yes'):
                         # Special handling for security group rules with port info
-                        if prop_key == 'internet_ingress_open' and resource_type == 'aws_security_group_rule':
+                        if prop_key == 'internet_ingress_open' and '_rule' in resource_type:
                             # Try to extract port and protocol from properties
                             from_port = props.get('from_port', props.get('port', ''))
                             to_port = props.get('to_port', '')

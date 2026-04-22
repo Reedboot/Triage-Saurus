@@ -1997,6 +1997,20 @@
             panelContent.innerHTML = '<div class="empty-state" id="section-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h18M3 12h18M3 17h18"/></svg><p>Run or load a scan to view<br/>section details.</p></div>';
           }
 
+          // Clear architecture diagrams and tabs
+          const diagramViews = document.getElementById('diagram-views');
+          if (diagramViews) {
+            diagramViews.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><p>Run or load a scan to view<br/>architecture diagrams.</p></div>';
+          }
+          const diagramTabs = document.getElementById('diagram-tabs');
+          if (diagramTabs) {
+            diagramTabs.innerHTML = '';
+          }
+          const diagramZoomWrap = document.getElementById('diagram-zoom-wrap');
+          if (diagramZoomWrap) {
+            diagramZoomWrap.innerHTML = '';
+          }
+
           // Populate past-scan and compare dropdowns from API
           const repoName = this.value.split('/').pop();
           fetch(`/api/scans/${encodeURIComponent(repoName)}`)
