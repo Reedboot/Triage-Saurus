@@ -481,6 +481,8 @@ class HierarchicalDiagramBuilder:
                         ]
                     
                     # Add to rule
+                    if rule_id not in self.children_by_parent:
+                        self.children_by_parent[rule_id] = []
                     self.children_by_parent[rule_id].append(user_resource)
                     resource_parent_map[user_id] = rule_id
         except Exception as e:
@@ -3019,22 +3021,45 @@ class HierarchicalDiagramBuilder:
                 if resource_name not in self.emitted_nodes:
                     continue
                 
-                has_internet = True
-                src_id = 'internet'
-                tgt_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                # Check if this resource has children that are exposed (for containers/blobs)
+                # If the parent is a storage account or similar container, drill down to children
+                resource = self.resource_by_name.get(resource_name)
+                targets_to_connect = []
                 
-                # Build label from exposure detail
-                label = f"{exposure_detail.reason}"
+                if resource and resource.get('id') in self.children_by_parent:
+                    children = self.children_by_parent[resource['id']]
+                    # Check if any children are emitted
+                    child_targets = [c for c in children if c.get('resource_name') in self.emitted_nodes]
+                    if child_targets:
+                        # Use children as connection targets instead of parent
+                        targets_to_connect = child_targets
                 
-                # Create the connection line
-                lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
+                # If no children targets found, use the parent
+                if not targets_to_connect:
+                    targets_to_connect = [resource]
                 
-                # Track the link index for this new connection
-                current_link_idx = link_index
-                link_index += 1
-                
-                # Add color styling for this link
-                style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
+                # Create connections for each target
+                for target_resource in targets_to_connect:
+                    target_name = target_resource.get('resource_name')
+                    if target_name not in self.emitted_nodes:
+                        continue
+                    
+                    has_internet = True
+                    src_id = 'internet'
+                    tgt_id = self.node_id_override.get(target_name) or sanitize_id(target_name)
+                    
+                    # Build label from exposure detail
+                    label = f"{exposure_detail.reason}"
+                    
+                    # Create the connection line
+                    lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
+                    
+                    # Track the link index for this new connection
+                    current_link_idx = link_index
+                    link_index += 1
+                    
+                    # Add color styling for this link
+                    style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
         
         # Add all style lines at the end
         lines.extend(style_lines)
@@ -4229,9 +4254,11 @@ def main():
             with get_db_connection() as conn:
                 providers = conn.execute(
                     """SELECT DISTINCT provider FROM resources 
-                       WHERE provider IS NOT NULL 
+                       WHERE experiment_id = ?
+                         AND provider IS NOT NULL 
                          AND provider NOT IN ('unknown', 'terraform', 'kubernetes')
-                       ORDER BY provider"""
+                       ORDER BY provider""",
+                    [experiment_id]
                 ).fetchall()
                 providers_to_process = [p['provider'] for p in providers]
         except Exception as e:
@@ -4244,7 +4271,7 @@ def main():
         diagram = builder.generate()
         provider = builder.detect_cloud_provider()
         diagram_title = f"{provider} Architecture"
-        diagrams = [(provider.lower(), diagram_title, diagram)]
+        diagrams = [(provider.lower(), diagram_title, diagram, args.repo)]
     else:
         diagrams = []
         for provider in providers_to_process:
@@ -4276,7 +4303,7 @@ def main():
                 }
                 provider_display = provider_map.get(provider.lower(), provider.title())
                 diagram_title = f"{provider_display} Architecture"
-                diagrams.append((provider.lower(), diagram_title, diagram))
+                diagrams.append((provider.lower(), diagram_title, diagram, args.repo))
     
     # Persist to database if requested
     if args.persist_db:
@@ -4286,7 +4313,7 @@ def main():
             
             with get_db_connection() as conn:
                 display_order = 0
-                for provider_key, diagram_title, diagram in diagrams:
+                for provider_key, diagram_title, diagram, repo_name in diagrams:
                     # Check if diagram already exists
                     existing = conn.execute(
                         "SELECT id FROM cloud_diagrams WHERE experiment_id = ? AND provider = ?",
@@ -4296,20 +4323,20 @@ def main():
                     if existing:
                         # Update existing
                         conn.execute(
-                            "UPDATE cloud_diagrams SET mermaid_code = ?, diagram_title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                            [diagram, diagram_title, existing['id']]
+                            "UPDATE cloud_diagrams SET repo_name = ?, mermaid_code = ?, diagram_title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            [repo_name, diagram, diagram_title, existing['id']]
                         )
                     else:
                         # Insert new
                         conn.execute(
-                            """INSERT INTO cloud_diagrams (experiment_id, provider, diagram_title, mermaid_code, display_order)
-                               VALUES (?, ?, ?, ?, ?)""",
-                            [experiment_id, provider_key, diagram_title, diagram, display_order]
+                            """INSERT INTO cloud_diagrams (experiment_id, repo_name, provider, diagram_title, mermaid_code, display_order)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            [experiment_id, repo_name, provider_key, diagram_title, diagram, display_order]
                         )
                     display_order += 1
                 conn.commit()
                 print(f"Persisted {len(diagrams)} diagram(s) to cloud_diagrams table")
-                for _, diagram_title, _ in diagrams:
+                for _, diagram_title, _, _ in diagrams:
                     print(f"  - {diagram_title}")
         except Exception as e:
             print(f"Warning: Failed to persist diagram to DB: {e}", file=sys.stderr)
@@ -4327,7 +4354,7 @@ def main():
             output_path.mkdir(parents=True, exist_ok=True)
             
             # Write diagrams to directory with names based on provider
-            for i, (provider_key, diagram_title, diagram) in enumerate(diagrams):
+            for i, (provider_key, diagram_title, diagram, repo_name) in enumerate(diagrams):
                 if len(diagrams) == 1:
                     # Single diagram: use generic Architecture_<Provider>.md
                     filename = f"Architecture_{provider_key.title()}.md"
@@ -4347,12 +4374,12 @@ def main():
             else:
                 # Write diagrams to separate files with provider suffix
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                for provider_key, _, diagram in diagrams:
+                for provider_key, _, diagram, _ in diagrams:
                     file_path = output_path.parent / f"{output_path.stem}_{provider_key}{output_path.suffix}"
                     file_path.write_text(diagram)
                     print(f"Diagram written to {file_path}")
     else:
-        for _, diagram_title, diagram in diagrams:
+        for _, diagram_title, diagram, _ in diagrams:
             print(f"\n{'='*60}")
             print(f"{diagram_title}")
             print(f"{'='*60}\n")
