@@ -1881,8 +1881,13 @@ class HierarchicalDiagramBuilder:
         lines.append('  subgraph network_tier["🌐 Network Tier"]')
         
         # Group resources by type
-        vpcs = [r for r in network_resources if 'vpc' in (r.get('resource_type') or '').lower()]
-        subnets = [r for r in network_resources if 'subnet' in (r.get('resource_type') or '').lower() 
+        # Match VPC-like resources across providers: vpc, vnet, virtual_network, network
+        vpc_keywords = ['vpc', 'vnet', 'virtual_network']
+        vpcs = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in vpc_keywords)
+                and 'security' not in (r.get('resource_type') or '').lower()]
+        # Match subnet-like resources across providers: subnet, vswitch, subnetwork, vpc_subnet
+        subnet_keywords = ['subnet', 'vswitch', 'subnetwork']
+        subnets = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in subnet_keywords)
                    and 'security' not in (r.get('resource_type') or '').lower()]
         security_groups = [r for r in network_resources if 'security_group' in (r.get('resource_type') or '').lower()
                            and 'rule' not in (r.get('resource_type') or '').lower()]
@@ -1957,6 +1962,10 @@ class HierarchicalDiagramBuilder:
         # Rules that are not children of SGs are rendered as top-level resources with their children
         for rule in security_group_rules:
             if rule['resource_name'] in self.emitted_nodes:
+                continue
+            
+            # Skip rules that are children of security groups - they'll be rendered inside the SG
+            if rule.get('parent_resource_id') is not None and rule['parent_resource_id'] in {sg['id'] for sg in security_groups}:
                 continue
             
             rule_children = self.children_by_parent.get(rule.get('id'), [])
@@ -3956,21 +3965,21 @@ class HierarchicalDiagramBuilder:
                 })
         
         # Extract and render network resources (VPC, subnets, security groups, etc.)
+        # NOTE: Do NOT filter by all_children - render_network_hierarchy handles hierarchy internally
         # Filter to exclude terraform metadata (zone_data, data sources, etc.)
         network_resources = [
             r for r in self.resources
             if self.is_network_resource(r)
-            and r['id'] not in all_children
             and not self.is_terraform_metadata_resource(r)
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
         ]
         
         # Also collect compute resources early (EC2 instances, VMs, etc.) - they'll be rendered inside network tier
+        # NOTE: Do NOT filter by all_children - render_network_hierarchy handles hierarchy internally
         compute_resources = [
             r for r in self.resources
             if self.is_compute_resource(r)
-            and r['id'] not in all_children
             and r['id'] not in apim_related_ids
             and r['id'] not in sb_related_ids
             and r['id'] not in k8s_related_ids
@@ -3992,7 +4001,9 @@ class HierarchicalDiagramBuilder:
             lines.extend(network_lines)
             lines.append("")
         
-        # Mark compute resources as emitted since they're rendered in network hierarchy
+        # Mark network and compute resources as emitted since they're rendered in network hierarchy
+        for net in network_resources:
+            self.emitted_nodes.add(net['resource_name'])
         for compute in compute_resources:
             self.emitted_nodes.add(compute['resource_name'])
         
