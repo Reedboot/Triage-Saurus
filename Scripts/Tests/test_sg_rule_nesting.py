@@ -247,6 +247,165 @@ class TestPropertyExtraction(unittest.TestCase):
         self.assertEqual(sg_name, 'default')
 
 
+class TestAzureNICNesting(unittest.TestCase):
+    """Test Azure NIC nesting transformation."""
+    
+    def setUp(self):
+        """Create a minimal diagram builder for testing."""
+        self.builder = HierarchicalDiagramBuilder(experiment_id='test')
+        self.builder.resources = []
+        self.builder.children_by_parent = {}
+        self.builder.resource_by_id = {}
+    
+    def _create_resource(self, res_id: int, name: str, res_type: str, 
+                        parent_id: int = None, properties: Dict = None) -> Dict:
+        """Helper to create an Azure resource."""
+        return {
+            'id': res_id,
+            'resource_name': name,
+            'resource_type': res_type,
+            'provider': 'azure',
+            'repo_name': 'test-repo',
+            'source_file': 'main.tf',
+            'parent_resource_id': parent_id,
+            'parent_resource_name': None,
+            'parent_resource_type': None,
+            'max_finding_score': 0,
+            'properties': properties or {},
+            'public': False,
+            'public_reason': '',
+            'network_acls': None,
+            'firewall_rules': [],
+        }
+    
+    def test_azure_nic_reparented_to_vm(self):
+        """Test that NICs are reparented from subnets to VMs."""
+        # Create vNet (id=1)
+        vnet = self._create_resource(1, 'vNet', 'azurerm_virtual_network')
+        
+        # Create subnet under vNet (id=2, parent=1)
+        subnet = self._create_resource(2, 'subnet', 'azurerm_subnet', parent_id=1)
+        
+        # Create VM (id=3)
+        vm = self._create_resource(3, 'dev-vm', 'azurerm_virtual_machine')
+        
+        # Create NIC under subnet (id=4, parent=2)
+        nic = self._create_resource(4, 'developerVMNetInt', 'azurerm_network_interface', 
+                                   parent_id=2)
+        
+        # Add resources
+        self.builder.resources = [vnet, subnet, vm, nic]
+        self.builder.resource_by_id = {1: vnet, 2: subnet, 3: vm, 4: nic}
+        
+        # Initial parent relationships
+        self.builder.children_by_parent = {
+            1: [subnet],
+            2: [nic],
+        }
+        
+        # Apply transformation
+        self.builder._apply_azure_nic_nesting()
+        
+        # Verify NIC was moved from subnet to VM
+        self.assertNotIn(4, [r.get('id') for r in self.builder.children_by_parent.get(2, [])])
+        self.assertIn(4, [r.get('id') for r in self.builder.children_by_parent.get(3, [])])
+    
+    def test_azure_nic_with_naming_heuristic(self):
+        """Test NIC detection using naming heuristics."""
+        # Create VM (id=1)
+        vm = self._create_resource(1, 'my-vm', 'azurerm_virtual_machine')
+        
+        # Create subnet (id=2)
+        subnet = self._create_resource(2, 'subnet', 'azurerm_subnet')
+        
+        # Create NIC with name containing VM name (id=3, parent=2)
+        nic = self._create_resource(3, 'my-vm-nic', 'azurerm_network_interface', parent_id=2)
+        
+        self.builder.resources = [vm, subnet, nic]
+        self.builder.resource_by_id = {1: vm, 2: subnet, 3: nic}
+        self.builder.children_by_parent = {2: [nic]}
+        
+        # Apply transformation
+        self.builder._apply_azure_nic_nesting()
+        
+        # Verify NIC was moved to VM based on naming heuristic
+        self.assertIn(3, [r.get('id') for r in self.builder.children_by_parent.get(1, [])])
+    
+    def test_azure_nic_skipped_without_vms(self):
+        """Test that transformation is skipped when no VMs are present."""
+        # Create only networking resources
+        subnet = self._create_resource(1, 'subnet', 'azurerm_subnet')
+        nic = self._create_resource(2, 'nic', 'azurerm_network_interface', parent_id=1)
+        
+        self.builder.resources = [subnet, nic]
+        self.builder.resource_by_id = {1: subnet, 2: nic}
+        self.builder.children_by_parent = {1: [nic]}
+        
+        original_parent = 1
+        
+        # Apply transformation
+        self.builder._apply_azure_nic_nesting()
+        
+        # NIC should remain under subnet (no VMs to attach to)
+        self.assertEqual(original_parent, 1)
+        self.assertIn(2, [r.get('id') for r in self.builder.children_by_parent.get(1, [])])
+    
+    def test_azure_multiple_nics_per_vm(self):
+        """Test handling of multiple NICs per VM."""
+        # Create VM (id=1)
+        vm = self._create_resource(1, 'multi-nic-vm', 'azurerm_virtual_machine')
+        
+        # Create subnet (id=2)
+        subnet = self._create_resource(2, 'subnet', 'azurerm_subnet')
+        
+        # Create two NICs under subnet (id=3, 4, parent=2)
+        nic1 = self._create_resource(3, 'multi-nic-vm-nic1', 'azurerm_network_interface', 
+                                    parent_id=2)
+        nic2 = self._create_resource(4, 'multi-nic-vm-nic2', 'azurerm_network_interface', 
+                                    parent_id=2)
+        
+        self.builder.resources = [vm, subnet, nic1, nic2]
+        self.builder.resource_by_id = {1: vm, 2: subnet, 3: nic1, 4: nic2}
+        self.builder.children_by_parent = {2: [nic1, nic2]}
+        
+        # Apply transformation
+        self.builder._apply_azure_nic_nesting()
+        
+        # Both NICs should be moved to VM
+        vm_children_ids = [r.get('id') for r in self.builder.children_by_parent.get(1, [])]
+        self.assertIn(3, vm_children_ids)
+        self.assertIn(4, vm_children_ids)
+        self.assertNotIn(3, [r.get('id') for r in self.builder.children_by_parent.get(2, [])])
+        self.assertNotIn(4, [r.get('id') for r in self.builder.children_by_parent.get(2, [])])
+    
+    def test_azure_nic_preserves_other_subnet_children(self):
+        """Test that reparenting NICs doesn't affect other subnet children."""
+        # Create subnet (id=1)
+        subnet = self._create_resource(1, 'subnet', 'azurerm_subnet')
+        
+        # Create VM (id=2)
+        vm = self._create_resource(2, 'vm', 'azurerm_virtual_machine')
+        
+        # Create NIC (id=3, parent=1)
+        nic = self._create_resource(3, 'vm-nic', 'azurerm_network_interface', parent_id=1)
+        
+        # Create other subnet child like NSG (id=4, parent=1)
+        nsg = self._create_resource(4, 'subnet-nsg', 'azurerm_network_security_group', 
+                                   parent_id=1)
+        
+        self.builder.resources = [subnet, vm, nic, nsg]
+        self.builder.resource_by_id = {1: subnet, 2: vm, 3: nic, 4: nsg}
+        self.builder.children_by_parent = {1: [nic, nsg]}
+        
+        # Apply transformation
+        self.builder._apply_azure_nic_nesting()
+        
+        # NIC should move to VM, but NSG should stay in subnet
+        subnet_children = [r.get('id') for r in self.builder.children_by_parent.get(1, [])]
+        self.assertNotIn(3, subnet_children)
+        self.assertIn(4, subnet_children)
+
+
 if __name__ == '__main__':
     # Run tests
     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])

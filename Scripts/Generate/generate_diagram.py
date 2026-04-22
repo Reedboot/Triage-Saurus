@@ -367,8 +367,10 @@ class HierarchicalDiagramBuilder:
         # under that SG's rules. This visualizes the control flow and security boundaries.
         self._apply_security_group_rule_nesting()
         
-        # Apply rendering transformation: nest resources under SG rules for diagram visualization
-        self._apply_security_group_rule_nesting()
+        # Apply rendering transformation: nest Azure NICs under their VMs
+        # For diagram purposes (NOT database semantics), this remaps NIC parents
+        # from subnets to VMs to show proper network attachment
+        self._apply_azure_nic_nesting()
         
         # Detect internet-exposed resources
         self._detect_internet_exposure()
@@ -488,6 +490,122 @@ class HierarchicalDiagramBuilder:
         except Exception as e:
             import sys
             print(f"[WARN] Security group rule nesting (diagram rendering) failed: {e}", file=sys.stderr)
+
+    
+    def _apply_azure_nic_nesting(self) -> None:
+        """Apply rendering transformation: nest Azure NICs under their VMs.
+        
+        In Azure Terraform, NICs are children of subnets (parent_resource_id).
+        But semantically, NICs attach to VMs. This transformation remaps
+        the NIC's parent from subnet → VM for diagram visualization only.
+        
+        This is a DIAGRAM-ONLY transformation, not a database change.
+        """
+        try:
+            # Guard: skip if no resources or no Azure resources
+            if not self.resources:
+                return
+            
+            has_azure_vms = any(
+                (r.get('resource_type') or '').lower() == 'azurerm_virtual_machine'
+                for r in self.resources
+            )
+            if not has_azure_vms:
+                return  # No Azure VMs, nothing to do
+            
+            # Build maps for quick lookup
+            resource_parent_map = {}  # {resource_id: parent_id}
+            vm_by_name = {}  # {vm_name: resource}
+            nics_by_name = {}  # {nic_name: resource}
+            
+            # Single pass to build maps
+            for parent_id, children in self.children_by_parent.items():
+                for child in children:
+                    child_id = child.get('id')
+                    if child_id:
+                        resource_parent_map[child_id] = parent_id
+            
+            # Collect VMs and NICs
+            for resource in self.resources:
+                res_type = (resource.get('resource_type') or '').lower()
+                res_name = resource.get('resource_name')
+                
+                if res_type == 'azurerm_virtual_machine':
+                    if res_name:
+                        vm_by_name[res_name] = resource
+                elif res_type == 'azurerm_network_interface':
+                    if res_name:
+                        nics_by_name[res_name] = resource
+            
+            # Find NIC-to-VM associations via resource names or properties
+            # In Azure, NICs are explicitly associated with VMs via terraform reference
+            for nic_name, nic_resource in nics_by_name.items():
+                nic_id = nic_resource.get('id')
+                props = nic_resource.get('properties') or {}
+                
+                # Look for VM references in NIC properties
+                vm_owner = None
+                if isinstance(props, dict):
+                    # Check common property keys for VM association
+                    for key in ['virtual_machine_id', 'vm_id', 'owner_vm']:
+                        vm_ref = props.get(key)
+                        if vm_ref:
+                            # Extract VM name from reference
+                            vm_name = vm_ref.split(".")[-1] if "." in str(vm_ref) else str(vm_ref)
+                            if vm_name in vm_by_name:
+                                vm_owner = vm_by_name[vm_name]
+                                break
+                
+                # If no explicit property, try naming heuristics
+                # Common patterns: vm-name-nic, vm_name_nic, vmnameint, etc.
+                if not vm_owner:
+                    nic_lower = nic_name.lower()
+                    for vm_name, vm_resource in vm_by_name.items():
+                        vm_lower = vm_name.lower()
+                        # Check multiple patterns:
+                        # 1. VM name is substring of NIC name
+                        # 2. NIC name contains VM name (even if mangled)
+                        # 3. Both contain common prefix (e.g., "dev" in "dev-vm" and "developerVMNetInt")
+                        
+                        if vm_lower in nic_lower:
+                            # Direct substring match (e.g., "my-vm" in "my-vm-nic")
+                            vm_owner = vm_resource
+                            break
+                        
+                        # Check for prefix match: if VM name and NIC name share initial word
+                        vm_words = vm_lower.replace('-', ' ').replace('_', ' ').split()
+                        nic_words = nic_lower.replace('-', ' ').replace('_', ' ').split()
+                        
+                        if vm_words and nic_words:
+                            vm_prefix = vm_words[0]
+                            nic_prefix = nic_words[0]
+                            # Match if first word is same or NIC prefix contains VM prefix
+                            if vm_prefix == nic_prefix or vm_prefix in nic_prefix or nic_prefix.startswith(vm_prefix[:3]):
+                                vm_owner = vm_resource
+                                break
+
+                
+                # If VM owner found, reparent the NIC
+                if vm_owner:
+                    vm_id = vm_owner.get('id')
+                    old_parent_id = resource_parent_map.get(nic_id)
+                    
+                    # Remove from old parent (subnet)
+                    if old_parent_id and old_parent_id in self.children_by_parent:
+                        self.children_by_parent[old_parent_id] = [
+                            r for r in self.children_by_parent[old_parent_id]
+                            if r.get('id') != nic_id
+                        ]
+                    
+                    # Add to VM
+                    if vm_id not in self.children_by_parent:
+                        self.children_by_parent[vm_id] = []
+                    self.children_by_parent[vm_id].append(nic_resource)
+                    resource_parent_map[nic_id] = vm_id
+        
+        except Exception as e:
+            import sys
+            print(f"[WARN] Azure NIC nesting (diagram rendering) failed: {e}", file=sys.stderr)
 
     
     def _detect_internet_exposure(self) -> None:
@@ -1950,9 +2068,18 @@ class HierarchicalDiagramBuilder:
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
                     
-                    # Render docker containers inside compute
+                    # Render child resources inside compute (NICs, disks, extensions, etc.)
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
                     docker_containers = [c for c in compute_children if 'docker_container' in (c.get('resource_type') or '').lower()]
+                    other_children = [c for c in compute_children if 'docker_container' not in (c.get('resource_type') or '').lower()]
+                    
+                    # Render non-docker children (NICs, disks, extensions, etc.)
+                    for child in other_children:
+                        if child['resource_name'] not in self.emitted_nodes:
+                            lines.append(self.render_node(child, indent="      "))
+                            self.emitted_nodes.add(child['resource_name'])
+                    
+                    # Render docker containers inside compute
                     if docker_containers:
                         lines.append('      subgraph containers["🐳 Docker Containers"]')
                         for container in docker_containers:

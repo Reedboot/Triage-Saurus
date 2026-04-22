@@ -4129,6 +4129,42 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
     return jsonify({"status": "started"})
 
 
+@app.route("/api/icon-mappings")
+def api_icon_mappings():
+    """Return icon mappings for Mermaid diagram nodes.
+    
+    Maps resource types (e.g., 'azurerm_app_service') to icon file paths.
+    Supports query parameter 'provider' (azure, aws, gcp).
+    """
+    try:
+        provider = (request.args.get("provider") or "azure").strip().lower()
+        
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Generate.icon_resolver import get_icon_path  # type: ignore
+        from Scripts.Generate.icon_resolver import get_all_available_icons  # type: ignore
+        
+        # Build mapping from all available icons for this provider
+        icon_map = {}
+        available_icons = get_all_available_icons(provider)
+        
+        # For each category and its icons, build the resource_type -> path mapping
+        for category, icons in available_icons.items():
+            for icon_name in icons:
+                # Construct likely resource type from icon name
+                # Format: category_icon_name (e.g., "app_service" from app_service.svg in azure)
+                resource_type = f"{provider}_{category}_{icon_name}".replace("-", "_")
+                icon_path = get_icon_path(resource_type, provider)
+                if icon_path:
+                    # Return relative path from web root
+                    rel_path = f"/static/assets/icons/{provider}/{icon_path.name}"
+                    icon_map[resource_type] = rel_path
+        
+        return jsonify(icon_map)
+    except Exception as exc:
+        app.logger.exception("icon_mappings error for provider %s", request.args.get("provider", "azure"))
+        return jsonify({"error": f"Failed to get icon mappings: {str(exc)}"}), 500
+
+
 @app.route("/api/diagrams/blast_radius/<experiment_id>/<resource_name>")
 def api_blast_radius(experiment_id: str, resource_name: str):
     """Return a Mermaid blast radius diagram for a specific resource."""
