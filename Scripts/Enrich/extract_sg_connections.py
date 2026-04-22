@@ -201,23 +201,14 @@ def extract_sg_connections(experiment_id: str) -> int:
                     label = " / ".join(label_parts)
                     protocol = rule_data.get('protocol', 'tcp')
                     
-                    # Create connection: Internet → SG rule
-                    conn.execute("""
-                        INSERT INTO resource_connections
-                        (source, target, connection_type, port, protocol, confirmed, label, experiment_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        "Internet",
-                        rule_name,
-                        "inbound_traffic",
-                        str(from_port),
-                        protocol,
-                        True,  # confirmed from TF
-                        label,
-                        experiment_id,
-                    ))
+                    # Note: Connection creation skipped here because:
+                    # 1. Diagram rendering now uses _apply_security_group_rule_nesting() transformation
+                    # 2. Database connection records require source_resource_id (NOT NULL), and Internet has no resource ID
+                    # 3. The rendering transformation handles all diagram visualization
+                    # If needed in future, create synthetic Internet resource with ID -1 or similar
+                    
                     connection_count += 1
-                    print(f"[SG Connections] Created: Internet → {rule_name} ({label})")
+                    print(f"[SG Connections] Identified: Internet → {rule_name} ({label})")
                     
                 except Exception as e:
                     print(f"[WARN] Error parsing {rule_name} from {tf_path}: {e}")

@@ -871,6 +871,7 @@ def _ensure_schema(conn: sqlite3.Connection):
       provider TEXT NOT NULL,
       diagram_title TEXT NOT NULL,
       mermaid_code TEXT NOT NULL,
+      css_code TEXT,
       display_order INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1599,11 +1600,16 @@ def insert_resource(
         # Insert properties
         if properties:
             for key, value in properties.items():
+                # Store lists/dicts as JSON, scalars as-is
+                if isinstance(value, (list, dict)):
+                    str_value = json.dumps(value)
+                else:
+                    str_value = str(value)
                 conn.execute("""
                     INSERT OR REPLACE INTO resource_properties
                     (resource_id, property_key, property_value, property_type, is_security_relevant)
                     VALUES (?, ?, ?, ?, ?)
-                """, (resource_id, key, str(value), 
+                """, (resource_id, key, str_value, 
                       _infer_property_type(key), 
                       _is_security_relevant(key)))
 
@@ -3515,6 +3521,7 @@ def upsert_cloud_diagram(
     provider: str,
     diagram_title: str,
     mermaid_code: str,
+    css_code: Optional[str] = None,
     display_order: int = 0,
 ) -> None:
     """Insert or update a Mermaid architecture diagram for a provider/experiment.
@@ -3524,6 +3531,14 @@ def upsert_cloud_diagram(
     diagram_title) to prevent duplicate provider tabs across multiple experiment
     runs. If a repo_name cannot be determined, falls back to the existing
     experiment-scoped uniqueness.
+    
+    Args:
+        experiment_id: Experiment identifier
+        provider: Cloud provider name
+        diagram_title: Title of the diagram
+        mermaid_code: Mermaid diagram code
+        css_code: Optional CSS code for icon styling
+        display_order: Display order for the diagram
     """
     # Skip meta-providers that shouldn't have architecture diagrams
     provider_norm = _canonical_diagram_provider(provider)
@@ -3573,29 +3588,31 @@ def upsert_cloud_diagram(
             conn.execute(
                 """
                 INSERT INTO cloud_diagrams
-                    (experiment_id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (experiment_id, repo_name, provider, diagram_title, mermaid_code, css_code, display_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(repo_name, provider, diagram_title) DO UPDATE SET
                     mermaid_code  = excluded.mermaid_code,
+                    css_code      = excluded.css_code,
                     display_order = excluded.display_order,
                     experiment_id = excluded.experiment_id,
                     updated_at    = CURRENT_TIMESTAMP
                 """,
-                (experiment_id, primary_repo, provider_norm, diagram_title, mermaid_code, display_order),
+                (experiment_id, primary_repo, provider_norm, diagram_title, mermaid_code, css_code, display_order),
             )
         else:
             # Fallback to experiment-scoped uniqueness if no repo_name is available
             conn.execute(
                 """
                 INSERT INTO cloud_diagrams
-                    (experiment_id, provider, diagram_title, mermaid_code, display_order, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (experiment_id, provider, diagram_title, mermaid_code, css_code, display_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(experiment_id, provider, diagram_title) DO UPDATE SET
                     mermaid_code  = excluded.mermaid_code,
+                    css_code      = excluded.css_code,
                     display_order = excluded.display_order,
                     updated_at    = CURRENT_TIMESTAMP
                 """,
-                (experiment_id, provider_norm, diagram_title, mermaid_code, display_order),
+                (experiment_id, provider_norm, diagram_title, mermaid_code, css_code, display_order),
             )
 
         conn.commit()
@@ -3615,7 +3632,7 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
             if repo_name:
                 rows = conn.execute(
                     """
-                    SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                    SELECT id, repo_name, provider, diagram_title, mermaid_code, css_code, display_order, updated_at
                     FROM cloud_diagrams
                     WHERE experiment_id = ?
                       AND LOWER(COALESCE(repo_name, '')) = LOWER(?)
@@ -3629,7 +3646,7 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
             else:
                 rows = conn.execute(
                     """
-                    SELECT id, repo_name, provider, diagram_title, mermaid_code, display_order, updated_at
+                    SELECT id, repo_name, provider, diagram_title, mermaid_code, css_code, display_order, updated_at
                     FROM cloud_diagrams
                     WHERE experiment_id = ?
                     """,
@@ -3669,6 +3686,7 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
                 "provider": provider_display,
                 "diagram_title": row.get("diagram_title"),
                 "mermaid_code": row.get("mermaid_code"),
+                "css_code": row.get("css_code"),
                 "display_order": row.get("display_order") or 0,
             })
         return result

@@ -4429,6 +4429,65 @@ def write_to_database(context: RepositoryContext, db_path: str = None, experimen
                         (parent_db_id, child_db_id),
                     )
     
+    # Second-and-a-half pass: Use parent_type metadata as fallback when parent not found.
+    # For resources whose type has parent_type defined (e.g., S3 bucket objects, Azure subnets),
+    # if no explicit parent was found, try to find a parent of that type.
+    try:
+        from db_helpers import get_db_connection as _gdb
+        
+        with _gdb(db_path) as conn:
+            # Get repo_id for this experiment/repo
+            repo_row = conn.execute(
+                "SELECT id FROM repositories WHERE experiment_id = ? AND repo_name = ?",
+                (experiment_id, context.repository_name),
+            ).fetchone()
+            if not repo_row:
+                pass
+            else:
+                repo_id = repo_row[0]
+                
+                # For each resource without a parent but has parent_type defined
+                for resource in context.resources:
+                    res_key = f"{resource.resource_type}.{resource.name}"
+                    if res_key not in res_db_ids:
+                        continue  # Not in DB, skip
+                    
+                    child_db_id = res_db_ids[res_key]
+                    
+                    # Check if this resource already has a parent_resource_id set
+                    existing = conn.execute(
+                        "SELECT parent_resource_id FROM resources WHERE id = ?",
+                        (child_db_id,),
+                    ).fetchone()
+                    if existing and existing[0] is not None:
+                        continue  # Already has parent, skip
+                    
+                    # Check resource_types metadata for parent_type
+                    rtype_info = _rtdb.get_resource_type(_get_db(), resource.resource_type)
+                    parent_type = rtype_info.get("parent_type") if rtype_info else None
+                    
+                    if not parent_type:
+                        continue  # No parent_type defined, skip
+                    
+                    # Try to find a parent resource of the specified type in this repo
+                    parent_candidates = conn.execute("""
+                        SELECT id FROM resources
+                        WHERE experiment_id = ? AND repo_id = ?
+                              AND resource_type = ?
+                        ORDER BY id ASC
+                        LIMIT 1
+                    """, (experiment_id, repo_id, parent_type)).fetchone()
+                    
+                    if parent_candidates:
+                        parent_db_id = parent_candidates[0]
+                        conn.execute(
+                            "UPDATE resources SET parent_resource_id=? WHERE id=?",
+                            (parent_db_id, child_db_id),
+                        )
+    except Exception as e:
+        import sys
+        print(f"[WARN] Parent type metadata fallback failed (non-fatal): {e}", file=sys.stderr)
+    
     # Third pass: detect and register shared/external resources
     try:
         from shared_resource_helpers import register_shared_resource, link_repo_to_shared_resource

@@ -222,7 +222,7 @@ class CICDArtifactAnalyzer:
                 
                 conn.execute(
                     """INSERT INTO findings 
-                       (experiment_id, title, description, severity, resource_id, category)
+                       (experiment_id, title, description, severity, resource_id, rule_id)
                        VALUES (?, ?, ?, ?, ?, ?)""",
                     (
                         self.experiment_id,

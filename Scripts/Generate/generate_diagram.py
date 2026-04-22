@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
 from internet_exposure_detector import InternetExposureDetector, ExposureDetail
+from icon_resolver import get_icon_data_uri, get_icon_class, get_fallback_icon_data_uri
 
 
 def load_architecture_diagram_exclusions() -> Set[str]:
@@ -177,6 +178,8 @@ class HierarchicalDiagramBuilder:
         # Maps resource_name → Mermaid node ID; populated by render_* methods so that
         # render_connections can use the correct (potentially prefixed) ID for edges.
         self.node_id_override: Dict[str, str] = {}
+        # Track providers detected in resources for CSS generation
+        self.detected_providers: Set[str] = set()
         # Tracks Mermaid node IDs that have already been emitted to detect duplicates.
         # When the same sanitized name appears for multiple resources (e.g. many Azure
         # resources named "example"), a qualified ID using the resource_type prefix is
@@ -240,6 +243,10 @@ class HierarchicalDiagramBuilder:
         """Wrap a Mermaid-visible label so long box titles stay inside their bounds."""
         text = re.sub(r'\s+', ' ', str(label or '').strip())
         if not text:
+            return text
+
+        # Don't re-wrap labels that already contain HTML break tags
+        if '<br/>' in text:
             return text
 
         normalized = text.replace('_', ' ').replace('/', ' / ')
@@ -338,7 +345,9 @@ class HierarchicalDiagramBuilder:
                 if c.get('source') in valid_names and c.get('target') in valid_names
             ]
         
-        # Build parent-child relationships from database
+        # Build parent-child relationships from database (parent_resource_id column).
+        # This ensures proper nesting: if a resource has parent_resource_id set, it
+        # will be rendered inside its parent's subgraph rather than at the top level.
         with get_db_connection() as conn:
             rows = conn.execute("""
                 SELECT parent_resource_id, id as child_id
@@ -350,7 +359,16 @@ class HierarchicalDiagramBuilder:
                 parent_id = row['parent_resource_id']
                 child_id = row['child_id']
                 if child_id in self.resource_by_id:
-                    self.children_by_parent[parent_id].append(self.resource_by_id[child_id])
+                    child_resource = self.resource_by_id[child_id]
+                    self.children_by_parent[parent_id].append(child_resource)
+        
+        # Apply rendering transformation: security group rules as filtering layers
+        # For diagram purposes (NOT database semantics), nest resources that use a SG
+        # under that SG's rules. This visualizes the control flow and security boundaries.
+        self._apply_security_group_rule_nesting()
+        
+        # Apply rendering transformation: nest resources under SG rules for diagram visualization
+        self._apply_security_group_rule_nesting()
         
         # Detect internet-exposed resources
         self._detect_internet_exposure()
@@ -360,6 +378,115 @@ class HierarchicalDiagramBuilder:
         
         # Infer data flow connections from metadata
         self._infer_data_connections()
+    
+    def _apply_security_group_rule_nesting(self) -> None:
+        """Apply rendering transformation: nest resources under SG rules for diagram visualization.
+        
+        This is a DIAGRAM-ONLY transformation, not a database change.
+        Resources that use a security group are nested under that group's rules
+        to visualize the control flow and security boundaries.
+        
+        Technically, rules are not parents (database remains correct), but for
+        threat modeling and visualization, rules become control layers.
+        """
+        try:
+            # Guard: skip if no resources or no AWS resources
+            if not self.resources:
+                return
+            
+            has_sg_rules = any(
+                (r.get('resource_type') or '').lower() == 'aws_security_group_rule' 
+                for r in self.resources
+            )
+            if not has_sg_rules:
+                return  # No SG rules, nothing to do
+            
+            # Build maps efficiently in single pass
+            sg_name_to_rules = {}  # {sg_name: [rule_resources]}
+            sg_name_to_users = {}  # {sg_name: [resource_ids]}
+            resource_parent_map = {}  # {resource_id: parent_id} for quick lookup
+            
+            # Single pass to build resource_parent_map
+            for parent_id, children in self.children_by_parent.items():
+                for child in children:
+                    child_id = child.get('id')
+                    if child_id:
+                        resource_parent_map[child_id] = parent_id
+            
+            # Single pass to collect rules and users
+            for resource in self.resources:
+                res_id = resource.get('id')
+                res_type = (resource.get('resource_type') or '').lower()
+                props = resource.get('properties') or {}
+                
+                # Collect rules
+                if res_type == 'aws_security_group_rule':
+                    sg_name = props.get('_sg_name') if isinstance(props, dict) else None
+                    if sg_name:
+                        if sg_name not in sg_name_to_rules:
+                            sg_name_to_rules[sg_name] = []
+                        sg_name_to_rules[sg_name].append(resource)
+                
+                # Collect users of SGs
+                sg_refs = []
+                if isinstance(props, dict):
+                    if 'security_group_refs' in props:
+                        sg_refs_prop = props.get('security_group_refs')
+                        if isinstance(sg_refs_prop, list):
+                            sg_refs.extend(sg_refs_prop)
+                        elif isinstance(sg_refs_prop, str):
+                            sg_refs.append(sg_refs_prop)
+                    if 'security_group_id' in props:
+                        sg_id_ref = props.get('security_group_id')
+                        if isinstance(sg_id_ref, str) and sg_id_ref:
+                            sg_refs.append(sg_id_ref)
+                
+                for sg_ref in sg_refs:
+                    sg_name = None
+                    if isinstance(sg_ref, str):
+                        sg_name = sg_ref.split(".")[-1] if "." in sg_ref else sg_ref
+                    
+                    if sg_name:
+                        if sg_name not in sg_name_to_users:
+                            sg_name_to_users[sg_name] = []
+                        if res_id not in sg_name_to_users[sg_name]:
+                            sg_name_to_users[sg_name].append(res_id)
+            
+            # Re-nest: move resources under SG rules
+            for sg_name, user_ids in sg_name_to_users.items():
+                if sg_name not in sg_name_to_rules:
+                    continue
+                
+                rules = sg_name_to_rules[sg_name]
+                ingress_rules = [r for r in rules if 
+                                (r.get('properties') or {}).get('type', 'ingress').lower() == 'ingress']
+                rule_to_use = ingress_rules[0] if ingress_rules else rules[0]
+                rule_id = rule_to_use.get('id')
+                
+                if not rule_id:
+                    continue
+                
+                for user_id in user_ids:
+                    if user_id not in self.resource_by_id:
+                        continue
+                    
+                    user_resource = self.resource_by_id[user_id]
+                    
+                    # Remove from old parent if it exists
+                    old_parent_id = resource_parent_map.get(user_id)
+                    if old_parent_id and old_parent_id in self.children_by_parent:
+                        self.children_by_parent[old_parent_id] = [
+                            r for r in self.children_by_parent[old_parent_id]
+                            if r.get('id') != user_id
+                        ]
+                    
+                    # Add to rule
+                    self.children_by_parent[rule_id].append(user_resource)
+                    resource_parent_map[user_id] = rule_id
+        except Exception as e:
+            import sys
+            print(f"[WARN] Security group rule nesting (diagram rendering) failed: {e}", file=sys.stderr)
+
     
     def _detect_internet_exposure(self) -> None:
         """Detect internet-exposed resources using multiple detection methods."""
@@ -1639,6 +1766,7 @@ class HierarchicalDiagramBuilder:
                    and 'security' not in (r.get('resource_type') or '').lower()]
         security_groups = [r for r in network_resources if 'security_group' in (r.get('resource_type') or '').lower()
                            and 'rule' not in (r.get('resource_type') or '').lower()]
+        security_group_rules = [r for r in network_resources if 'security_group_rule' in (r.get('resource_type') or '').lower()]
         gateways = [r for r in network_resources if any(x in (r.get('resource_type') or '').lower() 
                     for x in ['gateway', 'firewall', 'nat', 'load_balancer'])]
         
@@ -1705,6 +1833,37 @@ class HierarchicalDiagramBuilder:
                 lines.append(self.render_node(subnet, indent="    "))
                 self.emitted_nodes.add(subnet['resource_name'])
         
+        # Render security group rules with nested resources (as control/filtering layers)
+        # Rules that are not children of SGs are rendered as top-level resources with their children
+        for rule in security_group_rules:
+            if rule['resource_name'] in self.emitted_nodes:
+                continue
+            
+            rule_children = self.children_by_parent.get(rule.get('id'), [])
+            
+            if rule_children:
+                # Render rule as subgraph with nested resources inside
+                rule_id = sanitize_id(rule['resource_name'])
+                rule_label = self._wrap_mermaid_label(rule['resource_name'])
+                lines.append(f'    subgraph {rule_id}[{self._quote_mermaid_label(rule_label)}]')
+                self._emitted_mermaid_ids.add(rule_id)
+                self._node_id_first_owner[rule_id] = str(rule.get('id', ''))
+                
+                # Render children (EC2 instances, etc.) inside the rule
+                for child in rule_children:
+                    if child['resource_name'] not in self.emitted_nodes:
+                        # Render nested resource (recursively handles nested structures)
+                        child_lines = self._render_nested_resource(child, indent="      ")
+                        lines.extend(child_lines)
+                        self.emitted_nodes.add(child['resource_name'])
+                
+                lines.append('    end')
+            else:
+                # Rule has no children, render as simple node
+                lines.append(self.render_node(rule, indent="    "))
+            
+            self.emitted_nodes.add(rule['resource_name'])
+        
         # Render security groups with rules nested
         # NOTE: SG rules are attached to compute resources but rendered at network tier for clarity
         # The Internet→Port connections show the attack surface
@@ -1724,7 +1883,28 @@ class HierarchicalDiagramBuilder:
                 
                 for rule in sg_rules:
                     if rule['resource_name'] not in self.emitted_nodes:
-                        lines.append(self.render_node(rule, indent="      "))
+                        # Check if rule has children (EC2 instances nested by transformation)
+                        rule_children = self.children_by_parent.get(rule.get('id'), [])
+                        if rule_children:
+                            # Render rule as subgraph with nested resources inside
+                            rule_id = sanitize_id(rule['resource_name'])
+                            rule_label = self._wrap_mermaid_label(rule['resource_name'])
+                            lines.append(f'      subgraph {rule_id}[{self._quote_mermaid_label(rule_label)}]')
+                            self._emitted_mermaid_ids.add(rule_id)
+                            self._node_id_first_owner[rule_id] = str(rule.get('id', ''))
+                            
+                            # Render children (EC2 instances, etc.) inside the rule
+                            for child in rule_children:
+                                if child['resource_name'] not in self.emitted_nodes:
+                                    # Render nested resource (recursively handles nested structures)
+                                    child_lines = self._render_nested_resource(child, indent="        ")
+                                    lines.extend(child_lines)
+                                    self.emitted_nodes.add(child['resource_name'])
+                            
+                            lines.append('      end')
+                        else:
+                            # Rule has no children, render as simple node
+                            lines.append(self.render_node(rule, indent="      "))
                         self.emitted_nodes.add(rule['resource_name'])
                 
                 lines.append('    end')
@@ -2010,6 +2190,11 @@ class HierarchicalDiagramBuilder:
 
         # Truncate long labels to fit in box
         label = resource.get('_label') or name
+        
+        # Strip emoji from label (emoji is replaced by icon in CSS class)
+        # Emoji patterns: common emoticons (e.g., 📬, 📥, 🐳, etc.)
+        label = re.sub(r'[\U0001F300-\U0001F9FF]+\s*', '', label).strip()
+        
         if len(label) > 50:
             label = label[:47] + "..."
 
@@ -2024,7 +2209,25 @@ class HierarchicalDiagramBuilder:
         if node_id not in self._node_id_first_owner:
             self._node_id_first_owner[node_id] = resource_db_id
         self.emitted_nodes.add(name)
-        return f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
+        
+        # Get resource type and provider for CSS class
+        resource_type = resource.get('resource_type', '').lower()
+        provider = _detect_provider_from_resource(resource)
+        
+        # Build node definition with CSS class for icon styling
+        css_class = None
+        if resource_type and provider not in ('unknown', 'terraform'):
+            css_class = get_icon_class(resource_type, provider)
+            # Store mapping for later reference in CSS generation
+            self.node_id_override[f"css_class_{node_id}"] = css_class
+        
+        # Add Mermaid class syntax: node_id[label]:::css_class
+        if css_class:
+            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{css_class}"
+        else:
+            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
+        
+        return node_def
     
     def render_subgraph(self, title: str, resources: List[dict], indent: str = "  ") -> List[str]:
         """Render a subgraph containing resources."""
@@ -3288,6 +3491,47 @@ class HierarchicalDiagramBuilder:
         # Default
         return 'infrastructure'
     
+    def generate_icon_css(self) -> str:
+        """Generate Mermaid classDef statements for icon styling.
+        
+        Creates classDefstatements that map CSS classes to icon background images
+        using base64-encoded SVG data URIs. These are embedded in the diagram
+        and applied via Mermaid's class syntax (node:::class_name).
+        """
+        if not self.resources:
+            return ""
+        
+        lines = []
+        
+        # Collect unique providers and resource types
+        providers_with_resources: Dict[str, Set[str]] = defaultdict(set)
+        
+        for res in self.resources:
+            provider = _detect_provider_from_resource(res).lower()
+            if provider not in ('unknown', 'terraform'):
+                self.detected_providers.add(provider)
+                rtype = res.get('resource_type', '').lower()
+                if rtype:
+                    providers_with_resources[provider].add(rtype)
+        
+        # Generate classDef for each resource type per provider
+        for provider in sorted(providers_with_resources.keys()):
+            resource_types = providers_with_resources[provider]
+            
+            for rtype in sorted(resource_types):
+                # Get icon data URI
+                icon_uri = get_icon_data_uri(rtype, provider)
+                if not icon_uri:
+                    # Try fallback
+                    icon_uri = get_fallback_icon_data_uri(provider)
+                
+                if icon_uri:
+                    css_class = get_icon_class(rtype, provider)
+                    # Mermaid classDef syntax with background image styling
+                    lines.append(f"classDef {css_class} fill:#ffffff,stroke:#333333,stroke-width:2px,background-image:url('{icon_uri}'),background-size:64px,background-repeat:no-repeat,background-position:center;")
+        
+        return "\n".join(lines)
+    
     def generate(self) -> str:
         """Generate the complete hierarchical diagram."""
         if not self.resources:
@@ -4114,6 +4358,81 @@ def main():
             print(f"{'='*60}\n")
             print(diagram)
 
+
+def generate_architecture_diagram(
+    experiment_id: str,
+    repo_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    include_operation_resources: Optional[bool] = None,
+) -> str:
+    """Generate a Mermaid architecture diagram for a given experiment and optional provider.
+    
+    Args:
+        experiment_id: The experiment ID
+        repo_name: Optional repository name filter
+        provider: Optional cloud provider filter
+        include_operation_resources: Whether to include API operations
+        
+    Returns:
+        Mermaid diagram code as a string
+    """
+    builder = HierarchicalDiagramBuilder(
+        experiment_id=experiment_id,
+        repo_name=repo_name,
+        include_api_operations=include_operation_resources,
+        provider_filter=provider,
+    )
+    return builder.generate()
+
+
+def generate_architecture_diagram_with_css(
+    experiment_id: str,
+    repo_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    include_operation_resources: Optional[bool] = None,
+) -> tuple[str, str]:
+    """Generate a Mermaid diagram with icon styling classDef statements.
+    
+    Args:
+        experiment_id: The experiment ID
+        repo_name: Optional repository name filter
+        provider: Optional cloud provider filter
+        include_operation_resources: Whether to include API operations
+        
+    Returns:
+        Tuple of (mermaid_code_with_classdef, css_code)
+        - mermaid_code_with_classdef: Full diagram with embedded classDef statements
+        - css_code: Standalone CSS (for backward compatibility / alternative rendering)
+    """
+    builder = HierarchicalDiagramBuilder(
+        experiment_id=experiment_id,
+        repo_name=repo_name,
+        include_api_operations=include_operation_resources,
+        provider_filter=provider,
+    )
+    diagram = builder.generate()
+    classdefs = builder.generate_icon_css()
+    
+    # Embed classDef statements into the diagram
+    # Insert them before the first node/subgraph definition
+    if classdefs:
+        # Split diagram to find where to inject classDefs
+        lines = diagram.split('\n')
+        # Find first non-comment line after the flowchart declaration
+        insert_idx = 1
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() and not line.strip().startswith('%%'):
+                insert_idx = i
+                break
+        
+        # Insert classDefs before first diagram content
+        lines.insert(insert_idx, classdefs)
+        diagram_with_css = '\n'.join(lines)
+    else:
+        diagram_with_css = diagram
+    
+    # Also return standalone CSS for backward compatibility
+    return diagram_with_css, classdefs
 
 
 if __name__ == "__main__":

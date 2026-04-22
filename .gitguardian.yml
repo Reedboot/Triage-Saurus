@@ -1,0 +1,27 @@
+# GitGuardian Configuration
+# Excludes false positives from secret scanning
+
+version: 1
+
+paths-ignore:
+  # Icon resolver contains resource type names that look like credentials
+  # but are actually Terraform resource type names in mappings (e.g., azurerm_key_vault_secret)
+  - "Scripts/Generate/icon_resolver.py"
+  
+  # Test files contain mock/example data only, no real credentials
+  - "Scripts/Generate/test_*.py"
+  - "Scripts/Scan/test_*.py"
+  - "Scripts/Tests/test_*.py"
+  - "Scripts/*/test_*.py"
+  - "Scripts/*_test.py"
+
+matches-ignore:
+  # Resource type names that contain "secret", "key", "password" in their names
+  # These are legitimate Azure/AWS/GCP resource types, not actual credentials
+  - match: "azurerm_key_vault"
+  - match: "azurerm_key_vault_secret"
+  - match: "azurerm_key_vault_key"
+  - match: "azurerm_key_vault_certificate"
+  - match: "aws_api_gateway_api_key"
+  - match: "aws_api_gateway_usage_plan_key"
+  - match: "oci_identity_api_key"

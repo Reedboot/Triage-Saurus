@@ -141,6 +141,7 @@ class InternetExposureDetector:
         'public_ip_assigned',
         'enable_public_network_access',
         'public_endpoint_enabled',
+        'internet_ingress_open',  # Security group/rule allows ingress from 0.0.0.0
     }
 
     def __init__(self, provider: str):
@@ -330,6 +331,7 @@ class InternetExposureDetector:
         for resource in resources:
             resource_id = resource.get('id')
             resource_name = resource.get('resource_name')
+            resource_type = (resource.get('resource_type') or '').lower()
 
             if not resource_name or resource_id not in properties:
                 continue
@@ -342,11 +344,27 @@ class InternetExposureDetector:
                 if prop_key in self.PUBLIC_PROPERTIES:
                     # Normalize boolean values
                     if prop_value and str(prop_value).lower() in ('true', '1', 'yes'):
-                        reason_parts.append(f'{prop_key}=true')
+                        # Special handling for security group rules with port info
+                        if prop_key == 'internet_ingress_open' and resource_type == 'aws_security_group_rule':
+                            # Try to extract port and protocol from properties
+                            from_port = props.get('from_port', props.get('port', ''))
+                            to_port = props.get('to_port', '')
+                            protocol = props.get('protocol', 'unknown')
+                            
+                            if from_port and from_port == to_port:
+                                reason_parts.append(f'port {from_port} open to 0.0.0.0/0')
+                            elif from_port and to_port:
+                                reason_parts.append(f'ports {from_port}-{to_port} open to 0.0.0.0/0')
+                            elif from_port:
+                                reason_parts.append(f'port {from_port} open to 0.0.0.0/0')
+                            else:
+                                reason_parts.append('allows ingress from 0.0.0.0/0')
+                        else:
+                            reason_parts.append(f'{prop_key}=true')
 
             if reason_parts:
                 # Skip if this resource has private override
-                if (resource.get('resource_type') or '').lower() in self.PRIVATE_OVERRIDE:
+                if resource_type in self.PRIVATE_OVERRIDE:
                     continue
 
                 exposed[resource_name] = ExposureDetail(

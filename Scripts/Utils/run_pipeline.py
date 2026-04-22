@@ -338,6 +338,7 @@ def main() -> int:
             experiment_id,
 
             "--output", str(output_dir),
+            "--persist-db",
         ],
         "Phase 3d — Generate architecture diagrams (zones, severity colours, data flows)",
         timeout=120,  # 2 minute timeout for diagram generation

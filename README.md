@@ -301,3 +301,8 @@ Recommendations
 
 ---
 
+Icons from:
+
+Azure - https://learn.microsoft.com/en-us/azure/architecture/icons/
+AWS - https://aws.amazon.com/architecture/icons/
+GCP - https://cloud.google.com/icons

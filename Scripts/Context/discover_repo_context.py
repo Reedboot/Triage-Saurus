@@ -99,44 +99,46 @@ def main() -> int:
 
     repo_name = repo_path.name
 
-    def log(message: str) -> None:
-        print(f"[{repo_name}] {message}", flush=True)
+    # Phase 1: Context Extraction (precedes Phase 1 Detection scan in pipeline)
+    print(f"\n{'─'*60}")
+    print(f"▶  Phase 1 — Fast context extraction")
+    print('─'*60)
 
     # 1. Data Extraction
-    log("== Starting context extraction ==")
+    print(f"\n[Phase 1] Running context extraction ...", flush=True)
     context_model = extract_context(str(repo_path))
-    log(f"== Extracted {len(context_model.resources)} resources, {len(context_model.relationships)} relationships ==")
+    print(f"[Phase 1] Extracted {len(context_model.resources)} resources, {len(context_model.relationships)} relationships", flush=True)
 
     # 2. Database Population
-    log("== Writing to database ==")
+    print(f"[Phase 1] Writing to database ...", flush=True)
     db_path = args.database if args.database else None
     write_to_database(context_model, db_path, experiment_id=args.experiment_id)
-    log("== Database write complete ==")
+    print(f"[Phase 1] Database write complete", flush=True)
 
     # 2b. Persist knowledge graph (nodes, typed relationships, enrichment queue)
-    log("== Persisting knowledge graph ==")
+    print(f"[Phase 1] Persisting knowledge graph ...", flush=True)
     try:
         # pass the experiment id / scan id as provenance so persisted relationships are traceable
         persist_context(context_model, scan_id=args.experiment_id, actor_type='context_discovery', actor_id=args.experiment_id)
-        log(f"== Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships ==")
+        print(f"[Phase 1] Knowledge graph: {len(context_model.resources)} nodes, {len(context_model.relationships)} relationships", flush=True)
     except Exception as e:
-        log(f"[WARN] Knowledge graph persist failed (non-fatal): {e}")
+        print(f"[Phase 1] [WARN] Knowledge graph persist failed (non-fatal): {e}", flush=True)
 
     # 3. Report Generation
-    log("== Generating reports ==")
+    print(f"[Phase 1] Generating reports ...", flush=True)
     if args.output_dir:
         summary_root = Path(args.output_dir).resolve() / "Summary"
     else:
         summary_root = Path.cwd() / "Output" / "Summary"
 
     generated = generate_reports(context_model, str(summary_root), repo_path=repo_path, experiment_id=args.experiment_id)
-    log("== Report generation complete ==")
+    print(f"[Phase 1] Reports generated", flush=True)
     for report in generated:
-        log(f"Generated: {report}")
+        print(f"[Phase 1] Created: {report}", flush=True)
 
     # Keep repository inventory in sync with discovered repos.
     update_repos_knowledge(repo_path)
-    log("Updated: Output/Knowledge/Repos.md")
+    print(f"[Phase 1] Updated: Output/Knowledge/Repos.md", flush=True)
 
     return 0
 

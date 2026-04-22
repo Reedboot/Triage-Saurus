@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Utils"))
-from log_formatter import format_scan_complete
+from log_formatter import format_scan_complete, Color, Header
 
 # ── Root paths ────────────────────────────────────────────────────────────────
 
@@ -273,7 +273,17 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     for config_path in config_paths:
         cmd_display += f"\n  --config {config_path}"
     cmd_display += f"\n  {target} --json --quiet"
-    print(f"\n[{label}] Running: {cmd_display}")
+    
+    # Use consistent header styling for known labels
+    if label == "Misconfigurations":
+        header = Header.MISCONFIGURATIONS
+    elif label == "Detection":
+        header = Header.DETECTION
+    else:
+        # Fallback for custom labels: wrap with yellow color
+        header = f"{Color.YELLOW}[{label}]{Color.RESET}"
+    
+    print(f"\n{header} Running: {cmd_display}")
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     # opengrep exits non-zero when findings exist — that's expected
@@ -282,7 +292,7 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
         try:
             return json.loads(stdout)
         except json.JSONDecodeError as exc:
-            print(f"[error] Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
+            print(f"{Header.ERROR} Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
             sys.exit(1)
@@ -321,7 +331,7 @@ def resolve_misconfig_paths(fired_ids: set[str], target: Path) -> list[Path]:
         if path.exists():
             resolved.append(path)
         else:
-            print(f"  [warn] Misconfiguration folder not found (skipped): {path}")
+            print(f"  {Header.WARN} Misconfiguration folder not found (skipped): {path}")
 
     return resolved
 
@@ -355,7 +365,7 @@ def main() -> None:
 
     target = Path(args.target).resolve()
     if not target.exists():
-        print(f"[error] Target path does not exist: {target}", file=sys.stderr)
+        print(f"{Header.ERROR} Target path does not exist: {target}", file=sys.stderr)
         sys.exit(1)
 
     # ── Phase 1: Detection ────────────────────────────────────────────────────
@@ -370,15 +380,15 @@ def main() -> None:
     print_detection_summary(fired_ids, misconfig_paths)
 
     if args.detection_only:
-        print("[detection-only] Stopping after Phase 1.")
+        print(f"{Header.DETECTION} Stopping after Phase 1.")
         sys.exit(0)
 
     if not misconfig_paths:
-        print("[warn] No applicable misconfiguration folders found. Exiting.")
+        print(f"{Header.WARN} No applicable misconfiguration folders found. Exiting.")
         sys.exit(0)
 
     if args.dry_run:
-        print("[dry-run] Would run Phase 2 against:")
+        print(f"{Header.DRY_RUN} Would run Phase 2 against:")
         for p in misconfig_paths:
             print(f"  --config {p}")
         sys.exit(0)
@@ -388,12 +398,12 @@ def main() -> None:
     print("PHASE 2 — Targeted Misconfigurations")
     print("=" * 60)
 
-    print(f"\n[Misconfigurations] Running targeted scan...")
+    print(f"\n{Header.MISCONFIGURATIONS} Running targeted scan...")
     print(f"  Configs: {len(misconfig_paths)} folder(s)")
     print(f"  Target:  {target}")
     scan_data = run_opengrep(misconfig_paths, target, "Misconfigurations")
     finding_count = len(scan_data.get("results", []))
-    print(f"\n[Misconfigurations] {finding_count} finding(s) ready for DB persistence")
+    print(f"\n{Header.MISCONFIGURATIONS} {finding_count} finding(s) ready for DB persistence")
 
     # ── Phase 3: Store findings in DB ─────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -407,7 +417,7 @@ def main() -> None:
         "--experiment", args.experiment,
         "--repo", args.repo,
     ]
-    print(f"\n[Store] Running: {' '.join(store_cmd)}")
+    print(f"\n{Header.STORE} Running: {' '.join(store_cmd)}")
     subprocess.run(store_cmd, check=True, text=True, input=json.dumps(scan_data))
 
     print(f"\n{format_scan_complete()}")

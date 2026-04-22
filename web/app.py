@@ -1664,7 +1664,14 @@ def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
                 if (d.get("provider") or "").strip().lower() != "terraform"
             ]
             if filtered:
-                return [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in filtered]
+                return [
+                    {
+                        "title": d["diagram_title"],
+                        "code": d["mermaid_code"],
+                        "css": d.get("css_code")  # Include CSS for icon styling
+                    }
+                    for d in filtered
+                ]
     except Exception:
         pass
 
@@ -4183,7 +4190,7 @@ def api_diagrams(experiment_id: str):
                     return jsonify(_response_payload(db_diagrams))
 
                 # No persisted diagrams — regenerate per-provider from DB topology.
-                from Scripts.Generate.generate_diagram import generate_architecture_diagram  # type: ignore
+                from Scripts.Generate.generate_diagram import generate_architecture_diagram_with_css  # type: ignore
                 from Scripts.Persist.db_helpers import get_db_connection as _get_conn  # type: ignore
 
                 with _get_conn() as conn:
@@ -4208,7 +4215,7 @@ def api_diagrams(experiment_id: str):
                 generated: list[dict] = []
                 for provider in providers:
                     try:
-                        code = generate_architecture_diagram(
+                        code, css = generate_architecture_diagram_with_css(
                             experiment_id,
                             repo_name=repo_name,
                             provider=provider,
@@ -4216,12 +4223,14 @@ def api_diagrams(experiment_id: str):
                         )
                     except Exception:
                         code = None
+                        css = None
                     if code and "No resources found" not in code:
                         provider_display = _provider_display_name(provider)
                         generated.append({
                             "provider": provider_display,
                             "diagram_title": f"{provider_display} Architecture",
                             "mermaid_code": code,
+                            "css_code": css,
                             "display_order": len(generated),
                         })
                         # Persist the regenerated diagrams for faster subsequent responses
@@ -4232,6 +4241,7 @@ def api_diagrams(experiment_id: str):
                                     provider=provider,
                                     diagram_title=f"{provider_display} Architecture",
                                     mermaid_code=code,
+                                    css_code=css,
                                     display_order=len(generated) - 1,
                                 )
                             except Exception:

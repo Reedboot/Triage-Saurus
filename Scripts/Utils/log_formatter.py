@@ -12,6 +12,21 @@ class Color:
     CYAN = "\033[96m"
 
 
+class Header:
+    """Consistent header styling for scan logs."""
+    
+    # Major phase headers (yellow background-like appearance)
+    MISCONFIGURATIONS = f"{Color.YELLOW}[Misconfigurations]{Color.RESET}"
+    STORE = f"{Color.YELLOW}[Store]{Color.RESET}"
+    DETECTION = f"{Color.YELLOW}[detection]{Color.RESET}"
+    DRY_RUN = f"{Color.YELLOW}[dry-run]{Color.RESET}"
+    
+    # Status headers
+    ERROR = f"{Color.RED}[error]{Color.RESET}"
+    WARN = f"{Color.YELLOW}[warn]{Color.RESET}"
+    INFO = f"{Color.CYAN}[info]{Color.RESET}"
+
+
 def format_finding(finding_id: int, title: str, severity: str) -> str:
     """Format a finding with emoji and color based on severity.
     
