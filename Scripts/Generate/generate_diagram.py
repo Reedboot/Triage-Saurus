@@ -298,6 +298,12 @@ class HierarchicalDiagramBuilder:
                 if c.get('source') in provider_resource_names or c.get('target') in provider_resource_names
             ]
         
+        # CRITICAL: Run exposure detection BEFORE filtering out resource types.
+        # This ensures that security group rules (which have no connections) are still
+        # available for the detector to find and mark as internet-exposed.
+        # These isolated resources will then be included in the diagram if they're exposed.
+        self._detect_internet_exposure()
+        
         # Filter out resource types that shouldn't appear in diagrams
         self.resources = [
             r for r in self.resources
@@ -371,9 +377,6 @@ class HierarchicalDiagramBuilder:
         # For diagram purposes (NOT database semantics), this remaps NIC parents
         # from subnets to VMs to show proper network attachment
         self._apply_azure_nic_nesting()
-        
-        # Detect internet-exposed resources
-        self._detect_internet_exposure()
         
         # Detect external resource references (APIM, Key Vault, etc.)
         self._detect_external_resource_references()
@@ -612,7 +615,7 @@ class HierarchicalDiagramBuilder:
         """Detect internet-exposed resources using multiple detection methods."""
         # Detection runs for specific providers only (aws, azure, gcp, oci)
         # For mixed-provider or terraform diagrams, detection is skipped
-        valid_providers = {'aws', 'azure', 'gcp', 'oci', 'alicloud'}
+        valid_providers = {'aws', 'azure', 'gcp', 'oci', 'alicloud', 'huaweicloud', 'tencentcloud'}
         
         # Get the provider from resources if provider_filter not set
         provider_to_detect = None
@@ -4195,7 +4198,11 @@ class HierarchicalDiagramBuilder:
                 self.is_identity_principal_like(r)
                 and r.get('resource_name') not in connected_resource_names
             )
-            and (self._is_connected_name(r.get('resource_name', '')) or self._is_architecturally_significant(r))
+            and (
+                self._is_connected_name(r.get('resource_name', ''))
+                or self._is_architecturally_significant(r)
+                or r.get('resource_name', '') in self.exposed_resources  # Include internet-exposed resources
+            )
         ]
         
         for res in other_resources:
