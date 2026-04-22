@@ -2202,7 +2202,19 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         # GCP firewall rule
         if resource_type == "google_compute_firewall":
             direction = str(attrs.get("direction", "")).strip().upper()
-            if direction == "INGRESS" and _is_world_source(block_text):
+            
+            # Extract source_ranges explicitly
+            source_ranges_match = re.search(r'source_ranges\s*=\s*\[(.*?)\]', block_text, re.S | re.I)
+            source_ranges = []
+            if source_ranges_match:
+                ranges_str = source_ranges_match.group(1)
+                source_ranges = [r.strip().strip('"').strip("'") for r in ranges_str.split(',')]
+                props["source_ranges"] = ",".join(source_ranges)
+            
+            # Check if open to world
+            is_open_to_world = any('0.0.0.0/0' in r or '::/0' in r for r in source_ranges) or _is_world_source(block_text)
+            
+            if direction == "INGRESS" and is_open_to_world:
                 props["internet_ingress_open"] = "true"
                 _append_signal(props, "firewall rule ingress from internet")
                 
@@ -2217,6 +2229,23 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                             ports.extend([p.strip().strip('"').strip("'") for p in port_match.split(',')])
                     if ports:
                         props["ports"] = ",".join(ports)
+
+        # Azure Network Security Rule
+        if resource_type == "azurerm_network_security_rule":
+            direction = str(attrs.get("direction", "")).strip().upper()
+            access = str(attrs.get("access", "")).strip().lower()
+            if direction == "INBOUND" and access == "allow" and _is_world_source(block_text):
+                props["internet_ingress_open"] = "true"
+                _append_signal(props, "network security rule inbound from internet")
+                
+                # Extract port information for better labeling
+                dst_port = attrs.get("destination_port_range", "")
+                protocol = attrs.get("protocol", "")
+                
+                if dst_port:
+                    props["destination_port_range"] = str(dst_port)
+                if protocol:
+                    props["protocol"] = str(protocol).lower()
 
         # Huawei security group rule
         if resource_type == "huaweicloud_networking_secgroup_rule":
