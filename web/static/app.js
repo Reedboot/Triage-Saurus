@@ -975,8 +975,21 @@
 
     const diagramViews = document.getElementById('diagram-views');
     const diagramTabs = document.getElementById('diagram-tabs');
+    
+    if (!diagramViews) {
+      console.error('[renderDiagrams] diagram-views element not found. Available elements:', {
+        diagramPanel: !!document.getElementById('diagram-panel'),
+        splitLayout: !!document.querySelector('.split-layout'),
+        splitRight: !!document.querySelector('.split-right'),
+        diagramZoomWrap: !!document.getElementById('diagram-zoom-wrap')
+      });
+    }
+    if (!diagramTabs) {
+      console.error('[renderDiagrams] diagram-tabs element not found');
+    }
+    
     if (!diagramViews || !diagramTabs) {
-      console.error('[renderDiagrams] Missing diagramViews or diagramTabs');
+      console.error('[renderDiagrams] Missing required elements - cannot render diagrams');
       return;
     }
 
