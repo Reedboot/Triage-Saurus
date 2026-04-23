@@ -2070,12 +2070,15 @@ def _stream_scan(repo_path: str, scan_name: str):
             sys.path.insert(0, str(REPO_ROOT))
             from Scripts.Persist.db_helpers import get_cloud_diagrams
             db_diags = get_cloud_diagrams(experiment_id)
+            yield _emit_scan_log(f"[Web] Retrieved {len(db_diags) if db_diags else 0} diagrams for experiment {experiment_id}")
             if db_diags:
                 diagrams = [{"title": d["diagram_title"], "code": d["mermaid_code"]} for d in db_diags]
-        except Exception:
+        except Exception as e:
             diagrams = []
+            yield _emit_scan_log(f"[Web] Error retrieving diagrams: {e}")
 
         if diagrams:
+            yield _emit_scan_log(f"[Web] Emitting {len(diagrams)} diagrams to web client")
             yield _sse("diagrams", diagrams)
         else:
             yield _emit_scan_log("[Web] No architecture diagrams found in cloud_diagrams.")

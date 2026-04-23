@@ -967,11 +967,18 @@
   // ── Diagram rendering ────────────────────────────────────────────────────
 
   function renderDiagrams(diagrams) {
-    if (!Array.isArray(diagrams) || !diagrams.length) return;
+    console.log('[renderDiagrams] Called with:', diagrams);
+    if (!Array.isArray(diagrams) || !diagrams.length) {
+      console.log('[renderDiagrams] No diagrams or not an array');
+      return;
+    }
 
     const diagramViews = document.getElementById('diagram-views');
     const diagramTabs = document.getElementById('diagram-tabs');
-    if (!diagramViews || !diagramTabs) return;
+    if (!diagramViews || !diagramTabs) {
+      console.error('[renderDiagrams] Missing diagramViews or diagramTabs');
+      return;
+    }
 
     Object.keys(diagramStates).forEach((key) => delete diagramStates[key]);
     currentDiagramIndex = 0;
@@ -984,11 +991,16 @@
     diagramTabs.innerHTML = '';
     diagramViews.querySelectorAll('.diagram-view').forEach(el => el.remove());
 
+    let addedCount = 0;
     diagrams.forEach((diag, idx) => {
       const title = diag.title || `Diagram ${idx + 1}`;
       const code = (diag.code || '').trim();
-      if (!code) return;
+      if (!code) {
+        console.warn('[renderDiagrams] Skipping diagram', idx, 'no code');
+        return;
+      }
 
+      addedCount++;
       // Create tab button
       const tabBtn = document.createElement('button');
       tabBtn.className = 'btn-small' + (idx === 0 ? ' active' : '');
@@ -1024,6 +1036,8 @@
         loadDiagramState(idx);
       });
     });
+
+    console.log('[renderDiagrams] Added', addedCount, 'diagrams to UI');
 
     // Render mermaid
     if (window.mermaid) {
@@ -1251,11 +1265,13 @@
         return r.json();
       })
       .then(data => {
-        if (data && data.diagrams) {
+        console.log('[Diagrams] Response:', data);
+        if (data && data.diagrams && data.diagrams.length > 0) {
+          console.log('[Diagrams] Found', data.diagrams.length, 'diagrams');
           storedDiagrams = data.diagrams;
           renderDiagrams(data.diagrams);
         } else {
-          console.log('[Diagrams] No diagrams in response');
+          console.log('[Diagrams] No diagrams in response:', data);
         }
       })
       .catch(err => {
