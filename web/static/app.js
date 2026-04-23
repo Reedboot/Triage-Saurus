@@ -1091,7 +1091,22 @@
     // Render mermaid
     if (window.mermaid) {
       try {
-        window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        window.mermaid.initialize({ 
+          startOnLoad: false, 
+          theme: 'dark',
+          securityLevel: 'loose',
+          onError: (err) => {
+            console.error('[Mermaid] Rendering error:', err.message);
+          }
+        });
+        
+        // Log each diagram before rendering
+        diagramViews.querySelectorAll('.mermaid').forEach((elem, idx) => {
+          const codeLen = elem.textContent.length;
+          const first50 = elem.textContent.substring(0, 50).replace(/\n/g, ' ');
+          console.log(`[renderDiagrams] Diagram ${idx}: ${codeLen} bytes, starts with: "${first50}..."`);
+        });
+        
         window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
         // Initialize pan/zoom after rendering
         setTimeout(() => {
@@ -1102,6 +1117,7 @@
         }, 150);
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
+        console.error('[Diagrams] Full error stack:', e.stack);
       }
     } else {
       // Wait for mermaid to load then re-render
@@ -1109,7 +1125,14 @@
         if (window.mermaid) {
           clearInterval(waitForMermaid);
           try {
-            window.mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+            window.mermaid.initialize({ 
+              startOnLoad: false, 
+              theme: 'dark',
+              securityLevel: 'loose',
+              onError: (err) => {
+                console.error('[Mermaid] Rendering error:', err.message);
+              }
+            });
             window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
             // Initialize pan/zoom after rendering
             setTimeout(() => {
@@ -1118,7 +1141,9 @@
               currentDiagramIndex = 0;
               scheduleDiagramFit();
             }, 150);
-          } catch (e) {}
+          } catch (e) {
+            console.error('[Diagrams] Mermaid render error:', e);
+          }
         }
       }, 300);
       setTimeout(() => clearInterval(waitForMermaid), 10000);

@@ -2126,7 +2126,7 @@ class HierarchicalDiagramBuilder:
                     # Render K8s workloads inside compute (they run on it)
                     k8s_to_render = getattr(self, '_k8s_for_compute', [])
                     if k8s_to_render:
-                        k8s_lines = self.render_kubernetes_cluster(k8s_to_render)
+                        k8s_lines = self.render_kubernetes_cluster(k8s_to_render, parent_context=compute_id)
                         for line in k8s_lines:
                             # Indent to be inside compute subgraph
                             if line.startswith("  "):
@@ -2233,7 +2233,7 @@ class HierarchicalDiagramBuilder:
                 
                 # Render Kubernetes workloads inside the compute resource (K8s runs on EC2 worker node)
                 if has_k8s:
-                    k8s_lines = self.render_kubernetes_cluster(k8s_resources)
+                    k8s_lines = self.render_kubernetes_cluster(k8s_resources, parent_context=vm_id)
                     for line in k8s_lines:
                         # Indent K8s lines to be inside the compute subgraph
                         if line.startswith("  "):
@@ -2303,42 +2303,40 @@ class HierarchicalDiagramBuilder:
         lines.append('  end')
         return lines
 
+    def _get_node_id(self, resource: dict) -> str:
+        """Get the Mermaid node ID for a resource using its UUID.
+        
+        Args:
+            resource: Resource dict with 'id' (UUID) and 'resource_name' fields
+            
+        Returns:
+            String suitable for use as Mermaid node ID (UUID or fallback to sanitized name)
+        """
+        # Use UUID if available, fall back to sanitized name
+        uuid = resource.get('id')
+        if uuid:
+            return str(uuid)
+        return sanitize_id(resource.get('resource_name', 'node'))
+
+    def _get_node_label(self, resource: dict) -> str:
+        """Get the display label for a resource.
+        
+        Uses 'name' field if available, otherwise falls back to 'resource_name'.
+        """
+        return resource.get('name') or resource.get('resource_name', 'Unknown')
+
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node.
 
-        When multiple resources share the same sanitized name (e.g. dozens of Azure
-        resources all named "example"), a qualified node ID is generated using a short
-        resource-type prefix so Mermaid does not collapse distinct nodes into one.
-        The mapping is stored in node_id_override so render_connections uses the
-        correct ID.
+        Uses the resource's UUID (asset ID) as the Mermaid node ID for guaranteed uniqueness.
+        The display name is used as the label.
         """
         name = resource['resource_name']
-        base_node_id = sanitize_id(name)
-
-        # Detect ID collision: if this sanitized name was already emitted for a
-        # *different* resource (different DB id), qualify it with a resource-type prefix.
-        resource_db_id = str(resource.get('id', ''))
-        first_owner = self._node_id_first_owner.get(base_node_id)
-        if base_node_id in self._emitted_mermaid_ids and first_owner != resource_db_id:
-            # Check if we've already computed an override for this resource name + type
-            override_key = f"{resource.get('resource_type','')}__{name}"
-            if override_key in self.node_id_override:
-                node_id = self.node_id_override[override_key]
-            else:
-                # Build a short prefix from the resource type (strip provider prefix)
-                rtype = resource.get('resource_type') or ''
-                type_short = rtype.split('_', 2)[-1] if '_' in rtype else rtype
-                node_id = sanitize_id(f"{type_short}_{name}")
-                # If that's still a collision, append the DB id to guarantee uniqueness
-                if node_id in self._emitted_mermaid_ids and self._node_id_first_owner.get(node_id) != resource_db_id:
-                    node_id = sanitize_id(f"{rtype}_{name}_{resource_db_id}")
-                self.node_id_override[name] = node_id
-                self.node_id_override[override_key] = node_id
-        else:
-            node_id = base_node_id
+        # Use UUID as node ID for guaranteed uniqueness across all resources
+        node_id = resource.get('id') or sanitize_id(name)
 
         # Truncate long labels to fit in box
-        label = resource.get('_label') or name
+        label = resource.get('_label') or resource.get('name') or name
         
         # Strip emoji from label (emoji is replaced by icon in CSS class)
         # Emoji patterns: common emoticons (e.g., 📬, 📥, 🐳, etc.)
@@ -2355,9 +2353,9 @@ class HierarchicalDiagramBuilder:
             label = f"{label} [{badge}]"
 
         self._emitted_mermaid_ids.add(node_id)
-        if node_id not in self._node_id_first_owner:
-            self._node_id_first_owner[node_id] = resource_db_id
         self.emitted_nodes.add(name)
+        # Store UUID mapping for this resource name so connections use the correct ID
+        self.node_id_override[name] = node_id
         
         # Get resource type and provider for CSS class
         resource_type = resource.get('resource_type', '').lower()
@@ -2558,8 +2556,13 @@ class HierarchicalDiagramBuilder:
         lines.append(f'{indent}end')
         return lines
     
-    def render_kubernetes_cluster(self, k8s_resources: List[dict]) -> List[str]:
-        """Render Kubernetes/AKS cluster with namespace subgraphs and workloads."""
+    def render_kubernetes_cluster(self, k8s_resources: List[dict], parent_context: str = None) -> List[str]:
+        """Render Kubernetes/AKS cluster with namespace subgraphs and workloads.
+        
+        Args:
+            k8s_resources: List of Kubernetes resources to render
+            parent_context: Optional parent identifier (e.g. compute instance name) to make subgraph IDs unique
+        """
         if not k8s_resources:
             return []
 
@@ -2637,14 +2640,29 @@ class HierarchicalDiagramBuilder:
             cluster_label = "Kubernetes Cluster"
 
         lines = []
-        lines.append(f"  subgraph k8s[{self._quote_mermaid_label(cluster_label)}]")
+        # Create unique subgraph ID using parent_context (which is a UUID for compute instances)
+        # If parent_context is provided, use it directly as it's already a UUID
+        # Otherwise generate from cluster resources or use default
+        if parent_context:
+            # parent_context is already a UUID from compute resource
+            k8s_subgraph_id = f"k8s_{parent_context}"
+            namespace_prefix = f"k8s_ns_{parent_context}"
+        elif cluster_resources:
+            # Use first cluster resource's UUID
+            cluster_uuid = cluster_resources[0].get('id', 'k8s')
+            k8s_subgraph_id = f"k8s_{cluster_uuid}"
+            namespace_prefix = f"k8s_ns_{cluster_uuid}"
+        else:
+            k8s_subgraph_id = "k8s"
+            namespace_prefix = "k8s_ns"
+        
+        lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]")
 
         resources_by_namespace: Dict[str, List[dict]] = defaultdict(list)
         emitted_node_ids: Set[str] = set()
         for res in workload_resources:
-            # Use a k8s_wl_ prefix to avoid Mermaid node-ID collisions with
-            # same-named resources in other subgraphs (e.g. APIM products).
-            node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
+            # Use UUID directly for node ID - guaranteed unique
+            node_id = self._get_node_id(res)
             if node_id in emitted_node_ids:
                 continue
             emitted_node_ids.add(node_id)
@@ -2652,7 +2670,9 @@ class HierarchicalDiagramBuilder:
             resources_by_namespace[namespace].append(res)
 
         for namespace, namespace_resources in resources_by_namespace.items():
-            namespace_id = f"k8s_ns_{sanitize_id(namespace)}"
+            # Use first resource's UUID to ensure unique namespace IDs across instances
+            first_res_id = namespace_resources[0].get('id', sanitize_id(namespace)) if namespace_resources else sanitize_id(namespace)
+            namespace_id = f"{namespace_prefix}_{first_res_id}"
             # Add resource type to label for clarity (Namespace)
             namespace_display = f"Namespace - {namespace}"
             lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]")
@@ -2693,7 +2713,7 @@ class HierarchicalDiagramBuilder:
 
             # Render Deployments as subgraphs (can contain pods and containers)
             for dep in deployments:
-                dep_id = "k8s_dep_" + sanitize_id(dep['resource_name'])
+                dep_id = self._get_node_id(dep)
                 dep_label = _render_workload_label(dep, "Deployment")
                 lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
                 
@@ -2703,8 +2723,8 @@ class HierarchicalDiagramBuilder:
                 
                 if pods:
                     for pod in pods:
-                        pod_id = "k8s_pod_" + sanitize_id(pod['resource_name'])
-                        pod_label = self._wrap_mermaid_label(pod['resource_name'])
+                        pod_id = self._get_node_id(pod)
+                        pod_label = self._wrap_mermaid_label(self._get_node_label(pod))
                         lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
                     # If no pods found, show container templates
@@ -2722,7 +2742,7 @@ class HierarchicalDiagramBuilder:
 
             # Render StatefulSets as subgraphs (similar to Deployment, can contain containers)
             for ss in statefulsets:
-                ss_id = "k8s_ss_" + sanitize_id(ss['resource_name'])
+                ss_id = self._get_node_id(ss)
                 ss_label = _render_workload_label(ss, "StatefulSet")
                 lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
                 
@@ -2731,8 +2751,8 @@ class HierarchicalDiagramBuilder:
                 
                 if pods:
                     for pod in pods:
-                        pod_id = "k8s_pod_" + sanitize_id(pod['resource_name'])
-                        pod_label = self._wrap_mermaid_label(pod['resource_name'])
+                        pod_id = self._get_node_id(pod)
+                        pod_label = self._wrap_mermaid_label(self._get_node_label(pod))
                         lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
                     # If no pods found, show container templates
@@ -2750,7 +2770,7 @@ class HierarchicalDiagramBuilder:
 
             # Render CronJobs separately (different scheduling model, can contain containers)
             for cj in cronjobs:
-                cj_id = "k8s_cron_" + sanitize_id(cj['resource_name'])
+                cj_id = self._get_node_id(cj)
                 cj_label = _render_workload_label(cj, "CronJob")
                 lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]")
                 
@@ -2759,8 +2779,8 @@ class HierarchicalDiagramBuilder:
                 
                 if jobs:
                     for job in jobs:
-                        job_id = "k8s_job_" + sanitize_id(job['resource_name'])
-                        job_label = self._wrap_mermaid_label(job['resource_name'])
+                        job_id = self._get_node_id(job)
+                        job_label = self._wrap_mermaid_label(self._get_node_label(job))
                         lines.append(f"        {job_id}[{self._quote_mermaid_label(job_label)}]")
                 else:
                     # If no jobs found, show container templates
@@ -2778,8 +2798,8 @@ class HierarchicalDiagramBuilder:
 
             # Render Services (network layer - NOT nested in deployments)
             for svc in services:
-                svc_id = "k8s_svc_" + sanitize_id(svc['resource_name'])
-                svc_label = self._wrap_mermaid_label(svc['resource_name'] + " (Service)")
+                svc_id = self._get_node_id(svc)
+                svc_label = self._wrap_mermaid_label(self._get_node_label(svc) + " (Service)")
                 lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
                 self.emitted_nodes.add(svc['resource_name'])
                 self.node_id_override[svc['resource_name']] = svc_id
@@ -2793,7 +2813,7 @@ class HierarchicalDiagramBuilder:
                 if res_type in _SKIP_TYPES:
                     continue
                     
-                node_id = "k8s_wl_" + sanitize_id(res['resource_name'])
+                node_id = self._get_node_id(res)
                 name = res['resource_name']
                 props = res.get('properties', {})
                 image = str(props.get('image', '') or '').strip()
@@ -2801,9 +2821,9 @@ class HierarchicalDiagramBuilder:
                 image_is_redundant = image and name.lower().startswith(image.lower())
                 
                 if image and not image_is_redundant:
-                    label = self._wrap_mermaid_label(f"{name} - Image: {image}")
+                    label = self._wrap_mermaid_label(f"{self._get_node_label(res)} - Image: {image}")
                 else:
-                    label = self._wrap_mermaid_label(name)
+                    label = self._wrap_mermaid_label(self._get_node_label(res))
                 
                 lines.append(f"      {node_id}[{self._quote_mermaid_label(label)}]")
                 self.emitted_nodes.add(res['resource_name'])
