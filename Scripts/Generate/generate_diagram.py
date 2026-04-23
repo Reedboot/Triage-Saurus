@@ -3689,19 +3689,10 @@ class HierarchicalDiagramBuilder:
             for rtype in sorted(resource_types):
                 css_class = get_icon_class(rtype, provider)
                 
-                # Get icon data URI
-                icon_uri = get_icon_data_uri(rtype, provider)
-                if not icon_uri:
-                    # Try fallback
-                    icon_uri = get_fallback_icon_data_uri(provider)
-                
-                if icon_uri:
-                    # Mermaid classDef syntax with background image styling
-                    lines.append(f"classDef {css_class} fill:#ffffff,stroke:#333333,stroke-width:2px,background-image:url('{icon_uri}'),background-size:64px,background-repeat:no-repeat,background-position:center;")
-                else:
-                    # Add placeholder classDef without icon to avoid Mermaid parse errors
-                    # when classes are referenced in nodes (node:::class_name)
-                    lines.append(f"classDef {css_class} fill:#f9f9f9,stroke:#666666,stroke-width:2px;")
+                # NOTE: Data URI icons cause Mermaid CSS parser errors with special characters.
+                # Using simple placeholder styling instead of complex background-image URIs.
+                # Future: Consider external icon URLs instead of embedded data URIs.
+                lines.append(f"classDef {css_class} fill:#f9f9f9,stroke:#666666,stroke-width:2px;")
         
         return "\n".join(lines)
     
