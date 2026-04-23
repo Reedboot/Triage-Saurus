@@ -3687,6 +3687,8 @@ class HierarchicalDiagramBuilder:
             resource_types = providers_with_resources[provider]
             
             for rtype in sorted(resource_types):
+                css_class = get_icon_class(rtype, provider)
+                
                 # Get icon data URI
                 icon_uri = get_icon_data_uri(rtype, provider)
                 if not icon_uri:
@@ -3694,9 +3696,12 @@ class HierarchicalDiagramBuilder:
                     icon_uri = get_fallback_icon_data_uri(provider)
                 
                 if icon_uri:
-                    css_class = get_icon_class(rtype, provider)
                     # Mermaid classDef syntax with background image styling
                     lines.append(f"classDef {css_class} fill:#ffffff,stroke:#333333,stroke-width:2px,background-image:url('{icon_uri}'),background-size:64px,background-repeat:no-repeat,background-position:center;")
+                else:
+                    # Add placeholder classDef without icon to avoid Mermaid parse errors
+                    # when classes are referenced in nodes (node:::class_name)
+                    lines.append(f"classDef {css_class} fill:#f9f9f9,stroke:#666666,stroke-width:2px;")
         
         return "\n".join(lines)
     
