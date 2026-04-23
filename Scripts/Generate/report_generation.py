@@ -13,14 +13,20 @@ from shared_utils import now_uk, _normalize_optional_bool
 from service_auth_topology import render_service_auth_topology
 
 
-def _get_db():
-    """Return a sqlite3.Connection if the learning DB exists, otherwise None."""
+_db_conn: sqlite3.Connection | None = None
+
+
+def _get_db() -> sqlite3.Connection | None:
+    """Return a cached sqlite3.Connection if the learning DB exists, otherwise None."""
+    global _db_conn
+    if _db_conn is not None:
+        return _db_conn
     if not _db.DB_PATH.exists():
         return None
     try:
-        conn = sqlite3.connect(str(_db.DB_PATH), timeout=30)
-        conn.row_factory = sqlite3.Row
-        return conn
+        _db_conn = sqlite3.connect(str(_db.DB_PATH), timeout=30)
+        _db_conn.row_factory = sqlite3.Row
+        return _db_conn
     except Exception:
         return None
 
@@ -1020,11 +1026,6 @@ def _is_network_boundary_resource(provider: str, resource_type: str) -> bool:
     }
     return resource_type in boundary_types.get(provider, set())
 
-
-def _safe_id(value: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in value)
-
-
 def _relationship_label(src_type: str, dst_type: str) -> tuple[str, bool] | None:
     """Return (label, dashed) for meaningful data/telemetry relationships."""
     if "elb" in src_type and "instance" in dst_type:
@@ -1597,7 +1598,7 @@ def _build_simple_architecture_diagram(
 
     for provider, resources in provider_resources.items():
         provider_title = _provider_title(provider)
-        provider_id = _safe_id(provider_title)
+        provider_id = re.sub(r'[^A-Za-z0-9_]', '_', provider_title)
         boundary_label = _network_boundary_label(provider)
 
         resource_types = sorted({r.resource_type for r in resources})

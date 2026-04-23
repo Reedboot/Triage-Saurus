@@ -46,6 +46,7 @@ _ARCHITECTURE_DIAGRAM_EXCLUSIONS = load_architecture_diagram_exclusions()
 
 
 _INVALID_NODE_ID_CHARS = re.compile(r'[^A-Za-z0-9_]')
+_MODULE_BLOCK_START_RE = re.compile(r'^\s*module\s+"[^"]+"\s*\{')
 
 
 def sanitize_id(name: str) -> str:
@@ -985,9 +986,8 @@ class HierarchicalDiagramBuilder:
             """Yield raw text of each top-level module { ... } block."""
             i = 0
             lines = tf_text.splitlines(keepends=True)
-            mod_start_re = re.compile(r'^\s*module\s+"[^"]+"\s*\{')
             while i < len(lines):
-                if mod_start_re.match(lines[i]):
+                if _MODULE_BLOCK_START_RE.match(lines[i]):
                     depth = 0
                     start = i
                     while i < len(lines):
