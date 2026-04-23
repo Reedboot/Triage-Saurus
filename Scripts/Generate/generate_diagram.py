@@ -242,36 +242,19 @@ class HierarchicalDiagramBuilder:
         return any(tok in rtype for tok in significant_tokens)
 
     def _wrap_mermaid_label(self, label: str, width: int = 28) -> str:
-        """Wrap a Mermaid-visible label so long box titles stay inside their bounds."""
+        """Wrap a Mermaid-visible label so long box titles stay inside their bounds.
+        
+        Note: Mermaid does not support <br/> tags in labels. This function now
+        returns labels without HTML wrapping. Mermaid handles long labels itself.
+        """
         text = re.sub(r'\s+', ' ', str(label or '').strip())
         if not text:
             return text
-
-        # Don't re-wrap labels that already contain HTML break tags
-        if '<br/>' in text:
-            return text
-
+        
+        # Don't add HTML tags - just return normalized text
+        # Mermaid will handle wrapping/overflow itself
         normalized = text.replace('_', ' ').replace('/', ' / ')
-
-        if len(normalized) <= width:
-            return normalized
-
-        if ': ' in normalized:
-            prefix, suffix = normalized.split(': ', 1)
-            wrapped_suffix = self._wrap_mermaid_label(suffix, width=width)
-            if wrapped_suffix:
-                return f"{prefix}:<br/>{wrapped_suffix}"
-            return f"{prefix}:"
-
-        chunks = textwrap.wrap(
-            normalized,
-            width=width,
-            break_long_words=False,
-            break_on_hyphens=True,
-        )
-        if len(chunks) <= 1:
-            return normalized
-        return '<br/>'.join(chunks)
+        return normalized
 
     def _quote_mermaid_label(self, label: str) -> str:
         """Return a Mermaid label wrapped in quotes with embedded quotes escaped."""
@@ -2610,7 +2593,7 @@ class HierarchicalDiagramBuilder:
                 for r in cluster_resources
             ]
             cluster_names = ", ".join(cluster_display_names)
-            cluster_label = f"Kubernetes Cluster<br/>{cluster_names}"
+            cluster_label = f"Kubernetes Cluster - {cluster_names}"
             # Mark cluster resources as emitted so connections to them still render.
             for r in cluster_resources:
                 self.emitted_nodes.add(r['resource_name'])
@@ -2661,14 +2644,14 @@ class HierarchicalDiagramBuilder:
                 image_is_redundant = image and name.lower().startswith(image.lower())
                 
                 if image and not image_is_redundant:
-                    label = f"{name}<br/>📦 Image: {image}"
+                    label = f"{name} - Image: {image}"
                 elif dockerfile:
-                    label = f"{name}<br/>🐳 Dockerfile: {Path(dockerfile).name}"
+                    label = f"{name} - Dockerfile: {Path(dockerfile).name}"
                 else:
                     label = name
                 
                 if workload_type_suffix:
-                    label = f"{label}<br/>{workload_type_suffix}"
+                    label = f"{label} ({workload_type_suffix})"
                 
                 return self._wrap_mermaid_label(label)
 
@@ -2760,7 +2743,7 @@ class HierarchicalDiagramBuilder:
             # Render Services (network layer - NOT nested in deployments)
             for svc in services:
                 svc_id = "k8s_svc_" + sanitize_id(svc['resource_name'])
-                svc_label = self._wrap_mermaid_label(svc['resource_name'] + "<br/>Service")
+                svc_label = self._wrap_mermaid_label(svc['resource_name'] + " (Service)")
                 lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
                 self.emitted_nodes.add(svc['resource_name'])
                 self.node_id_override[svc['resource_name']] = svc_id
@@ -2782,7 +2765,7 @@ class HierarchicalDiagramBuilder:
                 image_is_redundant = image and name.lower().startswith(image.lower())
                 
                 if image and not image_is_redundant:
-                    label = self._wrap_mermaid_label(f"{name}<br/>📦 Image: {image}")
+                    label = self._wrap_mermaid_label(f"{name} - Image: {image}")
                 else:
                     label = self._wrap_mermaid_label(name)
                 
