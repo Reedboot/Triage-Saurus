@@ -3635,7 +3635,7 @@ def get_cloud_diagrams(experiment_id: str, repo_name: Optional[str] = None) -> l
                     SELECT id, repo_name, provider, diagram_title, mermaid_code, css_code, display_order, updated_at
                     FROM cloud_diagrams
                     WHERE experiment_id = ?
-                      AND LOWER(COALESCE(repo_name, '')) = LOWER(?)
+                      AND (repo_name IS NULL OR LOWER(repo_name) = LOWER(?))
                     """,
                     (experiment_id, repo_name),
                 ).fetchall()

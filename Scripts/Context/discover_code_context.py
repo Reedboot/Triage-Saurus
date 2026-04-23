@@ -39,6 +39,7 @@ from output_paths import REPO_ROOT
 from service_auth_topology import render_service_auth_topology
 from framework_extractor import detect_tech_stack
 from extract_dependencies import extract_dependencies
+from log_formatter import Color
 
 DETECTION_FRAMEWORKS = REPO_ROOT / "Rules" / "Detection" / "Frameworks"
 DETECTION_CODE = REPO_ROOT / "Rules" / "Detection" / "Code"
@@ -564,13 +565,13 @@ def _persist_framework_data(
             )
 
         if framework_version:
-            print(f"  Framework version  : {framework_version}")
+            print(f"{Color.CYAN}  🏷️  Framework version  : {framework_version}{Color.RESET}")
         if framework_name:
-            print(f"  Framework name     : {framework_name}")
+            print(f"{Color.CYAN}  🏷️  Framework name     : {framework_name}{Color.RESET}")
         if iac_type:
-            print(f"  IaC type           : {iac_type}")
+            print(f"{Color.CYAN}  🏷️  IaC type           : {iac_type}{Color.RESET}")
     except Exception as e:
-        print(f"  Warning: Failed to persist framework data: {str(e)}")
+        print(f"{Color.RED}  ⚠️  Warning: Failed to persist framework data: {str(e)}{Color.RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -741,7 +742,7 @@ def _detect_external_services(
                 conn.commit()
                 hits.append(info)
     except Exception as exc:
-        print(f"  Warning: Could not persist external service connections: {exc}")
+        print(f"{Color.RED}  ⚠️  Warning: Could not persist external service connections: {exc}{Color.RESET}")
 
     return hits
 
@@ -1041,7 +1042,7 @@ def main() -> int:
 
     target = Path(args.target).resolve()
     if not target.is_dir():
-        print(f"Error: target is not a directory: {target}", file=sys.stderr)
+        print(f"{Color.RED}❌ Error: target is not a directory: {target}{Color.RESET}", file=sys.stderr)
         return 1
 
     # Resolve output dir
@@ -1068,25 +1069,25 @@ def main() -> int:
     # ── 1. opengrep: Frameworks ──────────────────────────────────────────────
     fired_framework_ids: set[str] = set()
     if not args.no_opengrep:
-        print("\n[Phase 2] Running opengrep Detection/Frameworks ...")
+        print(f"{Color.YELLOW}🔎 Running opengrep Detection/Frameworks ...{Color.RESET}")
         fw_results = _run_opengrep(DETECTION_FRAMEWORKS, target)
         fired_framework_ids = _extract_rule_ids(fw_results)
-        print(f"  → {len(fired_framework_ids)} framework rule(s) fired: {sorted(fired_framework_ids)}")
+        print(f"{Color.GREEN}  ✅ {len(fired_framework_ids)} framework rule(s) fired: {sorted(fired_framework_ids)}{Color.RESET}")
         for rule_id in fired_framework_ids:
             raw[f"opengrep.framework.{rule_id}"] = "detected"
 
     # ── 2. opengrep: Code patterns ───────────────────────────────────────────
     fired_code_ids: set[str] = set()
     if not args.no_opengrep:
-        print("\n[Phase 2] Running opengrep Detection/Code ...")
+        print(f"{Color.YELLOW}🔎 Running opengrep Detection/Code ...{Color.RESET}")
         code_results = _run_opengrep(DETECTION_CODE, target)
         fired_code_ids = _extract_rule_ids(code_results)
-        print(f"  → {len(fired_code_ids)} code rule(s) fired: {sorted(fired_code_ids)}")
+        print(f"{Color.GREEN}  ✅ {len(fired_code_ids)} code rule(s) fired: {sorted(fired_code_ids)}{Color.RESET}")
         for rule_id in fired_code_ids:
             raw[f"opengrep.code.{rule_id}"] = "detected"
 
     # ── 3. Manifest parsing ──────────────────────────────────────────────────
-    print("\n[Phase 2] Parsing manifest files ...")
+    print(f"{Color.YELLOW}📦 Parsing manifest files ...{Color.RESET}")
     _merge(raw, _parse_package_json(target))
     _merge(raw, _parse_requirements_txt(target))
     _merge(raw, _parse_pom_xml(target))
@@ -1110,16 +1111,16 @@ def main() -> int:
         pass
 
     # ── 4. Kubernetes manifests ──────────────────────────────────────────────
-    print("[Phase 2] Parsing Kubernetes manifests ...")
+    print(f"{Color.YELLOW}☸️  Parsing Kubernetes manifests ...{Color.RESET}")
     _merge(raw, _parse_k8s_manifests(target))
 
     # ── 5. CI/CD detection ───────────────────────────────────────────────────
-    print("[Phase 2] Detecting CI/CD tooling ...")
+    print(f"{Color.YELLOW}⚙️  Detecting CI/CD tooling ...{Color.RESET}")
     _merge(raw, _detect_cicd(target))
 
     # ── 6. Persist to DB ─────────────────────────────────────────────────────
     flat = _flatten_for_db(raw)
-    print(f"\n[Phase 2] Persisting {len(flat)} metadata entries to DB (clearing stale entries first) ...")
+    print(f"{Color.CYAN}💾 Saving {len(flat)} metadata entries to database (clearing stale entries first)...{Color.RESET}")
 
     # Update basic repo scan stats (best-effort) so Overview can show file counts.
     try:
@@ -1147,10 +1148,10 @@ def main() -> int:
             namespace="phase2_code",
             source="discover_code_context",
         )
-        print(f"  ✓ {key}")
+        print(f"{Color.GREEN}  💾 Saved: {key}{Color.RESET}")
 
      # ── 7. Dynamic summary rendering (no HTML persisted) ────────────────────
-    print("\n[Phase 2] Summary rendering is dynamic from DB entities/findings/relationships ...")
+    print(f"{Color.CYAN}📝 Summary rendering is dynamic from DB entities/findings/relationships ...{Color.RESET}")
     summary_key = _write_summary(
         experiment_id=args.experiment,
         repo_name=args.repo,
@@ -1159,10 +1160,10 @@ def main() -> int:
         fired_code_ids=fired_code_ids,
         output_dir=output_dir,
     )
-    print(f"  ✓ {summary_key}")
+    print(f"{Color.GREEN}  📝 Summary key: {summary_key}{Color.RESET}")
 
     # ── 8. Persist framework and tech stack data ──────────────────────────────
-    print("\n[Phase 2] Persisting framework and IaC data ...")
+    print(f"{Color.CYAN}💾 Saving framework and IaC data ...{Color.RESET}")
     _persist_framework_data(
         experiment_id=args.experiment,
         repo_name=args.repo,
@@ -1186,15 +1187,15 @@ def main() -> int:
         )
 
     # ── 10. Detect known external (egress) services ───────────────────────────
-    print("\n[Phase 2] Scanning for known external services (egress) ...")
+    print(f"{Color.YELLOW}🌐 Scanning for known external services (egress) ...{Color.RESET}")
     ext_hits = _detect_external_services(target, args.experiment, args.repo)
     if ext_hits:
         for h in ext_hits:
-            print(f"  ✓ {h['name']} ({h['category']}) — detected in {h['file']}:{h['line']}")
+            print(f"{Color.GREEN}  🌐 Detected: {h['name']} ({h['category']}) in {h['file']}:{h['line']}{Color.RESET}")
     else:
-        print("  (none detected)")
+        print(f"{Color.YELLOW}  ⚠️  No known external services detected{Color.RESET}")
 
-    print(f"\n[Phase 2] Complete — {len(flat)} metadata entries, summary mode: {summary_key}")
+    print(f"{Color.BOLD}{Color.GREEN}✅ Complete — {len(flat)} metadata entries, summary mode: {summary_key}{Color.RESET}")
     return 0
 
 
