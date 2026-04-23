@@ -3180,6 +3180,9 @@ class HierarchicalDiagramBuilder:
                     # Track the link index for this new connection (link_index = len(edge_list))
                     current_link_idx = len(edge_list)
                     
+                    # Add placeholder to edge_list so subsequent indices increment correctly
+                    edge_list.append((None, src_id, tgt_id))
+                    
                     # Add color styling for this link
                     style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
         
