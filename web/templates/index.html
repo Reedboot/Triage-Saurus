@@ -5,85 +5,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Triage-Saurus — Repo Scanner</title>
-  <script>
-    (function () {
-      var mermaidLoaded = false;
-      function loadScript(src, onload, onerror) {
-        var s = document.createElement('script');
-        s.src = src; s.defer = true;
-        s.onload = function () { mermaidLoaded = true; if (onload) onload(); };
-        s.onerror = function () { if (onerror) onerror(); };
-        document.head.appendChild(s);
-      }
-      // Try local vendor first (works offline/intranet), then fall back to CDN
-      loadScript('/static/vendor/mermaid.min.js', function () { console.info('mermaid loaded from /static/vendor'); }, function () {
-        loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () { console.info('mermaid loaded from CDN'); }, function () {
-          console.warn('Mermaid library failed to load from vendor and CDN. Diagrams will not render.');
-          try {
-            var b = document.createElement('div');
-            b.className = 'mermaid-error';
-            b.textContent = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access or place mermaid.min.js at /static/vendor/mermaid.min.js';
-            b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px;max-width:400px';
-            document.body.appendChild(b);
-          } catch (e) { }
-        });
-      });
-    })();
-  </script>
-  <link rel="stylesheet" href="/static/app.css?v=2" />
+  <script src="/static/js/mermaid-loader.js"></script>
+  <link rel="stylesheet" href="/static/app.css?v=3" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="shortcut icon" href="/static/favicon.svg" />
   <link rel="apple-touch-icon" href="/static/favicon.svg" />
-  <style>
-    /* legacy: summary panels kept until full section-tabs migration */
-    .diagram-views {
-      min-height: 360px;
-      overflow: auto;
-    }
 
-    .summary-tabs {
-      display: none;
-      gap: 4px;
-      padding: 6px 12px 0;
-      border-bottom: 1px solid #30363d;
-      overflow-x: auto;
-      flex-shrink: 0;
-    }
 
-    .summary-tabs.visible {
-      display: flex;
-    }
-
-    .summary-tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: #8b949e;
-      font-size: 0.8rem;
-      padding: 6px 12px;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-
-    .summary-tab-btn:hover:not(:disabled) {
-      color: #c9d1d9;
-    }
-
-    .summary-tab-btn.active {
-      color: #58a6ff;
-      border-bottom-color: #58a6ff;
-    }
-
-    .summary-view {
-      display: none;
-      padding: 14px;
-      overflow: auto;
-    }
-
-    .summary-view.active {
-      display: block;
-    }
-  </style>
   <!-- Load icon injector for Mermaid diagrams -->
   <script src="/static/js/mermaid-icon-injector.js" defer></script>
 </head>
@@ -168,34 +96,8 @@
           </div>
         </div>
 
-        <script>
-          document.addEventListener('DOMContentLoaded', function () {
-            const btn = document.getElementById('run-compare-btn');
-            if (!btn) return;
-            btn.addEventListener('click', async function () {
-              const from = (document.getElementById('compare-from-select') || {}).value || '';
-              const to = (document.getElementById('compare-to-select') || {}).value || '';
-              const repoOpt = document.querySelector('#repo-select option:checked');
-              const repo = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) ? repoOpt.dataset.name : (document.getElementById('repo-select') || {}).value || '';
-              if (!from || !to || !repo) { alert('Please select both scans to compare and select a repository.'); return; }
-              try {
-                const resp = await fetch(`/api/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&repo=${encodeURIComponent(repo)}`);
-                const data = await resp.json();
-                if (window.renderDiff) { window.renderDiff(data); }
-                else if (window._triage && window._triage.renderDiff) { window._triage.renderDiff(data); }
-                else {
-                  let tries = 0;
-                  const waiter = setInterval(() => {
-                    if (window.renderDiff) { clearInterval(waiter); window.renderDiff(data); }
-                    else if (window._triage && window._triage.renderDiff) { clearInterval(waiter); window._triage.renderDiff(data); }
-                    else if (++tries > 40) { clearInterval(waiter); alert('Compare not available.'); }
-                  }, 200);
-                }
-                const dp = document.getElementById('diagram-panel'); if (dp) dp.scrollIntoView({ behavior: 'smooth' });
-              } catch (e) { alert('Compare failed: ' + e); }
-            });
-          });
-        </script>
+
+
 
 
         <div class="status-bar" id="status-bar">
@@ -309,86 +211,6 @@
   </div>
 
   <!-- Modal styles -->
-  <style>
-    .modal {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.7);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-    }
-
-    .modal-content {
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 24px;
-      max-width: 400px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-    }
-
-    .modal-content h3 {
-      margin: 0 0 12px;
-      color: #f0883e;
-      font-size: 18px;
-    }
-
-    .modal-content p {
-      margin: 0 0 24px;
-      color: #8b949e;
-      line-height: 1.5;
-    }
-
-    .modal-buttons {
-      display: flex;
-      gap: 8px;
-      flex-direction: column;
-    }
-
-    .modal-btn {
-      padding: 10px 16px;
-      border: 1px solid #30363d;
-      background: #161b22;
-      color: #c9d1d9;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: all 0.2s;
-    }
-
-    .modal-btn:hover {
-      background: #0d1117;
-      border-color: #58a6ff;
-      color: #58a6ff;
-    }
-
-    .modal-btn.primary {
-      background: #238636;
-      border-color: #2ea043;
-      color: #fff;
-    }
-
-    .modal-btn.primary:hover {
-      background: #2ea043;
-      border-color: #3fb950;
-    }
-
-    .modal-btn.cancel {
-      background: transparent;
-      border-color: #30363d;
-    }
-
-    .modal-btn.cancel:hover {
-      background: #da3633;
-      border-color: #f85149;
-      color: #fff;
-    }
-  </style>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="/static/table-resize.js" defer></script>
@@ -398,6 +220,8 @@
   <script src="/static/roles.js" defer></script>
   <script src="/static/overview.js" defer></script>
   <script src="/static/subscription.js" defer></script>
+  <script src="/static/compare.js" defer></script>
+  <script src="/static/open-questions.js" defer></script>
   <!-- Direct fallback for mermaid if async loading fails -->
   <script src="/static/vendor/mermaid.min.js" defer></script>
 </body>
