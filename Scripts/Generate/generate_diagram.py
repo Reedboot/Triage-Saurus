@@ -4460,18 +4460,31 @@ def main():
                     ).fetchone()
                     
                     if existing:
-                        # Update existing
+                        # Update existing  
                         conn.execute(
                             "UPDATE cloud_diagrams SET repo_name = ?, mermaid_code = ?, diagram_title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             [repo_name, diagram, diagram_title, existing['id']]
                         )
                     else:
-                        # Insert new
-                        conn.execute(
-                            """INSERT INTO cloud_diagrams (experiment_id, repo_name, provider, diagram_title, mermaid_code, display_order)
-                               VALUES (?, ?, ?, ?, ?, ?)""",
-                            [experiment_id, repo_name, provider_key, diagram_title, diagram, display_order]
-                        )
+                        # Insert new - but first check if this (repo_name, provider, title) combo exists elsewhere
+                        existing_any = conn.execute(
+                            "SELECT id FROM cloud_diagrams WHERE repo_name = ? AND provider = ? AND diagram_title = ?",
+                            [repo_name, provider_key, diagram_title]
+                        ).fetchone()
+                        
+                        if existing_any:
+                            # Update the existing row (from a different experiment)
+                            conn.execute(
+                                "UPDATE cloud_diagrams SET experiment_id = ?, mermaid_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                [experiment_id, diagram, existing_any['id']]
+                            )
+                        else:
+                            # Insert completely new
+                            conn.execute(
+                                """INSERT INTO cloud_diagrams (experiment_id, repo_name, provider, diagram_title, mermaid_code, display_order)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                [experiment_id, repo_name, provider_key, diagram_title, diagram, display_order]
+                            )
                     display_order += 1
                 conn.commit()
                 print(f"Persisted {len(diagrams)} diagram(s) to cloud_diagrams table")
