@@ -979,6 +979,22 @@
     if (toggleSectionsBtn) { toggleSectionsBtn.title = 'Show sections'; toggleSectionsBtn.textContent = '📑 Sections'; }
   }
 
+  function setDiagramPlaceholderVisible(visible) {
+    const diagramViews = document.getElementById('diagram-views');
+    if (!diagramViews) return;
+
+    diagramViews.classList.toggle('has-diagrams', !visible);
+    const placeholder = diagramViews.querySelector('#diagram-placeholder, .diagram-placeholder, .empty-state');
+    if (placeholder) {
+      placeholder.hidden = !visible;
+      if (visible) {
+        placeholder.removeAttribute('aria-hidden');
+      } else {
+        placeholder.setAttribute('aria-hidden', 'true');
+      }
+    }
+  }
+
   // ── Diagram rendering ────────────────────────────────────────────────────
 
   function renderDiagrams(diagrams) {
@@ -1015,8 +1031,9 @@
     Object.keys(diagramStates).forEach((key) => delete diagramStates[key]);
     currentDiagramIndex = 0;
 
-    // Remove placeholder
-    const placeholder = diagramViews.querySelector('#diagram-placeholder, .diagram-placeholder');
+    // Hide the empty-state message as soon as real diagrams are being rendered.
+    setDiagramPlaceholderVisible(false);
+    const placeholder = diagramViews.querySelector('#diagram-placeholder, .diagram-placeholder, .empty-state');
     if (placeholder) placeholder.remove();
 
     // Clear existing dynamic content
@@ -2054,6 +2071,7 @@
           const diagramViews = document.getElementById('diagram-views');
           if (diagramViews) {
             diagramViews.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><p>Run or load a scan to view<br/>architecture diagrams.</p></div>';
+            setDiagramPlaceholderVisible(true);
           }
           const diagramTabs = document.getElementById('diagram-tabs');
           if (diagramTabs) {

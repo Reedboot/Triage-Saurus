@@ -1735,6 +1735,11 @@ class HierarchicalDiagramBuilder:
         for res in sql_resources:
             server_name = res['resource_name']
             server_id = sanitize_id(server_name)
+            
+            # Prevent rendering the same subgraph twice
+            if server_id in self._emitted_mermaid_ids:
+                continue
+            
             props = res.get('properties') or {}
             database_name = str(props.get('database') or preferred_database or '').strip()
             children = self.children_by_parent.get(res['id'], [])
@@ -1772,6 +1777,10 @@ class HierarchicalDiagramBuilder:
         name = resource['resource_name']
         node_id = sanitize_id(name)
         children = self.children_by_parent.get(resource['id'], [])
+
+        # Prevent rendering the same subgraph twice (duplicate subgraph IDs cause cycles in Mermaid)
+        if node_id in self._emitted_mermaid_ids:
+            return []
 
         if not children:
             return [self.render_node(resource, indent=indent)]
@@ -2359,16 +2368,32 @@ class HierarchicalDiagramBuilder:
         
         return node_def
     
-    def render_subgraph(self, title: str, resources: List[dict], indent: str = "  ") -> List[str]:
+    def render_subgraph(self, title: str, resources: List[dict], indent: str = "  ", seen_ids: set = None) -> List[str]:
         """Render a subgraph containing resources."""
         if not resources:
             return []
         
+        if seen_ids is None:
+            seen_ids = set()
+        
         lines = []
         subgraph_id = sanitize_id(title.lower().replace(' ', '_'))
+        
+        # Prevent duplicate subgraph definitions
+        if subgraph_id in seen_ids:
+            return []
+        seen_ids.add(subgraph_id)
+        
         lines.append(f"{indent}subgraph {subgraph_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(title))}]")
         
         for res in resources:
+            res_id = res['id']
+            
+            # Skip if we've already rendered this resource
+            if res_id in seen_ids:
+                continue
+            seen_ids.add(res_id)
+            
             # Check if this resource has children that should be nested
             children = self.children_by_parent.get(res['id'], [])
             if children:
@@ -2376,7 +2401,8 @@ class HierarchicalDiagramBuilder:
                 child_lines = self.render_subgraph(
                     res['resource_name'], 
                     children, 
-                    indent=indent + "  "
+                    indent=indent + "  ",
+                    seen_ids=seen_ids
                 )
                 lines.extend(child_lines)
             else:

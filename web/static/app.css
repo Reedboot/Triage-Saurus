@@ -573,6 +573,12 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .diagram-placeholder svg, .assets-placeholder svg, .summary-placeholder svg, .section-placeholder svg { opacity: 0.3; }
 .diagram-placeholder p, .assets-placeholder p, .summary-placeholder p, .section-placeholder p { font-size: 0.85rem; }
+.diagram-views.has-diagrams .diagram-placeholder,
+.diagram-views.has-diagrams .empty-state,
+.diagram-placeholder[hidden],
+.empty-state[hidden] {
+  display: none !important;
+}
 
 .diagram-view {
   display: none;
