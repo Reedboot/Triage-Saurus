@@ -193,6 +193,9 @@ class HierarchicalDiagramBuilder:
         self.exposed_resources: Dict[str, ExposureDetail] = {}
         # Track resources rendered as subgraphs (cannot be connection endpoints in Mermaid)
         self.subgraph_nodes: Set[str] = set()
+        # Track resource IDs that have been rendered as subgraphs to prevent duplicate subgraph
+        # definitions when multiple resources with the same name appear in a parent-child chain
+        self._rendered_subgraph_resource_ids: Set[str] = set()
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -1735,11 +1738,6 @@ class HierarchicalDiagramBuilder:
         for res in sql_resources:
             server_name = res['resource_name']
             server_id = sanitize_id(server_name)
-            
-            # Prevent rendering the same subgraph twice
-            if server_id in self._emitted_mermaid_ids:
-                continue
-            
             props = res.get('properties') or {}
             database_name = str(props.get('database') or preferred_database or '').strip()
             children = self.children_by_parent.get(res['id'], [])
@@ -1776,22 +1774,34 @@ class HierarchicalDiagramBuilder:
         """Render a resource as a nested subgraph when it has children."""
         name = resource['resource_name']
         node_id = sanitize_id(name)
-        children = self.children_by_parent.get(resource['id'], [])
+        resource_id = resource['id']
+        children = self.children_by_parent.get(resource_id, [])
 
-        # Prevent rendering the same subgraph twice (duplicate subgraph IDs cause cycles in Mermaid)
-        if node_id in self._emitted_mermaid_ids:
+        # Skip if this resource was already rendered as a subgraph (prevent duplicate definitions)
+        if resource_id in self._rendered_subgraph_resource_ids:
             return []
 
         if not children:
             return [self.render_node(resource, indent=indent)]
 
+        # Check if we're about to create a duplicate subgraph ID  
+        # (e.g., parent named "X" and child also named "X" = node_id collision)
+        if node_id in self._emitted_mermaid_ids:
+            # Can't render as subgraph, render as simple node instead
+            return [self.render_node(resource, indent=indent)]
+
         lines: List[str] = []
         lines.append(f'{indent}subgraph {node_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(name))}]')
         self._emitted_mermaid_ids.add(node_id)
+        self._rendered_subgraph_resource_ids.add(resource_id)  # Track this resource ID
         if node_id not in self._node_id_first_owner:
-            self._node_id_first_owner[node_id] = str(resource.get('id', ''))
+            self._node_id_first_owner[node_id] = str(resource_id)
 
         for child in children:
+            # Skip self-referential children (resource contains itself) to prevent cycles
+            if child['id'] == resource_id:
+                continue
+            
             if self.children_by_parent.get(child['id']):
                 lines.extend(self._render_nested_resource(child, indent=indent + "  "))
             else:
