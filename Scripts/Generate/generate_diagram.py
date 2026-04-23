@@ -191,6 +191,8 @@ class HierarchicalDiagramBuilder:
         self._node_id_first_owner: Dict[str, str] = {}
         # Internet exposure detection: map of resource_name → ExposureDetail
         self.exposed_resources: Dict[str, ExposureDetail] = {}
+        # Track resources rendered as subgraphs (cannot be connection endpoints in Mermaid)
+        self.subgraph_nodes: Set[str] = set()
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -2079,6 +2081,8 @@ class HierarchicalDiagramBuilder:
                     self._emitted_mermaid_ids.add(compute_id)
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
+                    # Mark this compute resource as a subgraph (cannot be connection endpoint)
+                    self.subgraph_nodes.add(compute_name)
                     
                     # Render child resources inside compute (NICs, disks, extensions, etc.)
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
@@ -2189,6 +2193,8 @@ class HierarchicalDiagramBuilder:
                 self._emitted_mermaid_ids.add(vm_id)
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
+                # Mark this node as a subgraph (cannot be connection endpoint)
+                self.subgraph_nodes.add(vm_name)
                 
                 # Render regular children (NICs, disks, etc.)
                 for child in other_children:
@@ -3051,6 +3057,11 @@ class HierarchicalDiagramBuilder:
 
             # Never render self-referential edges (node -> same node); these add noise.
             if src == tgt or sanitize_id(src) == sanitize_id(tgt):
+                continue
+            
+            # Skip connections to/from subgraph nodes (compound nodes with children).
+            # In Mermaid, edges cannot terminate on subgraph containers, only on leaf nodes.
+            if src in self.subgraph_nodes or tgt in self.subgraph_nodes:
                 continue
 
             # ── Special case: Internet → APIM subgraph ────────────────────────
