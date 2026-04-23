@@ -53,6 +53,430 @@ DB_PATH = COZO_DB
 # _ensure_schema skips the expensive DDL + lock on every subsequent connection.
 _schema_ensured_for: set = set()
 
+_BASE_TABLES_SQL = """
+
+    CREATE TABLE IF NOT EXISTS repositories (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT NOT NULL,
+      repo_url TEXT,
+      repo_type TEXT,
+      primary_language TEXT,
+      framework_version TEXT,
+      framework_name TEXT,
+      iac_type TEXT,
+      files_scanned INTEGER,
+      iac_files_count INTEGER,
+      code_files_count INTEGER,
+      scanned_at TIMESTAMP DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE(experiment_id, repo_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS resources (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      provider TEXT,
+      region TEXT,
+      discovered_by TEXT,
+      discovery_method TEXT,
+      source_file TEXT,
+      source_line_start INTEGER,
+      source_line_end INTEGER,
+      parent_resource_id INTEGER,
+      status TEXT DEFAULT 'active',
+      first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_id, resource_type, resource_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_properties (
+      id INTEGER PRIMARY KEY,
+      resource_id INTEGER NOT NULL,
+      property_key TEXT NOT NULL,
+      property_value TEXT,
+      property_type TEXT,
+      is_security_relevant BOOLEAN DEFAULT 0,
+      UNIQUE(resource_id, property_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_connections (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      source_resource_id INTEGER NOT NULL,
+      target_resource_id INTEGER,
+      source_repo_id INTEGER,
+      target_repo_id INTEGER,
+      is_cross_repo BOOLEAN DEFAULT 0,
+      connection_type TEXT,
+      protocol TEXT,
+      port TEXT,
+      authentication TEXT,
+      authorization TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      via_component TEXT,
+      notes TEXT,
+      inferred_internet BOOLEAN DEFAULT 0,
+      target_external TEXT,
+      connection_metadata TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS trust_boundaries (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      boundary_type TEXT,
+      provider TEXT,
+      region TEXT,
+      description TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS trust_boundary_members (
+      trust_boundary_id INTEGER NOT NULL,
+      resource_id INTEGER NOT NULL,
+      PRIMARY KEY (trust_boundary_id, resource_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS data_flows (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      flow_type TEXT,
+      description TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS data_flow_steps (
+      id INTEGER PRIMARY KEY,
+      flow_id INTEGER NOT NULL,
+      step_order INTEGER NOT NULL,
+      resource_id INTEGER,
+      component_label TEXT,
+      protocol TEXT,
+      port TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS context_questions (
+      id INTEGER PRIMARY KEY,
+      question_key TEXT UNIQUE NOT NULL,
+      question_text TEXT NOT NULL,
+      question_category TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS context_answers (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      question_id INTEGER NOT NULL,
+      answer_value TEXT,
+      answer_confidence TEXT,
+      evidence_source TEXT,
+      evidence_type TEXT,
+      answered_by TEXT,
+      answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Subscription-wide Q&A (applies across repos within an experiment/subscription context)
+    CREATE TABLE IF NOT EXISTS subscription_context (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      scope_key TEXT DEFAULT 'global',
+      repo_name TEXT,
+      question TEXT NOT NULL,
+      answer TEXT,
+      answered_by TEXT,
+      confidence REAL,
+      tags TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS skeptic_reviews (
+      id INTEGER PRIMARY KEY,
+      finding_id INTEGER NOT NULL,
+      reviewer_type TEXT NOT NULL,
+      score_adjustment REAL,
+      adjusted_score REAL,
+      confidence REAL,
+      reasoning TEXT,
+      key_concerns TEXT,
+      mitigating_factors TEXT,
+      recommendation TEXT DEFAULT 'confirm',
+      reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS risk_score_history (
+      id INTEGER PRIMARY KEY,
+      finding_id INTEGER NOT NULL,
+      score REAL NOT NULL,
+      scored_by TEXT,
+      rationale TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS context_metadata (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_id INTEGER,
+      namespace TEXT DEFAULT 'phase2',
+      key TEXT NOT NULL,
+      value TEXT,
+      source TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_id, namespace, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_nodes (
+      id INTEGER PRIMARY KEY,
+      resource_type TEXT NOT NULL,
+      terraform_name TEXT NOT NULL,
+      canonical_name TEXT,
+      friendly_name TEXT,
+      display_label TEXT,
+      provider TEXT,
+      source_repo TEXT,
+      aliases TEXT DEFAULT '[]',
+      confidence TEXT DEFAULT 'extracted',
+      properties TEXT DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(resource_type, terraform_name, source_repo)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_relationships (
+      id INTEGER PRIMARY KEY,
+      source_id INTEGER NOT NULL,
+      target_id INTEGER NOT NULL,
+      relationship_type TEXT NOT NULL,
+      source_repo TEXT,
+      confidence TEXT DEFAULT 'extracted',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(source_id, target_id, relationship_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS findings (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT,
+      repo_id INTEGER,
+      title TEXT,
+      description TEXT,
+      severity TEXT,
+      severity_score INTEGER,
+      resource_id INTEGER,
+      rule_id TEXT,
+      source_file TEXT,
+      source_line_start INTEGER,
+      source_line_end INTEGER,
+      code_snippet TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_equivalences (
+      id INTEGER PRIMARY KEY,
+      resource_node_id INTEGER NOT NULL,
+      candidate_resource_type TEXT NOT NULL,
+      candidate_terraform_name TEXT NOT NULL,
+      candidate_source_repo TEXT NOT NULL,
+      equivalence_kind TEXT NOT NULL DEFAULT 'cross_repo_alias',
+      confidence TEXT DEFAULT 'medium',
+      evidence_level TEXT DEFAULT 'inferred',
+      provenance TEXT NOT NULL,
+      context TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(
+        resource_node_id,
+        candidate_resource_type,
+        candidate_terraform_name,
+        candidate_source_repo,
+        equivalence_kind
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_queue (
+      id INTEGER PRIMARY KEY,
+      resource_node_id INTEGER,
+      relationship_id INTEGER,
+      gap_type TEXT NOT NULL,
+      context TEXT,
+      assumption_text TEXT,
+      assumption_basis TEXT,
+      confidence TEXT DEFAULT 'medium',
+      suggested_value TEXT,
+      status TEXT DEFAULT 'pending_review',
+      resolved_by TEXT,
+      resolved_at TIMESTAMP,
+      rejection_reason TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS repo_ai_content (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT NOT NULL,
+      section_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content_html TEXT,
+      generated_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, repo_name, section_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS cloud_diagrams (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      repo_name TEXT,
+      provider TEXT NOT NULL,
+      diagram_title TEXT NOT NULL,
+      mermaid_code TEXT NOT NULL,
+      css_code TEXT,
+      display_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, provider, diagram_title)
+    );
+
+    CREATE TABLE IF NOT EXISTS exposure_analysis (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      normalized_role TEXT NOT NULL,
+      is_entry_point BOOLEAN DEFAULT 0,
+      is_countermeasure BOOLEAN DEFAULT 0,
+      is_compute_or_data BOOLEAN DEFAULT 0,
+      exposure_level TEXT DEFAULT 'isolated',
+      exposure_path TEXT,
+      has_internet_path BOOLEAN DEFAULT 0,
+      opengrep_violations TEXT DEFAULT '[]',
+      base_severity TEXT,
+      risk_score REAL DEFAULT 0,
+      confidence TEXT DEFAULT 'medium',
+      notes TEXT,
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      repo_id INTEGER,
+      protocol TEXT,
+      port TEXT,
+      auth_method TEXT,
+      is_encrypted BOOLEAN,
+      destination_type TEXT,
+      endpoint TEXT,
+      UNIQUE(experiment_id, resource_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS internet_exposure_paths (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      path_id TEXT NOT NULL,
+      source_resource_id INTEGER NOT NULL,
+      target_resource_id INTEGER NOT NULL,
+      path_length INTEGER DEFAULT 0,
+      path_nodes TEXT NOT NULL,
+      has_countermeasure BOOLEAN DEFAULT 0,
+      countermeasures_in_path TEXT DEFAULT '[]',
+      validation_status TEXT DEFAULT 'pending',
+      validated_by TEXT,
+      validated_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, path_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS exposure_risk_scoring (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      opengrep_rule_id TEXT,
+      rule_severity TEXT,
+      severity_score REAL DEFAULT 0,
+      exposure_multiplier REAL DEFAULT 1.0,
+      final_risk_score REAL DEFAULT 0,
+      exposure_factor TEXT,
+      vulnerability_factor TEXT,
+      combined_factors TEXT DEFAULT '{}',
+      scoring_method TEXT DEFAULT 'exposure_plus_vuln',
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, resource_id, opengrep_rule_id),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shared_resources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      resource_type TEXT NOT NULL,
+      resource_identifier TEXT NOT NULL,
+      friendly_name TEXT,
+      provider TEXT NOT NULL,
+      category TEXT,
+      discovered_from_repo TEXT,
+      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reference_count INTEGER DEFAULT 1,
+      variable_name TEXT,
+      data_source_name TEXT,
+      properties TEXT,
+      UNIQUE(provider, resource_type, resource_identifier)
+    );
+
+    CREATE TABLE IF NOT EXISTS shared_resource_references (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      shared_resource_id INTEGER NOT NULL,
+      repo_name TEXT NOT NULL,
+      experiment_id TEXT,
+      local_resource_id INTEGER,
+      reference_type TEXT,
+      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (shared_resource_id) REFERENCES shared_resources(id),
+      FOREIGN KEY (local_resource_id) REFERENCES resources(id),
+      UNIQUE(shared_resource_id, repo_name, local_resource_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dependencies (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL,
+      experiment_id TEXT NOT NULL,
+      project_path TEXT,
+      package_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      package_manager TEXT NOT NULL,
+      language TEXT NOT NULL,
+      source_file TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(repo_id, project_path, package_name, version, package_manager),
+      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS resource_internet_accessibility (
+      id INTEGER PRIMARY KEY,
+      experiment_id TEXT NOT NULL,
+      resource_id INTEGER NOT NULL,
+      resource_name TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      is_internet_accessible BOOLEAN DEFAULT 0,
+      shortest_path_distance INTEGER,
+      path_data TEXT,
+      via_public_ip BOOLEAN DEFAULT 0,
+      via_public_endpoint BOOLEAN DEFAULT 0,
+      via_managed_identity BOOLEAN DEFAULT 0,
+      entry_point TEXT,
+      auth_level TEXT,
+      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(experiment_id, resource_id)
+    );
+"""
+
 # Setup logging for database operations
 _logger = logging.getLogger(__name__)
 if not _logger.handlers:
@@ -586,428 +1010,7 @@ def _ensure_schema(conn: sqlite3.Connection):
 
     # Perform migrations under a try/finally so the lock is removed on exit
     try:
-        conn.executescript("""
-    CREATE TABLE IF NOT EXISTS repositories (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      repo_name TEXT NOT NULL,
-      repo_url TEXT,
-      repo_type TEXT,
-      primary_language TEXT,
-      framework_version TEXT,
-      framework_name TEXT,
-      iac_type TEXT,
-      files_scanned INTEGER,
-      iac_files_count INTEGER,
-      code_files_count INTEGER,
-      scanned_at TIMESTAMP DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-      UNIQUE(experiment_id, repo_name)
-    );
-
-    CREATE TABLE IF NOT EXISTS resources (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      repo_id INTEGER NOT NULL,
-      resource_name TEXT NOT NULL,
-      resource_type TEXT NOT NULL,
-      provider TEXT,
-      region TEXT,
-      discovered_by TEXT,
-      discovery_method TEXT,
-      source_file TEXT,
-      source_line_start INTEGER,
-      source_line_end INTEGER,
-      parent_resource_id INTEGER,
-      status TEXT DEFAULT 'active',
-      first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, repo_id, resource_type, resource_name)
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_properties (
-      id INTEGER PRIMARY KEY,
-      resource_id INTEGER NOT NULL,
-      property_key TEXT NOT NULL,
-      property_value TEXT,
-      property_type TEXT,
-      is_security_relevant BOOLEAN DEFAULT 0,
-      UNIQUE(resource_id, property_key)
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_connections (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      source_resource_id INTEGER NOT NULL,
-      target_resource_id INTEGER,
-      source_repo_id INTEGER,
-      target_repo_id INTEGER,
-      is_cross_repo BOOLEAN DEFAULT 0,
-      connection_type TEXT,
-      protocol TEXT,
-      port TEXT,
-      authentication TEXT,
-      authorization TEXT,
-      auth_method TEXT,
-      is_encrypted BOOLEAN,
-      via_component TEXT,
-      notes TEXT,
-      inferred_internet BOOLEAN DEFAULT 0,
-      target_external TEXT,
-      connection_metadata TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS trust_boundaries (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      boundary_type TEXT,
-      provider TEXT,
-      region TEXT,
-      description TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS trust_boundary_members (
-      trust_boundary_id INTEGER NOT NULL,
-      resource_id INTEGER NOT NULL,
-      PRIMARY KEY (trust_boundary_id, resource_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS data_flows (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      flow_type TEXT,
-      description TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS data_flow_steps (
-      id INTEGER PRIMARY KEY,
-      flow_id INTEGER NOT NULL,
-      step_order INTEGER NOT NULL,
-      resource_id INTEGER,
-      component_label TEXT,
-      protocol TEXT,
-      port TEXT,
-      auth_method TEXT,
-      is_encrypted BOOLEAN,
-      notes TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS context_questions (
-      id INTEGER PRIMARY KEY,
-      question_key TEXT UNIQUE NOT NULL,
-      question_text TEXT NOT NULL,
-      question_category TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS context_answers (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      question_id INTEGER NOT NULL,
-      answer_value TEXT,
-      answer_confidence TEXT,
-      evidence_source TEXT,
-      evidence_type TEXT,
-      answered_by TEXT,
-      answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    -- Subscription-wide Q&A (applies across repos within an experiment/subscription context)
-    CREATE TABLE IF NOT EXISTS subscription_context (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      scope_key TEXT DEFAULT 'global',
-      repo_name TEXT,
-      question TEXT NOT NULL,
-      answer TEXT,
-      answered_by TEXT,
-      confidence REAL,
-      tags TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS skeptic_reviews (
-      id INTEGER PRIMARY KEY,
-      finding_id INTEGER NOT NULL,
-      reviewer_type TEXT NOT NULL,
-      score_adjustment REAL,
-      adjusted_score REAL,
-      confidence REAL,
-      reasoning TEXT,
-      key_concerns TEXT,
-      mitigating_factors TEXT,
-      recommendation TEXT DEFAULT 'confirm',
-      reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS risk_score_history (
-      id INTEGER PRIMARY KEY,
-      finding_id INTEGER NOT NULL,
-      score REAL NOT NULL,
-      scored_by TEXT,
-      rationale TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS context_metadata (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      repo_id INTEGER,
-      namespace TEXT DEFAULT 'phase2',
-      key TEXT NOT NULL,
-      value TEXT,
-      source TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, repo_id, namespace, key)
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_nodes (
-      id INTEGER PRIMARY KEY,
-      resource_type TEXT NOT NULL,
-      terraform_name TEXT NOT NULL,
-      canonical_name TEXT,
-      friendly_name TEXT,
-      display_label TEXT,
-      provider TEXT,
-      source_repo TEXT,
-      aliases TEXT DEFAULT '[]',
-      confidence TEXT DEFAULT 'extracted',
-      properties TEXT DEFAULT '{}',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(resource_type, terraform_name, source_repo)
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_relationships (
-      id INTEGER PRIMARY KEY,
-      source_id INTEGER NOT NULL,
-      target_id INTEGER NOT NULL,
-      relationship_type TEXT NOT NULL,
-      source_repo TEXT,
-      confidence TEXT DEFAULT 'extracted',
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(source_id, target_id, relationship_type)
-    );
-
-    CREATE TABLE IF NOT EXISTS findings (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT,
-      repo_id INTEGER,
-      title TEXT,
-      description TEXT,
-      severity TEXT,
-      severity_score INTEGER,
-      resource_id INTEGER,
-      rule_id TEXT,
-      source_file TEXT,
-      source_line_start INTEGER,
-      source_line_end INTEGER,
-      code_snippet TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_equivalences (
-      id INTEGER PRIMARY KEY,
-      resource_node_id INTEGER NOT NULL,
-      candidate_resource_type TEXT NOT NULL,
-      candidate_terraform_name TEXT NOT NULL,
-      candidate_source_repo TEXT NOT NULL,
-      equivalence_kind TEXT NOT NULL DEFAULT 'cross_repo_alias',
-      confidence TEXT DEFAULT 'medium',
-      evidence_level TEXT DEFAULT 'inferred',
-      provenance TEXT NOT NULL,
-      context TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(
-        resource_node_id,
-        candidate_resource_type,
-        candidate_terraform_name,
-        candidate_source_repo,
-        equivalence_kind
-      )
-    );
-
-    CREATE TABLE IF NOT EXISTS enrichment_queue (
-      id INTEGER PRIMARY KEY,
-      resource_node_id INTEGER,
-      relationship_id INTEGER,
-      gap_type TEXT NOT NULL,
-      context TEXT,
-      assumption_text TEXT,
-      assumption_basis TEXT,
-      confidence TEXT DEFAULT 'medium',
-      suggested_value TEXT,
-      status TEXT DEFAULT 'pending_review',
-      resolved_by TEXT,
-      resolved_at TIMESTAMP,
-      rejection_reason TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS repo_ai_content (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      repo_name TEXT NOT NULL,
-      section_key TEXT NOT NULL,
-      title TEXT NOT NULL,
-      content_html TEXT,
-      generated_by TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, repo_name, section_key)
-    );
-
-    CREATE TABLE IF NOT EXISTS cloud_diagrams (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      repo_name TEXT,
-      provider TEXT NOT NULL,
-      diagram_title TEXT NOT NULL,
-      mermaid_code TEXT NOT NULL,
-      css_code TEXT,
-      display_order INTEGER DEFAULT 0,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, provider, diagram_title)
-    );
-
-    CREATE TABLE IF NOT EXISTS exposure_analysis (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      resource_id INTEGER NOT NULL,
-      resource_name TEXT NOT NULL,
-      resource_type TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      normalized_role TEXT NOT NULL,
-      is_entry_point BOOLEAN DEFAULT 0,
-      is_countermeasure BOOLEAN DEFAULT 0,
-      is_compute_or_data BOOLEAN DEFAULT 0,
-      exposure_level TEXT DEFAULT 'isolated',
-      exposure_path TEXT,
-      has_internet_path BOOLEAN DEFAULT 0,
-      opengrep_violations TEXT DEFAULT '[]',
-      base_severity TEXT,
-      risk_score REAL DEFAULT 0,
-      confidence TEXT DEFAULT 'medium',
-      notes TEXT,
-      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      repo_id INTEGER,
-      protocol TEXT,
-      port TEXT,
-      auth_method TEXT,
-      is_encrypted BOOLEAN,
-      destination_type TEXT,
-      endpoint TEXT,
-      UNIQUE(experiment_id, resource_id),
-      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS internet_exposure_paths (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      path_id TEXT NOT NULL,
-      source_resource_id INTEGER NOT NULL,
-      target_resource_id INTEGER NOT NULL,
-      path_length INTEGER DEFAULT 0,
-      path_nodes TEXT NOT NULL,
-      has_countermeasure BOOLEAN DEFAULT 0,
-      countermeasures_in_path TEXT DEFAULT '[]',
-      validation_status TEXT DEFAULT 'pending',
-      validated_by TEXT,
-      validated_at TIMESTAMP,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, path_id),
-      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS exposure_risk_scoring (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      resource_id INTEGER NOT NULL,
-      opengrep_rule_id TEXT,
-      rule_severity TEXT,
-      severity_score REAL DEFAULT 0,
-      exposure_multiplier REAL DEFAULT 1.0,
-      final_risk_score REAL DEFAULT 0,
-      exposure_factor TEXT,
-      vulnerability_factor TEXT,
-      combined_factors TEXT DEFAULT '{}',
-      scoring_method TEXT DEFAULT 'exposure_plus_vuln',
-      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, resource_id, opengrep_rule_id),
-      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS shared_resources (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      resource_type TEXT NOT NULL,
-      resource_identifier TEXT NOT NULL,
-      friendly_name TEXT,
-      provider TEXT NOT NULL,
-      category TEXT,
-      discovered_from_repo TEXT,
-      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      reference_count INTEGER DEFAULT 1,
-      variable_name TEXT,
-      data_source_name TEXT,
-      properties TEXT,
-      UNIQUE(provider, resource_type, resource_identifier)
-    );
-
-    CREATE TABLE IF NOT EXISTS shared_resource_references (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      shared_resource_id INTEGER NOT NULL,
-      repo_name TEXT NOT NULL,
-      experiment_id TEXT,
-      local_resource_id INTEGER,
-      reference_type TEXT,
-      discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (shared_resource_id) REFERENCES shared_resources(id),
-      FOREIGN KEY (local_resource_id) REFERENCES resources(id),
-      UNIQUE(shared_resource_id, repo_name, local_resource_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS dependencies (
-      id TEXT PRIMARY KEY,
-      repo_id TEXT NOT NULL,
-      experiment_id TEXT NOT NULL,
-      project_path TEXT,
-      package_name TEXT NOT NULL,
-      version TEXT NOT NULL,
-      package_manager TEXT NOT NULL,
-      language TEXT NOT NULL,
-      source_file TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(repo_id, project_path, package_name, version, package_manager),
-      FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS resource_internet_accessibility (
-      id INTEGER PRIMARY KEY,
-      experiment_id TEXT NOT NULL,
-      resource_id INTEGER NOT NULL,
-      resource_name TEXT NOT NULL,
-      resource_type TEXT NOT NULL,
-      is_internet_accessible BOOLEAN DEFAULT 0,
-      shortest_path_distance INTEGER,
-      path_data TEXT,
-      via_public_ip BOOLEAN DEFAULT 0,
-      via_public_endpoint BOOLEAN DEFAULT 0,
-      via_managed_identity BOOLEAN DEFAULT 0,
-      entry_point TEXT,
-      auth_level TEXT,
-      computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(experiment_id, resource_id)
-    );
-    """)
+        conn.executescript(_BASE_TABLES_SQL)
 
         # Ensure repo-scoped uniqueness index exists for the newer upsert behavior.
         try:
