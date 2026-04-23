@@ -1492,6 +1492,181 @@ def _load_vulnerable_resource_keys(repo_name: str) -> set[tuple[str, str]]:
         if row["resource_type"] and row["resource_name"]
     }
 
+_STORAGE_PARENT_TYPES = frozenset({"azurerm_storage_account"})
+_STORAGE_CHILD_TYPES = frozenset({
+    "azurerm_storage_container", "azurerm_storage_blob", "azurerm_storage_queue",
+    "azurerm_storage_share", "azurerm_storage_table",
+})
+_SQL_PARENT_TYPES = frozenset({
+    "azurerm_mssql_server", "azurerm_sql_server",
+    "azurerm_mysql_server", "azurerm_postgresql_server",
+})
+_SQL_CHILD_TYPES = frozenset({
+    "azurerm_mssql_database", "azurerm_sql_database",
+    "azurerm_mysql_database",
+})
+_COSMOS_PARENT_TYPES = frozenset({"azurerm_cosmosdb_account"})
+_COSMOS_CHILD_TYPES = frozenset({
+    "azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_sql_container",
+    "azurerm_cosmosdb_mongo_database", "azurerm_cosmosdb_mongo_collection",
+    "azurerm_cosmosdb_cassandra_keyspace", "azurerm_cosmosdb_cassandra_table",
+    "azurerm_cosmosdb_table", "azurerm_cosmosdb_gremlin_graph",
+})
+_KV_PARENT_TYPES = frozenset({"azurerm_key_vault"})
+_KV_CHILD_TYPES = frozenset({
+    "azurerm_key_vault_key", "azurerm_key_vault_secret",
+    "azurerm_key_vault_certificate",
+})
+_LB_PARENT_TYPES = frozenset({"aws_elb", "aws_alb", "aws_lb", "azurerm_lb", "azurerm_application_gateway"})
+_LB_CHILD_TYPES = frozenset({
+    "aws_lb_listener", "aws_alb_listener", "aws_lb_target_group", "aws_alb_target_group",
+    "aws_lb_target_group_attachment", "aws_lb_listener_rule", "azurerm_lb_backend_address_pool", "azurerm_lb_rule",
+    "azurerm_application_gateway_http_listener",
+})
+_SB_PARENT_TYPES = frozenset({"azurerm_servicebus_namespace", "azurerm_eventhub_namespace"})
+_SB_CHILD_TYPES = frozenset({
+    "azurerm_servicebus_queue", "azurerm_servicebus_topic", "azurerm_servicebus_subscription",
+    "azurerm_eventhub", "azurerm_eventhub_consumer_group",
+})
+_ECS_PARENT_TYPES = frozenset({"aws_ecs_cluster"})
+_ECS_INSTANCE_TYPES = frozenset({"aws_instance", "aws_autoscaling_group", "aws_launch_configuration", "aws_launch_template"})
+
+
+def _detect_service_hierarchies(
+    layer_services: list[str],
+    non_boundary_parents: dict[str, list[str]],
+) -> dict:
+    """Detect parent/child service hierarchies within a single architecture layer."""
+    _STORAGE_PARENT = "Storage Account"
+    _STORAGE_CONTAINER = "Storage Container"
+    _STORAGE_BLOB = "Storage Blob"
+
+    storage_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _STORAGE_PARENT_TYPES),
+        None,
+    )
+    storage_nested_services: set[str] = set()
+    if storage_parent_service:
+        for s in layer_services:
+            if s == storage_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_STORAGE_CHILD_TYPES):
+                storage_nested_services.add(s)
+        if not storage_nested_services:
+            _STORAGE_PARENT = "Storage Account"
+            _STORAGE_CONTAINER = "Storage Container"
+            _STORAGE_BLOB = "Storage Blob"
+            if _STORAGE_PARENT in layer_services:
+                if _STORAGE_CONTAINER in layer_services:
+                    storage_nested_services.add(_STORAGE_CONTAINER)
+                if _STORAGE_BLOB in layer_services:
+                    storage_nested_services.add(_STORAGE_BLOB)
+
+    _S3_PARENT = "S3 Bucket"
+    _S3_CHILDREN = {"Public Access Block", "S3 Bucket Acl", "S3 Bucket ACL", "S3 Bucket Ownership Controls"}
+    s3_nested_services: set[str] = set()
+    if _S3_PARENT in layer_services:
+        for s in layer_services:
+            if s in _S3_CHILDREN:
+                s3_nested_services.add(s)
+
+    sql_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _SQL_PARENT_TYPES),
+        None,
+    )
+    sql_nested_services: set[str] = set()
+    if sql_parent_service:
+        for s in layer_services:
+            if s == sql_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_SQL_CHILD_TYPES):
+                sql_nested_services.add(s)
+
+    cosmos_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _COSMOS_PARENT_TYPES),
+        None,
+    )
+    cosmos_nested_services: set[str] = set()
+    if cosmos_parent_service:
+        for s in layer_services:
+            if s == cosmos_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_COSMOS_CHILD_TYPES):
+                cosmos_nested_services.add(s)
+
+    kv_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _KV_PARENT_TYPES),
+        None,
+    )
+    kv_nested_services: set[str] = set()
+    if kv_parent_service:
+        for s in layer_services:
+            if s == kv_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_KV_CHILD_TYPES):
+                kv_nested_services.add(s)
+
+    lb_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _LB_PARENT_TYPES),
+        None,
+    )
+    lb_nested_services: set[str] = set()
+    if lb_parent_service:
+        for s in layer_services:
+            if s == lb_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_LB_CHILD_TYPES):
+                lb_nested_services.add(s)
+
+    sb_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _SB_PARENT_TYPES),
+        None,
+    )
+    sb_nested_services: set[str] = set()
+    if sb_parent_service:
+        for s in layer_services:
+            if s == sb_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types.issubset(_SB_CHILD_TYPES):
+                sb_nested_services.add(s)
+
+    ecs_parent_service = next(
+        (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _ECS_PARENT_TYPES),
+        None,
+    )
+    ecs_nested_instances: set[str] = set()
+    if ecs_parent_service:
+        for s in layer_services:
+            if s == ecs_parent_service:
+                continue
+            svc_types = set(non_boundary_parents.get(s, []))
+            if svc_types and svc_types & _ECS_INSTANCE_TYPES:
+                ecs_nested_instances.add(s)
+
+    return {
+        "storage_parent": storage_parent_service,
+        "storage_nested": storage_nested_services,
+        "s3_nested": s3_nested_services,
+        "sql_parent": sql_parent_service,
+        "sql_nested": sql_nested_services,
+        "cosmos_parent": cosmos_parent_service,
+        "cosmos_nested": cosmos_nested_services,
+        "kv_parent": kv_parent_service,
+        "kv_nested": kv_nested_services,
+        "lb_parent": lb_parent_service,
+        "lb_nested": lb_nested_services,
+        "sb_parent": sb_parent_service,
+        "sb_nested": sb_nested_services,
+        "ecs_parent": ecs_parent_service,
+        "ecs_nested": ecs_nested_instances,
+    }
+
 
 def _build_simple_architecture_diagram(
     repo_name: str,
@@ -1745,15 +1920,6 @@ def _build_simple_architecture_diagram(
             raw_for_cat = sorted(set(non_boundary_parents.get(service, [])))
             cat = category_for_raw_types(raw_for_cat)
             services_by_layer.setdefault(cat, []).append(service)
-            # Debug API Management
-            if service == "API Management":
-                try:
-                    with open('Output/Summary/apim_layer_debug.log','w') as _dbg:
-                        _dbg.write(f"Service: {service}\n")
-                        _dbg.write(f"Raw types: {raw_for_cat}\n")
-                        _dbg.write(f"Category/Layer: {cat}\n")
-                except:
-                    pass
 
         # Ensure identity resources (e.g., Key Vault, Managed Identity) appear in the Identity layer
         # BUT: Skip API Gateway child components that are already grouped under "API Management"
@@ -1781,59 +1947,14 @@ def _build_simple_architecture_diagram(
         except Exception:
             pass
 
-        # Debugging: capture a small snapshot of services_by_layer to aid troubleshooting
-        try:
-            dbg = {
-                'provider': provider,
-                'layer_counts': {k: len(v) for k,v in services_by_layer.items()},
-                'identity_contents': services_by_layer.get('identity', [])
-            }
-            with open('Output/Summary/report_generation_debug.log','a') as _dbg:
-                _dbg.write(str(dbg) + "\n")
-        except Exception:
-            pass
-
         # Filter out service entries that should not appear on the architecture chart
         try:
             db = _get_db()
-            # Debug: Log services BEFORE filtering
-            try:
-                with open('Output/Summary/before_filter.log','w') as _dbg:
-                    _dbg.write(f"Services before filtering:\n")
-                    for layer_key, svc_list in services_by_layer.items():
-                        _dbg.write(f"  {layer_key}: {svc_list}\n")
-            except:
-                pass
-            
             for layer_key, svc_list in list(services_by_layer.items()):
                 filtered = []
-                # Debug: Log what we're filtering
-                if layer_key == 'security':
-                    try:
-                        with open('Output/Summary/security_filtering.log','w') as _dbg:
-                            _dbg.write(f"Filtering security layer, input services: {svc_list}\n")
-                    except:
-                        pass
-                
                 for svc in svc_list:
                     raw_types = non_boundary_parents.get(svc, [])
-                    
-                    # Debug security layer processing
-                    if layer_key == 'security' and svc == 'API Management':
-                        try:
-                            with open('Output/Summary/api_mgmt_debug.log','w') as _dbg:
-                                _dbg.write(f"Processing: {svc}\n")
-                                _dbg.write(f"Raw types: {raw_types}\n")
-                        except:
-                            pass
-                    
                     if _is_non_visual_control_service(raw_types):
-                        if layer_key == 'security' and svc == 'API Management':
-                            try:
-                                with open('Output/Summary/api_mgmt_debug.log','a') as _dbg:
-                                    _dbg.write(f"FILTERED by _is_non_visual_control_service\n")
-                            except:
-                                pass
                         continue
                     # If any raw_type is allowed to display, keep the service
                     keep = False
@@ -1858,36 +1979,13 @@ def _build_simple_architecture_diagram(
                     if keep:
                         filtered.append(svc)
                 
-                # Debug: Log what was kept
-                if layer_key == 'security':
-                    try:
-                        with open('Output/Summary/security_filtering.log','a') as _dbg:
-                            _dbg.write(f"After filtering, kept services: {filtered}\n")
-                    except:
-                        pass
-                
                 services_by_layer[layer_key] = filtered
-        except Exception as e:
-            # Log any exceptions
-            try:
-                with open('Output/Summary/filter_exception.log','w') as _dbg:
-                    _dbg.write(f"Exception during filtering: {e}\n")
-                    import traceback
-                    _dbg.write(traceback.format_exc())
-            except:
-                pass
+        except Exception:
             pass
 
         svc_global_idx = 0
         for layer_key in layer_order:
             layer_services = services_by_layer.get(layer_key, [])
-            # Debug: Log layer services
-            if layer_key == 'security':
-                try:
-                    with open('Output/Summary/security_layer.log','w') as _dbg:
-                        _dbg.write(f"Security layer services: {layer_services}\n")
-                except:
-                    pass
             if not layer_services:
                 # Still render the Monitoring layer if has_alerting_signal and no services were bucketed here
                 if layer_key == "monitoring" and has_alerting_signal:
@@ -1902,202 +2000,36 @@ def _build_simple_architecture_diagram(
             layer_label, layer_cat = layer_meta[layer_key]
             layer_id = f"{provider_id}_Layer_{layer_key.capitalize()}"
             
-            # Identify storage hierarchies:
-            # - Storage Account -> Storage Container/Blob/Queue/File/Table
-            # Friendly-name defaults (ensure variables exist regardless of detection path)
             _STORAGE_PARENT = "Storage Account"
             _STORAGE_CONTAINER = "Storage Container"
             _STORAGE_BLOB = "Storage Blob"
-            _STORAGE_PARENT_TYPES = frozenset({"azurerm_storage_account"})
-            _STORAGE_CHILD_TYPES = frozenset({
-                "azurerm_storage_container", "azurerm_storage_blob", "azurerm_storage_queue",
-                "azurerm_storage_share", "azurerm_storage_table",
-            })
-            storage_parent_service = next(
-                (s for s in layer_services if set(non_boundary_parents.get(s, [])) & _STORAGE_PARENT_TYPES),
-                None,
-            )
-            storage_nested_services: set[str] = set()
-            if storage_parent_service:
-                for s in layer_services:
-                    if s == storage_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_STORAGE_CHILD_TYPES):
-                        storage_nested_services.add(s)
-                # Fallback to friendly-name detection for backwards compatibility
-                if not storage_nested_services:
-                    _STORAGE_PARENT = "Storage Account"
-                    _STORAGE_CONTAINER = "Storage Container"
-                    _STORAGE_BLOB = "Storage Blob"
-                    if _STORAGE_PARENT in layer_services:
-                        if _STORAGE_CONTAINER in layer_services:
-                            storage_nested_services.add(_STORAGE_CONTAINER)
-                        if _STORAGE_BLOB in layer_services:
-                            storage_nested_services.add(_STORAGE_BLOB)
-
             _S3_PARENT = "S3 Bucket"
-            # Policy resources remain context-only; do not render policy nodes on architecture.
-            _S3_CHILDREN = {"Public Access Block", "S3 Bucket Acl", "S3 Bucket ACL", "S3 Bucket Ownership Controls"}
-            s3_nested_services: set[str] = set()
-            if _S3_PARENT in layer_services:
-                for s in layer_services:
-                    if s in _S3_CHILDREN:
-                        s3_nested_services.add(s)
-
-            # Identify SQL hierarchy: Database nested inside SQL Server
-            # Detected by raw resource types so it works regardless of DB friendly-name drift
-            _SQL_PARENT_TYPES = frozenset({
-                "azurerm_mssql_server", "azurerm_sql_server",
-                "azurerm_mysql_server", "azurerm_postgresql_server",
-            })
-            _SQL_CHILD_TYPES = frozenset({
-                "azurerm_mssql_database", "azurerm_sql_database",
-                "azurerm_mysql_database",
-            })
-            sql_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _SQL_PARENT_TYPES),
-                None,
-            )
-            sql_nested_services: set[str] = set()
-            if sql_parent_service:
-                for s in layer_services:
-                    if s == sql_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_SQL_CHILD_TYPES):
-                        sql_nested_services.add(s)
-
-            # Identify Cosmos DB: account -> databases/containers
-            _COSMOS_PARENT_TYPES = frozenset({"azurerm_cosmosdb_account"})
-            _COSMOS_CHILD_TYPES = frozenset({
-                "azurerm_cosmosdb_sql_database", "azurerm_cosmosdb_sql_container",
-                "azurerm_cosmosdb_mongo_database", "azurerm_cosmosdb_mongo_collection",
-                "azurerm_cosmosdb_cassandra_keyspace", "azurerm_cosmosdb_cassandra_table",
-                "azurerm_cosmosdb_table", "azurerm_cosmosdb_gremlin_graph",
-            })
-            cosmos_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _COSMOS_PARENT_TYPES),
-                None,
-            )
-            cosmos_nested_services: set[str] = set()
-            if cosmos_parent_service:
-                for s in layer_services:
-                    if s == cosmos_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_COSMOS_CHILD_TYPES):
-                        cosmos_nested_services.add(s)
-
-            # Identify Key Vault hierarchy: keys/secrets nested inside Key Vault
-            _KV_PARENT_TYPES = frozenset({"azurerm_key_vault"})
-            _KV_CHILD_TYPES = frozenset({
-                "azurerm_key_vault_key", "azurerm_key_vault_secret",
-                "azurerm_key_vault_certificate",
-            })
-            kv_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _KV_PARENT_TYPES),
-                None,
-            )
-            kv_nested_services: set[str] = set()
-            if kv_parent_service:
-                for s in layer_services:
-                    if s == kv_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_KV_CHILD_TYPES):
-                        kv_nested_services.add(s)
-
-            # Identify Load Balancer hierarchy: listeners and target groups nested inside LB
-            _LB_PARENT_TYPES = frozenset({"aws_elb", "aws_alb", "aws_lb", "azurerm_lb", "azurerm_application_gateway"})
-            _LB_CHILD_TYPES = frozenset({
-                "aws_lb_listener", "aws_alb_listener", "aws_lb_target_group", "aws_alb_target_group",
-                "aws_lb_target_group_attachment", "aws_lb_listener_rule", "azurerm_lb_backend_address_pool", "azurerm_lb_rule",
-                "azurerm_application_gateway_http_listener",
-            })
-            lb_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _LB_PARENT_TYPES),
-                None,
-            )
-            lb_nested_services: set[str] = set()
-            if lb_parent_service:
-                for s in layer_services:
-                    if s == lb_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_LB_CHILD_TYPES):
-                        lb_nested_services.add(s)
-
-            # Identify Service Bus hierarchy: topics/queues/subscriptions nested inside namespace
-            _SB_PARENT_TYPES = frozenset({"azurerm_servicebus_namespace", "azurerm_eventhub_namespace"})
-            _SB_CHILD_TYPES = frozenset({
-                "azurerm_servicebus_queue", "azurerm_servicebus_topic", "azurerm_servicebus_subscription",
-                "azurerm_eventhub", "azurerm_eventhub_consumer_group",
-            })
-            sb_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _SB_PARENT_TYPES),
-                None,
-            )
-            sb_nested_services: set[str] = set()
-            if sb_parent_service:
-                for s in layer_services:
-                    if s == sb_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types.issubset(_SB_CHILD_TYPES):
-                        sb_nested_services.add(s)
-
-            # Identify ECS clustering: nest EC2 instances inside ECS Cluster when EC2-backed
-            _ECS_PARENT_TYPES = frozenset({"aws_ecs_cluster"})
-            _ECS_INSTANCE_TYPES = frozenset({"aws_instance", "aws_autoscaling_group", "aws_launch_configuration", "aws_launch_template"})
-            ecs_parent_service = next(
-                (s for s in layer_services
-                 if set(non_boundary_parents.get(s, [])) & _ECS_PARENT_TYPES),
-                None,
-            )
-            ecs_nested_instances: set[str] = set()
-            if ecs_parent_service:
-                # If the repo contains instance-like resources, assume EC2-backed cluster
-                for s in layer_services:
-                    if s == ecs_parent_service:
-                        continue
-                    svc_types = set(non_boundary_parents.get(s, []))
-                    if svc_types and svc_types & _ECS_INSTANCE_TYPES:
-                        ecs_nested_instances.add(s)
-
-            # Keep child services hidden as standalone nodes; render them inside their parents.
-            storage_child_candidates = set(storage_nested_services)
-            s3_child_candidates = set(s3_nested_services)
-            sql_child_candidates = set(sql_nested_services)
-            kv_child_candidates = set(kv_nested_services)
-            lb_child_candidates = set(lb_nested_services)
-            sb_child_candidates = set(sb_nested_services)
-            ecs_child_candidates = set(ecs_nested_instances)
-            cosmos_child_candidates = set(cosmos_nested_services)
-
-            storage_nested_services = storage_child_candidates
-            s3_nested_services = s3_child_candidates
-            sql_nested_services = sql_child_candidates
-            kv_nested_services = kv_child_candidates
-            lb_nested_services = lb_child_candidates
-            sb_nested_services = sb_child_candidates
-            ecs_nested_instances = ecs_child_candidates
-            cosmos_nested_services = cosmos_child_candidates
+            _h = _detect_service_hierarchies(layer_services, non_boundary_parents)
+            storage_parent_service = _h["storage_parent"]
+            storage_nested_services = _h["storage_nested"]
+            s3_nested_services = _h["s3_nested"]
+            sql_parent_service = _h["sql_parent"]
+            sql_nested_services = _h["sql_nested"]
+            cosmos_parent_service = _h["cosmos_parent"]
+            cosmos_nested_services = _h["cosmos_nested"]
+            kv_parent_service = _h["kv_parent"]
+            kv_nested_services = _h["kv_nested"]
+            lb_parent_service = _h["lb_parent"]
+            lb_nested_services = _h["lb_nested"]
+            sb_parent_service = _h["sb_parent"]
+            sb_nested_services = _h["sb_nested"]
+            ecs_parent_service = _h["ecs_parent"]
+            ecs_nested_instances = _h["ecs_nested"]
 
             all_nested = (
-                storage_child_candidates
-                | s3_child_candidates
-                | sql_child_candidates
-                | kv_child_candidates
-                | lb_child_candidates
-                | sb_child_candidates
-                | ecs_child_candidates
-                | cosmos_child_candidates
+                storage_nested_services
+                | s3_nested_services
+                | sql_nested_services
+                | kv_nested_services
+                | lb_nested_services
+                | sb_nested_services
+                | ecs_nested_instances
+                | cosmos_nested_services
             )
 
             # Adjust layer service count to account for all nested services
