@@ -157,6 +157,12 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                     friendly = "S3 Bucket"
                 elif any(rt.startswith("azurerm_") for rt in pattern_types):
                     friendly = "Storage Account"
+                elif any(rt.startswith("google_") for rt in pattern_types):
+                    friendly = "GCS Bucket"
+                elif any(rt.startswith("oci_") for rt in pattern_types):
+                    friendly = "OCI Object Storage"
+                elif any(rt.startswith("alicloud_") for rt in pattern_types):
+                    friendly = "OSS Bucket"
                 else:
                     friendly = "Storage"
                 grouped[friendly] = pattern_types
@@ -212,8 +218,10 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                 grouped[friendly] = pattern_types
             elif pattern_name == "serverless":
                 friendly = "Serverless Functions"
+                grouped[friendly] = pattern_types
             elif pattern_name == "key_vault":
                 friendly = "Key Vault"
+                grouped[friendly] = pattern_types
             elif pattern_name == "database":
                 # Determine database type
                 if any("mssql" in rt or "sql_server" in rt for rt in pattern_types):
@@ -228,12 +236,16 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                     friendly = "Cloud SQL"
                 else:
                     friendly = "Database Server"
+                grouped[friendly] = pattern_types
             elif pattern_name == "cosmos_db":
                 friendly = "Cosmos DB Account" if any(rt.startswith("azurerm_") for rt in pattern_types) else "NoSQL Database"
+                grouped[friendly] = pattern_types
             elif pattern_name == "kubernetes":
                 friendly = "Kubernetes Cluster"  # Will be overridden by inferred cluster logic
+                grouped[friendly] = pattern_types
             elif pattern_name == "app_service":
                 friendly = "App Service Plan"
+                grouped[friendly] = pattern_types
             elif pattern_name == "monitoring":
                 if any("application_insights" in rt for rt in pattern_types):
                     friendly = "Application Insights"
@@ -241,6 +253,7 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                     friendly = "Log Analytics Workspace"
                 else:
                     friendly = "Monitoring"
+                grouped[friendly] = pattern_types
             else:
                 friendly = pattern_name.replace("_", " ").title()
                 grouped[friendly] = pattern_types
@@ -1643,6 +1656,9 @@ def _build_simple_architecture_diagram(
 
 
         def _is_non_visual_control_service(raw_types: list[str]) -> bool:
+            """Return True only when ALL resource types in the group are pure control/policy
+            resources with no real service endpoint.  Mixed groups (e.g. a storage bucket
+            alongside its IAM binding) must not be filtered out."""
             control_tokens = (
                 "security_group",
                 "network_security_group",
@@ -1651,14 +1667,19 @@ def _build_simple_architecture_diagram(
                 "monitor",
                 "diagnostic",
             )
-            for rt in raw_types:
-                lower = rt.lower()
-                # Exclude API Gateway components from policy/role filtering
-                if any(tok in lower for tok in ('api_management', 'api_gateway', 'apigateway')):
-                    continue
-                if _is_iam_policy_role_type(lower) or any(token in lower for token in control_tokens):
-                    return True
-            return False
+            # Collect types that are NOT API-gateway components (those are always kept)
+            non_api_types = [
+                rt for rt in raw_types
+                if not any(tok in rt.lower() for tok in ('api_management', 'api_gateway', 'apigateway'))
+            ]
+            if not non_api_types:
+                # All types are API-gateway components — keep the group
+                return False
+            # Only filter if every non-API type is a control/IAM/policy type
+            return all(
+                _is_iam_policy_role_type(rt.lower()) or any(token in rt.lower() for token in control_tokens)
+                for rt in non_api_types
+            )
 
         def _is_vulnerable_child_candidate(raw_types: list[str]) -> bool:
             if not raw_types or _is_non_visual_control_service(raw_types):
@@ -2075,12 +2096,10 @@ def _build_simple_architecture_diagram(
             # Adjust layer service count to account for all nested services
             visible_layer_services = [s for s in layer_services if s not in all_nested]
 
-            # Skip layer wrapper if only one service (reduces visual noise)
-            skip_layer_wrapper = len(visible_layer_services) == 1 and not (layer_key == "monitoring" and has_alerting_signal)
-            # Force Identity layer wrapper even when there's a single identity service (improves clarity)
-            if layer_key == "identity":
-                skip_layer_wrapper = False
-            
+            # Always render the layer subgraph wrapper — skipping it causes nodes to inherit
+            # Mermaid's default white fill (no surrounding subgraph = no layer styling).
+            skip_layer_wrapper = False
+
             if not skip_layer_wrapper:
                 lines.append(f'    subgraph {layer_id}["{layer_label}"]')
                 style_id(layer_id, layer_cat)
