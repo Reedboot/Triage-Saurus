@@ -2332,8 +2332,8 @@ class HierarchicalDiagramBuilder:
         The display name is used as the label.
         """
         name = resource['resource_name']
-        # Use UUID as node ID for guaranteed uniqueness across all resources
-        node_id = resource.get('id') or sanitize_id(name)
+        # Use _get_node_id to guarantee node_id is always a string (never a raw int DB pk)
+        node_id = self._get_node_id(resource)
 
         # Truncate long labels to fit in box
         label = resource.get('_label') or resource.get('name') or name
@@ -4350,7 +4350,7 @@ class HierarchicalDiagramBuilder:
                 if existing is None or priority >= existing[0]:
                     style_by_node_id[node_id] = (priority, color, 2)  # 2px stroke for regular resources
 
-        for node_id in sorted(style_by_node_id.keys()):
+        for node_id in sorted(str(k) for k in style_by_node_id.keys()):
             # Skip styling subgraph containers — Mermaid cannot style subgraph containers, only leaf nodes
             if node_id in subgraph_ids:
                 continue
