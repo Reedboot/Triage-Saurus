@@ -1814,7 +1814,7 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph data_tier["🗄️ Data Tier"]')
+        lines.append('  subgraph data_tier["Data Tier"]')
 
         for res in sql_resources:
             lines.extend(self.render_sql_hierarchy([res]))
@@ -1881,7 +1881,7 @@ class HierarchicalDiagramBuilder:
             return []
         
         lines: List[str] = []
-        lines.append('  subgraph network_tier["🌐 Network Tier"]')
+        lines.append('  subgraph network_tier["Network Tier"]')
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, network
@@ -3209,7 +3209,7 @@ class HierarchicalDiagramBuilder:
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
-            lines.insert(0, '  internet[/"🌐 Internet"/]')
+            lines.insert(0, '  internet[/"Internet"/]')
 
         return lines
     
@@ -3466,7 +3466,7 @@ class HierarchicalDiagramBuilder:
                                 'resource_type': 'azurerm_api_management',
                                 'provider': 'azure',
                                 '_external': True,
-                                '_label': f'🌐 APIM: {var_name}',
+                                '_label': f'APIM: {var_name}',
                                 'properties': {}
                             })
                             external_id_counter += 1
@@ -3877,7 +3877,7 @@ class HierarchicalDiagramBuilder:
                         'resource_type': 'external_service',
                         'id': _ext_id,
                         '_synthetic': True,
-                        '_label': f'🌐 {_hostname}',
+                        '_label': f'{_hostname}',
                     }
                     self.resources.append(self.resource_by_name[_ext_id])
                 self.connections.append({
