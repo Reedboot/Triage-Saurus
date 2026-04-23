@@ -4252,6 +4252,33 @@ def api_diagrams(experiment_id: str):
                         for row in prov_rows
                         if row['provider']
                     })
+                    
+                    # If no resources found for the requested repo_name, try any repo in the experiment
+                    if not providers:
+                        prov_rows = conn.execute(
+                            """
+                            SELECT DISTINCT LOWER(COALESCE(r.provider, '')) AS provider
+                            FROM resources r
+                            WHERE r.experiment_id = ?
+                              AND LOWER(COALESCE(r.provider, '')) NOT IN ('', 'unknown', 'terraform', 'kubernetes')
+                            ORDER BY provider
+                            """,
+                            (experiment_id,),
+                        ).fetchall()
+                        providers = sorted({
+                            _canonical_provider_key(row['provider'])
+                            for row in prov_rows
+                            if row['provider']
+                        })
+                        # If we found providers in any repo, use those and update repo_name to the first repo with resources
+                        if providers:
+                            first_repo_row = conn.execute(
+                                "SELECT DISTINCT repo_name FROM repositories WHERE id IN (SELECT DISTINCT repo_id FROM resources WHERE experiment_id = ?) LIMIT 1",
+                                (experiment_id,)
+                            ).fetchone()
+                            if first_repo_row:
+                                repo_name = first_repo_row[0]
+
 
                 generated: list[dict] = []
                 for provider in providers:
