@@ -540,7 +540,12 @@
     }
 
     // Check if a scan is already running for this repo
-    const repoName = repoPath.split('/').pop();
+    // Use canonical repo name from data-name attribute if available
+    const repoSelect = document.getElementById('repo-select');
+    const repoOpt = repoSelect?.querySelector('option:checked');
+    const repoName = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) 
+      ? repoOpt.dataset.name 
+      : repoPath.split('/').pop();
     fetch(`/api/scans/${repoName}`)
       .then(response => response.json())
       .then(data => {
@@ -789,7 +794,12 @@
   function checkForRunningScan(repoPath) {
     if (!repoPath) return;
     
-    const repoName = repoPath.split('/').pop();
+    // Use canonical repo name from data-name attribute if available
+    const repoSelect = document.getElementById('repo-select');
+    const repoOpt = repoSelect?.querySelector('option:checked');
+    const repoName = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) 
+      ? repoOpt.dataset.name 
+      : repoPath.split('/').pop();
     fetch(`/api/scans/${repoName}`)
       .then(response => response.json())
       .then(data => {
@@ -823,7 +833,12 @@
 
   // Reconnect to a running experiment by polling for its status
   function reconnectToRunningExperiment(repoPath, experimentId, createdAt) {
-    const repoName = repoPath.split('/').pop();
+    // Use canonical repo name from data-name attribute if available
+    const repoSelect = document.getElementById('repo-select');
+    const repoOpt = repoSelect?.querySelector('option:checked');
+    const repoName = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) 
+      ? repoOpt.dataset.name 
+      : repoPath.split('/').pop();
     
     // Cancel any existing polling to prevent duplicates
     if (currentPollInterval) {
@@ -2051,7 +2066,11 @@
            }
 
           // Populate past-scan and compare dropdowns from API
-          const repoName = this.value.split('/').pop();
+          // Use canonical repo name from data-name attribute if available
+          const repoOpt = this.querySelector('option:checked');
+          const repoName = (repoOpt && repoOpt.dataset && repoOpt.dataset.name) 
+            ? repoOpt.dataset.name 
+            : this.value.split('/').pop();
           fetch(`/api/scans/${encodeURIComponent(repoName)}`)
             .then(r => r.json())
             .then(data => {
