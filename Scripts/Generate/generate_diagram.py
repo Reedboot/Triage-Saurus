@@ -3040,6 +3040,7 @@ class HierarchicalDiagramBuilder:
         lines.append("")
 
         has_internet = False
+        edge_list = []  # Track (conn, src_id, tgt_id) for all rendered edges
 
         def _is_internet(name: Optional[str]) -> bool:
             return str(name or '').strip().lower() == 'internet'
@@ -3136,34 +3137,19 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"  {src_id} {arrow}|{safe_label}| {tgt_id}")
             else:
                 lines.append(f"  {src_id} {arrow} {tgt_id}")
+            
+            # Track this edge for later styling
+            edge_list.append((conn, src_id, tgt_id))
 
-        # Add red styling for direct Internet connections.
-        link_index = 0
+        # Add red styling for direct Internet connections using the tracked edge list
         style_lines = []
-        for i, conn in enumerate(self.connections):
+        for link_index, (conn, src_id, tgt_id) in enumerate(edge_list):
             src = conn.get('source')
             tgt = conn.get('target')
-            if not src or not tgt:
-                continue
-            if (conn.get('connection_type') or '').lower() in SKIP_EDGE_TYPES:
-                continue
-            if src == tgt or sanitize_id(src) == sanitize_id(tgt):
-                continue
-            if tgt == '__apim_subgraph__':
-                if _is_internet(src):
-                    style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
-                link_index += 1
-                continue
-            if not _is_internet(src) and src not in self.emitted_nodes:
-                continue
-            if not _is_internet(tgt) and tgt not in self.emitted_nodes:
-                continue
             
-            # Color direct Internet→service connections red.
+            # Color direct Internet→service connections red
             if _is_internet(src) and (tgt and not _is_internet(tgt)):
                 style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
-            
-            link_index += 1
         
         # Add Internet connections for detected exposed resources
         if self.exposed_resources:
@@ -3208,9 +3194,8 @@ class HierarchicalDiagramBuilder:
                     # Create the connection line
                     lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
                     
-                    # Track the link index for this new connection
-                    current_link_idx = link_index
-                    link_index += 1
+                    # Track the link index for this new connection (link_index = len(edge_list))
+                    current_link_idx = len(edge_list)
                     
                     # Add color styling for this link
                     style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
