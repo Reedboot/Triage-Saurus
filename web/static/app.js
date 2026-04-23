@@ -1675,6 +1675,11 @@
   function getCurrentRepoName() {
     const sel = document.getElementById('repo-select');
     if (!sel || !sel.value) return '';
+    // Prefer data-name attribute (canonical repo name from DB), fallback to path extraction
+    const repoOpt = sel.querySelector('option:checked');
+    if (repoOpt && repoOpt.dataset && repoOpt.dataset.name) {
+      return repoOpt.dataset.name;
+    }
     return sel.value.split('/').pop();
   }
 
