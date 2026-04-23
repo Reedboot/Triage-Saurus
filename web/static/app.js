@@ -976,20 +976,24 @@
     const diagramViews = document.getElementById('diagram-views');
     const diagramTabs = document.getElementById('diagram-tabs');
     
-    if (!diagramViews) {
-      console.error('[renderDiagrams] diagram-views element not found. Available elements:', {
-        diagramPanel: !!document.getElementById('diagram-panel'),
-        splitLayout: !!document.querySelector('.split-layout'),
-        splitRight: !!document.querySelector('.split-right'),
-        diagramZoomWrap: !!document.getElementById('diagram-zoom-wrap')
-      });
-    }
-    if (!diagramTabs) {
-      console.error('[renderDiagrams] diagram-tabs element not found');
-    }
-    
     if (!diagramViews || !diagramTabs) {
-      console.error('[renderDiagrams] Missing required elements - cannot render diagrams');
+      console.error('[renderDiagrams] Missing required elements!');
+      
+      // Diagnostic: log the entire page structure
+      console.log('[renderDiagrams] DIAGNOSTICS:');
+      console.log('  - diagram-views element:', diagramViews ? '✓ FOUND' : '✗ NOT FOUND');
+      console.log('  - diagram-tabs element:', diagramTabs ? '✓ FOUND' : '✗ NOT FOUND');
+      console.log('  - diagram-panel:', document.getElementById('diagram-panel') ? '✓ FOUND' : '✗ NOT FOUND');
+      console.log('  - diagram-zoom-wrap:', document.getElementById('diagram-zoom-wrap') ? '✓ FOUND' : '✗ NOT FOUND');
+      console.log('  - split-right:', document.querySelector('.split-right') ? '✓ FOUND' : '✗ NOT FOUND');
+      
+      // Log all elements with "diagram" in the id
+      const diagramElements = document.querySelectorAll('[id*="diagram"]');
+      console.log('  - All diagram-related elements:', diagramElements.length);
+      diagramElements.forEach(el => {
+        console.log('    - ID:', el.id, 'Tag:', el.tagName, 'Classes:', el.className);
+      });
+      
       return;
     }
 
