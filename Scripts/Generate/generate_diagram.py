@@ -2082,7 +2082,7 @@ class HierarchicalDiagramBuilder:
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
                     # Mark this compute resource as a subgraph (cannot be connection endpoint)
-                    self.subgraph_nodes.add(compute_name)
+                    self.subgraph_nodes.add(compute_id)
                     
                     # Render child resources inside compute (NICs, disks, extensions, etc.)
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
@@ -2194,7 +2194,7 @@ class HierarchicalDiagramBuilder:
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
                 # Mark this node as a subgraph (cannot be connection endpoint)
-                self.subgraph_nodes.add(vm_name)
+                self.subgraph_nodes.add(vm_id)
                 
                 # Render regular children (NICs, disks, etc.)
                 for child in other_children:
@@ -4223,7 +4223,7 @@ class HierarchicalDiagramBuilder:
         lines.extend(conn_lines)
         
         # Add styling for resource categories
-        style_lines = self.render_styles()
+        style_lines = self.render_styles(lines)
         if style_lines:
             lines.append("")
             lines.extend(style_lines)
@@ -4234,9 +4234,21 @@ class HierarchicalDiagramBuilder:
         
         return "\n".join(lines)
     
-    def render_styles(self) -> List[str]:
-        """Generate color-coded borders for resource categories."""
+    def render_styles(self, diagram_lines: List[str]) -> List[str]:
+        """Generate color-coded borders for resource categories.
+        
+        Accepts the accumulated diagram lines so far to extract subgraph IDs,
+        avoiding Mermaid limitations where subgraph containers cannot be styled.
+        """
         lines = []
+        
+        # Extract all subgraph IDs from the diagram (they appear in "subgraph ID[label]" lines)
+        import re
+        subgraph_ids = set()
+        for line in diagram_lines:
+            match = re.search(r'\bsubgraph\s+(\w+)\[', line)
+            if match:
+                subgraph_ids.add(match.group(1))
         
         # Category colors from old generator
         category_colors = {
@@ -4312,6 +4324,9 @@ class HierarchicalDiagramBuilder:
                     style_by_node_id[node_id] = (priority, color, 2)  # 2px stroke for regular resources
 
         for node_id in sorted(style_by_node_id.keys()):
+            # Skip styling subgraph containers — Mermaid cannot style subgraph containers, only leaf nodes
+            if node_id in subgraph_ids:
+                continue
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
         
