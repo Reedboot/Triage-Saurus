@@ -4195,6 +4195,12 @@ def api_diagrams(experiment_id: str):
 
     Uses cloud_diagrams DB table only.
     """
+    # Force reload of diagram generation module to ensure fresh code is used
+    if 'Scripts.Generate.generate_diagram' in sys.modules:
+        del sys.modules['Scripts.Generate.generate_diagram']
+    if 'Scripts.Generate.icon_resolver' in sys.modules:
+        del sys.modules['Scripts.Generate.icon_resolver']
+    
     repo_name = (request.args.get("repo_name") or "").strip()
     include_api_operations_raw = (request.args.get("include_api_operations") or "").strip().lower()
     include_api_operations_override: bool | None = None
