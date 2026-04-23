@@ -2039,10 +2039,11 @@
           if (diagramTabs) {
             diagramTabs.innerHTML = '';
           }
-          const diagramZoomWrap = document.getElementById('diagram-zoom-wrap');
-          if (diagramZoomWrap) {
-            diagramZoomWrap.innerHTML = '';
-          }
+           const diagramZoomWrap = document.getElementById('diagram-zoom-wrap');
+           if (diagramZoomWrap) {
+             // Note: Don't clear diagram-zoom-wrap entirely as it contains nested elements
+             // (diagram-zoom-inner, diagram-views) needed by renderDiagrams().
+           }
 
           // Populate past-scan and compare dropdowns from API
           const repoName = this.value.split('/').pop();
