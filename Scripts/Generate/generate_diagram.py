@@ -2314,8 +2314,12 @@ class HierarchicalDiagramBuilder:
         """
         # Use UUID if available, fall back to sanitized name
         uuid = resource.get('id')
-        if uuid:
-            return str(uuid)
+        if uuid is not None:
+            node_id_str = str(uuid)
+            # Mermaid node IDs cannot start with '-': prefix synthetic negative IDs
+            if node_id_str.startswith('-'):
+                return f"synthetic_{node_id_str[1:]}"
+            return node_id_str
         return sanitize_id(resource.get('resource_name', 'node'))
 
     def _get_node_label(self, resource: dict) -> str:
@@ -2659,15 +2663,19 @@ class HierarchicalDiagramBuilder:
         lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]")
 
         resources_by_namespace: Dict[str, List[dict]] = defaultdict(list)
-        emitted_node_ids: Set[str] = set()
         for res in workload_resources:
             # Use UUID directly for node ID - guaranteed unique
             node_id = self._get_node_id(res)
-            if node_id in emitted_node_ids:
+            # Global dedup: skip resources already rendered in a previous K8s cluster call
+            if node_id in self._emitted_mermaid_ids:
                 continue
-            emitted_node_ids.add(node_id)
+            self._emitted_mermaid_ids.add(node_id)
             namespace = self.get_kubernetes_namespace(res)
             resources_by_namespace[namespace].append(res)
+
+        if not resources_by_namespace:
+            # All workloads already rendered in another context - suppress this cluster
+            return []
 
         for namespace, namespace_resources in resources_by_namespace.items():
             # Use first resource's UUID to ensure unique namespace IDs across instances
@@ -2734,9 +2742,10 @@ class HierarchicalDiagramBuilder:
                             lines.append(line)
                     else:
                         # If no containers either, show pod template placeholder
-                        lines.append(f"        k8s_dep_pod_tpl[📦 Pod Template]")
+                        lines.append(f"        k8s_dep_pod_tpl_{dep_id}[📦 Pod Template]")
                 
                 lines.append("      end")
+                self._emitted_mermaid_ids.add(dep_id)
                 self.emitted_nodes.add(dep['resource_name'])
                 self.node_id_override[dep['resource_name']] = dep_id
 
@@ -2762,9 +2771,10 @@ class HierarchicalDiagramBuilder:
                             lines.append(line)
                     else:
                         # If no containers either, show pod template placeholder
-                        lines.append(f"        k8s_ss_pod_tpl[📦 Pod Template]")
+                        lines.append(f"        k8s_ss_pod_tpl_{ss_id}[📦 Pod Template]")
                 
                 lines.append("      end")
+                self._emitted_mermaid_ids.add(ss_id)
                 self.emitted_nodes.add(ss['resource_name'])
                 self.node_id_override[ss['resource_name']] = ss_id
 
@@ -2790,17 +2800,21 @@ class HierarchicalDiagramBuilder:
                             lines.append(line)
                     else:
                         # If no containers either, show job template placeholder
-                        lines.append(f"        k8s_cron_job_tpl[⏰ Job Pod]")
+                        lines.append(f"        k8s_cron_job_tpl_{cj_id}[⏰ Job Pod]")
                 
                 lines.append("      end")
+                self._emitted_mermaid_ids.add(cj_id)
                 self.emitted_nodes.add(cj['resource_name'])
                 self.node_id_override[cj['resource_name']] = cj_id
 
             # Render Services (network layer - NOT nested in deployments)
             for svc in services:
                 svc_id = self._get_node_id(svc)
+                if svc_id in self._emitted_mermaid_ids:
+                    continue
                 svc_label = self._wrap_mermaid_label(self._get_node_label(svc) + " (Service)")
                 lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
+                self._emitted_mermaid_ids.add(svc_id)
                 self.emitted_nodes.add(svc['resource_name'])
                 self.node_id_override[svc['resource_name']] = svc_id
 
@@ -2814,6 +2828,8 @@ class HierarchicalDiagramBuilder:
                     continue
                     
                 node_id = self._get_node_id(res)
+                if node_id in self._emitted_mermaid_ids:
+                    continue
                 name = res['resource_name']
                 props = res.get('properties', {})
                 image = str(props.get('image', '') or '').strip()
@@ -2826,6 +2842,7 @@ class HierarchicalDiagramBuilder:
                     label = self._wrap_mermaid_label(self._get_node_label(res))
                 
                 lines.append(f"      {node_id}[{self._quote_mermaid_label(label)}]")
+                self._emitted_mermaid_ids.add(node_id)
                 self.emitted_nodes.add(res['resource_name'])
                 self.node_id_override[res['resource_name']] = node_id
 
@@ -4269,13 +4286,24 @@ class HierarchicalDiagramBuilder:
         """
         lines = []
         
-        # Extract all subgraph IDs from the diagram (they appear in "subgraph ID[label]" lines)
+        # Extract all subgraph IDs and rendered leaf node IDs from the diagram.
+        # Styles must only reference IDs that actually exist in the diagram body.
         import re
         subgraph_ids = set()
+        all_rendered_ids = set()
         for line in diagram_lines:
-            match = re.search(r'\bsubgraph\s+(\w+)\[', line)
-            if match:
-                subgraph_ids.add(match.group(1))
+            m = re.search(r'\bsubgraph\s+([\w-]+)\[', line)
+            if m:
+                subgraph_ids.add(m.group(1))
+                all_rendered_ids.add(m.group(1))
+                continue
+            stripped = line.strip()
+            if stripped and not stripped.startswith(
+                ('end', 'style', 'linkStyle', 'flowchart', 'classDef', '%', 'internet', '--', '-.')
+            ):
+                m = re.match(r'^\s+([\w-]+)\s*[\[\(]', line)
+                if m:
+                    all_rendered_ids.add(m.group(1))
         
         # Category colors from old generator
         category_colors = {
@@ -4351,6 +4379,9 @@ class HierarchicalDiagramBuilder:
                     style_by_node_id[node_id] = (priority, color, 2)  # 2px stroke for regular resources
 
         for node_id in sorted(str(k) for k in style_by_node_id.keys()):
+            # Skip nodes that were never actually rendered in the diagram body
+            if node_id not in all_rendered_ids:
+                continue
             # Skip styling subgraph containers — Mermaid cannot style subgraph containers, only leaf nodes
             if node_id in subgraph_ids:
                 continue
