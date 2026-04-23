@@ -25,7 +25,13 @@ def _get_db():
         return None
 
 def _provider_title(provider: str) -> str:
-    return {"azure": "Azure", "aws": "AWS", "gcp": "GCP"}.get(provider, provider.upper())
+    return {
+        "azure": "Azure",
+        "aws": "AWS",
+        "gcp": "GCP",
+        "oci": "OCI",
+        "alicloud": "Alicloud",
+    }.get(provider, provider.upper())
 
 
 _K8S_PROVIDER_PREFERENCE = ("azure", "aws", "gcp")
