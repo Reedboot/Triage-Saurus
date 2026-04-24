@@ -24,8 +24,14 @@ class PathSummary:
     file_count: int
 
 
-def run_git_ls_files(repo_path: Path, rel_path: str | None = None) -> int:
-    """Return the count of git-tracked files under rel_path (or all files if None)."""
+def run_git_ls_files(
+    repo_path: Path, rel_path: str | None = None, exclude_patterns: List[str] | None = None
+) -> int:
+    """Return the count of git-tracked files under rel_path (or all files if None).
+
+    Files whose path contains any of the exclude_patterns substrings are not counted,
+    mirroring the --exclude flags that will be passed to opengrep.
+    """
     cmd = ["git", "-C", str(repo_path), "ls-files"]
     if rel_path:
         cmd.append(rel_path)
@@ -37,36 +43,26 @@ def run_git_ls_files(repo_path: Path, rel_path: str | None = None) -> int:
     output = result.stdout.strip()
     if not output:
         return 0
-    return len(output.splitlines())
+    lines = output.splitlines()
+    if exclude_patterns:
+        lines = [
+            line for line in lines
+            if not any(pat in line for pat in exclude_patterns)
+        ]
+    return len(lines)
 
 
-def gather_path_summaries(target: Path) -> List[PathSummary]:
+def gather_path_summaries(target: Path, exclude_patterns: List[str] | None = None) -> List[PathSummary]:
     """Collect tracked file counts for immediate children of the target directory."""
     summaries: List[PathSummary] = []
     for child in sorted(target.iterdir(), key=lambda p: p.name):
         if child.name == ".git":
             continue
         rel = child.name
-        count = run_git_ls_files(target, rel)
+        count = run_git_ls_files(target, rel, exclude_patterns)
         if count == 0:
             continue
         summaries.append(PathSummary(rel_path=rel, file_count=count))
-    # Include tracked files directly under the target directory (no subfolder)
-    loose_files = [
-        p.name for p in target.iterdir() if p.is_file() and p.name != ".gitignore"
-    ]
-    if loose_files:
-        tracked_loose = [
-            name for name in loose_files if run_git_ls_files(target, name) > 0
-        ]
-        if tracked_loose:
-            summaries.insert(
-                0,
-                PathSummary(
-                    rel_path=".",
-                    file_count=sum(run_git_ls_files(target, name) for name in tracked_loose),
-                ),
-            )
     return summaries
 
 
@@ -112,7 +108,10 @@ def build_chunks(
 def run_chunk(
     chunk: List[str], args: argparse.Namespace, cwd: Path, index: int, total: int
 ) -> int:
-    cmd = [args.opengrep, "scan", "--config", args.config, *chunk]
+    exclude_flags: List[str] = []
+    for pat in getattr(args, "exclude", None) or []:
+        exclude_flags += ["--exclude", pat]
+    cmd = [args.opengrep, "scan", "--config", args.config, *exclude_flags, *chunk]
     print(f"[chunk {index}/{total}] {' '.join(cmd)}")
     if args.dry_run:
         return 0
@@ -152,6 +151,17 @@ def parse_args() -> argparse.Namespace:
         help="opengrep executable to invoke (default: opengrep)",
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        metavar="PATTERN",
+        default=[],
+        help=(
+            "Glob pattern to exclude from scanning (passed to opengrep --exclude). "
+            "Also excluded when counting files to determine chunk sizes. "
+            "May be specified multiple times, e.g. --exclude '.python_packages'."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print planned chunks without running opengrep",
@@ -171,7 +181,7 @@ def main() -> int:
         print(f"Target '{target}' is not inside a git repository", file=sys.stderr)
         return 1
 
-    summaries = gather_path_summaries(target)
+    summaries = gather_path_summaries(target, args.exclude or None)
     chunks = build_chunks(summaries, args.max_files, args.max_paths)
     print(
         f"Prepared {len(chunks)} opengrep chunk(s) "
