@@ -343,6 +343,77 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "google_sql_user": {"parent_type": "google_sql_database_instance", "parent_field": "instance"},
     "google_container_node_pool": {"parent_type": "google_container_cluster", "parent_field": "cluster"},
     "google_firestore_document": {"parent_type": "google_firestore_database", "parent_field": "database"},
+    # GCP – Compute (extended)
+    "google_compute_route": {"parent_type": "google_compute_network", "parent_field": "network"},
+    "google_compute_router": {"parent_type": "google_compute_network", "parent_field": "network"},
+    "google_compute_router_nat": {"parent_type": "google_compute_router", "parent_field": "router"},
+    "google_compute_router_interface": {"parent_type": "google_compute_router", "parent_field": "router"},
+    "google_compute_router_peer": {"parent_type": "google_compute_router", "parent_field": "router"},
+    "google_compute_network_peering": {"parent_type": "google_compute_network", "parent_field": "network"},
+    "google_compute_attached_disk": {"parent_type": "google_compute_instance", "parent_field": "instance"},
+    "google_compute_subnetwork_iam_binding": {"parent_type": "google_compute_subnetwork", "parent_field": "subnetwork"},
+    "google_compute_subnetwork_iam_member": {"parent_type": "google_compute_subnetwork", "parent_field": "subnetwork"},
+    "google_compute_instance_iam_binding": {"parent_type": "google_compute_instance", "parent_field": "instance_name"},
+    "google_compute_instance_iam_member": {"parent_type": "google_compute_instance", "parent_field": "instance_name"},
+    "google_compute_region_target_http_proxy": {"parent_type": "google_compute_region_url_map", "parent_field": "url_map"},
+    "google_compute_region_target_https_proxy": {"parent_type": "google_compute_region_url_map", "parent_field": "url_map"},
+    # GCP – IAM / Service Accounts
+    "google_service_account_key": {"parent_type": "google_service_account", "parent_field": "service_account_id"},
+    "google_service_account_iam_binding": {"parent_type": "google_service_account", "parent_field": "service_account_id"},
+    "google_service_account_iam_member": {"parent_type": "google_service_account", "parent_field": "service_account_id"},
+    # GCP – Cloud SQL (extended)
+    "google_sql_ssl_cert": {"parent_type": "google_sql_database_instance", "parent_field": "instance"},
+    # GCP – BigQuery
+    "google_bigquery_table": {"parent_type": "google_bigquery_dataset", "parent_field": "dataset_id"},
+    "google_bigquery_dataset_iam_binding": {"parent_type": "google_bigquery_dataset", "parent_field": "dataset_id"},
+    "google_bigquery_dataset_iam_member": {"parent_type": "google_bigquery_dataset", "parent_field": "dataset_id"},
+    "google_bigquery_table_iam_binding": {"parent_type": "google_bigquery_table", "parent_field": "table_id"},
+    "google_bigquery_table_iam_member": {"parent_type": "google_bigquery_table", "parent_field": "table_id"},
+    "google_bigquery_reservation_assignment": {"parent_type": "google_bigquery_reservation", "parent_field": "reservation"},
+    # GCP – Pub/Sub
+    "google_pubsub_subscription": {"parent_type": "google_pubsub_topic", "parent_field": "topic"},
+    "google_pubsub_subscription_iam_binding": {"parent_type": "google_pubsub_subscription", "parent_field": "subscription"},
+    "google_pubsub_subscription_iam_member": {"parent_type": "google_pubsub_subscription", "parent_field": "subscription"},
+    "google_pubsub_topic_iam_binding": {"parent_type": "google_pubsub_topic", "parent_field": "topic"},
+    "google_pubsub_topic_iam_member": {"parent_type": "google_pubsub_topic", "parent_field": "topic"},
+    # GCP – Cloud KMS
+    "google_kms_crypto_key": {"parent_type": "google_kms_key_ring", "parent_field": "key_ring"},
+    "google_kms_crypto_key_version": {"parent_type": "google_kms_crypto_key", "parent_field": "crypto_key"},
+    "google_kms_crypto_key_iam_binding": {"parent_type": "google_kms_crypto_key", "parent_field": "crypto_key_id"},
+    "google_kms_crypto_key_iam_member": {"parent_type": "google_kms_crypto_key", "parent_field": "crypto_key_id"},
+    "google_kms_key_ring_iam_binding": {"parent_type": "google_kms_key_ring", "parent_field": "key_ring_id"},
+    "google_kms_key_ring_iam_member": {"parent_type": "google_kms_key_ring", "parent_field": "key_ring_id"},
+    # GCP – Spanner
+    "google_spanner_database": {"parent_type": "google_spanner_instance", "parent_field": "instance"},
+    "google_spanner_database_iam_binding": {"parent_type": "google_spanner_database", "parent_field": "database"},
+    "google_spanner_database_iam_member": {"parent_type": "google_spanner_database", "parent_field": "database"},
+    "google_spanner_instance_iam_binding": {"parent_type": "google_spanner_instance", "parent_field": "instance"},
+    "google_spanner_instance_iam_member": {"parent_type": "google_spanner_instance", "parent_field": "instance"},
+    # GCP – Secret Manager
+    "google_secret_manager_secret_version": {"parent_type": "google_secret_manager_secret", "parent_field": "secret"},
+    "google_secret_manager_secret_iam_binding": {"parent_type": "google_secret_manager_secret", "parent_field": "secret_id"},
+    "google_secret_manager_secret_iam_member": {"parent_type": "google_secret_manager_secret", "parent_field": "secret_id"},
+    # GCP – Artifact Registry
+    "google_artifact_registry_repository_iam_binding": {"parent_type": "google_artifact_registry_repository", "parent_field": "repository_id"},
+    "google_artifact_registry_repository_iam_member": {"parent_type": "google_artifact_registry_repository", "parent_field": "repository_id"},
+    # GCP – Cloud Run
+    "google_cloud_run_service_iam_binding": {"parent_type": "google_cloud_run_service", "parent_field": "name"},
+    "google_cloud_run_service_iam_member": {"parent_type": "google_cloud_run_service", "parent_field": "name"},
+    # GCP – Cloud Functions
+    "google_cloudfunctions_function_iam_binding": {"parent_type": "google_cloudfunctions_function", "parent_field": "cloud_function"},
+    "google_cloudfunctions_function_iam_member": {"parent_type": "google_cloudfunctions_function", "parent_field": "cloud_function"},
+    # GCP – DNS
+    "google_dns_record_set": {"parent_type": "google_dns_managed_zone", "parent_field": "managed_zone"},
+    # GCP – Bigtable
+    "google_bigtable_table": {"parent_type": "google_bigtable_instance", "parent_field": "instance_name"},
+    "google_bigtable_gc_policy": {"parent_type": "google_bigtable_table", "parent_field": "table"},
+    "google_bigtable_app_profile": {"parent_type": "google_bigtable_instance", "parent_field": "instance_name"},
+    "google_bigtable_instance_iam_binding": {"parent_type": "google_bigtable_instance", "parent_field": "instance_name"},
+    "google_bigtable_instance_iam_member": {"parent_type": "google_bigtable_instance", "parent_field": "instance_name"},
+    # GCP – Firestore (extended)
+    "google_firestore_index": {"parent_type": "google_firestore_database", "parent_field": "database"},
+    # GCP – Dataproc
+    "google_dataproc_job": {"parent_type": "google_dataproc_cluster", "parent_field": "cluster_name"},
     # --- Kubernetes ---
     "kubernetes_deployment": {"parent_type": "kubernetes_namespace", "parent_field": "namespace"},
     "kubernetes_service": {"parent_type": "kubernetes_namespace", "parent_field": "namespace"},
