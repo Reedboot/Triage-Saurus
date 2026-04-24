@@ -1981,6 +1981,14 @@ class HierarchicalDiagramBuilder:
                 subnet_children = self.children_by_parent.get(subnet_db_id, [])
                 subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
 
+                # Collect EKS/GKE/AKS managed-K8s cluster resources that are children of this subnet.
+                # These are network-tier resources but need special subgraph treatment with K8s nested inside.
+                _cluster_tokens = ('eks_cluster', 'container_cluster', 'kubernetes_cluster')
+                subnet_clusters = [
+                    c for c in subnet_children
+                    if any(tok in (c.get('resource_type') or '').lower() for tok in _cluster_tokens)
+                ]
+
                 # Find SGs whose resources live in this subnet (SGs are VPC-level in AWS,
                 # but we place them here if any of their protected resources are in this subnet)
                 subnet_compute_ids = {c.get('id') for c in subnet_computes}
@@ -1993,31 +2001,74 @@ class HierarchicalDiagramBuilder:
                     if any(c.get('id') in subnet_compute_ids for c in sg_children):
                         sgs_for_subnet.append(sg)
 
-                if subnet_computes or sgs_for_subnet:
+                # If subnet hosts an EKS/GKE cluster, pull unplaced VPC-level SGs into this subnet
+                # so they appear alongside the cluster they're protecting (visualisation only).
+                if subnet_clusters and not sgs_for_subnet:
+                    for sg in vpc_sgs:
+                        if sg['resource_name'] not in self.emitted_nodes:
+                            sgs_for_subnet.append(sg)
+
+                if subnet_computes or sgs_for_subnet or subnet_clusters:
                     subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                     lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                     self._emitted_mermaid_ids.add(subnet_node_id)
                     self._node_id_first_owner[subnet_node_id] = str(subnet_db_id or '')
 
                     if sgs_for_subnet:
-                        # Render SG as subgraph containing the compute resources it protects
+                        # Render SG as subgraph containing the compute resources it protects.
+                        # If there are no compute children (e.g. SG pulled in for EKS subnet),
+                        # render as a plain node to avoid an empty subgraph.
                         for sg in sgs_for_subnet:
                             sg_node_id = sanitize_id(sg['resource_name'])
                             sg_label   = self._wrap_mermaid_label(sg['resource_name'])
-                            lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::icon-aws-security-group')
-                            self._emitted_mermaid_ids.add(sg_node_id)
-                            self._node_id_first_owner[sg_node_id] = str(sg.get('id', ''))
-                            self.subgraph_nodes.add(sg['resource_name'])
-                            for compute in subnet_computes:
-                                if compute['resource_name'] not in self.emitted_nodes:
-                                    self._emit_compute_node(compute, lines, i3)
-                            lines.append(f'{i2}end')
+                            has_compute_to_wrap = bool(subnet_computes)
+                            if has_compute_to_wrap:
+                                lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::icon-aws-security-group')
+                                self._emitted_mermaid_ids.add(sg_node_id)
+                                self._node_id_first_owner[sg_node_id] = str(sg.get('id', ''))
+                                self.subgraph_nodes.add(sg['resource_name'])
+                                for compute in subnet_computes:
+                                    if compute['resource_name'] not in self.emitted_nodes:
+                                        self._emit_compute_node(compute, lines, i3)
+                                lines.append(f'{i2}end')
+                            else:
+                                # No compute to wrap — render SG as a plain node inside the subnet
+                                lines.append(self.render_node(sg, indent=i2))
                             self.emitted_nodes.add(sg['resource_name'])
                     else:
                         # No SG data — render compute directly in subnet
                         for compute in subnet_computes:
                             if compute['resource_name'] not in self.emitted_nodes:
                                 self._emit_compute_node(compute, lines, i2)
+
+                    # Render EKS/GKE/AKS managed-K8s clusters nested inside this subnet.
+                    # Each cluster becomes a subgraph with the Kubernetes workloads inside it.
+                    k8s_for_compute = getattr(self, '_k8s_for_compute', [])
+                    for cluster in subnet_clusters:
+                        if cluster['resource_name'] in self.emitted_nodes:
+                            continue
+                        cluster_node_id = sanitize_id(cluster['resource_name'])
+                        cluster_label   = self._wrap_mermaid_label(cluster['resource_name'])
+                        rtype = (cluster.get('resource_type') or '').lower()
+                        provider = (cluster.get('provider') or 'aws').lower()
+                        css_class = get_icon_class(rtype, provider) if rtype else None
+                        css_suffix = f':::{css_class}' if css_class else ''
+                        if k8s_for_compute:
+                            # Open cluster subgraph and nest K8s inside it
+                            lines.append(f'{i2}subgraph {cluster_node_id}[{self._quote_mermaid_label(cluster_label)}]{css_suffix}')
+                            self._emitted_mermaid_ids.add(cluster_node_id)
+                            self._node_id_first_owner[cluster_node_id] = str(cluster.get('id', ''))
+                            self.subgraph_nodes.add(cluster['resource_name'])
+                            self.node_id_override[cluster['resource_name']] = cluster_node_id
+                            # Render K8s cluster with extra indentation inside the EKS subgraph
+                            k8s_lines = self.render_kubernetes_cluster(k8s_for_compute, parent_context=cluster_node_id)
+                            extra = i2  # add two spaces of extra indent per nesting level
+                            for kl in k8s_lines:
+                                lines.append(extra + kl)
+                            lines.append(f'{i2}end')  # close cluster subgraph
+                        else:
+                            lines.append(self.render_node(cluster, indent=i2))
+                        self.emitted_nodes.add(cluster['resource_name'])
 
                     lines.append(f'{i1}end')
                 else:
@@ -4274,6 +4325,11 @@ class HierarchicalDiagramBuilder:
             and not self.is_terraform_metadata_resource(r)
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
+            # Exclude pure Kubernetes workload resources (kubernetes_networkpolicy, etc.) —
+            # they're rendered inside the K8s cluster subgraph, not in the cloud network tier.
+            # EKS/AKS cluster resources (aws_eks_cluster, azurerm_kubernetes_cluster) are NOT
+            # excluded because they ARE cloud network resources that anchor the K8s subgraph.
+            and not (self.is_kubernetes(r) and (r.get('resource_type') or '').lower().startswith('kubernetes_'))
         ]
         
         # Also collect compute resources early (EC2 instances, VMs, etc.) - they'll be rendered inside network tier
@@ -4308,8 +4364,9 @@ class HierarchicalDiagramBuilder:
         for compute in compute_resources:
             self.emitted_nodes.add(compute['resource_name'])
         
-        # Mark K8s resources as emitted only if they were rendered in compute (inside network).
-        # For standalone K8s (no compute resources), mark them after rendering.
+        # Mark K8s resources as emitted only if they were rendered in compute (inside network)
+        # OR inside an EKS/GKE cluster subgraph nested in a subnet (the new path).
+        # For standalone K8s (no compute AND no subnet EKS clusters), mark them after rendering.
         if compute_resources:
             for k8s in k8s_resources:
                 self.emitted_nodes.add(k8s['resource_name'])
@@ -4322,13 +4379,15 @@ class HierarchicalDiagramBuilder:
         
         # Render Kubernetes cluster standalone if there are K8s resources but no compute resources
         # (pure K8s repositories with no cloud provider infrastructure).
-        # If compute resources exist, K8s is already rendered nested inside them (line 1907).
+        # If K8s was already nested inside a subnet EKS cluster, emitted_nodes guards against re-rendering.
         if k8s_resources and not compute_resources:
-            k8s_lines = self.render_kubernetes_cluster(k8s_resources)
-            if k8s_lines:
-                lines.extend(k8s_lines)
-                lines.append("")
-            # Mark K8s resources as emitted after standalone rendering
+            already_rendered = any(r['resource_name'] in self.emitted_nodes for r in k8s_resources)
+            if not already_rendered:
+                k8s_lines = self.render_kubernetes_cluster(k8s_resources)
+                if k8s_lines:
+                    lines.extend(k8s_lines)
+                    lines.append("")
+            # Mark K8s resources as emitted
             for k8s in k8s_resources:
                 self.emitted_nodes.add(k8s['resource_name'])
         
