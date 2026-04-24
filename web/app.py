@@ -4148,12 +4148,14 @@ def api_icon_mappings():
             AZURE_RESOURCE_TYPE_TO_ICON,
             AWS_RESOURCE_TYPE_TO_ICON,
             GCP_RESOURCE_TYPE_TO_ICON,
+            KUBERNETES_RESOURCE_TYPE_TO_ICON,
         )
 
         provider_map = {
-            "azure": ("azure", AZURE_RESOURCE_TYPE_TO_ICON),
-            "aws":   ("aws",   AWS_RESOURCE_TYPE_TO_ICON),
-            "gcp":   ("gcp",   GCP_RESOURCE_TYPE_TO_ICON),
+            "azure":      ("azure",      AZURE_RESOURCE_TYPE_TO_ICON),
+            "aws":        ("aws",        AWS_RESOURCE_TYPE_TO_ICON),
+            "gcp":        ("gcp",        GCP_RESOURCE_TYPE_TO_ICON),
+            "kubernetes": ("kubernetes", KUBERNETES_RESOURCE_TYPE_TO_ICON),
         }
 
         icon_map: dict = {}
@@ -4166,7 +4168,10 @@ def api_icon_mappings():
 
         for pname, mapping in providers_to_merge:
             for resource_type, (category, icon_name) in mapping.items():
-                rel_path = f"/static/assets/icons/{pname}/{category}/{icon_name}.svg"
+                if category:
+                    rel_path = f"/static/assets/icons/{pname}/{category}/{icon_name}.svg"
+                else:
+                    rel_path = f"/static/assets/icons/{pname}/{icon_name}.svg"
                 # Later providers don't overwrite earlier ones so Azure stays canonical
                 icon_map.setdefault(resource_type, rel_path)
 

@@ -1055,8 +1055,33 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
         mapping = AWS_RESOURCE_TYPE_TO_ICON
     elif provider.lower() == 'gcp':
         mapping = GCP_RESOURCE_TYPE_TO_ICON
-    else:
+    elif provider.lower() in ('kubernetes', 'k8s'):
+        mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
+        if rtype in mapping:
+            category, icon_name = mapping[rtype]
+            # Kubernetes icons live directly in icons/kubernetes/
+            icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
+            if icon_file.exists():
+                return icon_file
         return None
+    else:
+        # Auto-detect provider from resource type prefix
+        if rtype.startswith('azurerm_'):
+            mapping = AZURE_RESOURCE_TYPE_TO_ICON
+        elif rtype.startswith('aws_'):
+            mapping = AWS_RESOURCE_TYPE_TO_ICON
+        elif rtype.startswith('google_'):
+            mapping = GCP_RESOURCE_TYPE_TO_ICON
+        elif rtype.startswith('kubernetes_'):
+            mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
+            if rtype in mapping:
+                category, icon_name = mapping[rtype]
+                icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
+                if icon_file.exists():
+                    return icon_file
+            return None
+        else:
+            return None
     
     # Try curated mapping first
     if rtype in mapping:
@@ -1144,6 +1169,27 @@ def get_fallback_icon_data_uri(provider: str = 'azure') -> Optional[str]:
             pass
     
     return None
+
+
+# Kubernetes resource type to icon mappings
+# Icons are stored in web/static/assets/icons/kubernetes/
+KUBERNETES_RESOURCE_TYPE_TO_ICON = {
+    'kubernetes_deployment': ('kubernetes', 'deployment'),
+    'kubernetes_daemonset': ('kubernetes', 'daemonset'),
+    'kubernetes_statefulset': ('kubernetes', 'statefulset'),
+    'kubernetes_service': ('kubernetes', 'service'),
+    'kubernetes_pod': ('kubernetes', 'pod'),
+    'kubernetes_namespace': ('kubernetes', 'namespace'),
+    'kubernetes_ingress': ('kubernetes', 'ingress'),
+    'kubernetes_job': ('kubernetes', 'job'),
+    'kubernetes_cronjob': ('kubernetes', 'cronjob'),
+    'kubernetes_configmap': ('kubernetes', 'configmap'),
+    'kubernetes_secret': ('kubernetes', 'secret'),
+    'kubernetes_cluster': ('kubernetes', 'cluster'),
+    'kubernetes_replicaset': ('kubernetes', 'deployment'),
+    'kubernetes_networkpolicy': ('kubernetes', 'ingress'),
+    'kubernetes_serviceaccount': ('kubernetes', 'service'),
+}
 
 
 def get_icon_class(resource_type: str, provider: str = 'azure') -> str:

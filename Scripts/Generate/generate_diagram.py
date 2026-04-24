@@ -197,6 +197,8 @@ class HierarchicalDiagramBuilder:
         # Track resource IDs that have been rendered as subgraphs to prevent duplicate subgraph
         # definitions when multiple resources with the same name appear in a parent-child chain
         self._rendered_subgraph_resource_ids: Set[str] = set()
+        # K8s services that need internet → service edges added after cluster rendering
+        self._k8s_internet_services: List[str] = []
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -584,17 +586,26 @@ class HierarchicalDiagramBuilder:
                     vm_id = vm_owner.get('id')
                     old_parent_id = resource_parent_map.get(nic_id)
                     
-                    # Remove from old parent (subnet)
+                    # Remove NIC from old parent (subnet)
                     if old_parent_id and old_parent_id in self.children_by_parent:
                         self.children_by_parent[old_parent_id] = [
                             r for r in self.children_by_parent[old_parent_id]
                             if r.get('id') != nic_id
                         ]
+                        # If the old parent was a subnet, add the VM as a logical child of
+                        # the subnet so the subnet still renders as a subgraph with the VM inside.
+                        old_parent_resource = self.resource_by_id.get(old_parent_id)
+                        if old_parent_resource and 'subnet' in (old_parent_resource.get('resource_type') or '').lower():
+                            already_there = any(r.get('id') == vm_id for r in self.children_by_parent[old_parent_id])
+                            if not already_there:
+                                self.children_by_parent[old_parent_id].append(vm_owner)
                     
-                    # Add to VM
+                    # Add NIC to VM (shows physical attachment)
                     if vm_id not in self.children_by_parent:
                         self.children_by_parent[vm_id] = []
-                    self.children_by_parent[vm_id].append(nic_resource)
+                    already_nic = any(r.get('id') == nic_id for r in self.children_by_parent[vm_id])
+                    if not already_nic:
+                        self.children_by_parent[vm_id].append(nic_resource)
                     resource_parent_map[nic_id] = vm_id
         
         except Exception as e:
@@ -1326,6 +1337,10 @@ class HierarchicalDiagramBuilder:
             'function_app', 'linux_function_app', 'windows_function_app',
             'app_service', 'linux_web_app', 'windows_web_app',
             'elastic_beanstalk',
+            'cloudfunctions_function', 'cloud_function',  # GCP
+            'app_engine', 'appengine',  # GCP App Engine
+            'cloud_run', 'cloudrun',  # GCP Cloud Run
+            'lambda_function',  # AWS Lambda
         ])
 
     def is_service_bus(self, resource: dict) -> bool:
@@ -1903,8 +1918,8 @@ class HierarchicalDiagramBuilder:
         lines.append('  subgraph network_tier["Network Tier"]')
         
         # Group resources by type
-        # Match VPC-like resources across providers: vpc, vnet, virtual_network, network
-        vpc_keywords = ['vpc', 'vnet', 'virtual_network']
+        # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
+        vpc_keywords = ['vpc', 'vnet', 'virtual_network', 'compute_network']
         vpcs = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in vpc_keywords)
                 and 'security' not in (r.get('resource_type') or '').lower()]
         # Match subnet-like resources across providers: subnet, vswitch, subnetwork, vpc_subnet
@@ -1912,7 +1927,8 @@ class HierarchicalDiagramBuilder:
         subnets = [r for r in network_resources if any(kw in (r.get('resource_type') or '').lower() for kw in subnet_keywords)
                    and 'security' not in (r.get('resource_type') or '').lower()]
         security_groups = [r for r in network_resources if 'security_group' in (r.get('resource_type') or '').lower()
-                           and 'rule' not in (r.get('resource_type') or '').lower()]
+                           and 'rule' not in (r.get('resource_type') or '').lower()
+                           and 'association' not in (r.get('resource_type') or '').lower()]
         security_group_rules = [r for r in network_resources if 'security_group_rule' in (r.get('resource_type') or '').lower()]
         gateways = [r for r in network_resources if any(x in (r.get('resource_type') or '').lower() 
                     for x in ['gateway', 'firewall', 'nat', 'load_balancer'])]
@@ -1942,6 +1958,41 @@ class HierarchicalDiagramBuilder:
                             and 'route_table' in (r.get('resource_type') or '').lower()
                             and 'association' not in (r.get('resource_type') or '').lower()]
             vpc_sgs      = [r for r in security_groups if r.get('id') in vpc_child_ids]
+
+            # Azure: NSGs may have parent=ROOT but are logically inside the VNet.
+            # Build the full descendant ID set for this VPC (subnets + their children).
+            all_vpc_desc_ids = set(vpc_child_ids)
+            for _s in vpc_subnets:
+                all_vpc_desc_ids.update(c.get('id') for c in self.children_by_parent.get(_s.get('id'), []))
+            # Also collect NIC names/IDs that belong to this VPC's subnets (before NIC-nesting
+            # transformation) by checking all resources whose parent is a VPC subnet.
+            _vpc_subnet_ids = {s.get('id') for s in vpc_subnets}
+            _nic_names_in_vpc = {
+                r['resource_name']
+                for r in self.resources
+                if r.get('parent_resource_id') in _vpc_subnet_ids
+                and 'network_interface' in (r.get('resource_type') or '').lower()
+                and 'association' not in (r.get('resource_type') or '').lower()
+            }
+            for sg in security_groups:
+                if sg['resource_name'] in self.emitted_nodes:
+                    continue
+                if sg.get('id') in all_vpc_desc_ids:
+                    continue  # already included via direct VPC child
+                sg_children = self.children_by_parent.get(sg.get('id'), [])
+                if any(c.get('id') in all_vpc_desc_ids for c in sg_children):
+                    vpc_sgs.append(sg)
+                    continue
+                # Azure: NSG with any NIC-SG-association child → it's associated with a NIC in
+                # this VPC. Pull the NSG into the VPC subgraph even if DB parent is ROOT.
+                if any(
+                    'network_interface_security_group_association' in (c.get('resource_type') or '').lower()
+                    or ('association' in (c.get('resource_type') or '').lower()
+                        and 'security_group' in (c.get('resource_type') or '').lower())
+                    for c in sg_children
+                ):
+                    if sg not in vpc_sgs:
+                        vpc_sgs.append(sg)
 
             # Determine indent levels — IGW wraps the whole VPC if attached
             igw = igw_ids_by_vpc_id.get(vpc_db_id)
@@ -1982,6 +2033,43 @@ class HierarchicalDiagramBuilder:
                 subnet_children = self.children_by_parent.get(subnet_db_id, [])
                 subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
 
+                # Azure: NICs are children of the subnet. Find VMs linked to those NICs.
+                subnet_nics = [
+                    c for c in subnet_children
+                    if 'network_interface' in (c.get('resource_type') or '').lower()
+                    and 'security_group' not in (c.get('resource_type') or '').lower()
+                    and 'association' not in (c.get('resource_type') or '').lower()
+                ]
+                if subnet_nics and compute_resources:
+                    nic_ids_in_subnet = {n.get('id') for n in subnet_nics}
+                    nic_names_in_subnet = {n.get('resource_name', '').lower() for n in subnet_nics}
+                    for comp in compute_resources:
+                        if comp['resource_name'] in self.emitted_nodes or comp in subnet_computes:
+                            continue
+                        # Check if this VM has a NIC that's in this subnet (via properties)
+                        vm_props = comp.get('properties', {}) or {}
+                        nic_refs = vm_props.get('network_interface_ids', [])
+                        if isinstance(nic_refs, str):
+                            nic_refs = [nic_refs]
+                        matched = any(
+                            any(nname in str(ref).lower() for nname in nic_names_in_subnet if nname)
+                            for ref in nic_refs
+                        )
+                        # Also match if VM's children include any subnet NIC
+                        if not matched:
+                            vm_children = self.children_by_parent.get(comp.get('id'), [])
+                            matched = any(c.get('id') in nic_ids_in_subnet for c in vm_children)
+                        # Heuristic: if only one VM and only one subnet with NICs, associate them
+                        if not matched and len(subnet_nics) > 0:
+                            all_vms_unplaced = [
+                                c for c in (compute_resources or [])
+                                if c['resource_name'] not in self.emitted_nodes
+                            ]
+                            if len(all_vms_unplaced) == 1:
+                                matched = True
+                        if matched:
+                            subnet_computes.append(comp)
+
                 # Collect EKS/GKE/AKS managed-K8s cluster resources that are children of this subnet.
                 # These are network-tier resources but need special subgraph treatment with K8s nested inside.
                 _cluster_tokens = ('eks_cluster', 'container_cluster', 'kubernetes_cluster')
@@ -2001,6 +2089,13 @@ class HierarchicalDiagramBuilder:
                     # SG is "for" this subnet if one of its child resources is a subnet compute
                     if any(c.get('id') in subnet_compute_ids for c in sg_children):
                         sgs_for_subnet.append(sg)
+                    # Azure: also match if NSG association's parent NIC is in this subnet
+                    elif any(
+                        'association' in (c.get('resource_type') or '').lower()
+                        and c.get('parent_resource_id') in {n.get('id') for n in subnet_nics}
+                        for c in sg_children
+                    ):
+                        sgs_for_subnet.append(sg)
 
                 # If subnet hosts an EKS/GKE cluster, pull unplaced VPC-level SGs into this subnet
                 # so they appear alongside the cluster they're protecting (visualisation only).
@@ -2009,7 +2104,7 @@ class HierarchicalDiagramBuilder:
                         if sg['resource_name'] not in self.emitted_nodes:
                             sgs_for_subnet.append(sg)
 
-                if subnet_computes or sgs_for_subnet or subnet_clusters:
+                if subnet_computes or sgs_for_subnet or subnet_clusters or subnet_nics:
                     subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
                     lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                     self._emitted_mermaid_ids.add(subnet_node_id)
@@ -2071,9 +2166,27 @@ class HierarchicalDiagramBuilder:
                             lines.append(self.render_node(cluster, indent=i2))
                         self.emitted_nodes.add(cluster['resource_name'])
 
+                    # Render NICs that are subnet children but not yet emitted (Azure)
+                    for nic in subnet_nics:
+                        if nic['resource_name'] not in self.emitted_nodes:
+                            lines.append(self.render_node(nic, indent=i2))
+                            self.emitted_nodes.add(nic['resource_name'])
+
                     lines.append(f'{i1}end')
                 else:
-                    lines.append(self.render_node(subnet, indent=i1))
+                    # Subnet has NICs or other children — render as subgraph but with leaf node content
+                    if subnet_nics:
+                        subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
+                        lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
+                        self._emitted_mermaid_ids.add(subnet_node_id)
+                        self._node_id_first_owner[subnet_node_id] = str(subnet_db_id or '')
+                        for nic in subnet_nics:
+                            if nic['resource_name'] not in self.emitted_nodes:
+                                lines.append(self.render_node(nic, indent=i2))
+                                self.emitted_nodes.add(nic['resource_name'])
+                        lines.append(f'{i1}end')
+                    else:
+                        lines.append(self.render_node(subnet, indent=i1))
 
                 self.emitted_nodes.add(subnet['resource_name'])
 
@@ -2082,6 +2195,21 @@ class HierarchicalDiagramBuilder:
                 if sg['resource_name'] not in self.emitted_nodes:
                     lines.append(self.render_node(sg, indent=i1))
                     self.emitted_nodes.add(sg['resource_name'])
+
+            # GCP / no-subnet fallback: if this VPC has no subnets in DB (e.g. GCP
+            # auto_create_subnetworks) but has unplaced compute resources, render them
+            # directly inside the VPC subgraph so they're not floating at tier level.
+            if not vpc_subnets and compute_resources:
+                for comp in compute_resources:
+                    if comp['resource_name'] not in self.emitted_nodes:
+                        self._emit_compute_node(comp, lines, i1)
+
+            # Render gateways/firewalls that are DB children of this VPC inside the VPC subgraph
+            # (e.g. GCP google_compute_firewall with parent=vpc)
+            for gw in gateways:
+                if gw['resource_name'] not in self.emitted_nodes and gw.get('parent_resource_id') == vpc['id']:
+                    lines.append(self.render_node(gw, indent=i1))
+                    self.emitted_nodes.add(gw['resource_name'])
 
             lines.append(f'{i0}end')  # close VPC
 
@@ -2188,6 +2316,13 @@ class HierarchicalDiagramBuilder:
         
         for res in network_resources:
             if res['resource_name'] not in self.emitted_nodes:
+                # Skip network attachment resources (NICs, NSG associations, etc.) whose
+                # parent resource was already rendered — they either got nested inside their
+                # parent subgraph or are administrative detail that adds noise at tier level.
+                parent_name = res.get('parent_resource_name') or ''
+                if parent_name and parent_name in self.emitted_nodes:
+                    self.emitted_nodes.add(res['resource_name'])
+                    continue
                 lines.append(self.render_node(res, indent="    "))
                 self.emitted_nodes.add(res['resource_name'])
         
@@ -2461,24 +2596,52 @@ class HierarchicalDiagramBuilder:
         return resource.get('name') or resource.get('resource_name', 'Unknown')
 
     def _emit_compute_node(self, compute: dict, lines: list, indent: str) -> None:
-        """Emit a single compute node line; marks it emitted. Used by render_network_hierarchy."""
+        """Emit a compute node (leaf or subgraph); marks it emitted. Used by render_network_hierarchy.
+
+        If the VM has NIC / extension children in the diagram hierarchy, renders it as a subgraph
+        so those children appear nested inside rather than floating at the network-tier level.
+        """
         if compute['resource_name'] in self.emitted_nodes:
             return
         is_public = self.is_public_ec2_instance(compute)
         icon = "📡" if is_public else "🔒"
         label = f"{icon} {compute['resource_name']}"
         c_id = self._get_node_id(compute)
-        if c_id not in self._emitted_mermaid_ids:
+        resource_type = (compute.get('resource_type') or '').lower()
+        provider = _detect_provider_from_resource(compute)
+        css_class = get_icon_class(resource_type, provider) if resource_type and provider not in ('unknown', 'terraform') else None
+        css_suffix = f':::{css_class}' if css_class else ''
+        c_label = self._wrap_mermaid_label(label)
+
+        # Check for renderable children (NICs, VM extensions, role assignments etc.)
+        _SKIP_CHILD_TYPES = frozenset({'iam_role', 'role_assignment', 'policy', 'user_assigned_identity'})
+        compute_children = self.children_by_parent.get(compute.get('id'), [])
+        renderable_children = [
+            c for c in compute_children
+            if c['resource_name'] not in self.emitted_nodes
+            and not any(tok in (c.get('resource_type') or '').lower() for tok in _SKIP_CHILD_TYPES)
+        ]
+
+        if renderable_children and c_id not in self._emitted_mermaid_ids:
+            # Render as subgraph so children appear nested inside
             self._emitted_mermaid_ids.add(c_id)
             self._node_id_first_owner[c_id] = str(compute.get('id', ''))
-            c_label = self._wrap_mermaid_label(label)
-            resource_type = (compute.get('resource_type') or '').lower()
-            provider = _detect_provider_from_resource(compute)
-            css_class = get_icon_class(resource_type, provider) if resource_type and provider not in ('unknown', 'terraform') else None
-            if css_class:
-                lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]:::{css_class}")
-            else:
-                lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]")
+            self.subgraph_nodes.add(compute['resource_name'])
+            lines.append(f'{indent}subgraph {c_id}[{self._quote_mermaid_label(c_label)}]{css_suffix}')
+            inner = indent + "  "
+            for child in renderable_children:
+                lines.append(self.render_node(child, indent=inner))
+                self.emitted_nodes.add(child['resource_name'])
+                child_id = self._get_node_id(child)
+                if child_id not in self._emitted_mermaid_ids:
+                    self._emitted_mermaid_ids.add(child_id)
+                    self._node_id_first_owner[child_id] = str(child.get('id', ''))
+            lines.append(f'{indent}end')
+        else:
+            if c_id not in self._emitted_mermaid_ids:
+                self._emitted_mermaid_ids.add(c_id)
+                self._node_id_first_owner[c_id] = str(compute.get('id', ''))
+                lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]{css_suffix}")
         self.node_id_override[compute['resource_name']] = c_id
         self.emitted_nodes.add(compute['resource_name'])
 
@@ -2840,7 +3003,7 @@ class HierarchicalDiagramBuilder:
             k8s_subgraph_id = "k8s"
             namespace_prefix = "k8s_ns"
         
-        lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]")
+        lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]:::icon-kubernetes-cluster")
         # Map all cluster resource names → subgraph ID so render_connections uses correct ID
         if cluster_resources:
             for r in cluster_resources:
@@ -2876,13 +3039,18 @@ class HierarchicalDiagramBuilder:
             namespace_id = f"{namespace_prefix}_{first_res_id}"
             # Add resource type to label for clarity (Namespace)
             namespace_display = f"Namespace - {namespace}"
-            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]")
+            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]:::icon-kubernetes-namespace")
 
             # Separate resources by type for proper nesting (use exact type matching, not substrings)
-            services = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_service']
-            deployments = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_deployment']
-            cronjobs = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_cronjob']
-            statefulsets = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_statefulset']
+            # Filter out Helm template variables ({{ ... }}) from resource names
+            def _is_valid_k8s_name(r):
+                name = r.get('resource_name', '')
+                return '{{' not in name and '}}' not in name
+
+            services = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_service' and _is_valid_k8s_name(r)]
+            deployments = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_deployment' and _is_valid_k8s_name(r)]
+            cronjobs = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_cronjob' and _is_valid_k8s_name(r)]
+            statefulsets = [r for r in namespace_resources if (r.get('resource_type') or '').lower() == 'kubernetes_statefulset' and _is_valid_k8s_name(r)]
             
             # other_workloads is everything else (RBAC, service accounts, etc.) - but we'll filter these later
             other_workloads = [r for r in namespace_resources 
@@ -2916,7 +3084,7 @@ class HierarchicalDiagramBuilder:
             for dep in deployments:
                 dep_id = self._get_node_id(dep)
                 dep_label = _render_workload_label(dep, "Deployment")
-                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
+                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]:::icon-kubernetes-deployment")
                 
                 # Add pods as children (if present in DB)
                 dep_children = self.children_by_parent.get(dep['id'], [])
@@ -2946,7 +3114,7 @@ class HierarchicalDiagramBuilder:
             for ss in statefulsets:
                 ss_id = self._get_node_id(ss)
                 ss_label = _render_workload_label(ss, "StatefulSet")
-                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
+                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]:::icon-kubernetes-statefulset")
                 
                 ss_children = self.children_by_parent.get(ss['id'], [])
                 pods = [c for c in ss_children if 'pod' in (c.get('resource_type') or '').lower()]
@@ -2975,7 +3143,7 @@ class HierarchicalDiagramBuilder:
             for cj in cronjobs:
                 cj_id = self._get_node_id(cj)
                 cj_label = _render_workload_label(cj, "CronJob")
-                lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]")
+                lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]:::icon-kubernetes-cronjob")
                 
                 cj_children = self.children_by_parent.get(cj['id'], [])
                 jobs = [c for c in cj_children if 'job' in (c.get('resource_type') or '').lower()]
@@ -3008,10 +3176,38 @@ class HierarchicalDiagramBuilder:
                 if svc['resource_name'] in self.emitted_nodes:
                     continue
                 svc_label = self._wrap_mermaid_label(self._get_node_label(svc) + " (Service)")
-                lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
+                # Determine service type for icon: LoadBalancer/NodePort get exposure icon
+                props = svc.get('properties', {}) or {}
+                svc_type = str(props.get('service_type', '') or props.get('type', '') or '').strip()
+                lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]:::icon-kubernetes-service")
                 self._emitted_mermaid_ids.add(svc_id)
                 self.emitted_nodes.add(svc['resource_name'])
                 self.node_id_override[svc['resource_name']] = svc_id
+
+            # Add Service → Deployment edges using name heuristics
+            # (K8s services select pods via labels; we approximate by name prefix matching)
+            for svc in services:
+                svc_id = self.node_id_override.get(svc['resource_name'])
+                if not svc_id:
+                    continue
+                svc_base = svc['resource_name'].replace('-service', '').replace('-svc', '').lower()
+                for dep in deployments:
+                    dep_id = self.node_id_override.get(dep['resource_name'])
+                    if not dep_id:
+                        continue
+                    dep_base = dep['resource_name'].replace('-deployment', '').lower()
+                    if svc_base and dep_base and (svc_base in dep_base or dep_base in svc_base):
+                        lines.append(f"      {svc_id} --> {dep_id}")
+
+            # Add internet → Service edges for LoadBalancer/NodePort services
+            for svc in services:
+                svc_id = self.node_id_override.get(svc['resource_name'])
+                if not svc_id:
+                    continue
+                props = svc.get('properties', {}) or {}
+                svc_type = str(props.get('service_type', '') or props.get('type', '') or '').strip()
+                if svc_type.lower() in ('loadbalancer', 'nodeport'):
+                    self._k8s_internet_services.append(svc_id)
 
             # Render other workloads (DaemonSet, Job, etc.)
             # But skip RBAC/account types (role, rolebinding, clusterrole, clusterrolebinding, serviceaccount)
@@ -3036,7 +3232,19 @@ class HierarchicalDiagramBuilder:
                 else:
                     label = self._wrap_mermaid_label(self._get_node_label(res))
                 
-                lines.append(f"      {node_id}[{self._quote_mermaid_label(label)}]")
+                # Map resource type to kubernetes icon CSS class
+                _K8S_TYPE_TO_ICON = {
+                    'kubernetes_daemonset': 'icon-kubernetes-daemonset',
+                    'kubernetes_job': 'icon-kubernetes-job',
+                    'kubernetes_pod': 'icon-kubernetes-pod',
+                    'kubernetes_configmap': 'icon-kubernetes-configmap',
+                    'kubernetes_secret': 'icon-kubernetes-secret',
+                    'kubernetes_networkpolicy': 'icon-kubernetes-ingress',
+                    'kubernetes_persistentvolumeclaim': 'icon-kubernetes-statefulset',
+                    'kubernetes_serviceaccount': 'icon-kubernetes-service',
+                }
+                icon_cls = _K8S_TYPE_TO_ICON.get(res_type, 'icon-kubernetes-pod')
+                lines.append(f"      {node_id}[{self._quote_mermaid_label(label)}]:::{icon_cls}")
                 self._emitted_mermaid_ids.add(node_id)
                 self.emitted_nodes.add(res['resource_name'])
                 self.node_id_override[res['resource_name']] = node_id
@@ -3548,6 +3756,12 @@ class HierarchicalDiagramBuilder:
         
         # Add all style lines at the end
         lines.extend(style_lines)
+
+        # Add internet → K8s LoadBalancer/NodePort service edges
+        if self._k8s_internet_services:
+            for svc_id in self._k8s_internet_services:
+                lines.append(f"  internet -.->|\"Public\"| {svc_id}")
+                has_internet = True
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
@@ -4099,6 +4313,8 @@ class HierarchicalDiagramBuilder:
             or 'iam_user' in (r.get('resource_type') or '').lower()
             or 'app_service_plan' in (r.get('resource_type') or '').lower()
             or 'service_plan' in (r.get('resource_type') or '').lower()
+            or 'random_id' in (r.get('resource_type') or '').lower()   # Terraform helper
+            or 'null_resource' in (r.get('resource_type') or '').lower()  # Terraform helper
         }
         all_children = set()
         for parent_id, children in self.children_by_parent.items():
