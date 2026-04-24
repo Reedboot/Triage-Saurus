@@ -4,6 +4,11 @@ rules:
       GCP firewall rule allows all TCP/UDP traffic (ports 0-65535) from any source
       (0.0.0.0/0). This exposes every service running on matched instances to the internet.
       Replace with specific port ranges and restrict source_ranges to known CIDR blocks.
+
+      ATTACK: nmap -sV -p- <instance-ip> → identify all running services across all ports → exploit any vulnerable service or use default credentials
+      TOOLS: nmap, masscan, metasploit, shodan, hydra, gcloud (gcloud compute firewall-rules list)
+      CHAIN: 0.0.0.0/0 all-ports rule → full port scan reveals every running service → exploit weakest service (DB, app server, admin panel) → OS shell → metadata service → service account token
+      IMPACT: Every service on every matched instance is internet-reachable; single vulnerable service or default credential leads to full instance and GCP identity compromise
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

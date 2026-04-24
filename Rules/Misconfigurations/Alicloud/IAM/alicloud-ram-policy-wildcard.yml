@@ -4,6 +4,10 @@ rules:
       RAM policy grants wildcard (*) permissions on Action or Resource.
       Wildcard permissions violate the principle of least privilege and can lead to privilege escalation.
       Restrict policy statements to only the required actions and specific resource ARNs.
+      ATTACK: compromised RAM identity → aliyun ram list-policies → confirm wildcard Action → perform any operation on any resource
+      TOOLS: aliyun-cli, ScoutSuite, Pacu (adapted)
+      CHAIN: credential compromise → RAM policy enumeration → wildcard permissions confirmed → full account resource access → data exfiltration
+      IMPACT: Full Alibaba Cloud account compromise; all services and data accessible to the overpermissioned identity
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

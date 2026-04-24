@@ -4,6 +4,10 @@ rules:
       OKE cluster API endpoint is publicly accessible.
       Set is_public_ip_enabled = false in the endpoint_config block
       to restrict API server access to private networks only.
+      ATTACK: kubectl --server https://<public-endpoint> get secrets → enumerate K8s resources → extract cluster secrets
+      TOOLS: kubectl, kube-hunter, k9s, Metasploit kubernetes modules
+      CHAIN: internet access → public K8s API discovery → stolen kubeconfig or RBAC misconfiguration → cluster enumeration → secret extraction
+      IMPACT: Full Kubernetes cluster compromise including all workloads, secrets, and service account tokens
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

@@ -5,6 +5,10 @@ rules:
       AdministratorAccess. These managed policies violate least privilege and give the
       attached workload far more access than it should have. Attach only the minimal
       policies required for the role's job.
+      ATTACK: Compromise workload with AdministratorAccess/IAMFullAccess → create new IAM user with admin rights → generate persistent access keys → full account control
+      TOOLS: aws-cli, Pacu, enumerate-iam, CloudSploit, Prowler, PMapper
+      CHAIN: Workload compromise → broad managed policy discovery → IAM admin exploitation → backdoor credential creation → full AWS account persistence
+      IMPACT: Full AWS account takeover; AdministratorAccess allows creating persistent backdoor credentials and accessing all services and data in the account
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

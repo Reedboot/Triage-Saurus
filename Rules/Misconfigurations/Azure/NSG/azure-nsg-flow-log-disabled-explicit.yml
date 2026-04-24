@@ -4,6 +4,10 @@ rules:
       Network Watcher flow log resource has logging explicitly disabled.
       Disabled flow logs mean network traffic will not be recorded for incident response or forensics.
       Set enabled = true and ensure retention_policy { enabled = true } with an adequate retention period.
+      ATTACK: Perform lateral movement through network with flow logs explicitly disabled → no traffic records captured → attack paths invisible to forensic investigation
+      TOOLS: nmap, Metasploit, Impacket, CrackMapExec, Azure Network Watcher
+      CHAIN: initial access → lateral movement through network segments → flow logs absent → no forensic trail → persistent undetected presence across network
+      IMPACT: No network traffic records for incident response; attack paths, lateral movement, and data exfiltration are completely invisible to forensic investigation
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -13,6 +13,10 @@ rules:
       
       Remediation: Use "awsvpc" network mode for Fargate tasks, or "bridge" for EC2
       tasks. Restrict IMDS access if host networking is required.
+      ATTACK: Exploit RCE in container → host network mode → curl 169.254.169.254/latest/meta-data/iam/security-credentials/<role> → steal IAM credentials
+      TOOLS: curl, aws-cli, Pacu, tcpdump, Metasploit, impacket
+      CHAIN: Container RCE → IMDS access via host network namespace → IAM role credential theft → AWS API calls as EC2 instance role → account compromise
+      IMPACT: IAM role credential theft and full host network access; attacker can sniff all EC2 network traffic and escalate to full AWS account compromise
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

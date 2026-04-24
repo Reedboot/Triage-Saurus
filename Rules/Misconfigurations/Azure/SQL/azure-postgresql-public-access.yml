@@ -4,6 +4,10 @@ rules:
       PostgreSQL Server has public network access enabled. This allows connections
       from the internet. Disable via `public_network_access_enabled = false` and
       use Private Endpoints.
+      ATTACK: Discover public port 5432 → spray default/leaked credentials → pg_dump all schemas
+      TOOLS: nmap, Hydra, psql, pg_dump, MicroBurst, Prowler, az-cli
+      CHAIN: internet-exposed PostgreSQL → credential spray → authenticated database access → full schema dump → data exfiltration
+      IMPACT: Complete database exfiltration including application credentials; potential RCE via COPY FROM PROGRAM
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

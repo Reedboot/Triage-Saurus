@@ -3,6 +3,10 @@ rules:
     message: |
       S3 bucket allows public access via ACL or public access block disabled.
       Ensure block_public_acls and block_public_policy are enabled and avoid public ACLs.
+      ATTACK: aws s3 ls s3://bucket (no creds) → enumerate objects → aws s3 cp to exfiltrate data → extract credentials if secrets stored in bucket
+      TOOLS: aws-cli, S3Scanner, GrayHatWarfare, bucket-finder, Pacu, truffleHog
+      CHAIN: Public bucket discovery → object enumeration → bulk exfiltration → credential theft if secrets stored → AWS account compromise via stolen keys
+      IMPACT: Full data exfiltration; potential credential theft enabling AWS account compromise; compliance violations for PII/PHI/PCI data stored in S3
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

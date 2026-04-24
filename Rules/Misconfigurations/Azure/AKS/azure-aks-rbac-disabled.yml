@@ -4,6 +4,10 @@ rules:
       AKS cluster has Kubernetes RBAC explicitly disabled.
       Without RBAC, all authenticated users have unrestricted access to cluster resources.
       Remove role_based_access_control block or set enabled = true.
+      ATTACK: Authenticate to AKS cluster with any valid credential → RBAC absent → access and modify all resources across all namespaces
+      TOOLS: kubectl, az-cli, Peirates, kube-hunter, AzureHound, Stormspotter
+      CHAIN: RBAC disabled → any authenticated user has implicit cluster-admin → kubectl get all -A → secret theft → privileged pod → node escape
+      IMPACT: Any authenticated user has unrestricted cluster-admin access; enables secrets theft, privilege escalation, and full node compromise
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

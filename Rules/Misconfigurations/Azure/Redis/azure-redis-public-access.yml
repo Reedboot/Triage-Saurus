@@ -3,6 +3,10 @@ rules:
     message: |
       Redis Cache has public network access enabled. This exposes the cache to the
       internet. Disable and use Private Endpoint.
+      ATTACK: Discover public Redis endpoint via Shodan → connect unauthenticated or with weak AUTH → dump all cache data → inject malicious values → session hijacking
+      TOOLS: redis-cli, nmap, Shodan, MicroBurst, Metasploit (redis module), Masscan
+      CHAIN: public endpoint discovery → unauthenticated or brute-forced Redis connection → cache data dump → session token injection → application account takeover
+      IMPACT: All cached data exposed (sessions, tokens, PII); session injection enables account takeover; cache poisoning corrupts application behavior
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

@@ -22,6 +22,10 @@ rules:
       Example fix:
         RUN addgroup -S appgroup && adduser -S appuser -G appgroup
         USER appuser
+      ATTACK: RCE via app vulnerability → root shell (UID 0) in container → write files/install backdoors → exploit container escape with full root privileges
+      TOOLS: deepce, amicontained, linpeas, docker inspect, trivy
+      CHAIN: root container → RCE yields root shell → unrestricted filesystem writes → capability abuse → container escape → node compromise
+      IMPACT: Any RCE yields root; amplified blast radius for all vulnerabilities; container escape attempts more likely to succeed; potential host compromise
     severity: WARNING
     languages: [dockerfile]
     patterns:

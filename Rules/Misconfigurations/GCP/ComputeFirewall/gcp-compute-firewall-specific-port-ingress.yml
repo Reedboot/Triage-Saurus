@@ -5,6 +5,11 @@ rules:
       on specific ports. Any instance matching the target tags or target service accounts
       is directly reachable from the internet on these ports.
       Restrict source_ranges to known CIDR blocks or use IAP / Cloud VPN for admin access.
+
+      ATTACK: nmap -p <port> 0.0.0.0/0 scan to find exposed instances → connect directly to service on matched port → brute-force or exploit service (SSH/RDP/DB/app)
+      TOOLS: nmap, masscan, shodan, hydra, metasploit, gcloud (gcloud compute firewall-rules list --filter="sourceRanges:0.0.0.0/0")
+      CHAIN: 0.0.0.0/0 ingress rule → internet-exposed service port → brute-force or CVE exploit → instance shell or service compromise → lateral movement to other VPC resources
+      IMPACT: Direct internet access to specific service ports on all matched instances; credential brute-force or unpatched service vulnerability leads to instance compromise
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

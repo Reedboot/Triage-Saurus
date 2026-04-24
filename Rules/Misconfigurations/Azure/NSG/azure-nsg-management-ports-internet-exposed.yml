@@ -4,6 +4,10 @@ rules:
       NSG rule allows SSH (22) or RDP (3389) inbound from the public internet.
       Exposing management ports to any source enables brute-force and exploitation attacks.
       Restrict source_address_prefix to specific trusted IP ranges or use Azure Bastion.
+      ATTACK: Discover public SSH/RDP port via Shodan → brute force credentials or exploit CVE → interactive shell on VM → query IMDS at 169.254.169.254 → steal managed identity token → full Azure access
+      TOOLS: nmap, Shodan, Hydra, Medusa, xfreerdp, ssh, curl (IMDS), MicroBurst
+      CHAIN: public SSH/RDP discovery → brute force or CVE exploit → interactive session → IMDS query → managed identity token → Azure API access → lateral movement
+      IMPACT: Full VM compromise via internet-exposed management port; managed identity token grants access to all Azure resources the identity can reach
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

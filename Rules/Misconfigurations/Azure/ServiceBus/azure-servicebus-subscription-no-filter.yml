@@ -21,6 +21,10 @@ rules:
       
       Note: This is INFO severity as it's more of an efficiency/design issue
       unless the service processes untrusted message types (then WARNING).
+      ATTACK: Gain queue/topic access → send crafted unexpected message type to unfiltered subscription → consumer processes untrusted payload without type validation → injection or logic error
+      TOOLS: az-cli, Azure Service Bus SDK, ServiceBusExplorer, MicroBurst
+      CHAIN: unfiltered subscription → inject unexpected message type or malformed payload → consumer processes without message-type validation → payload injection or logic error in consumer
+      IMPACT: Consumers forced to handle all message types including malicious ones; potential injection or business logic errors; downstream services manipulated via crafted messages
     severity: INFO
     languages: [terraform, hcl]
     patterns:

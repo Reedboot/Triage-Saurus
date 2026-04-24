@@ -8,6 +8,10 @@ rules:
 
       Set enable_key_rotation = true on aws_kms_key resources to rotate key material
       automatically every 365 days. Note: rotation only applies to symmetric CMKs.
+      ATTACK: Exfiltrate or compromise KMS key material (insider/supply chain) → decrypt all data encrypted under that key → retroactive plaintext access
+      TOOLS: aws-cli, Pacu, CloudSploit, ScoutSuite, kms-key-analyzer
+      CHAIN: KMS key compromise (insider/exfiltration) → no rotation means key valid indefinitely → decrypt all encrypted data retroactively without expiry
+      IMPACT: Perpetual decryption capability for all data encrypted under the key; no rotation means the compromise window and blast radius are unbounded
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -11,7 +11,11 @@ rules:
       
       Remediation: Either set external_enabled = false (internal only) or add
       IP restriction rules via the ingress.ip_security_restriction blocks.
-    severity: WARNING
+      ATTACK: Enumerate public Container App URL → exploit application vulnerability or SSRF → query IMDS at 169.254.169.254 → steal managed identity token → Azure resource abuse
+      TOOLS: nmap, Shodan, Burp Suite, curl (IMDS), az-cli, MicroBurst, ffuf
+      CHAIN: public ingress discovery → application exploit or SSRF → IMDS token theft → managed identity abuse → lateral movement to Azure resources
+      IMPACT: Containerized workload directly reachable from internet; SSRF and RCE paths to managed identity token theft and full Azure resource access
+    severity:WARNING
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

@@ -9,6 +9,10 @@ rules:
 
       Set ssl_enable = "Enable" on alicloud_kvstore_instance resources. Also
       ensure Redis is not publicly accessible by restricting security group rules.
+      ATTACK: tcpdump on network path → capture Redis AUTH command in plaintext → replay credentials → execute arbitrary Redis commands
+      TOOLS: tcpdump, Wireshark, redis-cli, arpspoof, Bettercap
+      CHAIN: network positioning → plaintext Redis traffic capture → AUTH credential theft → Redis authentication → arbitrary command execution
+      IMPACT: Full Redis cache access; credential theft, session data exposure, and potential RCE via Redis commands
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

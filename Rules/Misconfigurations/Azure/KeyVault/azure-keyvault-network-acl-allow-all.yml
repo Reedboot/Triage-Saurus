@@ -4,7 +4,11 @@ rules:
       Key Vault network ACLs set to 'Allow' by default.
       This allows access from any network. Set default_action to 'Deny'
       and whitelist specific networks/IPs.
-    severity: WARNING
+      ATTACK: Compromise identity with Key Vault access → connect from any internet IP → enumerate secrets → exfiltrate all credentials → lateral movement using stolen secrets
+      TOOLS: az-cli, MicroBurst, AzureHound, curl, Stormspotter
+      CHAIN: identity compromise → Key Vault access from any internet IP (default Allow) → secret exfiltration → lateral movement across all services using those credentials
+      IMPACT: Default Allow network policy means any compromised identity with KV permissions can reach vault globally; no IP-based restriction as defense-in-depth
+    severity:WARNING
     languages: [terraform, hcl]
     patterns:
       - pattern: |

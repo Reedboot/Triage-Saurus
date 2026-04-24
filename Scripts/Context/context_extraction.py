@@ -1,6 +1,8 @@
 # context_extraction.py
 import json
+import os
 import re
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -45,7 +47,8 @@ _DOCKER_FROM_RE = re.compile(r'^\s*FROM\s+([^\s]+)(?:\s+AS\s+([A-Za-z0-9_\-\.]+)
 
 # Timeout for opengrep subprocesses (seconds). Prevents pipeline from hanging
 # indefinitely if opengrep blocks or encounters unexpected input.
-OPENGREP_TIMEOUT_SECONDS = 120
+# Each rule file gets this budget; 19 rules × 30s = 570s worst-case.
+OPENGREP_TIMEOUT_SECONDS = 30
 
 
 def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
@@ -53,6 +56,19 @@ def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
         return []
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
+    # Restrict scan to relevant IaC and config file types only — avoids scanning
+    # large compiled artefacts, vendor trees, and binary files which dramatically
+    # slow down generic-language rules.
+    _INCLUDE_EXTS = ["*.tf", "*.tfvars", "*.hcl", "*.yaml", "*.yml", "*.json",
+                     "*.py", "*.js", "*.ts", "*.cs", "*.go", "*.java", "*.rb"]
+    _EXCLUDE_DIRS = [".git", ".terraform", "node_modules", "vendor", "__pycache__",
+                     ".tox", "dist", "build", "target", ".eggs"]
+    include_flags: list[str] = []
+    for ext in _INCLUDE_EXTS:
+        include_flags += ["--include", ext]
+    exclude_flags: list[str] = []
+    for d in _EXCLUDE_DIRS:
+        exclude_flags += ["--exclude-dir", d]
     cmd = [
         "opengrep", "scan",
         "--config", str(config_path),
@@ -60,15 +76,39 @@ def _run_opengrep_scan(config_path: Path, target_path: Path) -> list[dict]:
         "--json",
         "--output", str(tmp_path),
         "--quiet",
-    ]
+        "--no-git-ignore",   # prevents spawning git subprocesses that outlive timeout
+    ] + include_flags + exclude_flags
+    proc = None
     try:
-        # Add a timeout to prevent an indefinite hang if opengrep blocks.
-        subprocess.run(cmd, capture_output=True, text=True, timeout=OPENGREP_TIMEOUT_SECONDS)
+        # Run in its own process group so we can kill the entire tree on timeout.
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        proc.wait(timeout=OPENGREP_TIMEOUT_SECONDS)
     except FileNotFoundError:
         # opengrep not installed — treat as no results
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         return []
     except subprocess.TimeoutExpired:
-        # opengrep timed out — return no hits but continue the pipeline
+        # Kill entire process group (opengrep + any git/child processes)
+        if proc is not None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
         try:
             tmp_path.unlink(missing_ok=True)
         except Exception:
@@ -718,12 +758,37 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             "--json",
             "--output", str(tmp_path),
             "--quiet",
+            "--no-git-ignore",
+            "--include", "*.yaml",
+            "--include", "*.yml",
+            "--exclude-dir", ".git",
+            "--exclude-dir", ".terraform",
+            "--exclude-dir", "node_modules",
         ]
+        proc_k8s = None
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=OPENGREP_TIMEOUT_SECONDS)
+            proc_k8s = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            proc_k8s.wait(timeout=OPENGREP_TIMEOUT_SECONDS)
         except FileNotFoundError:
             return []
         except subprocess.TimeoutExpired:
+            if proc_k8s is not None:
+                try:
+                    os.killpg(os.getpgid(proc_k8s.pid), signal.SIGKILL)
+                except Exception:
+                    try:
+                        proc_k8s.kill()
+                    except Exception:
+                        pass
+                try:
+                    proc_k8s.wait(timeout=5)
+                except Exception:
+                    pass
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
@@ -794,6 +859,25 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             props = {"manifest_kind": kind, "source": "opengrep_detection"}
             if namespace:
                 props["k8s_namespace"] = namespace
+
+            # For Services, read source file and find the specific YAML doc to extract spec.type
+            if kind == "Service":
+                try:
+                    svc_text = source_path.read_text(errors="ignore")
+                    # Split into YAML documents and find the one matching this service name
+                    for svc_doc in re.split(r'^\s*---\s*$', svc_text, flags=re.MULTILINE):
+                        name_chk = re.search(r'^\s*name:\s*(\S+)', svc_doc, re.MULTILINE)
+                        kind_chk = re.search(r'^\s*kind:\s*Service\b', svc_doc, re.MULTILINE)
+                        if kind_chk and name_chk and name_chk.group(1).strip() == name:
+                            svc_type_m = re.search(r'^\s*type:\s*(\S+)', svc_doc, re.MULTILINE)
+                            if svc_type_m:
+                                svc_type = svc_type_m.group(1).strip()
+                                props["service_type"] = svc_type
+                                if svc_type == "LoadBalancer":
+                                    props["internet_ingress_open"] = "true"
+                            break
+                except Exception:
+                    pass
             
             resources.append(
                 Resource(
@@ -864,6 +948,15 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             props = {"manifest_kind": kind, "source": "kubernetes_manifest"}
             if namespace:
                 props["k8s_namespace"] = namespace
+
+            # For Services, extract spec.type so LoadBalancer exposure is detectable
+            if kind == "Service":
+                svc_type_m = re.search(r'^\s*type:\s*(\S+)', doc, re.MULTILINE)
+                if svc_type_m:
+                    svc_type = _clean_value(svc_type_m.group(1))
+                    props["service_type"] = svc_type
+                    if svc_type == "LoadBalancer":
+                        props["internet_ingress_open"] = "true"
 
             resources.append(
                 Resource(
@@ -1691,6 +1784,79 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
     # Parse Terraform resource + data blocks with source location.
     block_re = re.compile(r'^\s*(resource|data)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?\s+"([^"]+)"')
+    # Also match module call blocks: module "name" { source = "..." }
+    # We do NOT add these as resources — instead we resolve their source and
+    # include the resources they create.  Registry modules (no leading ./ or ../)
+    # are handled via a known-module lookup table; local modules are scanned recursively.
+    module_block_re = re.compile(r'^\s*module\s+"([^"]+)"')
+
+    # Known registry-module → resource-type mappings (covers common public modules)
+    KNOWN_MODULE_RESOURCES: dict[str, list[str]] = {
+        "terraform-aws-modules/vpc/aws":           ["aws_vpc", "aws_subnet", "aws_internet_gateway", "aws_route_table"],
+        "terraform-aws-modules/eks/aws":           ["aws_eks_cluster", "aws_eks_node_group"],
+        "terraform-aws-modules/rds/aws":           ["aws_db_instance", "aws_db_subnet_group"],
+        "terraform-aws-modules/s3-bucket/aws":     ["aws_s3_bucket"],
+        "terraform-aws-modules/iam/aws//modules/iam-role": ["aws_iam_role"],
+        "terraform-aws-modules/security-group/aws": ["aws_security_group"],
+        "terraform-aws-modules/alb/aws":           ["aws_lb", "aws_lb_listener", "aws_lb_target_group"],
+        "terraform-aws-modules/lambda/aws":        ["aws_lambda_function"],
+        "terraform-google-modules/network/google": ["google_compute_network", "google_compute_subnetwork"],
+        "terraform-google-modules/kubernetes-engine/google": ["google_container_cluster", "google_container_node_pool"],
+        "Azure/aks/azurerm":                       ["azurerm_kubernetes_cluster"],
+        "Azure/network/azurerm":                   ["azurerm_virtual_network", "azurerm_subnet"],
+    }
+
+    def _resolve_module_source(file: "Path", source: str, module_name: str) -> list[Resource]:
+        """Resolve a module source to concrete Resource objects.
+
+        For local modules (source starts with ./ or ../) the module directory
+        is scanned for .tf resource blocks.  For registry modules a lookup
+        table provides a best-effort list of likely resource types."""
+        resolved: list[Resource] = []
+        if source.startswith("./") or source.startswith("../"):
+            module_dir = (file.parent / source).resolve()
+            if module_dir.is_dir():
+                tf_files = list(module_dir.glob("*.tf"))
+                inner_re = re.compile(r'^\s*resource\s+"([A-Za-z_][A-Za-z0-9_]*)"\s+"([^"]+)"')
+                for tf_file in tf_files:
+                    try:
+                        inner_content = tf_file.read_text(errors="ignore")
+                    except Exception:
+                        continue
+                    for line in inner_content.splitlines():
+                        im = inner_re.match(line)
+                        if im:
+                            rtype, rname = im.groups()
+                            resolved.append(Resource(
+                                name=rname,
+                                resource_type=rtype,
+                                file_path=str(tf_file),
+                                properties={
+                                    "terraform_block": "resource",
+                                    "via_module": module_name,
+                                    "module_source": source,
+                                },
+                            ))
+        else:
+            # Registry module — normalise the source key (strip version suffix)
+            source_key = source.split("?")[0].rstrip("/")
+            for pattern, types in KNOWN_MODULE_RESOURCES.items():
+                if source_key == pattern or source_key.startswith(pattern.split("//")[0]):
+                    for rtype in types:
+                        resolved.append(Resource(
+                            name=f"{module_name}_{rtype.split('_', 1)[-1]}",
+                            resource_type=rtype,
+                            file_path=str(file),
+                            properties={
+                                "terraform_block": "resource",
+                                "via_module": module_name,
+                                "module_source": source,
+                                "inferred_from_registry_module": "true",
+                            },
+                        ))
+                    break
+        return resolved
+
     # Detect attribute references to other resources: type.name.attr
     # Note: this regex matches TYPE.NAME (the capture group) followed by .ATTR.
     # For data source references like data.TYPE.NAME.attr, the leading `data.TYPE`
@@ -1701,6 +1867,8 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
     # First pass: collect all resources and build a lookup map
     resource_blocks: list[tuple[Resource, str]] = []  # (resource, raw_block_text)
+    # Track (resource_type, name) pairs to avoid duplicates — including module-inferred resources
+    known_resource_keys: set[tuple[str, str]] = set()
     for file in sorted(f for f in files if f.suffix == ".tf"):
         try:
             rel = str(file.relative_to(repo_path))
@@ -1713,6 +1881,31 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         lines = content.splitlines()
         i = 0
         while i < len(lines):
+            # Check for module block first — must NOT become a resource node
+            mm = module_block_re.match(lines[i])
+            if mm:
+                module_name = mm.group(1)
+                # Collect the block body
+                depth = 0
+                mod_lines = []
+                for j in range(i, min(i + 60, len(lines))):
+                    mod_lines.append(lines[j])
+                    depth += lines[j].count("{") - lines[j].count("}")
+                    if j > i and depth <= 0:
+                        break
+                mod_text = "\n".join(mod_lines)
+                src_m = re.search(r'source\s*=\s*"([^"]+)"', mod_text)
+                if src_m:
+                    module_resources = _resolve_module_source(file, src_m.group(1), module_name)
+                    for mr in module_resources:
+                        key = (mr.resource_type, mr.name)
+                        if key not in known_resource_keys:
+                            context.resources.append(mr)
+                            resource_blocks.append((mr, ""))
+                            known_resource_keys.add(key)
+                i += len(mod_lines)
+                continue
+
             m = block_re.match(lines[i])
             if m:
                 block_kind, resource_type, name = m.groups()
@@ -1745,13 +1938,14 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 )
                 resource_blocks.append((resource, block_text))
                 context.resources.append(resource)
+                known_resource_keys.add((resource_type, name))
             i += 1
 
     # Build lookup: "type.name" → resource
     res_lookup: Dict[str, Resource] = {
         f"{r.resource_type}.{r.name}": r for r, _ in resource_blocks
     }
-    known_resource_keys: set[tuple[str, str]] = {(r.resource_type, r.name) for r in context.resources}
+    # known_resource_keys already populated above (including module-inferred resources)
 
     for manifest_resource in extract_kubernetes_manifest_resources(files, repo_path):
         key = (manifest_resource.resource_type, manifest_resource.name)
@@ -1924,6 +2118,49 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             return False
         text = str(value).lower()
         return any(token in text for token in ("0.0.0.0/0", "::/0", "\"*\"", " internet", "any"))
+
+    # RFC1918 private ranges — never considered internet-facing
+    _RFC1918_PREFIXES = ("10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                         "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                         "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+                         "172.30.", "172.31.", "192.168.", "127.", "169.254.")
+    _SPECIAL_PREFIXES = ("fd", "fe80", "::1")  # IPv6 private/link-local
+
+    def _cidr_exposure_level(cidr_list: list[str]) -> str:
+        """Classify a list of source CIDRs into an exposure tier.
+
+        Returns:
+          'open'       – contains 0.0.0.0/0 or ::/0  (fully internet exposed)
+          'broad'      – contains a public CIDR with prefix ≤ /16 (broad internet exposure)
+          'restricted' – contains at least one public CIDR but all are /17 or narrower
+          'private'    – all CIDRs are RFC1918 / loopback / link-local
+        """
+        import ipaddress
+        has_public = False
+        has_broad_public = False
+        for cidr in cidr_list:
+            cidr = cidr.strip()
+            if not cidr:
+                continue
+            if cidr in ("0.0.0.0/0", "::/0"):
+                return "open"
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+                if net.is_private or net.is_loopback or net.is_link_local:
+                    continue
+                # It's a public address
+                has_public = True
+                # Broad: /16 or larger (prefix_length <= 16 means more hosts)
+                if net.prefixlen <= 16:
+                    has_broad_public = True
+            except ValueError:
+                # Can't parse — treat conservatively as potentially public
+                has_public = True
+        if has_broad_public:
+            return "broad"
+        if has_public:
+            return "restricted"
+        return "private"
 
     for resource, block_text in resource_blocks:
         props = resource.properties or {}
@@ -2199,9 +2436,29 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 if protocol:
                     props["protocol"] = str(protocol).lower()
 
+        # GCP compute instance — external IP via access_config block
+        if resource_type == "google_compute_instance":
+            if re.search(r'access_config\s*\{', block_text, re.I):
+                props["has_public_ip"] = "true"
+                _append_signal(props, "compute instance has access_config (external/NAT IP)")
+            if re.search(r'network_tier\s*=\s*"(PREMIUM|STANDARD)"', block_text, re.I):
+                props["network_tier"] = "external"
+
+        # GCP Cloud Function — HTTP trigger makes it internet-accessible
+        if resource_type == "google_cloudfunctions_function":
+            # trigger_http present = HTTPS endpoint exposed
+            if re.search(r'trigger_http\s*=\s*true', block_text, re.I):
+                props["internet_access"] = "true"
+                _append_signal(props, "cloud function has trigger_http=true")
+            # https_trigger_url reference in block also signals HTTP trigger
+            elif re.search(r'https_trigger_url', block_text, re.I):
+                props["internet_access"] = "true"
+                _append_signal(props, "cloud function exposes https_trigger_url")
+
         # GCP firewall rule
         if resource_type == "google_compute_firewall":
-            direction = str(attrs.get("direction", "")).strip().upper()
+            # GCP default direction is INGRESS when the attribute is omitted
+            direction = str(attrs.get("direction", "INGRESS")).strip().upper() or "INGRESS"
             
             # Extract source_ranges explicitly
             source_ranges_match = re.search(r'source_ranges\s*=\s*\[(.*?)\]', block_text, re.S | re.I)
@@ -2210,25 +2467,31 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 ranges_str = source_ranges_match.group(1)
                 source_ranges = [r.strip().strip('"').strip("'") for r in ranges_str.split(',')]
                 props["source_ranges"] = ",".join(source_ranges)
-            
-            # Check if open to world
-            is_open_to_world = any('0.0.0.0/0' in r or '::/0' in r for r in source_ranges) or _is_world_source(block_text)
-            
-            if direction == "INGRESS" and is_open_to_world:
-                props["internet_ingress_open"] = "true"
-                _append_signal(props, "firewall rule ingress from internet")
-                
-                # Extract port information if specified
-                # GCP uses source_ranges and allowed/denied blocks
+
+            if direction == "INGRESS" and source_ranges:
+                exposure = _cidr_exposure_level(source_ranges)
+                # Extract allowed ports for context regardless of exposure level
                 allowed_blocks = re.findall(r'allowed\s*\{(.*?)\}', block_text, re.S | re.I)
+                ports = []
                 if allowed_blocks:
-                    ports = []
                     for allowed_body in allowed_blocks:
                         port_matches = re.findall(r'ports\s*=\s*\[(.*?)\]', allowed_body, re.S)
                         for port_match in port_matches:
                             ports.extend([p.strip().strip('"').strip("'") for p in port_match.split(',')])
-                    if ports:
-                        props["ports"] = ",".join(ports)
+                if ports:
+                    props["ports"] = ",".join(ports)
+
+                if exposure == "open":
+                    props["internet_ingress_open"] = "true"
+                    _append_signal(props, "firewall rule: ingress from 0.0.0.0/0")
+                elif exposure == "broad":
+                    props["broad_cidr_ingress"] = "true"
+                    props["exposure_scope"] = ",".join(source_ranges)
+                    _append_signal(props, f"firewall rule: ingress from broad public CIDR {','.join(source_ranges)}")
+                elif exposure == "restricted":
+                    props["restricted_ingress"] = "true"
+                    props["exposure_scope"] = ",".join(source_ranges)
+                    _append_signal(props, f"firewall rule: ingress restricted to {','.join(source_ranges)}")
 
         # Azure Network Security Rule
         if resource_type == "azurerm_network_security_rule":
@@ -2308,6 +2571,37 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             if subnet_refs:
                 props["subnet_refs"] = subnet_refs
             sg_refs = _extract_tf_reference_labels(attrs.get("security_groups"), "aws_security_group")
+            if sg_refs:
+                props["security_group_refs"] = sg_refs
+
+        # AWS RDS: extract SG refs from vpc_security_group_ids
+        if resource_type in {"aws_db_instance", "aws_rds_cluster"}:
+            sg_refs = _extract_tf_reference_labels(attrs.get("vpc_security_group_ids"), "aws_security_group")
+            if sg_refs:
+                props["security_group_refs"] = sg_refs
+
+        # AWS ECS: security_groups lives inside network_configuration block
+        if resource_type in {"aws_ecs_service", "aws_ecs_task_definition"}:
+            net_cfg = attrs.get("network_configuration") or attrs.get("network_configuration.security_groups")
+            sg_refs = _extract_tf_reference_labels(net_cfg, "aws_security_group") if net_cfg else []
+            if not sg_refs:
+                # Fallback: some parsers flatten it as security_groups directly
+                sg_refs = _extract_tf_reference_labels(attrs.get("security_groups"), "aws_security_group")
+            if sg_refs:
+                props["security_group_refs"] = sg_refs
+
+        # AWS Autoscaling / Launch Config / Launch Template
+        if resource_type in {"aws_autoscaling_group", "aws_launch_configuration", "aws_launch_template"}:
+            sg_refs = _extract_tf_reference_labels(attrs.get("security_groups"), "aws_security_group")
+            if sg_refs:
+                props["security_group_refs"] = sg_refs
+
+        # AWS Lambda (VPC-attached functions)
+        if resource_type == "aws_lambda_function":
+            vpc_cfg = attrs.get("vpc_config") or attrs.get("vpc_config.security_group_ids")
+            sg_refs = _extract_tf_reference_labels(vpc_cfg, "aws_security_group") if vpc_cfg else []
+            if not sg_refs:
+                sg_refs = _extract_tf_reference_labels(attrs.get("security_group_ids"), "aws_security_group")
             if sg_refs:
                 props["security_group_refs"] = sg_refs
 

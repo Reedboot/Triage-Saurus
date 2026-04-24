@@ -14,6 +14,9 @@ rules:
       and explicitly allow only required traffic paths.
 
       ATTACK: Compromised pod → no network isolation → connect to any pod in cluster → reach metadata API → steal cloud credentials
+      TOOLS: kubectl, nmap, curl, kube-hunter
+      CHAIN: compromised pod → lateral movement to any cluster pod (no NetworkPolicy) → reach cloud metadata API → steal node/pod SA token → cloud provider access
+      IMPACT: Cluster-wide lateral movement; cloud credential theft enabling full cloud provider access
     severity: WARNING
     languages: [yaml]
     pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*kind:\s+NetworkPolicy)'

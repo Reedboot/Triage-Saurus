@@ -4,6 +4,10 @@ rules:
       Azure Key Vault does not have purge_protection_enabled = true.
       Without purge protection, vaults and secrets can be permanently deleted during the soft-delete retention period.
       Set purge_protection_enabled = true to prevent accidental or malicious permanent deletion.
+      ATTACK: Compromise identity with Key Vault Contributor role → soft-delete all secrets and keys → purge before retention period expires → permanent data destruction → ransom demand
+      TOOLS: az-cli, MicroBurst, PowerShell Az module, AzureHound
+      CHAIN: Key Vault contributor compromise → delete all secrets/keys → immediately purge bypassing soft-delete window → permanent destruction → dependent services fail → ransom
+      IMPACT: Permanent deletion of all secrets, keys, and certificates; all dependent services lose access; no recovery possible after purge; ransomware-style availability attack
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

@@ -4,6 +4,10 @@ rules:
       Container runs with privileged: true, granting full host access.
       This allows container escape and host compromise. Remove privileged
       flag or use specific capabilities instead.
+      ATTACK: kubectl exec -it <pod> -- bash → nsenter --target 1 --mount --uts --ipc --net --pid → host shell → cat /etc/kubernetes/pki/ca.key → cluster-admin
+      TOOLS: kubectl, nsenter, crictl, amicontained, deepce, kubeletctl
+      CHAIN: privileged container → host namespace access → nsenter to PID 1 → host root shell → kubelet credential theft → cluster-admin escalation
+      IMPACT: Full node compromise; access to all pods on node; kubelet credential theft enabling cluster-admin; complete host filesystem read/write
     severity: ERROR
     languages: [yaml]
     pattern: |

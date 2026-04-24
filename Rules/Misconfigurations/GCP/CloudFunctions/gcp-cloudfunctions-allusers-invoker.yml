@@ -6,6 +6,11 @@ rules:
       on the internet without authentication.
       Remove the public binding and use service-account-to-service-account authentication,
       or protect the endpoint with Cloud Endpoints / Cloud Run + IAP.
+
+      ATTACK: curl https://<region>-<project>.cloudfunctions.net/<function> (no auth token required due to allUsers) → trigger function execution → access downstream Cloud SQL/GCS/Secret Manager
+      TOOLS: curl, Postman, nuclei, ffuf, gcloud (gcloud functions call <function>)
+      CHAIN: allUsers invoker binding → unauthenticated execution → function accesses downstream GCP services via attached service account → data exfiltration or privilege escalation
+      IMPACT: Arbitrary unauthenticated invocation of function; full access to all GCP resources the function's service account can reach without any identity requirement
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

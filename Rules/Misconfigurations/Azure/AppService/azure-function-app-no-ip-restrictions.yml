@@ -3,6 +3,10 @@ rules:
     message: |
       Function App has no IP access restrictions. Add `ip_restriction` rules to
       limit access.
+      ATTACK: Enumerate Function App trigger URLs → invoke functions from any internet IP → abuse serverless functions or exhaust billing
+      TOOLS: ffuf, curl, Burp Suite, nuclei, MicroBurst, az-cli
+      CHAIN: no IP restrictions → enumerate function trigger endpoints → unauthenticated or brute-forced invocation → function abuse or DoS
+      IMPACT: Unrestricted function invocation; consumption billing exhaustion, DoS, or abuse of function-connected backend resources
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -13,6 +13,9 @@ rules:
       Use Alibaba Cloud Bastion Host for administrative access.
 
       ATTACK: Shodan/Censys scan → discover public ECS → SSH brute force / exploit open service → IMDS at 100.100.100.200 → RAM credentials
+      TOOLS: Shodan, Censys, nmap, Hydra, ssh-audit
+      CHAIN: internet scan → public ECS discovery → SSH brute force / service exploit → IMDS at 100.100.100.200 → RAM role credentials → Alibaba Cloud API access
+      IMPACT: Full instance compromise; RAM credential theft enabling Alibaba Cloud resource access and lateral movement
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

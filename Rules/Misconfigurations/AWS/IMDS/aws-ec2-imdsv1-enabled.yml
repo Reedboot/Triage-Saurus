@@ -10,6 +10,9 @@ rules:
       a hop-limit of 1 (preventing SSRF exploitation). Also set http_put_response_hop_limit = 1.
 
       ATTACK: App SSRF → GET 169.254.169.254/…/iam/security-credentials/<role> → stolen AWS creds → full IAM role access
+      TOOLS: SSRFmap, Burp Suite, curl
+      CHAIN: SSRF vulnerability in app → IMDSv1 query (no token required) → IAM role credential extraction → AWS API access with stolen creds
+      IMPACT: Full IAM role compromise; access to all AWS resources permitted by the role policy
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

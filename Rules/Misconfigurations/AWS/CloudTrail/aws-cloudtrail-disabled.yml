@@ -9,6 +9,10 @@ rules:
 
       Ensure enable_logging = true and enable_log_file_validation = true on all
       aws_cloudtrail resources covering management events in all regions.
+      ATTACK: Verify CloudTrail is disabled → perform malicious API calls (create IAM keys, exfiltrate S3 data, modify SCPs) → no audit trail remains
+      TOOLS: Pacu, aws-cli, CloudSploit, ScoutSuite, Prowler
+      CHAIN: Audit evasion (CloudTrail disabled) → unrestricted API activity → persistence establishment (new IAM users/keys) → zero forensic visibility
+      IMPACT: Complete audit trail loss; all attacker actions (credential creation, data access, policy changes) are invisible to incident response and forensics
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

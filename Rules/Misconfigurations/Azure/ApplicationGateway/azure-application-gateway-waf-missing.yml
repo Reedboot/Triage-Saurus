@@ -4,6 +4,10 @@ rules:
       Application Gateway is using a Standard tier SKU without WAF protection.
       Web application firewall (WAF/WAF_v2) is required to protect against OWASP Top 10 attacks.
       Change sku tier to WAF or WAF_v2 and configure waf_configuration block.
+      ATTACK: Probe backend for OWASP Top 10 vulnerabilities → SQLi/XSS/RCE on unprotected application → database dump or code execution → exfiltrate credentials → lateral movement
+      TOOLS: sqlmap, OWASP ZAP, Burp Suite, nikto, nuclei, Metasploit
+      CHAIN: no WAF filtering → OWASP Top 10 attack → backend compromise → data exfiltration → credential theft → lateral movement to internal services
+      IMPACT: Backend application fully exposed to injection attacks; data breach and full application compromise possible without WAF filtering
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

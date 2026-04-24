@@ -2,10 +2,15 @@ rules:
   - id: gcp-cloud-sql-public-ip
     languages:
       - hcl
-    message: >-
-      GCP Cloud SQL instance has a public IP address enabled. 
-      This exposes the database to the internet, increasing the attack surface. 
+    message: |
+      GCP Cloud SQL instance has a public IP address enabled.
+      This exposes the database to the internet, increasing the attack surface.
       Configure `ipv4_enabled = false` to ensure the database is only accessible via private IP.
+
+      ATTACK: nmap -sV -p 3306,5432,1433 <public-ip> → identify DB engine → hydra/sqlmap brute-force default credentials → authenticate and dump databases
+      TOOLS: nmap, hydra, sqlmap, metasploit (auxiliary/scanner/mysql/mysql_login), gcloud (gcloud sql instances describe)
+      CHAIN: public IP discovery → port scan → brute-force or CVE exploit → DB access → dump all schemas → exfiltrate PII/secrets → use embedded credentials for lateral movement
+      IMPACT: Direct database compromise; full data exfiltration of all databases hosted on the instance; embedded credentials in DB can enable further cloud account takeover
     severity: ERROR
     patterns:
       - pattern-inside: |

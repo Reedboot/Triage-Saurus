@@ -277,6 +277,10 @@ _BASE_TABLES_SQL = """
       source_line_start INTEGER,
       source_line_end INTEGER,
       code_snippet TEXT,
+      attack_chain TEXT,
+      attack_tools TEXT,
+      attack_chain_steps TEXT,
+      attack_impact TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1243,6 +1247,15 @@ def _ensure_schema(conn: sqlite3.Connection):
             conn.execute("ALTER TABLE findings ADD COLUMN credential_classification TEXT")
         if "credential_note" not in findings_columns:
             conn.execute("ALTER TABLE findings ADD COLUMN credential_note TEXT")
+        # Attack intelligence fields (parsed from opengrep rule messages)
+        if "attack_chain" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN attack_chain TEXT")
+        if "attack_tools" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN attack_tools TEXT")
+        if "attack_chain_steps" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN attack_chain_steps TEXT")
+        if "attack_impact" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN attack_impact TEXT")
 
         # Exposure analysis table columns (ensure they exist for backward compatibility)
         exposure_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}
@@ -2260,6 +2273,7 @@ def batch_insert_findings(
               severity_score, base_severity, evidence_location, source_file,
               source_line_start, source_line_end, rule_id, proposed_fix,
               code_snippet, reason
+            - attack_chain, attack_tools, attack_chain_steps, attack_impact (optional)
     
     Returns:
         List of inserted finding IDs
@@ -2276,8 +2290,9 @@ def batch_insert_findings(
                     INSERT INTO findings
                     (experiment_id, repo_id, resource_id, title, description, category,
                      severity_score, base_severity, evidence_location, source_file, source_line_start,
-                     source_line_end, rule_id, proposed_fix, code_snippet, reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_line_end, rule_id, proposed_fix, code_snippet, reason,
+                     attack_chain, attack_tools, attack_chain_steps, attack_impact)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING id
                 """, (
                     finding['experiment_id'],
@@ -2296,6 +2311,10 @@ def batch_insert_findings(
                     finding.get('proposed_fix'),
                     finding.get('code_snippet'),
                     finding.get('reason'),
+                    finding.get('attack_chain'),
+                    finding.get('attack_tools'),
+                    finding.get('attack_chain_steps'),
+                    finding.get('attack_impact'),
                 ))
                 finding_ids.append(cursor.fetchone()[0])
             break

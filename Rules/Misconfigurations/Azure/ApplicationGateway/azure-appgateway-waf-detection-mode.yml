@@ -12,6 +12,9 @@ rules:
       positives before switching to Prevention.
 
       ATTACK: WAF in Detection mode → SQL injection / XSS passes through unblocked → backend exploitation
+      TOOLS: sqlmap, XSStrike, Burp Suite, nuclei
+      CHAIN: WAF detection mode identified → craft SQLi / XSS payloads → requests logged but not blocked → backend exploitation
+      IMPACT: Unrestricted web attacks against backend; SQL injection leading to data exfiltration or RCE
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

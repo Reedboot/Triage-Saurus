@@ -5,6 +5,10 @@ rules:
       This exposes storage data to anonymous internet access. Set
       `allow_blob_public_access = false` and
       `public_network_access_enabled = false`.
+      ATTACK: BlobHunter/MicroBurst discovers public storage → enumerate blobs anonymously → download sensitive files and extract secrets
+      TOOLS: BlobHunter, MicroBurst, az-cli, azcopy, AzureHound, Storage Explorer
+      CHAIN: public blob endpoint → anonymous blob enumeration → bulk data download → secret/credential extraction → Azure subscription pivot
+      IMPACT: Full unauthenticated data exfiltration; discovered credentials enable broader Azure subscription compromise
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

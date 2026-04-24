@@ -4,6 +4,10 @@ rules:
       Cosmos DB account may be accessible from the public internet. Set
       `public_network_access_enabled = "Disabled"` or configure `ip_range_filter`
       / VNet rules to restrict access.
+      ATTACK: Enumerate public CosmosDB endpoint → obtain account keys via az cosmosdb keys list → dump all databases → exfiltrate sensitive documents
+      TOOLS: az-cli, MicroBurst, Prowler, AzureHound, cosmosdb-utils
+      CHAIN: public endpoint discovery → account key retrieval → database enumeration → full collection dump → sensitive data exfiltration
+      IMPACT: Full database contents exposed; all collections and documents accessible with account keys; no network-layer restriction prevents data theft
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

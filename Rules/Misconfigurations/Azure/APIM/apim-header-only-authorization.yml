@@ -26,6 +26,10 @@ rules:
       2. Add JWT token validation in APIM policy
       3. Implement server-side authorization checks (don't trust headers)
       4. Use OAuth 2.0 or OpenID Connect flows instead
+      ATTACK: Craft HTTP request with forged custom header value → bypass authorization check → invoke all protected API operations
+      TOOLS: curl, Burp Suite, Postman, mitmproxy, Intruder
+      CHAIN: discover custom header name via recon → forge arbitrary header value → bypass APIM authorization → unrestricted backend access
+      IMPACT: Complete authorization bypass; attacker can invoke all API operations without valid credentials
     languages:
       - hcl
     severity: ERROR

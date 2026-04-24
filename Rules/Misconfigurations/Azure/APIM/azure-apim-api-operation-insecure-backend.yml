@@ -14,6 +14,10 @@ rules:
       
       If the backend service doesn't support HTTPS, enable TLS on the
       backend or use Azure Private Link for encrypted tunnels.
+      ATTACK: Gain internal network position or pivot host → intercept HTTP APIM-to-backend traffic → steal forwarded auth headers
+      TOOLS: Wireshark, tcpdump, mitmproxy, AzureHound, Stormspotter, Bettercap
+      CHAIN: internal network access → capture cleartext APIM-to-backend requests → extract forwarded auth tokens → impersonate APIM gateway
+      IMPACT: Backend auth token theft; attacker bypasses APIM and calls backend services directly using stolen credentials
     severity: WARNING
     languages: [terraform, hcl]
     pattern: |

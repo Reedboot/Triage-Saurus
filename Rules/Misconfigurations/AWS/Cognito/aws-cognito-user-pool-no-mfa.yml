@@ -10,6 +10,10 @@ rules:
       
       Remediation: Set mfa_configuration to "ON" or "OPTIONAL" with at least
       one MFA configuration (software_token_mfa_configuration or sms_configuration).
+      ATTACK: Obtain breached credential list → credential-stuff Cognito hosted UI or InitiateAuth API → authenticate as victim user → access application
+      TOOLS: hydra, Burp Suite Intruder, CredMaster, aws-cli, credential stuffing wordlists (HaveIBeenPwned)
+      CHAIN: Breach database acquisition → automated credential stuffing → account authentication → application data access and account takeover
+      IMPACT: Full account takeover for any user whose password appears in leaked credential databases; no second factor stops automated stuffing attacks
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

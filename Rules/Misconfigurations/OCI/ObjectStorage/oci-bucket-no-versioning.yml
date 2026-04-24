@@ -3,6 +3,10 @@ rules:
     message: |
       OCI Object Storage bucket does not have versioning enabled.
       Enable versioning to protect against accidental deletion and overwrites.
+      ATTACK: oci os object delete --bucket-name <bucket> --all → delete all objects → versioning absent → permanent data loss
+      TOOLS: oci-cli, custom scripts
+      CHAIN: compromised credentials → object delete/overwrite → versioning disabled → no recovery path → permanent data loss
+      IMPACT: Permanent loss of all bucket data; no recovery path after malicious or accidental deletion/overwrite
     severity: LOW
     languages: [terraform, hcl]
     patterns:

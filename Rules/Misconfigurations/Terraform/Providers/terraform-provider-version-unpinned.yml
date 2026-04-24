@@ -4,6 +4,10 @@ rules:
       Terraform provider does not have a version constraint. This can cause
       unexpected behavior when provider versions update. Pin to specific
       version range (e.g., version = "~> 3.0").
+      ATTACK: malicious actor compromises provider registry → unpinned provider pulls malicious version → terraform apply executes attacker code
+      TOOLS: terraform, custom malicious provider, supply chain attack frameworks
+      CHAIN: version unpinned → provider registry compromise or namespace hijack → malicious provider downloaded → terraform apply → infrastructure backdoored
+      IMPACT: Full infrastructure compromise via supply chain; malicious provider exfiltrates state, credentials, and creates backdoor resources
     severity: INFO
     languages: [terraform, hcl]
     patterns:

@@ -10,6 +10,9 @@ rules:
       private_cluster_config to use a private endpoint only.
 
       ATTACK: Public K8s API → RBAC misconfiguration → kubectl exec → IMDS → GCP SA token → project access
+      TOOLS: kubectl, curl, nmap, kube-hunter
+      CHAIN: internet-accessible K8s API discovery → RBAC misconfiguration exploitation → kubectl exec into pod → GCE IMDS query → node service account token → GCP project API access
+      IMPACT: Full GKE cluster compromise; GCP project-level access via node service account
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

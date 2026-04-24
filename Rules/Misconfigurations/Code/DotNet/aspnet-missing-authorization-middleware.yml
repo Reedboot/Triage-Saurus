@@ -7,6 +7,10 @@ rules:
       attributes are not enforced and CSRF-style attacks can succeed.
       Add UseAuthentication() and UseAuthorization() to the Configure pipeline, and
       restrict CORS origins to known trusted domains.
+      ATTACK: fetch from attacker.com → AllowAnyOrigin bypasses SOP → missing UseAuthorization means [Authorize] unenforced → access protected API endpoints cross-origin
+      TOOLS: Burp Suite, curl, mitmproxy, OWASP ZAP, cors-scanner
+      CHAIN: cross-origin request → AllowAnyOrigin CORS bypass → missing auth middleware → [Authorize] attribute bypass → authenticated endpoint access → data exfiltration
+      IMPACT: Any website can make cross-origin requests to protected endpoints; [Authorize] attributes ineffective; full API exposure to cross-origin attackers
     severity: ERROR
     languages: [csharp]
     patterns:

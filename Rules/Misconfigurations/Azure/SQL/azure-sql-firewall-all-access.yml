@@ -4,6 +4,10 @@ rules:
       SQL Server firewall rule allows access from 0.0.0.0 to 0.0.0.0 or
       255.255.255.255. This allows access from any internet IP address.
       Restrict to specific IP ranges or use Private Endpoints.
+      ATTACK: Shodan/masscan discovers exposed port 1433 → brute force SA/admin credentials → access all databases on server
+      TOOLS: Shodan, nmap, masscan, Hydra, sqlcmd, SQLRecon, MicroBurst
+      CHAIN: globally open firewall → internet scan discovers SQL port → brute force SQL credentials → full database server access
+      IMPACT: Any internet host can attempt SQL Server access; successful brute force yields complete database server compromise
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

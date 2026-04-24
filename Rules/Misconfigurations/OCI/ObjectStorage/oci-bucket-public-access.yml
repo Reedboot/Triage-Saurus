@@ -3,6 +3,10 @@ rules:
     message: |
       OCI Object Storage bucket allows public access.
       Set access_type to "NoPublicAccess" to prevent unauthenticated reads.
+      ATTACK: oci os object list --bucket-name <bucket> --namespace <ns> → download all objects without authentication
+      TOOLS: oci-cli, curl, cloud_enum, GrayhatWarfare
+      CHAIN: internet access → public bucket enumeration → unauthenticated object download → sensitive data exfiltration
+      IMPACT: Full unauthenticated exfiltration of all objects in the bucket
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

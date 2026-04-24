@@ -4,6 +4,10 @@ rules:
       Storage Account does not enforce encryption for blobs/files.
       Data at rest should always be encrypted. Azure encrypts by default
       but ensure enable_https_traffic_only = true.
+      ATTACK: Intercept HTTP traffic to storage account → capture blob data transmitted in cleartext → extract secrets from blobs
+      TOOLS: mitmproxy, Wireshark, tcpdump, Burp Suite, SSLstrip, Bettercap
+      CHAIN: HTTP storage traffic → network-level interception → blob data captured in cleartext → offline analysis for embedded credentials
+      IMPACT: Plaintext blob data theft; credentials embedded in blobs enable lateral movement to connected services
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

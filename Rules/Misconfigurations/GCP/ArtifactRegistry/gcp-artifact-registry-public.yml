@@ -8,6 +8,11 @@ rules:
 
       Remove allUsers bindings from Artifact Registry IAM. Use
       google_artifact_registry_repository_iam_binding with specific service accounts.
+
+      ATTACK: docker pull <region>-docker.pkg.dev/<project>/<repo>/<image> (no auth) → dive <image> or docker history → extract hardcoded secrets from image layers
+      TOOLS: docker, crane, dive, trufflehog, ggshield, gcloud (gcloud artifacts docker images list)
+      CHAIN: public image pull → layer analysis → credential/key extraction → authenticate to GCP APIs or downstream services → lateral movement across project
+      IMPACT: Exposure of application secrets, service account keys, or proprietary code baked into container layers; enables full project compromise if service account keys are found
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

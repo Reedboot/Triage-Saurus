@@ -5,6 +5,10 @@ rules:
       integration, the management plane and API gateway endpoint are publicly
       accessible. Set `virtual_network_type` to `"Internal"` or `"External"` and
       use an Application Gateway for WAF protection.
+      ATTACK: Internet scan discovers APIM management endpoint → enumerate management API → extract subscription keys and API policies
+      TOOLS: Shodan, curl, Burp Suite, az-cli, MicroBurst, Stormspotter
+      CHAIN: public APIM management plane → management API enumeration → subscription key extraction → API policy modification → full gateway control
+      IMPACT: Control plane compromise; attacker modifies API policies, extracts secrets, and reroutes all API traffic
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -9,6 +9,10 @@ rules:
       Add an authentication_policy block to the oci_apigateway_deployment resource
       specifying a JWT issuer, JWKS URI, and required claims, or configure
       HTTP Basic authentication with appropriate backend credentials.
+      ATTACK: curl https://<api-gw-url>/route → invoke backend without credentials → access protected data/services
+      TOOLS: curl, Postman, OWASP ZAP, Burp Suite
+      CHAIN: internet access → unauthenticated API call → backend service access → data exfiltration
+      IMPACT: Full unauthenticated access to backend services behind the API gateway
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

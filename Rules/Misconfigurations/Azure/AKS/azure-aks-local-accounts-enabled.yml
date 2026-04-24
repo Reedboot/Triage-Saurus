@@ -4,6 +4,10 @@ rules:
       AKS cluster has local_account_disabled = false. Local accounts bypass
       Azure AD authentication and should be disabled. Use Azure AD integration
       for centralized identity management.
+      ATTACK: Extract local kubeconfig or service account token → authenticate without Azure AD → bypass Conditional Access and MFA enforcement
+      TOOLS: kubectl, az-cli, AzureHound, Peirates, kube-hunter, kubeaudit
+      CHAIN: local accounts active → static kubeconfig bypasses AAD/MFA → kubectl cluster access → full resource enumeration → privilege escalation
+      IMPACT: Authentication bypass; static credentials allow full cluster access without MFA or Conditional Access enforcement
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

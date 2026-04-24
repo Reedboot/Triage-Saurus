@@ -3,6 +3,10 @@ rules:
     message: |
       Event Hub namespace has public network access enabled. Restrict access via
       Private Endpoint or network rules.
+      ATTACK: Obtain Event Hub connection string → connect to public endpoint → intercept real-time event streams → inject poisoned events into downstream consumers
+      TOOLS: az-cli, ServiceBusExplorer, MicroBurst, Azure Event Hubs SDK, Shodan
+      CHAIN: public endpoint + connection string leak → event stream connection → real-time event eavesdropping → malicious event injection → downstream consumer manipulation
+      IMPACT: Real-time event streams intercepted; sensitive telemetry and business events exposed; event injection corrupts downstream consumers and pipelines
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -4,6 +4,10 @@ rules:
       Storage Account does not have logging enabled.
       Blob/Queue/Table operations will not be audited.
       Add logging block with enabled = true.
+      ATTACK: Access storage account with valid credentials → exfiltrate all blobs → modify or delete data → no audit trail for forensics
+      TOOLS: az-cli, azcopy, MicroBurst, BlobHunter, Storage Explorer
+      CHAIN: no storage logging → undetected blob access → bulk exfiltration → data modification or deletion → zero forensic evidence
+      IMPACT: Undetected data theft and tampering; incident response blind with no access logs for investigation
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

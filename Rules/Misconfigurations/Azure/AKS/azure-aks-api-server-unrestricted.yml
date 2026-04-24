@@ -4,6 +4,10 @@ rules:
       AKS cluster has no api_server_authorized_ip_ranges configured.
       The Kubernetes API server is publicly accessible from any IP address.
       Set api_server_authorized_ip_ranges to trusted CIDR ranges or use a private cluster.
+      ATTACK: Shodan discovers public Kubernetes API server → authenticate with leaked kubeconfig → full cluster access and malicious pod deployment
+      TOOLS: Shodan, kubectl, kube-hunter, az-cli, AzureHound, Peirates, masscan
+      CHAIN: public API server → leaked kubeconfig or credential brute force → kubectl access → deploy privileged pods → node escape
+      IMPACT: Full cluster takeover from internet; attacker deploys privileged containers, steals node credentials, and pivots to Azure IMDS
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

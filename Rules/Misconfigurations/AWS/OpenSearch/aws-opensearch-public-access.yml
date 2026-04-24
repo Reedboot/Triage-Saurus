@@ -10,6 +10,10 @@ rules:
       (e.g., Log4Shell vulnerabilities in OpenSearch).
       
       Remediation: Configure vpc_options with subnet_ids and security_group_ids.
+      ATTACK: Discover public OpenSearch endpoint → curl https://<domain>/_cat/indices → query all indices without authentication → bulk document exfiltration
+      TOOLS: curl, elasticsearch-dump, opensearch-py, Burp Suite, nuclei, aws-cli
+      CHAIN: Public endpoint discovery → index enumeration (_cat/indices) → bulk document query (_search) → data exfiltration → potential Log4Shell RCE
+      IMPACT: Full data exfiltration from all indices; unauthenticated access exposes all stored documents, logs, and sensitive application data to any internet user
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

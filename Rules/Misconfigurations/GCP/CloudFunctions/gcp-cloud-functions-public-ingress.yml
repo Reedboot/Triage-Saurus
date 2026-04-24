@@ -9,6 +9,11 @@ rules:
       Set ingress_settings to "ALLOW_INTERNAL_ONLY" or "ALLOW_INTERNAL_AND_GCLB"
       to restrict traffic to VPC or load balancer sources. Use an authenticated
       Cloud Run or API Gateway proxy for public-facing functions.
+
+      ATTACK: curl https://<region>-<project>.cloudfunctions.net/<function> -d '{}' (ALLOW_ALL ingress, no auth token) → invoke function directly → probe for SSRF via VPC connector
+      TOOLS: curl, ffuf, nuclei, Postman, gcloud (gcloud functions describe --format=json)
+      CHAIN: public ingress → direct function invocation → SSRF to metadata server (169.254.169.254) or internal services → service account token theft → full API access
+      IMPACT: Direct unauthenticated execution of function logic; if VPC-connected, potential pivot to internal network and metadata server for service account credential theft
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

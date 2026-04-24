@@ -5,6 +5,10 @@ rules:
       HTTP requests expose session tokens, authentication credentials, and application data
       to network-level eavesdropping. Setting https_only = true forces all HTTP requests
       to redirect to HTTPS (HTTP 301) at the platform level, before reaching application code.
+      ATTACK: Intercept HTTP requests to App Service → capture Bearer tokens or session cookies from plaintext traffic
+      TOOLS: mitmproxy, Wireshark, Burp Suite, SSLstrip, Bettercap, arpspoof
+      CHAIN: https_only=false → HTTP requests accepted → plaintext session token/cookie capture → session replay → full application access
+      IMPACT: Session token and credential theft from unencrypted traffic; complete application account takeover
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

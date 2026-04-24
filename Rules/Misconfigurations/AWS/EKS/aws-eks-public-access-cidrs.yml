@@ -8,6 +8,10 @@ rules:
 
       Restrict public_access_cidrs to trusted IP ranges or disable public endpoint
       access entirely and use a private endpoint (endpoint_private_access = true).
+      ATTACK: Discover EKS API endpoint via DNS → authenticate with stolen/weak credentials or exploit misconfigured RBAC → kubectl get secrets,pods → cluster takeover
+      TOOLS: kubectl, aws-cli, kube-hunter, Pacu, kubeletctl, nmap, Shodan
+      CHAIN: API server discovery → credential theft or RBAC misconfiguration exploit → kubectl access → cluster enumeration → workload and secret exfiltration
+      IMPACT: Full Kubernetes cluster compromise from the internet; attacker can read secrets, exec into pods, and deploy persistent backdoor workloads
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

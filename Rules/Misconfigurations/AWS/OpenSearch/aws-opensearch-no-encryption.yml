@@ -9,6 +9,10 @@ rules:
       application data.
       
       Remediation: Set encrypt_at_rest.enabled = true (uses KMS).
+      ATTACK: Obtain EBS snapshot backing OpenSearch domain → mount externally → read Lucene segment files → extract all plaintext indexed document data
+      TOOLS: aws-cli, Pacu, elasticsearch-dump, opensearch-py, curl
+      CHAIN: EBS snapshot access → volume mount in attacker account → Lucene segment file reading → full plaintext index data extraction
+      IMPACT: Full search index disclosure; all indexed documents (logs, PII, application data) readable in plaintext from unencrypted storage media
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

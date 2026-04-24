@@ -5,6 +5,10 @@ rules:
       there is no visibility into database access patterns, suspicious activities,
       or potential credential theft. Enable extended auditing policy with Log
       Analytics or Storage Account destination.
+      ATTACK: Authenticate to SQL server → exfiltrate all tables → drop/modify data → no audit trail left behind
+      TOOLS: sqlcmd, mssql-cli, SQLRecon, MicroBurst, Burp Suite
+      CHAIN: no auditing configured → undetected authentication → bulk SELECT exfiltration → data modification → zero forensic evidence
+      IMPACT: Undetected data exfiltration and manipulation; incident response severely hampered with no audit trail
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

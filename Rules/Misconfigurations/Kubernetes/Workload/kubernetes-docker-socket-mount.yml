@@ -4,6 +4,10 @@ rules:
       Host's Docker socket `/var/run/docker.sock` is mounted into the container.
       This grants the container full control over the host's Docker engine and allows for trivial host escape to root.
       Remove the Docker socket mount and use rootless tools like Kaniko or Buildah instead.
+      ATTACK: docker -H unix:///var/run/docker.sock run -v /:/host --privileged alpine chroot /host → instant host root shell
+      TOOLS: docker, crictl, deepce, amicontained, nsenter
+      CHAIN: docker.sock access → spawn privileged container → chroot to host filesystem → host root shell → node takeover → kubelet credential theft → cluster-admin
+      IMPACT: Immediate host root access; full node compromise; access to all container filesystems and secrets; cluster-admin via stolen kubelet credentials
     severity: ERROR
     languages: [yaml]
     pattern: |

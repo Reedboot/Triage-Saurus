@@ -11,6 +11,10 @@ rules:
       - Other custom auth middleware
       
       Add app.UseAuthorization() after authentication middleware.
+      ATTACK: curl https://<app>/admin/endpoint → [Authorize] attribute bypassed without UseAuthorization() → unauthenticated route access
+      TOOLS: curl, Burp Suite, OWASP ZAP, Postman
+      CHAIN: HTTP request → ASP.NET middleware pipeline → UseAuthorization() absent → [Authorize] attributes ignored → all protected routes accessible
+      IMPACT: Complete authorization bypass; all [Authorize]-protected routes accessible without valid credentials
     severity: ERROR
     languages: [csharp]
     patterns:

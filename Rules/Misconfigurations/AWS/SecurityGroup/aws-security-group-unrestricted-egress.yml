@@ -4,6 +4,10 @@ rules:
       Security group allows unrestricted egress to 0.0.0.0/0 on all ports and protocols.
       This lets workloads reach any internet destination and makes data exfiltration
       easier. Restrict egress to the minimum required destinations and ports.
+      ATTACK: Compromise EC2/container → unrestricted outbound access → exfiltrate data to attacker C2 → establish reverse shell → persistent backdoor access
+      TOOLS: curl, ncat, aws-cli, Pacu, DNS tunneling tools, CloudFront C2 frameworks, impacket
+      CHAIN: Workload compromise → unrestricted internet egress → C2 channel establishment → data exfiltration → persistent backdoor via reverse shell
+      IMPACT: Unconstrained data exfiltration and C2; no network controls prevent compromised workloads from reaching any internet destination or establishing persistence
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

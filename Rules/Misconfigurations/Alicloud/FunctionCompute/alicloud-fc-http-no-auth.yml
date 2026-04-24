@@ -11,6 +11,9 @@ rules:
       function with an API Gateway that enforces authentication.
 
       ATTACK: Direct HTTP POST to trigger URL (no credentials) → function executes → accesses downstream data stores
+      TOOLS: curl, nuclei, Postman, Burp Suite
+      CHAIN: trigger URL discovery → unauthenticated HTTP invocation → function execution → downstream data store access (OSS/RDS/TableStore)
+      IMPACT: Unauthorized function execution; access to downstream Alibaba Cloud data stores and services
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

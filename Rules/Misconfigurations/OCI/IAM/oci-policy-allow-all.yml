@@ -4,6 +4,10 @@ rules:
       OCI IAM policy grants all-resources access.
       Apply the principle of least privilege by specifying resource types
       instead of using all-resources wildcards.
+      ATTACK: compromised OCI principal → oci iam policy list → confirm all-resources grant → enumerate and exfiltrate all resources
+      TOOLS: oci-cli, Pacu, cloud_enum, ScoutSuite
+      CHAIN: credential compromise → IAM policy enumeration → all-resources access confirmed → full tenancy enumeration → data exfiltration
+      IMPACT: Full OCI tenancy compromise; all resources across all compartments accessible to the overpermissioned identity
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

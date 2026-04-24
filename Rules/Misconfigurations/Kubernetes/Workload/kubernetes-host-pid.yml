@@ -3,6 +3,10 @@ rules:
     message: |
       Pod uses hostPID: true, accessing host process namespace.
       This allows viewing/killing host processes. Remove hostPID.
+      ATTACK: ps aux → find kubelet/etcd PIDs → cat /proc/<pid>/environ → extract KUBECONFIG or credentials → kubectl with stolen creds → cluster access
+      TOOLS: ps, nsenter, procfs, amicontained, deepce, kubectl
+      CHAIN: hostPID → host process enumeration → /proc filesystem credential extraction → kubelet token theft → API server access → privilege escalation
+      IMPACT: Full host process visibility; credential extraction from process environment; ability to kill critical host processes including kubelet and etcd
     severity: ERROR
     languages: [yaml]
     pattern: "hostPID: true"

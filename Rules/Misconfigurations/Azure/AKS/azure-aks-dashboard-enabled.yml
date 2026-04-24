@@ -4,6 +4,10 @@ rules:
       AKS cluster has the legacy Kubernetes dashboard explicitly enabled.
       The dashboard exposes cluster resources via an unauthenticated UI and has a history of CVEs.
       Remove the kube_dashboard block or set enabled = false.
+      ATTACK: Browse to Kubernetes dashboard URL → unauthenticated access → enumerate all cluster resources → deploy backdoor privileged pod
+      TOOLS: kubectl proxy, Browser, Peirates, kube-hunter, AzureHound
+      CHAIN: public dashboard URL accessible → unauthenticated dashboard access → cluster resource enumeration → malicious pod deployment → RCE
+      IMPACT: Full cluster compromise via unauthenticated dashboard; privileged pod deployment enables node escape and lateral movement
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

@@ -4,6 +4,10 @@ rules:
       Azure MSSQL server security alert policy has critical threat detection alerts disabled.
       Disabling Sql_Injection or Data_Exfiltration alerts suppresses detection of active attacks.
       Remove those entries from disabled_alerts or set disabled_alerts to an empty list.
+      ATTACK: Exploit SQL injection blind spot → run malicious queries undetected → exfiltrate database contents without triggering alerts
+      TOOLS: sqlmap, Burp Suite, mssql-cli, SQLRecon, MicroBurst
+      CHAIN: disabled threat detection → SQL injection undetected → bulk SELECT/EXEC queries → data exfiltration → zero alerting
+      IMPACT: Full database compromise with no forensic trail; attacker exfiltrates PII and credentials undetected indefinitely
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

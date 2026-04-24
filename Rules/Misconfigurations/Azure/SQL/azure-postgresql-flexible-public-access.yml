@@ -3,6 +3,10 @@ rules:
     message: |
       PostgreSQL Flexible Server has public network access enabled. Use
       `public_network_access_enabled = "Disabled"` and deploy within a VNet.
+      ATTACK: Scan for port 5432 → brute force PostgreSQL credentials → execute COPY TO for bulk data exfiltration
+      TOOLS: nmap, Hydra, psql, pg_dump, MicroBurst, az-cli, Prowler
+      CHAIN: public PostgreSQL endpoint → credential brute force → authenticated access → bulk COPY TO exfiltration
+      IMPACT: Full database exfiltration; potential RCE via COPY FROM PROGRAM on unpatched PostgreSQL instances
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

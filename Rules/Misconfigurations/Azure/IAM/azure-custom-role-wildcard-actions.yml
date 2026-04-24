@@ -4,6 +4,10 @@ rules:
       Azure custom role definition grants wildcard (*) actions, allowing all Azure RM operations.
       This violates the principle of least privilege and could enable full subscription takeover.
       Replace actions = ["*"] with the specific actions required by the role.
+      ATTACK: Compromise identity with wildcard custom role → enumerate all subscription resources → create backdoor Owner account → full subscription takeover
+      TOOLS: az-cli, AzureHound, Stormspotter, MicroBurst, ROADtools
+      CHAIN: identity compromise → wildcard role action enumeration → privilege escalation to Owner → backdoor account creation → persistent full subscription access
+      IMPACT: Full Azure Resource Manager control plane access; all resources readable/modifiable/deletable; enables complete subscription takeover and persistent backdoor
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

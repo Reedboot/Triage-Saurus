@@ -9,6 +9,10 @@ rules:
       Replace HTTP listeners with HTTPS listeners using a valid TLS certificate,
       or configure an HTTP-to-HTTPS redirect rule. Set protocol = "https" and
       configure ssl_certificate_id on the alicloud_slb_listener resource.
+      ATTACK: mitmproxy on network path → intercept HTTP traffic on SLB port 80 → capture auth tokens and credentials in plaintext
+      TOOLS: mitmproxy, Wireshark, arpspoof, Bettercap, SSLstrip
+      CHAIN: network positioning → HTTP traffic interception → credential/token capture → session hijacking → account takeover
+      IMPACT: Theft of authentication credentials and session tokens from all users traversing the SLB
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

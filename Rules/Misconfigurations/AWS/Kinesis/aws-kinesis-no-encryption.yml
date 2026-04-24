@@ -11,6 +11,10 @@ rules:
       
       Remediation: Configure server_side_encryption with type = "KMS" and a
       key_id referencing a customer-managed KMS key.
+      ATTACK: Compromise IAM credentials with kinesis:GetRecords → GetShardIterator + GetRecords on all shards → read plaintext stream data without decryption
+      TOOLS: aws-cli, Pacu, kinesis-data-extractor, ScoutSuite
+      CHAIN: IAM credential theft → Kinesis shard enumeration → unencrypted record exfiltration → sensitive event/PII/credential extraction from stream
+      IMPACT: Full stream data exfiltration; real-time application events, PII, and sensitive payloads readable in plaintext by any authorized API caller
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

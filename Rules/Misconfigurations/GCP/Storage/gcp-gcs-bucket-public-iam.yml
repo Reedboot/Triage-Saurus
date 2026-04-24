@@ -11,6 +11,9 @@ rules:
       access only to specific service accounts or groups.
 
       ATTACK: gsutil ls gs://bucket-name (no creds) → enumerate objects → download sensitive data
+      TOOLS: gsutil, GrayHatWarfare, bucket-finder, curl
+      CHAIN: public bucket discovery → object enumeration → data download → credential extraction if secrets stored
+      IMPACT: Full data exfiltration; if credentials found, complete GCP project compromise
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

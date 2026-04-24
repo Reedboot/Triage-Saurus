@@ -17,6 +17,10 @@ rules:
 
       These controls are visible in the threat model as security boundaries
       that slow lateral movement after a pod compromise.
+      ATTACK: RCE exploit → root shell (UID 0) with all capabilities → write to writable root filesystem → install persistent backdoor → attempt container escape
+      TOOLS: deepce, amicontained, linpeas, kubectl exec, capsh
+      CHAIN: missing securityContext → root container (UID 0) → full capability set → writable filesystem → persistent backdoor or namespace escape
+      IMPACT: RCE grants root shell with all Linux capabilities; writable filesystem enables persistence; no OS boundary limiting post-compromise lateral movement
     severity: WARNING
     languages: [yaml]
     pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*\bsecurityContext\s*:)'

@@ -4,6 +4,10 @@ rules:
       RDS instance is not configured for Multi-AZ (multi_az = false). Without Multi-AZ
       deployment, the database may be unavailable during AZ failures. Consider enabling
       multi_az = true for production workloads.
+      ATTACK: Trigger AZ failure or use aws fis to force failover → single-AZ RDS becomes unavailable → application DoS → potential data inconsistency on recovery
+      TOOLS: aws-cli, AWS FIS (Fault Injection Simulator), Pacu, chaos engineering frameworks
+      CHAIN: AZ outage or forced failover trigger → single-AZ instance unreachable → extended application downtime → potential data loss during unclean failure
+      IMPACT: Extended database unavailability during AZ failures; single point of failure enables DoS via infrastructure disruption or cloud outages
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

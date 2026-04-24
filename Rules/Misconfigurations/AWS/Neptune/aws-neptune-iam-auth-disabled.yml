@@ -7,6 +7,10 @@ rules:
       tokens instead of static credentials, integrates with IAM policies, and is auditable
       via CloudTrail.
       Set iam_database_authentication_enabled = true.
+      ATTACK: Obtain Neptune endpoint and static credentials → connect via Gremlin console or SPARQL → execute traversal queries → enumerate and exfiltrate full graph
+      TOOLS: aws-cli, Gremlin console, Apache TinkerPop, curl (SPARQL), Pacu
+      CHAIN: Endpoint discovery → static credential authentication (no expiry) → graph traversal queries → full node/edge/property exfiltration
+      IMPACT: Full graph database compromise; all nodes, edges, and properties readable via static credentials that persist indefinitely until manually rotated
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

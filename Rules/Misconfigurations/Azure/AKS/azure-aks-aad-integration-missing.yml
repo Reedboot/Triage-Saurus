@@ -4,6 +4,10 @@ rules:
       AKS cluster does not have Azure AD RBAC integration.
       Local accounts bypass centralized identity management.
       Add azure_active_directory_role_based_access_control block.
+      ATTACK: Enumerate AKS cluster → authenticate with local kubeconfig → bypass MFA/Conditional Access → access all Kubernetes resources
+      TOOLS: kubectl, az-cli, AzureHound, Stormspotter, kubeaudit, kube-hunter
+      CHAIN: no AAD integration → local credentials bypass MFA and CA policies → kubectl access → enumerate all namespaces → lateral movement to pods
+      IMPACT: Unrestricted cluster access bypassing MFA; full namespace and resource control enabling container escape or data exfiltration
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

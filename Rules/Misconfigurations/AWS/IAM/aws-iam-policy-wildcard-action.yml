@@ -5,6 +5,10 @@ rules:
       Effect "Allow". Overly permissive IAM policies violate least-privilege and allow
       privilege escalation if the identity is compromised. Scope actions to the minimum
       required set and restrict Resource to specific ARNs.
+      ATTACK: Compromise identity with wildcard IAM policy → enumerate all accessible APIs → create admin IAM user/role → establish persistent AWS account control
+      TOOLS: aws-cli, Pacu, enumerate-iam, PMapper, CloudSploit, Prowler
+      CHAIN: Identity compromise → wildcard policy discovery → unrestricted API enumeration → privilege escalation path → backdoor credential creation
+      IMPACT: Unrestricted AWS service access; attacker can call any API action, read all data, modify resources, and create persistent backdoor credentials
     severity: WARNING
     languages: [json, hcl, terraform]
     patterns:

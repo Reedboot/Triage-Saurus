@@ -12,6 +12,9 @@ rules:
       scope any remaining exec permissions to specific namespaces via Role (not ClusterRole).
 
       ATTACK: kubectl exec -it <pod> -- /bin/sh → read /var/run/secrets/ → steal service-account token → escalate
+      TOOLS: kubectl, curl
+      CHAIN: pods/exec RBAC permission → kubectl exec into any pod → read /var/run/secrets/kubernetes.io/serviceaccount/token → impersonate service account → RBAC privilege escalation
+      IMPACT: Container breakout to any pod; service account token theft enabling cluster-wide privilege escalation
     severity: ERROR
     languages: [yaml]
     pattern-regex: '(?s)kind:\s+(?:Cluster)?Role[\s\S]*?resources:[\s\S]*?\bpods/(?:exec|attach)\b[\s\S]*?verbs:[\s\S]*?\b(?:create|\*)\b'

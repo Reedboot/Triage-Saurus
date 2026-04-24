@@ -4,6 +4,10 @@ rules:
       Ingress detected without TLS configuration.
       Unencrypted traffic is vulnerable to interception.
       Add tls block with certificate configuration.
+      ATTACK: ARP spoofing / network position → tcpdump/mitmproxy → capture plaintext credentials and session tokens from HTTP traffic
+      TOOLS: tcpdump, Wireshark, ettercap, mitmproxy, arpspoof
+      CHAIN: network position → cleartext interception → credential/session theft → account takeover → full data access
+      IMPACT: Full credential and session token exposure to any on-path attacker; enables account takeover without service compromise
     severity: WARNING
     languages: [yaml]
     patterns:

@@ -14,6 +14,10 @@ rules:
       
       Add <validate-jwt> or <check-header> in the <inbound> section to enforce
       authentication at the API gateway level.
+      ATTACK: Enumerate APIM endpoints → call any operation without credentials → access backend services unauthenticated
+      TOOLS: curl, Postman, Burp Suite, ffuf, apim-cli, MicroBurst
+      CHAIN: public APIM endpoint discovery → unauthenticated API calls → backend service access → data exfiltration or manipulation
+      IMPACT: Completely unauthenticated access to all API operations and connected backend services
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

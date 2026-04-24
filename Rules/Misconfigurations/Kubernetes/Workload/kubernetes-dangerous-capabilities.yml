@@ -4,6 +4,10 @@ rules:
       Container adds dangerous Linux capabilities (SYS_ADMIN, NET_ADMIN).
       These capabilities enable container escape and host compromise.
       Remove or use more specific capabilities.
+      ATTACK: unshare --map-root-user (SYS_ADMIN) → mount host filesystem → access /etc/kubernetes/pki → steal cluster CA key; or NET_ADMIN → iptables manipulation → traffic redirect
+      TOOLS: capsh, amicontained, deepce, nsenter, unshare, iptables
+      CHAIN: SYS_ADMIN/NET_ADMIN capability → kernel syscall access → namespace escape → host filesystem mount → PKI/credential exfiltration → cluster-admin
+      IMPACT: Kernel-level access enabling container escape; host filesystem read/write; cluster certificate theft; full node and potential cluster compromise
     severity: ERROR
     languages: [yaml]
     patterns:

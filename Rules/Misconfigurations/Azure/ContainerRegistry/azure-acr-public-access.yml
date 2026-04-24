@@ -3,6 +3,10 @@ rules:
     message: |
       Container Registry has public network access enabled. Images can be pulled
       from any internet IP. Disable and use Private Endpoints.
+      ATTACK: Pull all container images from public ACR → inspect layers with dive/crane → extract hardcoded secrets and credentials → use credentials for lateral movement
+      TOOLS: docker, crane, dive, Trivy, az-cli, MicroBurst, Shodan
+      CHAIN: public registry discovery → anonymous or credentialed image pull → layer inspection → secret/credential extraction → lateral movement across dependent services
+      IMPACT: All container images publicly accessible; secrets baked into image layers stolen; credentials extracted enable lateral movement across all services using them
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

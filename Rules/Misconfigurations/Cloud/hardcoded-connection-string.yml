@@ -4,6 +4,10 @@ rules:
       Hardcoded connection string detected with embedded credentials.
       Connection strings containing passwords or access keys should be stored in
       Key Vault, Secrets Manager, or environment variables — never in source code.
+      ATTACK: grep -r "AccountKey=\|Password=" . → extract credentials from source code → authenticate directly to storage/database → exfiltrate all data
+      TOOLS: truffleHog, gitleaks, git-secrets, grep, Azure CLI, mongosh, redis-cli
+      CHAIN: source code access → credential extraction → direct database/storage auth → full data exfiltration → lateral movement to connected services
+      IMPACT: Full database/storage account access; all stored data exfiltrated; credentials likely reused across services; persistent access until rotated; compliance violations
     severity: ERROR
     languages: [generic]
     pattern-regex: 'DefaultEndpointsProtocol=https?;AccountName=[^$%{(][^;]*;AccountKey=[^$%{(]|Server=[^$%{(][^;]*;(?:Password|Pwd)=[^$%{(]|mongodb(?:\+srv)?://[^$%{(][^@]*:[^$%{(][^@]*@|amqps?://[^$%{(][^@]*:[^$%{(][^@]*@|redis://:[^$%{(][^@]*@'

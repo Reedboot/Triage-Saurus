@@ -12,6 +12,9 @@ rules:
       and annotate Kubernetes ServiceAccounts with the GCP SA to bind.
 
       ATTACK: Pod RCE/SSRF → GCE metadata → node SA token (Editor) → full GCP project API access
+      TOOLS: curl, SSRFmap, gcloud, kubectl
+      CHAIN: pod RCE or SSRF → GCE metadata server query → node service account token (often Editor role) → GCP API access → project-wide resource manipulation
+      IMPACT: Full GCP project compromise via overprivileged node service account; all APIs accessible to Editor role
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

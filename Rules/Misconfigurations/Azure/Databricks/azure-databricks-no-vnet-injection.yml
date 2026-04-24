@@ -12,7 +12,11 @@ rules:
       
       Remediation: Configure custom_parameters with virtual_network_id,
       public_subnet_name, and private_subnet_name to enable VNet injection.
-    severity: WARNING
+      ATTACK: Compromise Databricks notebook via misconfigured permissions → execute arbitrary Python/Scala → establish outbound connection to C2 → exfiltrate data via unfiltered internet egress
+      TOOLS: az-cli, curl, Python (in notebook), MicroBurst, netcat, Databricks REST API
+      CHAIN: notebook access via weak permissions → arbitrary code execution in cluster → unfiltered egress to internet → data exfiltration to attacker infrastructure
+      IMPACT: No egress filtering means compromised notebooks can exfiltrate any data processed by cluster to internet; organization firewall and NSG rules do not apply
+    severity:WARNING
     languages: [terraform, hcl]
     patterns:
       - pattern: |

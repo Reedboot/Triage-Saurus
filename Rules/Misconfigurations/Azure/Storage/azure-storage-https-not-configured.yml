@@ -56,3 +56,7 @@ rules:
         - Prevents accidental changes when provider updates
         - Documents security requirements
         - Avoids "works on my machine" issues with provider versions
+      ATTACK: Identify storage account accepting HTTP → intercept unencrypted requests → steal SAS tokens from URL query parameters
+      TOOLS: mitmproxy, Wireshark, Burp Suite, az-cli, azcopy
+      CHAIN: HTTP storage endpoint → traffic intercept → SAS token captured from URL → token replay → full container access
+      IMPACT: SAS token theft via URL interception; captured tokens grant time-limited storage access for data theft or data injection

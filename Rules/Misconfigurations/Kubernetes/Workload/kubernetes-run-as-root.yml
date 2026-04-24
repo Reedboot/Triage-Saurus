@@ -4,6 +4,10 @@ rules:
       Container likely runs as root (runAsUser: 0 or runAsNonRoot: false).
       Running as root increases privilege escalation risk.
       Set runAsNonRoot: true or runAsUser to non-zero UID.
+      ATTACK: RCE exploit → root shell (UID 0) → chown/chmod arbitrary files → write to hostPath mounts → escalate via SUID binary or capability abuse
+      TOOLS: deepce, amicontained, linpeas, find (SUID), capsh
+      CHAIN: root container → UID 0 privilege → SUID/capability exploitation → hostPath write → host file modification → node persistence
+      IMPACT: RCE yields immediate root shell; unrestricted filesystem writes; higher blast radius for all vulnerabilities; container escape more likely to succeed
     severity: WARNING
     languages: [yaml]
     patterns:

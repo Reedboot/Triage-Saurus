@@ -4,6 +4,10 @@ rules:
       Storage Account network rules set to 'Allow' by default.
       This allows public access. Set default_action to 'Deny' and
       whitelist specific networks.
+      ATTACK: Access storage from any internet IP → enumerate all containers with shared key → bulk download all blobs
+      TOOLS: az-cli, azcopy, MicroBurst, AzureHound, BlobHunter, Storage Explorer
+      CHAIN: default Allow network rule → unrestricted internet access → container enumeration → bulk blob exfiltration or ransomware encryption
+      IMPACT: Unrestricted internet access to storage account; complete data theft or ransomware encryption of all stored blobs
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

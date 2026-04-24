@@ -7,6 +7,10 @@ rules:
 
       Associate a WAF Web ACL with the API Gateway stage using
       aws_wafv2_web_acl_association or the web_acl_arn on the stage resource.
+      ATTACK: Identify API Gateway endpoint → craft SQLi/XSS/SSRF payload → send unfiltered request through gatewayless API → exploit backend
+      TOOLS: sqlmap, Burp Suite, OWASP ZAP, nuclei, aws-cli, ffuf
+      CHAIN: API reconnaissance → injection payload crafting → unfiltered backend delivery → data exfiltration or RCE on backend service
+      IMPACT: SQLi, XSS, SSRF, and volumetric DDoS reach backend unfiltered; no rate limiting exposes APIs to automated abuse and scraping
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

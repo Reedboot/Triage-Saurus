@@ -11,6 +11,10 @@ rules:
       
       Remediation: Set image_scanning_configuration.scan_on_push = true in
       the aws_ecr_repository resource.
+      ATTACK: Push image with known-vulnerable base (Log4Shell, OpenSSL CVE) → image deployed to ECS/EKS without scan → exploit CVE in running container → RCE
+      TOOLS: trivy, grype, docker, aws-cli, Metasploit (CVE-specific modules), crane
+      CHAIN: Vulnerable image deployment → CVE exploitation in container → container RCE → IMDS credential theft or host escape → AWS account access
+      IMPACT: Undetected vulnerable images running in production; known CVEs exploitable for container RCE with potential host escape and cluster compromise
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

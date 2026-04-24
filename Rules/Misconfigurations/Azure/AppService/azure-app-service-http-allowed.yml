@@ -4,6 +4,10 @@ rules:
       Azure App Service allows plain HTTP traffic — https_only is false or absent.
       Data transmitted over HTTP is unencrypted and vulnerable to interception.
       Set https_only = true to redirect all HTTP requests to HTTPS.
+      ATTACK: Intercept HTTP traffic to App Service → steal session tokens from cookies or Authorization headers in cleartext
+      TOOLS: mitmproxy, Wireshark, Burp Suite, SSLstrip, arpspoof, Bettercap
+      CHAIN: HTTP traffic → network-level interception → session token/cookie captured → session replay → full authenticated application access
+      IMPACT: Session token and credential theft from unencrypted traffic; complete application account takeover via hijacked sessions
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

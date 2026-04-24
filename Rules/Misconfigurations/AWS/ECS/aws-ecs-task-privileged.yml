@@ -12,6 +12,10 @@ rules:
       
       Remediation: Set privileged = false and grant only required Linux capabilities
       via linux_parameters.capabilities.add.
+      ATTACK: Exploit RCE in privileged container → mount host filesystem or use nsenter → escape container isolation → read IMDS credentials → AWS account pivot
+      TOOLS: docker, cdk (container escape toolkit), aws-cli, Pacu, nsenter, chroot, Metasploit
+      CHAIN: Container RCE → privileged capabilities exploitation → host filesystem/process access → IMDS credential theft → AWS account compromise
+      IMPACT: Full EC2 host compromise; container escape enables host takeover, credential theft, rootkit installation, and AWS account persistence
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

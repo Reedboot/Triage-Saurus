@@ -10,6 +10,10 @@ rules:
       Restrict the cidr_ip on port 3389 to specific trusted IP ranges.
       Use Alibaba Cloud Bastion Host or VPN for Windows administrative access.
       If RDP is not required, remove the inbound rule entirely.
+      ATTACK: nmap -p 3389 0.0.0.0/0 → discover open RDP → Hydra brute force or BlueKeep exploit → Windows instance compromise
+      TOOLS: nmap, masscan, Hydra, Metasploit, rdp-sec-check, BlueKeep PoC
+      CHAIN: internet scanning → open RDP discovery → credential brute force or CVE exploit → Windows compromise → lateral movement
+      IMPACT: Full Windows instance compromise; potential ransomware deployment and lateral movement across the VPC
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

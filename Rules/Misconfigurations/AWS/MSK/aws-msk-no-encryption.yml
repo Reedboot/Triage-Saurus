@@ -11,6 +11,10 @@ rules:
       
       Remediation: Set encryption_info.encryption_in_transit.client_broker to "TLS"
       or "TLS_PLAINTEXT" (prefer "TLS").
+      ATTACK: Gain VPC network access → use tcpdump or network tap on Kafka port 9092 → passively intercept all plaintext Kafka producer/consumer messages
+      TOOLS: tcpdump, Wireshark, kcat/kafkacat, ksniff, kafka-python, aws-cli
+      CHAIN: VPC network access (compromised host) → passive Kafka traffic capture on port 9092 → plaintext message decoding → PII/financial/credential extraction
+      IMPACT: Full Kafka message stream interception; all producer/consumer traffic readable in plaintext enabling sensitive data exfiltration at the stream level
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

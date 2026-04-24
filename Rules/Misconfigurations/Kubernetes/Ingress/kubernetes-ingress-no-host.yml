@@ -11,6 +11,9 @@ rules:
       show which services are internet-facing vs. internal.
 
       ATTACK: Attacker uses any hostname → hits catch-all Ingress → reaches backend service
+      TOOLS: curl, nuclei, Burp Suite
+      CHAIN: arbitrary hostname request → catch-all Ingress rule match → backend service exposure → direct service exploitation
+      IMPACT: Unintended service exposure; all backend services reachable via any hostname bypassing host-based routing controls
     severity: WARNING
     languages: [yaml]
     patterns:

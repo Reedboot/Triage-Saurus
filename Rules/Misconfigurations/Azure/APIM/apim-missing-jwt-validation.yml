@@ -9,6 +9,10 @@ rules:
       cryptographically verified and can be spoofed.
       
       Recommended fix: Add JWT validation policy with validate-jwt element
+      ATTACK: Capture APIM subscription key → forge custom header values (CB-User-Context) → skip JWT auth → access all operations as any user
+      TOOLS: curl, Burp Suite, jwt_tool, Postman, mitmproxy
+      CHAIN: subscription key enumeration → absent JWT validation → forged user context headers → access all backends as arbitrary identity
+      IMPACT: Complete authentication bypass; attacker impersonates any user and accesses all API backends without valid tokens
     languages:
       - hcl
     severity: ERROR

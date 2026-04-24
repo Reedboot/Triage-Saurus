@@ -11,7 +11,11 @@ rules:
       
       Remediation: Set ip_address_type to "Private" and use a VNet + private subnet
       via subnet_ids for private networking.
-    severity: ERROR
+      ATTACK: Scan public IP via Shodan → exploit application vulnerability → RCE in container → query IMDS at 169.254.169.254 → steal managed identity token → lateral movement
+      TOOLS: nmap, Shodan, Metasploit, curl (IMDS), az-cli, MicroBurst
+      CHAIN: internet exposure → application exploit → container RCE → IMDS query → managed identity token → Azure resource abuse
+      IMPACT: Internet-facing container compromised; managed identity token grants access to all associated Azure resources
+    severity:ERROR
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

@@ -7,6 +7,10 @@ rules:
 
       Set authorization_type to AWS_IAM, COGNITO_USER_POOLS, or CUSTOM (Lambda authorizer)
       and define appropriate authorizer_id to protect the endpoint.
+      ATTACK: Discover API endpoint via Swagger/OpenAPI docs → invoke method directly without credentials → access backend services or trigger privileged actions
+      TOOLS: curl, Burp Suite, Postman, kiterunner, aws-cli, OWASP ZAP
+      CHAIN: API enumeration → unauthenticated HTTP request → backend access → data exfiltration or unauthorized action execution
+      IMPACT: Full unauthenticated API access; any functionality exposed by the endpoint is available to any internet user without credentials
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

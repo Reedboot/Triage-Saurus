@@ -5,6 +5,10 @@ rules:
       Operation policies without validate-jwt, check-header, or authentication-basic
       allow unauthenticated requests to reach the backend.
       Add JWT validation or authentication to the operation policy.
+      ATTACK: Enumerate APIM API operations → send unauthenticated requests directly → call backend APIs without credentials
+      TOOLS: curl, Postman, Burp Suite, ffuf, apim-cli
+      CHAIN: public APIM endpoint discovery → unauthenticated operation invocation → backend API access → data exfiltration
+      IMPACT: Unauthenticated access to backend APIs; full data exposure and potential abuse of API-connected services
     languages:
       - hcl
     severity: WARNING

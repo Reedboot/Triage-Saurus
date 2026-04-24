@@ -3,6 +3,10 @@ rules:
     message: |
       OCI Autonomous Database is publicly accessible.
       Set is_access_control_enabled = true to restrict access via ACL rules.
+      ATTACK: nmap -p 1521 0.0.0.0/0 → discover public OCI ATP → Hydra brute force credentials → full data access
+      TOOLS: nmap, masscan, sqlplus, Hydra, Metasploit
+      CHAIN: internet scanning → public DB discovery → credential brute force → DB authentication → full data access
+      IMPACT: Full database compromise including all stored data, PII, and application secrets
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

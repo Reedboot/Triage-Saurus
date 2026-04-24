@@ -4,7 +4,11 @@ rules:
       Container Registry has admin user enabled.
       This creates long-lived credentials. Use Managed Identity or
       service principal with RBAC instead. Set admin_enabled = false.
-    severity: WARNING
+      ATTACK: Obtain long-lived admin credentials via az acr credential show → authenticate to registry → push malicious images or pull all images for secret extraction
+      TOOLS: az-cli, docker, MicroBurst, AzureHound, dive, crane
+      CHAIN: credential exposure or theft → admin login to ACR → image pull for secret extraction or malicious image push → supply chain attack or lateral movement
+      IMPACT: Long-lived admin credentials enable persistent registry access; secret extraction from image layers and malicious image injection possible without rotation
+    severity:WARNING
     languages: [terraform, hcl]
     pattern: |
       resource "azurerm_container_registry" "$NAME" {

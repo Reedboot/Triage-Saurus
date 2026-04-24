@@ -20,6 +20,10 @@ rules:
         LIKE '%' + REPLACE(REPLACE(REPLACE(@searchTerm, '[', '[[]'), '%', '[%]'), '_', '[_]') + '%'
       
       Or use full-text search (CONTAINS) instead of LIKE for better performance.
+      ATTACK: inject '%' as search parameter → LIKE '%' returns all records → bypass tenant/institution WHERE filter → access all rows
+      TOOLS: Burp Suite, OWASP ZAP, sqlmap, curl, custom fuzzing scripts
+      CHAIN: user input → wildcard injection in LIKE clause → filter bypass → unauthorized data enumeration → mass data exfiltration
+      IMPACT: Filter bypass exposing all database rows; tenant data isolation broken enabling cross-tenant data access
     severity: WARNING
     languages: [generic]
     paths:

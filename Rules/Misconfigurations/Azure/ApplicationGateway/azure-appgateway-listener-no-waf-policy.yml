@@ -15,6 +15,9 @@ rules:
       or ensure the global WAF policy applies to all listeners via policy association.
 
       ATTACK: Discover unprotected listener path (func.example.com) → bypass WAF → direct exploitation of backend
+      TOOLS: nuclei, Burp Suite, curl, nmap
+      CHAIN: listener enumeration → identify path without WAF policy → send malicious payloads (SQLi/XSS/RCE) → direct backend exploitation
+      IMPACT: WAF bypass enabling full web exploitation; backend RCE, SQLi, or data exfiltration without detection
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

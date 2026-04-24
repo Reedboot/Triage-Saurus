@@ -11,6 +11,11 @@ rules:
 
       Remove the allUsers binding and require authenticated callers. Use
       google_cloud_run_service_iam_binding with specific service accounts or groups.
+
+      ATTACK: curl https://<service>-<hash>-uc.a.run.app/ (no auth) → interact with service API → exploit SSRF to reach GCP metadata endpoint (169.254.169.254) → steal service account token
+      TOOLS: curl, Postman, nuclei, ffuf, gcloud (gcloud run services describe --format=json)
+      CHAIN: allUsers invoker → unauthenticated HTTP access → SSRF to metadata server → service account token theft → gcloud auth activate-service-account → full API access as service identity
+      IMPACT: Full unauthenticated access to service; SSRF to metadata server enables complete service account compromise and lateral movement across all attached GCP resources
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

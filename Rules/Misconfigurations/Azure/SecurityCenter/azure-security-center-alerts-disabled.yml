@@ -4,6 +4,10 @@ rules:
       Azure Security Center contact has alert notifications or admin alerts explicitly disabled.
       Security incidents will not be surfaced to responsible contacts.
       Set alert_notifications = true and alerts_to_admins = true.
+      ATTACK: Execute any attack (lateral movement, data exfiltration, identity abuse) → Defender detects and generates alerts → alerts never forwarded to contacts → attack proceeds unnoticed
+      TOOLS: az-cli, AzureHound, Stormspotter, Prowler, Metasploit
+      CHAIN: initial compromise → sustained attack activity → Defender alerts generated → alert notifications disabled → security team never notified → prolonged dwell time
+      IMPACT: Security team receives no notifications of active attacks; mean time to detect (MTTD) increases dramatically; breach dwell time extended without any human response
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

@@ -68,6 +68,9 @@ class InternetExposureDetector:
             'elb', 'alb', 'nlb', 'elastic_load_balancing',  # Load balancers (legacy names)
             'application_load_balancer', 'network_load_balancer',
             'cloudfront', 'aws_cloudfront',
+            # Full REST API Gateway type names
+            'aws_api_gateway_rest_api', 'aws_api_gateway_stage',
+            'aws_apigatewayv2_stage',
         },
         'azure': {
             'api_management_api', 'api_management_product',
@@ -307,6 +310,19 @@ class InternetExposureDetector:
                     prop_value = props[prop_key]
                     if self._contains_open_rules(prop_value):
                         reason_parts.append(f'{prop_key}: allows 0.0.0.0/0')
+
+            # GCP google_compute_firewall stores source_ranges as a CSV property
+            source_ranges_raw = props.get('source_ranges', '')
+            if source_ranges_raw:
+                ranges = [r.strip() for r in source_ranges_raw.split(',')]
+                if any(r in ('0.0.0.0/0', '::/0') for r in ranges):
+                    reason_parts.append('source_ranges: allows 0.0.0.0/0 (all ingress)')
+
+            # internet_ingress_open is set by context_extraction for GCP/Azure firewall rules
+            if props.get('internet_ingress_open') == 'true':
+                ports = props.get('ports', '')
+                port_str = f' (ports: {ports})' if ports else ''
+                reason_parts.append(f'Firewall rule open to internet{port_str}')
 
             # Check for explicit start_ip or start_ip_address
             if props.get('start_ip_address') == '0.0.0.0':

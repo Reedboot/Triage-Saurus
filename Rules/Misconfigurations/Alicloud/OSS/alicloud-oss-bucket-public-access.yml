@@ -4,6 +4,10 @@ rules:
       OSS bucket ACL allows public access.
       Public buckets expose data to the internet without authentication.
       Set acl = "private" to restrict access.
+      ATTACK: ossutil ls oss://<bucket> --endpoint oss-<region>.aliyuncs.com → enumerate and download all objects unauthenticated
+      TOOLS: aliyun-cli, ossutil, GrayhatWarfare, cloud_enum
+      CHAIN: internet access → public OSS bucket discovery → unauthenticated object enumeration → mass data download → data breach
+      IMPACT: Full unauthenticated access to all objects in the bucket; sensitive data exposed to the internet
     severity: HIGH
     languages: [terraform, hcl]
     pattern-either:

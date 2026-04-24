@@ -3,6 +3,10 @@ rules:
     message: |
       MySQL Flexible Server has public network access enabled. Disable and deploy
       in a VNet using delegated subnet.
+      ATTACK: nmap scan discovers port 3306 → brute force credentials with Hydra → dump all databases with mysqldump
+      TOOLS: nmap, Hydra, mysqldump, MicroBurst, az-cli, Prowler
+      CHAIN: public MySQL endpoint discovered → credential brute force → authenticated database access → full data exfiltration
+      IMPACT: Full database exfiltration; credential theft enabling lateral movement to connected Azure services
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

@@ -9,6 +9,11 @@ rules:
 
       Remove allUsers and allAuthenticatedUsers from project-level IAM bindings.
       Use specific service accounts, groups, or domains with least-privilege roles.
+
+      ATTACK: gcloud projects get-iam-policy <project> → identify allUsers bindings → invoke any resource the role grants (GCS, Compute, BigQuery) without authentication
+      TOOLS: gcloud, curl (GCP REST APIs), gcpwn, gcp_scanner, hayabusa
+      CHAIN: allUsers project IAM binding → any internet user inherits the role → enumerate all resources → access/exfiltrate data → use any write permissions to persist or escalate
+      IMPACT: Every internet user gains the assigned role across the entire GCP project; even viewer roles leak environment topology, secrets references, and resource metadata
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

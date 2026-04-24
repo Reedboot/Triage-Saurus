@@ -18,6 +18,10 @@ rules:
         </on-error>
       
       Log detailed errors server-side only (Application Insights).
+      ATTACK: Trigger error conditions via fuzzing → collect stack traces and internal hostnames from responses → map internal architecture
+      TOOLS: Burp Suite, ffuf, curl, nuclei, custom fuzzing scripts
+      CHAIN: API error fuzzing → backend errors reveal internal IPs/service names → architecture mapping → targeted exploitation of exposed services
+      IMPACT: Internal network topology and connection strings exposed; revealed architecture enables targeted lateral movement to backend services
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

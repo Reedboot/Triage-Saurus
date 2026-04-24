@@ -13,6 +13,10 @@ rules:
       
       If clients require HTTP for testing, use a separate non-production API
       and ensure no production credentials or data are used.
+      ATTACK: ARP spoof or intercept HTTP traffic to APIM endpoint → capture API keys and Bearer tokens from plaintext headers
+      TOOLS: mitmproxy, Wireshark, Burp Suite, SSLstrip, arpspoof, Bettercap
+      CHAIN: HTTP traffic interception → API key/token captured from plaintext headers → credential replay → full API access
+      IMPACT: API key and session token theft; attacker gains full API access and can call all backend services with stolen credentials
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

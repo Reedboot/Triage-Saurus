@@ -4,6 +4,10 @@ rules:
       Azure SQL Server has public network access enabled. The SQL endpoint is
       reachable from the internet. Disable via
       `public_network_access_enabled = "Disabled"` and use Private Endpoints.
+      ATTACK: Shodan/FOFA scan for port 1433 → brute force SQL credentials → exfiltrate all databases → attempt xp_cmdshell RCE
+      TOOLS: Shodan, nmap, Hydra, sqlcmd, SQLRecon, MicroBurst, Metasploit
+      CHAIN: public SQL endpoint discovered → credential brute force → database access → full data exfiltration → xp_cmdshell OS command execution
+      IMPACT: Complete database compromise; potential OS-level RCE via xp_cmdshell enabling full server takeover
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

@@ -8,6 +8,10 @@ rules:
       Set encrypted = true and optionally specify a kms_key_id. Consider enabling
       account-level EBS default encryption (aws_ebs_encryption_by_default) to prevent
       future accidental creation of unencrypted volumes.
+      ATTACK: Share or discover public EBS snapshot → restore to attacker-controlled EC2 instance → mount volume → read plaintext data from filesystem
+      TOOLS: aws-cli, Pacu, ebs-snapper, manual EC2 mount operations
+      CHAIN: Snapshot discovery → cross-account snapshot share or public snapshot → attacker mounts volume → plaintext OS/app/credential data access
+      IMPACT: Full data disclosure from EBS volume; OS data, application secrets, and credentials stored on disk exposed in plaintext to snapshot accessor
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

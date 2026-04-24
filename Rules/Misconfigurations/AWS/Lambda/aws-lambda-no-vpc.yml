@@ -9,6 +9,10 @@ rules:
 
       Note: Lambda in VPC requires NAT Gateway for internet access. Ensure VPC has
       private subnets with NAT if internet egress is required.
+      ATTACK: Exploit Lambda function code (RCE/SSRF) → unrestricted outbound internet connection → exfiltrate data or establish C2 channel without network controls
+      TOOLS: aws-cli, Pacu, custom Lambda exploit payloads, curl, DNS tunneling tools
+      CHAIN: Lambda RCE or SSRF → unrestricted internet egress → data exfiltration to attacker server → C2 channel establishment → persistent data access
+      IMPACT: Unconstrained data exfiltration path from Lambda; no VPC means no egress filtering, enabling C2 and exfiltration to any internet destination
     severity: INFO
     languages: [terraform, hcl]
     patterns:

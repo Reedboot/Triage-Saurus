@@ -6,6 +6,10 @@ rules:
       Set storage_encrypted = true and specify a kms_key_id (defaults to AWS-managed key
       if omitted). Note: encryption cannot be enabled on an existing unencrypted instance —
       a snapshot-restore cycle is required.
+      ATTACK: Share or access unencrypted RDS snapshot → restore snapshot in attacker AWS account → connect to restored DB instance → dump all plaintext data
+      TOOLS: aws-cli, Pacu, mysql/psql client, rds-snapshot-extractor
+      CHAIN: Snapshot discovery → cross-account share or public snapshot → restore in attacker account → full plaintext database access without running instance credentials
+      IMPACT: Full database disclosure from unencrypted snapshots; data accessible to anyone with snapshot access, bypassing all application-level authentication
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

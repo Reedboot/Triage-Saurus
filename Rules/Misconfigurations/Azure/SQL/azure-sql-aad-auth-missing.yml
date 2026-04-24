@@ -4,6 +4,10 @@ rules:
       SQL Server does not have Azure AD authentication configured.
       Using only SQL logins bypasses centralized identity management.
       Add azuread_administrator block or azurerm_mssql_server_aad_administrator resource.
+      ATTACK: Enumerate SQL logins → spray weak passwords → authenticate as SQL admin without MFA or Conditional Access enforcement
+      TOOLS: SQLRecon, MicroBurst, az-cli, sqlcmd, CrackMapExec, Hydra
+      CHAIN: SQL-only auth bypasses Conditional Access → password spray SQL logins → admin access → full database control
+      IMPACT: Unauthorized database access bypassing MFA; no Conditional Access policies applied to SQL credentials
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

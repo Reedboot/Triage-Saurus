@@ -4,6 +4,10 @@ rules:
       RDS instance has skip_final_snapshot = true. Skipping the final snapshot may lead to
       data loss if the instance is accidentally deleted. Set skip_final_snapshot = false
       or ensure backups are exported prior to deletion.
+      ATTACK: Compromise AWS credentials → terraform destroy or aws rds delete-db-instance → no final snapshot created → permanent irrecoverable data loss
+      TOOLS: aws-cli, Pacu, terraform, AWS Console
+      CHAIN: Privileged credential compromise → intentional or accidental RDS deletion → no snapshot created → complete data destruction with no recovery path
+      IMPACT: Permanent data loss on instance deletion; ransomware, insider threat, or accidental terraform destroy causes irrecoverable database destruction
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

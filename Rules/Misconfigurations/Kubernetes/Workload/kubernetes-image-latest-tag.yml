@@ -3,6 +3,10 @@ rules:
     message: |
       Container image uses ':latest' tag. This is unpredictable and
       violates immutable infrastructure principles. Pin to specific version.
+      ATTACK: push malicious image layer to registry tagged as 'latest' → wait for pod restart or rolling update → malicious code executes inside cluster
+      TOOLS: crane, skopeo, docker, cosign, trivy, Grype
+      CHAIN: unpinned image → supply chain substitution via registry push → pod restart pulls backdoored image → RCE in cluster context → lateral movement
+      IMPACT: Supply chain compromise on next pod restart; inability to audit running code; potential cluster-wide backdoor if image used by multiple workloads
     severity: INFO
     languages: [yaml]
     pattern-regex: 'image:\s*[^\s]+:latest'

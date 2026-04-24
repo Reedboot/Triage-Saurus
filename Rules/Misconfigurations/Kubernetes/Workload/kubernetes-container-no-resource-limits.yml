@@ -17,6 +17,10 @@ rules:
             memory: "512Mi"
 
       In the threat model, containers without limits have no DoS boundary.
+      ATTACK: deploy crypto-miner or fork bomb inside container → exhaust all node CPU/memory → trigger OOM kills of co-located pods → cluster-wide DoS
+      TOOLS: stress-ng, fork-bomb scripts, crypto-mining payloads, kubectl top
+      CHAIN: no resource limits → CPU/memory exhaustion → co-located pod eviction → node NotReady → service disruption across cluster
+      IMPACT: Single compromised container starves all co-located pods; node-level DoS; crypto-mining consuming cluster resources undetected
     severity: WARNING
     languages: [yaml]
     pattern-regex: '(?s)kind:\s+(?:Deployment|DaemonSet|StatefulSet|Pod)(?![\s\S]*\blimits\s*:)'

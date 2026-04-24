@@ -4,6 +4,10 @@ rules:
       Azure App Service site_config allows deprecated TLS 1.0 or TLS 1.1 (RFC 8996).
       Legacy TLS versions are vulnerable to known protocol attacks (BEAST, POODLE, SLOTH).
       Set min_tls_version = "1.2" in the site_config block.
+      ATTACK: Force TLS downgrade to 1.0/1.1 → exploit POODLE/BEAST → decrypt HTTPS traffic → steal session tokens and credentials
+      TOOLS: testssl.sh, SSLstrip, Wireshark, POODLE PoC, nmap ssl-enum-ciphers, Bettercap
+      CHAIN: TLS 1.0/1.1 negotiated → BEAST/POODLE downgrade → HTTPS session decryption → session token extraction → account takeover
+      IMPACT: Full HTTPS traffic decryption; session token theft enabling persistent authentication bypass and application compromise
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

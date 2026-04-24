@@ -4,6 +4,10 @@ rules:
       ActionTrail (Audit) is not enabled or logging is disabled. Without audit logs,
       user activity and configuration changes are not recorded. Enable ActionTrail
       with appropriate trails for security auditing.
+      ATTACK: attacker compromises credentials → exfiltrates data or modifies config → ActionTrail absent → attack undetected indefinitely
+      TOOLS: aliyun-cli, custom exfiltration scripts
+      CHAIN: initial access → privilege escalation → data access → no ActionTrail logging → attack goes undetected
+      IMPACT: Complete audit blind spot; attacker actions including data access, IAM changes, and resource deletion go unlogged
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

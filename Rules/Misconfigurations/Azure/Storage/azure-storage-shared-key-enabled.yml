@@ -4,6 +4,10 @@ rules:
       Storage Account allows shared access key authentication.
       Prefer Azure AD authentication with Managed Identity.
       Set shared_access_key_enabled = false.
+      ATTACK: Extract storage account key from leaked config/repo → use key with azcopy for full permanent account access
+      TOOLS: az-cli, azcopy, MicroBurst, truffleHog, gitleaks, Storage Explorer
+      CHAIN: shared key leaked in code or config → secret scanning discovers key → azcopy authenticate with key → full storage account access
+      IMPACT: Permanent full storage access until key rotation; keys in source code grant attackers complete data access and manipulation rights
     severity: INFO
     languages: [terraform, hcl]
     patterns:

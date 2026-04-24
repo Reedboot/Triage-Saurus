@@ -3,7 +3,11 @@ rules:
     message: |
       Service Bus namespace has public network access enabled. Restrict access via
       Private Endpoint or network rules.
-    severity: WARNING
+      ATTACK: Obtain connection string via credential leak or MicroBurst enumeration → connect to public Service Bus → intercept messages → inject malicious messages → downstream consumer manipulation
+      TOOLS: az-cli, ServiceBusExplorer, MicroBurst, Azure Service Bus SDK, Shodan
+      CHAIN: public endpoint + connection string leak → queue/topic access → message interception → malicious message injection → downstream consumer exploitation
+      IMPACT: All messages readable and injectable; message queue poisoning corrupts business workflows; sensitive data in messages exposed to unauthorized parties
+    severity:WARNING
     languages: [terraform, hcl]
     pattern-either:
       - pattern: |

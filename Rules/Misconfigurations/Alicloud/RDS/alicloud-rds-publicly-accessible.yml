@@ -4,6 +4,10 @@ rules:
       RDS instance allows internet access.
       Exposing RDS to the public internet increases the attack surface significantly.
       Restrict access by setting address_type = "Intranet" or removing public endpoints.
+      ATTACK: nmap -p 3306,1433,5432 0.0.0.0/0 → discover public RDS → Hydra brute force default credentials → full DB access
+      TOOLS: nmap, masscan, Hydra, sqlmap, aliyun-cli
+      CHAIN: internet scanning → public RDS discovery → credential brute force → DB authentication → full data access
+      IMPACT: Full database compromise; all stored data, credentials, and schema accessible from the internet
     severity: HIGH
     languages: [terraform, hcl]
     pattern-either:

@@ -6,6 +6,11 @@ rules:
       not possible within Cloud SQL's managed restore flow.
       Set enabled = true in the backup_configuration block. For production databases
       also enable point_in_time_recovery = true (PostgreSQL/MySQL 8.0+).
+
+      ATTACK: ransomware/destructive query on DB → DROP DATABASE or mass DELETE → no backup available → permanent data loss with no managed restore path
+      TOOLS: mysql-client, psql, gcloud (gcloud sql backups list), sqlmap (for destruction via injection)
+      CHAIN: DB access (via public IP, stolen creds, or SQL injection) → destructive operation → backups disabled → unrecoverable data loss → business disruption
+      IMPACT: Permanent data loss with no Cloud SQL managed restore; complete destruction of database contents including PII, business data, and application state
     severity: ERROR
     languages: [terraform, hcl]
     patterns:
@@ -40,6 +45,11 @@ rules:
       not possible within Cloud SQL's managed restore flow.
       Set enabled = true in the backup_configuration block. For production databases
       also enable point_in_time_recovery = true (PostgreSQL/MySQL 8.0+).
+
+      ATTACK: ransomware/destructive query on DB → DROP DATABASE or mass DELETE → no backup available → permanent data loss with no managed restore path
+      TOOLS: mysql-client, psql, gcloud (gcloud sql backups list), sqlmap (for destruction via injection)
+      CHAIN: DB access (via public IP, stolen creds, or SQL injection) → destructive operation → backups disabled → unrecoverable data loss → business disruption
+      IMPACT: Permanent data loss with no Cloud SQL managed restore; complete destruction of database contents including PII, business data, and application state
     severity: ERROR
     languages: [terraform, hcl]
     patterns:
@@ -80,6 +90,11 @@ rules:
         - log_lock_waits = on
         - log_min_messages = WARNING
         - connection_throttling = on (for PostgreSQL 9.6+)
+
+      ATTACK: brute-force PostgreSQL credentials → connections succeed silently → query sensitive tables → exfiltrate data with no log evidence due to missing log_connections/log_disconnections
+      TOOLS: hydra, pgcli, metasploit (auxiliary/scanner/postgres/postgres_login), gcloud (gcloud sql instances describe)
+      CHAIN: credential attack or SQL injection → DB access → exfiltration occurs → no log_connections/log_disconnections entries → incident response has no audit trail → dwell time extended
+      IMPACT: Complete blind spot in forensic investigation; attacker can access, exfiltrate, or modify data with no connection or query audit trail surviving in Cloud Logging
     severity: WARNING
     languages: [terraform, hcl]
     patterns:
@@ -109,6 +124,11 @@ rules:
       to all Google-authenticated users or the entire internet respectively.
       Remove the special_group access blocks granting these roles. Use specific
       service accounts, Google groups, or domain restrictions instead.
+
+      ATTACK: bq ls --project_id=<project> (no auth for allUsers) → bq query 'SELECT * FROM dataset.table' → stream full dataset to attacker-controlled storage
+      TOOLS: bq (BigQuery CLI), gcloud, curl (BigQuery REST API), google-cloud-bigquery Python SDK
+      CHAIN: allUsers dataset access → enumerate tables → bulk query export → bq extract to attacker GCS bucket → full data exfiltration without any authentication
+      IMPACT: Full exfiltration of all BigQuery tables in the dataset; for allUsers, accessible by the entire internet without any Google account
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

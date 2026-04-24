@@ -6,6 +6,10 @@ rules:
       violate compliance requirements (PCI-DSS, HIPAA, GDPR).
       Set storage_encrypted = true. Note: encryption must be set at cluster creation time;
       existing unencrypted clusters cannot be modified in-place.
+      ATTACK: Share or access Neptune snapshot → restore to attacker-controlled AWS account → connect to restored cluster → query full graph for plaintext data
+      TOOLS: aws-cli, Pacu, Gremlin console, Apache TinkerPop
+      CHAIN: Snapshot access or cross-account share → attacker account restore → graph query execution → full plaintext graph data exfiltration
+      IMPACT: Full graph database disclosure from unencrypted snapshots; compliance violations (PCI-DSS, HIPAA, GDPR) for sensitive data stored in Neptune
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

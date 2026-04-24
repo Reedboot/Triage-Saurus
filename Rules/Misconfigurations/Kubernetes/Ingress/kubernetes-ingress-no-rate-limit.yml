@@ -4,6 +4,10 @@ rules:
       Ingress without rate limiting annotations.
       Services are vulnerable to DoS/brute force attacks.
       Add nginx.ingress.kubernetes.io/limit-rps annotation.
+      ATTACK: wfuzz/hydra → brute force login endpoints → exhaust application worker threads → service unavailable to legitimate users
+      TOOLS: hydra, wfuzz, ab, vegeta, slowloris
+      CHAIN: no rate limiting → brute force credentials → account takeover or DoS → service disruption for all users
+      IMPACT: Credential brute force leading to account compromise; DoS causing service unavailability; amplified impact on downstream services
     severity: INFO
     languages: [yaml]
     patterns:

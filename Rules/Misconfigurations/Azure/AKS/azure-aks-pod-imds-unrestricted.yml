@@ -14,6 +14,9 @@ rules:
       rather than using pod-level managed identity on all pods.
 
       ATTACK: Pod RCE/SSRF → GET http://169.254.169.254/metadata/identity/oauth2/token → managed identity bearer token → Azure Resource Manager API → Key Vault/SQL/Storage access
+      TOOLS: kubectl, curl, SSRFmap, Burp Suite
+      CHAIN: pod RCE or SSRF → IMDS token request → managed identity bearer token → ARM API calls → Key Vault secrets / Storage / SQL access
+      IMPACT: Managed identity compromise; access to all Azure resources assigned to the identity
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

@@ -13,6 +13,9 @@ rules:
       via the azurerm_logic_app_workflow access_control block.
 
       ATTACK: Discover trigger URL (leaked in code/logs) → POST arbitrary payload → trigger workflow → abuse downstream connectors (send emails, read SQL, write Storage)
+      TOOLS: curl, Postman, Burp Suite, truffleHog
+      CHAIN: trigger URL extraction from leaked code/logs → arbitrary payload POST → workflow execution → downstream connector abuse (Office 365, SQL, Azure Storage)
+      IMPACT: Unauthorized workflow execution; data exfiltration via SQL connectors, storage write, or phishing via email connector
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

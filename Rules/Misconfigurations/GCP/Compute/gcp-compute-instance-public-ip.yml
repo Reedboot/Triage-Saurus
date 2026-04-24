@@ -9,6 +9,11 @@ rules:
 
       Remove the access_config block to use internal IPs only. Use Cloud NAT for
       outbound internet access, and a bastion host or IAP for administrative access.
+
+      ATTACK: nmap -sV <public-ip> → identify open services (SSH/RDP/app ports) → brute-force SSH with hydra or exploit public-facing service CVE → gain shell on instance
+      TOOLS: nmap, masscan, hydra, metasploit, shodan (shodan search "org:<project>"), gcloud (gcloud compute instances list)
+      CHAIN: public IP enumeration via Shodan/masscan → open port identification → SSH brute-force or exploit vulnerable service → shell access → steal service account key from metadata → full GCP project access
+      IMPACT: Direct OS-level compromise of the instance; service account metadata theft enables full GCP API access as the instance identity
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

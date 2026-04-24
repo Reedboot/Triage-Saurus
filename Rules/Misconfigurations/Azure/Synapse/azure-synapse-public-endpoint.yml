@@ -11,7 +11,11 @@ rules:
       
       Remediation: Set public_network_access_enabled = false and configure
       private_link_hub_ids for private endpoint connectivity.
-    severity: WARNING
+      ATTACK: Discover public Synapse endpoint → brute force or obtain SQL pool credentials → execute SQL queries against analytics warehouse → bulk data exfiltration
+      TOOLS: sqlcmd, az-cli, MicroBurst, nmap, Synapse Studio, sqlmap
+      CHAIN: public endpoint discovery → SQL credential brute force or credential leak → SQL pool access → data warehouse query → bulk exfiltration of analytics data
+      IMPACT: Entire analytics data warehouse exposed; SQL credential compromise yields full read/write access to all production analytics data and linked services
+    severity:WARNING
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

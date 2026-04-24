@@ -3747,7 +3747,7 @@ class HierarchicalDiagramBuilder:
                 # NOTE: Data URI icons cause Mermaid CSS parser errors with special characters.
                 # Using simple placeholder styling instead of complex background-image URIs.
                 # Future: Consider external icon URLs instead of embedded data URIs.
-                lines.append(f"classDef {css_class} fill:#f9f9f9,stroke:#666666,stroke-width:2px;")
+                lines.append(f"classDef {css_class} stroke:#666666,stroke-width:2px;")
         
         return "\n".join(lines)
     

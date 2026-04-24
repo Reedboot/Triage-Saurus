@@ -29,7 +29,11 @@ rules:
       ```
       
       Reference: https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices
-    severity: ERROR
+      ATTACK: Exploit RCE on VM or App Service → query IMDS at 169.254.169.254 → obtain Contributor/Owner managed identity token → access all subscription resources → persistent backdoor
+      TOOLS: curl (IMDS), az-cli, AzureHound, MicroBurst, Stormspotter
+      CHAIN: RCE on compute resource → IMDS token theft → Contributor/Owner role abuse → full subscription resource access → backdoor identity creation
+      IMPACT: Compromised compute resource grants Contributor/Owner access to all subscription resources; lateral movement across entire Azure environment enabled
+    severity:ERROR
     languages: [terraform, json]
     pattern-either:
       - pattern-regex: "role_definition_name\\s*=\\s*\"(?:Contributor|Owner)\""

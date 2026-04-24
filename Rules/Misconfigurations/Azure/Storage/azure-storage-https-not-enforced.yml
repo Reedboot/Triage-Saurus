@@ -54,3 +54,7 @@ rules:
         - Blob/File/Queue/Table data transmitted unencrypted over HTTP
         - Subject to man-in-the-middle attacks
         - Non-compliant with security standards (PCI-DSS, HIPAA, etc.)
+      ATTACK: Send HTTP requests to storage endpoint → intercept SAS tokens from URL query strings → replay tokens for full container access
+      TOOLS: mitmproxy, Wireshark, Burp Suite, azcopy, az-cli
+      CHAIN: HTTP allowed → SAS tokens passed in plaintext URL → traffic intercept → token capture → unauthorized storage container access
+      IMPACT: SAS token and blob data interception; replayed SAS tokens grant persistent storage access for exfiltration or data injection

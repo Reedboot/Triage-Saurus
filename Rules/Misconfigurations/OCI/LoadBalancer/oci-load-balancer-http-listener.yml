@@ -9,6 +9,10 @@ rules:
       Replace the HTTP listener with an HTTPS listener configured with an SSL
       certificate bundle. Configure an HTTP-to-HTTPS redirect policy using
       oci_load_balancer_rule_set with REDIRECT_URI action targeting port 443.
+      ATTACK: mitmproxy on network path → intercept HTTP traffic on LB → capture auth tokens and session cookies in plaintext
+      TOOLS: mitmproxy, Wireshark, arpspoof, Bettercap, SSLstrip
+      CHAIN: network positioning → HTTP traffic interception → credential/token capture → session hijacking → account takeover
+      IMPACT: Theft of authentication credentials and session tokens from all users traversing the load balancer
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

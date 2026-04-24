@@ -4,6 +4,10 @@ rules:
       Terraform state stored locally with 'backend "local"' is unencrypted and
       not backed up. Use remote backend (Azure Storage, S3, Terraform Cloud)
       with encryption and locking enabled.
+      ATTACK: cat terraform.tfstate | jq '.resources' → extract plaintext secrets and connection strings from unencrypted local state
+      TOOLS: cat, jq, grep, gitleaks, truffleHog
+      CHAIN: filesystem access → local state file read → plaintext credential extraction → cloud API or database authentication → full access
+      IMPACT: Full credential exposure from state file; all Terraform-managed resources accessible using extracted secrets
     severity: WARNING
     languages: [terraform, hcl]
     pattern: |

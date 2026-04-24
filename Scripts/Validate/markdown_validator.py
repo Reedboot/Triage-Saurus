@@ -232,6 +232,68 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
                     )
                 )
 
+        # Check for empty subgraphs (only direction directive, no nodes).
+        # Mermaid 11.x rejects these with a syntax error.
+        _MERMAID_RESERVED_IDS = {
+            'default', 'end', 'graph', 'subgraph', 'style', 'class', 'classdef',
+            'click', 'call', 'flowchart', 'sequencediagram', 'gantt', 'pie',
+            'linkstyle', 'direction', 'tb', 'lr', 'bt', 'rl', 'td',
+            'null', 'true', 'false',
+        }
+        i_blk = 0
+        new_block_sg: list[str] = list(block)
+        removed_sg_ids: set[str] = set()
+        while i_blk < len(new_block_sg):
+            sg_m = re.match(r'(\s*)subgraph (\S+)\[', new_block_sg[i_blk])
+            if sg_m:
+                sg_id = sg_m.group(2)
+                # Collect up to matching 'end'
+                depth = 1
+                j_blk = i_blk + 1
+                while j_blk < len(new_block_sg) and depth > 0:
+                    if re.match(r'\s*subgraph ', new_block_sg[j_blk]):
+                        depth += 1
+                    elif re.match(r'\s*end\s*$', new_block_sg[j_blk]):
+                        depth -= 1
+                    j_blk += 1
+                inner = new_block_sg[i_blk + 1 : j_blk - 1]
+                has_nodes = any(
+                    ('["' in bl or '-->' in bl)
+                    for bl in inner
+                    if not re.match(r'\s*(direction\s+|$)', bl.strip())
+                )
+                if not has_nodes:
+                    problems.append(Problem(
+                        Path("."), "ERROR",
+                        f"Empty Mermaid subgraph '{sg_id}' (contains only direction directive); Mermaid 11.x will reject this",
+                        start_line_no + i_blk,
+                    ))
+                    if fix:
+                        removed_sg_ids.add(sg_id)
+                        del new_block_sg[i_blk:j_blk]
+                        continue
+            i_blk += 1
+        if removed_sg_ids:
+            # Also remove style lines for the removed subgraphs
+            new_block_sg = [
+                bl for bl in new_block_sg
+                if not any(re.search(rf'\bstyle {re.escape(sid)}\b', bl) for sid in removed_sg_ids)
+            ]
+            block = new_block_sg
+            changed = True
+
+        # Check for reserved Mermaid keywords used as subgraph IDs.
+        for j, b in enumerate(block):
+            sg_id_m = re.match(r'\s*subgraph (\S+)\[', b)
+            if sg_id_m:
+                sid = sg_id_m.group(1).lower().rstrip('"')
+                if sid in _MERMAID_RESERVED_IDS:
+                    problems.append(Problem(
+                        Path("."), "ERROR",
+                        f"Mermaid subgraph uses reserved keyword '{sg_id_m.group(1)}' as ID; prefix with 'nd_'",
+                        start_line_no + j,
+                    ))
+
         # Determine first non-empty line.
         first_non_empty_i = next((j for j, b in enumerate(block) if b.strip()), None)
         directive_line = block[first_non_empty_i].strip() if first_non_empty_i is not None else ""

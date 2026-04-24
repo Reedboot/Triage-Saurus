@@ -58,3 +58,7 @@ rules:
         ```bash
         grep -E 'sku\s*=\s*"[^"]*lts[^"]*"' tfscripts/*.tf
         ```
+      ATTACK: Identify EOL Ubuntu version → exploit known unpatched CVE (kernel/service) → privilege escalation to root → IMDS credential theft → Azure resource access
+      TOOLS: nmap, Shodan, Metasploit, searchsploit, curl (IMDS), linpeas, exploit-db
+      CHAIN: EOL OS detection → public CVE exploit (unpatched vulnerability) → privilege escalation to root → IMDS token theft → Azure resource access via managed identity
+      IMPACT: EOL OS has unpatched CVEs with public exploits; root access enables IMDS token theft and lateral movement to all Azure resources

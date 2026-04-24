@@ -7,6 +7,10 @@ rules:
       inside the VNet, removing it from public exposure entirely.
       Without this, the API server is reachable from any IP (unless restricted
       by api_server_authorized_ip_ranges, which is weaker than private mode).
+      ATTACK: Scan internet for public Kubernetes API endpoints → exploit exposed kube-apiserver → full cluster control
+      TOOLS: Shodan, masscan, kubectl, kube-hunter, Peirates, AzureHound, az-cli
+      CHAIN: public API server → internet-accessible kube-apiserver → credential brute force or known CVE exploit → full cluster takeover
+      IMPACT: Internet-exposed Kubernetes control plane; successful exploit yields cluster takeover, node access, and Azure subscription pivot
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

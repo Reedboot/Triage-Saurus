@@ -4,6 +4,10 @@ rules:
       App Service has no IP access restrictions configured. The application is
       accessible from any internet IP. Add `ip_restriction` rules in `site_config`
       to limit access to known IP ranges.
+      ATTACK: Enumerate App Service URL → launch automated scanning and exploitation (SQLi, brute force, fuzzing) from any internet IP
+      TOOLS: ffuf, Burp Suite, nuclei, sqlmap, Hydra, MicroBurst, nikto
+      CHAIN: no IP restrictions → unrestricted internet access → automated vulnerability scanning → exploitation → application compromise
+      IMPACT: Unrestricted attack surface; any internet host can probe and exploit application vulnerabilities at will
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

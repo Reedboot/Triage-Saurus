@@ -4,6 +4,10 @@ rules:
       RDS instance does not enforce SSL connections.
       Without SSL, data in transit is transmitted in plaintext.
       Set ssl_action = "Open" on the associated alicloud_db_connection resource.
+      ATTACK: tcpdump on network path → capture plaintext RDS traffic → extract SQL credentials and query data
+      TOOLS: tcpdump, Wireshark, arpspoof, Bettercap, mitmproxy
+      CHAIN: network positioning → plaintext RDS traffic interception → credential capture → DB authentication → data exfiltration
+      IMPACT: Theft of database credentials and all data transmitted between application and RDS instance
     severity: MEDIUM
     languages: [terraform, hcl]
     patterns:

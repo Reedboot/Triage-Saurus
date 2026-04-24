@@ -4,6 +4,10 @@ rules:
       Container allows privilege escalation (allowPrivilegeEscalation: true).
       This permits processes to gain more privileges than parent.
       Set to false unless specifically required.
+      ATTACK: exploit SUID binary inside container → setuid(0) → root privilege escalation inside container → leverage root for container escape
+      TOOLS: amicontained, deepce, linpeas, capsh, find (SUID discovery)
+      CHAIN: allowPrivilegeEscalation → SUID/syscall exploitation → root inside container → capability abuse → container escape attempt → host compromise
+      IMPACT: Any process can escalate to root; amplifies all RCE vulnerabilities; increases likelihood of successful container escape
     severity: WARNING
     languages: [yaml]
     pattern: |

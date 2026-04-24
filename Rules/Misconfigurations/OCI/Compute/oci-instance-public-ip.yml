@@ -4,6 +4,10 @@ rules:
       OCI Compute instance has a public IP assigned.
       Use private subnets and a load balancer for internet-facing traffic
       instead of assigning public IPs directly to instances.
+      ATTACK: nmap -sV <public-ip> → identify open services → brute force SSH/RDP or exploit known CVEs → instance compromise
+      TOOLS: nmap, masscan, Metasploit, Hydra
+      CHAIN: internet scanning → public IP discovery → service enumeration → exploitation → instance compromise
+      IMPACT: Direct compromise of compute instance and all data/services accessible from it
     severity: WARNING
     languages: [terraform, hcl]
     pattern: |

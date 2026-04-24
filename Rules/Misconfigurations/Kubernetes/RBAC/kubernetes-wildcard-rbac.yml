@@ -3,6 +3,10 @@ rules:
     message: |
       RBAC role uses wildcard (*) for verbs or resources.
       This grants excessive permissions. Use specific verbs/resources.
+      ATTACK: kubectl auth can-i '*' '*' → confirm unrestricted access → kubectl get secrets -A → kubectl exec -it <privileged-pod> -- bash → node escape
+      TOOLS: kubectl, Peirates, kube-hunter, rakkess, kubeletctl
+      CHAIN: wildcard RBAC → all resource access → secrets exfiltration → privileged pod exec → node compromise → cluster-admin escalation
+      IMPACT: Equivalent to cluster-admin; all resources readable and writable; enables full cluster takeover and persistent backdoor installation
     severity: WARNING
     languages: [yaml]
     patterns:

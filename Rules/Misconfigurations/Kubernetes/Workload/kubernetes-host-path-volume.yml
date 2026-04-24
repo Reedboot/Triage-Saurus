@@ -4,6 +4,10 @@ rules:
       Pod mounts hostPath volume, accessing host filesystem.
       This allows reading/writing host files, potential container escape.
       Use persistent volumes instead of hostPath.
+      ATTACK: ls <hostPath-mount>/ → find /etc/kubernetes/pki/ca.key → steal cluster CA → forge admin client certificate → kubectl --client-certificate → cluster-admin
+      TOOLS: kubectl, find, openssl, kubeletctl, crictl
+      CHAIN: hostPath mount → host filesystem read/write → kubeconfig/PKI discovery → CA key exfiltration → admin cert forgery → cluster-admin access
+      IMPACT: Host filesystem access enabling PKI and credential theft; writable paths enable node persistence; cluster-admin achievable via stolen certificates
     severity: WARNING
     languages: [yaml]
     pattern: |

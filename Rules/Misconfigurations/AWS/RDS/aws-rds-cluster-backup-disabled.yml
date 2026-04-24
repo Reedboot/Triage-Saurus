@@ -4,6 +4,10 @@ rules:
       RDS Aurora cluster has backup_retention_period = 0, which disables automated backups.
       Without backups, data recovery from accidental deletion or corruption is impossible.
       Set backup_retention_period to at least 7 days (35 days max recommended for production).
+      ATTACK: Compromise AWS credentials → aws rds delete-db-cluster --skip-final-snapshot → no backups exist → permanent irrecoverable data loss
+      TOOLS: aws-cli, Pacu, terraform destroy, AWS Console
+      CHAIN: Privileged credential compromise → cluster deletion API call → no backup retention → permanent data destruction with no recovery path
+      IMPACT: Permanent data loss on cluster deletion; ransomware or destructive attacks against Aurora clusters succeed with zero recovery capability
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

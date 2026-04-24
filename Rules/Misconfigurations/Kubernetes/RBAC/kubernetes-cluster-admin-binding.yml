@@ -3,6 +3,10 @@ rules:
     message: |
       ClusterRoleBinding grants cluster-admin role.
       This provides full cluster control. Use least privilege roles instead.
+      ATTACK: kubectl auth can-i --list → enumerate all resources → kubectl get secrets -A → exfiltrate credentials → kubectl exec for arbitrary code execution
+      TOOLS: kubectl, kube-hunter, Peirates, kubeletctl, rakkess
+      CHAIN: cluster-admin binding → unrestricted API access → all secrets enumeration → SA token theft → persistent backdoor deployment
+      IMPACT: Full cluster compromise; access to all secrets, configs, and workloads across all namespaces; unrestricted pod execution and node access
     severity: ERROR
     languages: [yaml]
     pattern: |

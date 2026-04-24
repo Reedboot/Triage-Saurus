@@ -34,6 +34,10 @@ rules:
       ```
       
       Reference: https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/custom-script-linux
+      ATTACK: Extract SQL credentials from VM extension settings via ARM API → authenticate to SQL server → dump all database contents → use DB admin privilege for lateral movement
+      TOOLS: az-cli, MicroBurst, sqlcmd, sqlmap, AzureHound, PowerShell Az module
+      CHAIN: ARM API read → extension credential extraction → SQL server authentication → database enumeration → data exfiltration → DB admin privilege abuse
+      IMPACT: SQL database completely compromised; all database contents exfiltrated; DB admin credentials enable further lateral movement to other services
     severity: ERROR
     languages: [terraform, json, bash]
     pattern-either:

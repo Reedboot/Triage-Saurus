@@ -6,6 +6,10 @@ rules:
       ValidateIssuerSigningKey=false allow attackers to forge tokens with arbitrary claims,
       use expired tokens, or bypass signature verification entirely.
       All validation parameters should be set to true in production.
+      ATTACK: forge JWT with arbitrary claims (ValidateIssuer=false, alg:none) → set role=admin in payload → API accepts token → bypass authorization → privileged endpoint access
+      TOOLS: jwt_tool, Burp Suite, jwt.io, python-jose, hashcat (alg:none attack)
+      CHAIN: disabled JWT validation → forge arbitrary claims/identity → API accepts forged token → role/permission bypass → privileged endpoint access → data manipulation
+      IMPACT: Complete authentication bypass; arbitrary identity and role claims accepted; token replay and alg:none attacks viable; full API access without valid credentials
     severity: ERROR
     languages: [csharp]
     pattern-either:

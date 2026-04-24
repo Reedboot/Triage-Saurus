@@ -10,6 +10,10 @@ rules:
       
       Excessive TTL can also be a security risk if messages contain sensitive
       data that should have a limited lifetime.
+      ATTACK: Gain queue access → inject long-lived malicious messages with TTL of months → messages persist beyond incident response window → exploit consumers at future time
+      TOOLS: az-cli, ServiceBusExplorer, Azure Service Bus SDK, MicroBurst
+      CHAIN: queue access → inject high-TTL malicious message → message persists past incident response → delayed exploitation of consumer application
+      IMPACT: Long-lived messages containing sensitive data expose PII for extended periods; malicious messages can trigger delayed exploitation; compliance violations for data retention
     severity: INFO
     languages: [terraform, hcl]
     pattern-either:

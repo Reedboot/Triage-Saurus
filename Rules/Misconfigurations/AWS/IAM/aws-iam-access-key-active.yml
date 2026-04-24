@@ -3,6 +3,10 @@ rules:
     message: |
       IAM access key is active. Long-lived access keys are a risk. Rotate keys and
       consider using temporary credentials (IAM Roles) instead of long-lived keys.
+      ATTACK: Discover leaked access key (GitHub, logs, env vars) → aws sts get-caller-identity → enumerate permissions → exploit assigned IAM policies for account pivot
+      TOOLS: truffleHog, git-secrets, aws-cli, Pacu, CloudSploit, enumerate-iam, gitleaks
+      CHAIN: Key discovery in code/config → identity and permission enumeration → privilege escalation → account persistence via new credentials
+      IMPACT: AWS account compromise via long-lived credential; attacker maintains persistent access until key is manually rotated or disabled
     severity: MEDIUM
     languages: [terraform, hcl]
     patterns:

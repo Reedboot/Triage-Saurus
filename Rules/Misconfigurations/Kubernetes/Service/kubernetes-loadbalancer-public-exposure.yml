@@ -4,6 +4,10 @@ rules:
       Kubernetes Service uses type: LoadBalancer, exposing service publicly.
       Ensure this is intentional and add network security controls.
       Consider using type: ClusterIP with Ingress instead.
+      ATTACK: nmap <LB-IP> → discover open ports/services → exploit vulnerabilities on exposed service → access internal cluster network
+      TOOLS: nmap, masscan, nuclei, shodan, metasploit
+      CHAIN: public LoadBalancer IP → internet-exposed port discovery → vulnerability exploitation → internal network access → lateral movement
+      IMPACT: Service directly exposed to internet bypassing ingress controls; any service vulnerability directly exploitable from public internet
     severity: WARNING
     languages: [yaml]
     pattern: "type: LoadBalancer"

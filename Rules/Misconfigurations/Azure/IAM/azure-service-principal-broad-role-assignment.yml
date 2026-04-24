@@ -47,7 +47,11 @@ rules:
       ```
       
       Reference: https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices
-    severity: ERROR
+      ATTACK: Leak SP credentials from Git/CI logs → authenticate as SP → use Contributor/Owner role to enumerate all subscription resources → exfiltrate data or create backdoor
+      TOOLS: az-cli, truffleHog, gitleaks, AzureHound, MicroBurst, Stormspotter
+      CHAIN: credential leak (Git/CI logs) → SP authentication → subscription-level role abuse → resource enumeration → data exfiltration or destruction
+      IMPACT: Leaked SP credentials grant full subscription access; all resources readable/modifiable; enables data theft, resource deletion, or persistent backdoor creation
+    severity:ERROR
     languages: [terraform, json]
     pattern-either:
       - pattern-regex: "role_definition_name\\s*=\\s*\"(?:Contributor|Owner)\""

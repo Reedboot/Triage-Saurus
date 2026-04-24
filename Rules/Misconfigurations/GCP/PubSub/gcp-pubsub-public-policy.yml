@@ -9,6 +9,11 @@ rules:
       Remove allUsers/allAuthenticatedUsers from Pub/Sub IAM and grant access
       only to specific service accounts using least-privilege roles
       (roles/pubsub.publisher or roles/pubsub.subscriber).
+
+      ATTACK: gcloud pubsub topics publish <topic> --message='{"type":"admin","payload":"..."}' (no auth for allUsers) → inject malicious message → poison downstream processing pipeline
+      TOOLS: gcloud, curl (Pub/Sub REST API), google-cloud-pubsub Python SDK, nuclei
+      CHAIN: allUsers publisher → inject crafted message → downstream Cloud Function/Dataflow/App Engine processes message → deserialization or injection vulnerability triggered → RCE or data corruption
+      IMPACT: Message injection into processing pipelines enables business logic abuse, data poisoning, or RCE in downstream consumers; allUsers subscriber drains topic and exfiltrates all event data
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

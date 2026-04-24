@@ -64,6 +64,10 @@ rules:
       ```
       
       Reference: https://learn.microsoft.com/en-us/azure/app-service/overview-vnet-integration
+      ATTACK: Compromise App Service via SSRF or RCE → use unrestricted outbound VNet access → reach internal databases and services
+      TOOLS: Burp Suite, curl, Metasploit, Covenant, Sliver, az-cli
+      CHAIN: App Service RCE/SSRF → no outbound NSG restrictions → reach internal databases/APIs → lateral movement → data exfiltration
+      IMPACT: Full internal VNet access from compromised app; lateral movement to databases, internal APIs, and other Azure services
     severity: WARNING
     languages: [terraform, json]
     pattern-either:

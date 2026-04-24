@@ -10,6 +10,10 @@ rules:
       where it is disabled or has findings silenced.
       
       Remediation: Set enable = true on aws_guardduty_detector.
+      ATTACK: Verify GuardDuty is disabled → perform IMDS credential abuse, crypto mining, port scanning, or S3 exfiltration → all attacker activity proceeds undetected
+      TOOLS: Pacu, aws-cli, ScoutSuite, Prowler, CloudSploit
+      CHAIN: Detection evasion (GuardDuty disabled) → unrestricted attacker TTPs → persistence establishment → data exfiltration with zero automated alerting
+      IMPACT: Zero threat detection; all attack patterns (credential abuse, C2, crypto mining, data exfiltration) proceed silently with no GuardDuty findings
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

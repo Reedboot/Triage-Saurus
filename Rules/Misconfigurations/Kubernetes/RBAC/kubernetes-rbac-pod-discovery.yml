@@ -4,6 +4,10 @@ rules:
       RBAC role allows broad pod/service discovery (list/watch).
       This enables reconnaissance for lateral movement.
       Restrict to specific namespaces/resources.
+      ATTACK: kubectl get pods,services,secrets -A → map cluster topology → identify privileged workloads → kubectl exec into high-value pods
+      TOOLS: kubectl, kube-hunter, Peirates, kdigger, rakkess
+      CHAIN: list/watch RBAC → cluster topology enumeration → high-value pod identification → privileged workload exploitation → lateral movement
+      IMPACT: Complete cluster map exposed; enables targeted lateral movement to sensitive workloads and credential stores; secrets enumeration across namespaces
     severity: WARNING
     languages: [yaml]
     pattern-regex: '(?s)kind:\s+ClusterRole[\s\S]*?resources:.*(?:pods|services|secrets)[\s\S]*?verbs:.*(?:list|watch|\*)'

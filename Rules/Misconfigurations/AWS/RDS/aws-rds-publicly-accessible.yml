@@ -5,6 +5,10 @@ rules:
       makes the endpoint resolvable from the internet. Even with security group restrictions,
       this widens the attack surface unnecessarily. Set publicly_accessible = false and
       access the database from within a VPC using private endpoints or a bastion.
+      ATTACK: Discover public RDS endpoint via DNS scan → connect on port 3306/5432 → brute force or replay stolen credentials → dump all database tables
+      TOOLS: nmap, masscan, hydra, sqlmap, mysql/psql client, aws-cli, Pacu, Shodan
+      CHAIN: DNS/port scan discovery → credential brute force or theft → authenticated DB connection → full schema enumeration and data exfiltration
+      IMPACT: Full database exposure to internet; direct brute force or credential replay against public RDS endpoint with no network perimeter protection
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

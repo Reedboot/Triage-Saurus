@@ -11,6 +11,10 @@ rules:
       tokens, rate limit counters, and application data.
       
       Remediation: Set auth_token to a strong secret, or use Valkey AUTH.
+      ATTACK: Gain VPC access (compromised EC2 or Lambda) → redis-cli -h <endpoint> (no password) → KEYS * → GET all cached session tokens and application data
+      TOOLS: redis-cli, nmap, aws-cli, Pacu, redis-rogue-server
+      CHAIN: VPC access (compromised workload) → unauthenticated Redis connection → KEYS/GET enumeration → session token theft → application account impersonation
+      IMPACT: Full cache data exfiltration; stolen session tokens enable application account takeover; FLUSHALL enables cache-based DoS against the application
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

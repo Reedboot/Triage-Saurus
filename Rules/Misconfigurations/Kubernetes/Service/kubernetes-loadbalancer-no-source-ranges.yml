@@ -11,6 +11,9 @@ rules:
       unrestricted public ingress node.
 
       ATTACK: Internet (any IP) → cloud LB (0.0.0.0/0) → Service port → application
+      TOOLS: Shodan, Censys, nmap, curl
+      CHAIN: internet scan discovers open cloud LB → unrestricted source IP access → direct Service port access → application exploitation
+      IMPACT: Unrestricted internet access to internal Kubernetes services; no IP allowlist enforcement
     severity: WARNING
     languages: [yaml]
     patterns:

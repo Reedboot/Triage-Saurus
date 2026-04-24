@@ -8,6 +8,11 @@ rules:
 
       Configure security definitions in the OpenAPI spec used by google_api_gateway_api_config
       to require Google ID token authentication (x-google-backend auth) or API key.
+
+      ATTACK: curl https://<gateway-id>-<hash>-uc.a.run.app/endpoint (no auth) → enumerate routes via 403/404 responses → call backend services directly without identity
+      TOOLS: curl, Postman, ffuf, nuclei, gcloud (gcloud api-gateway apis list), swagger-ui
+      CHAIN: unauthenticated API access → enumerate endpoints → invoke backend Cloud Functions/Run services → access downstream data or trigger privileged operations
+      IMPACT: Full backend API access without identity verification; data exfiltration and abuse of all exposed routes including any backend service the gateway proxies
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

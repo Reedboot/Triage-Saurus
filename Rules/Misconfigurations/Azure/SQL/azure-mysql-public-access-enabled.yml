@@ -4,6 +4,10 @@ rules:
       Azure MySQL server has public network access explicitly enabled.
       The database endpoint is reachable from the public internet.
       Set public_network_access_enabled = false and use private endpoints.
+      ATTACK: Discover public MySQL endpoint → spray weak/default credentials → exfiltrate all database tables
+      TOOLS: nmap, Hydra, mysqldump, MicroBurst, Prowler, az-cli
+      CHAIN: internet-accessible MySQL endpoint → credential spray → database access → bulk table dump → data exfiltration
+      IMPACT: Full database compromise; potential access to application secrets and customer PII stored in MySQL
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

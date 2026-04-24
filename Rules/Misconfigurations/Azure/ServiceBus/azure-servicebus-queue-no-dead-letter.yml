@@ -11,6 +11,10 @@ rules:
       
       Without this, message loss can occur silently, making incident 
       investigation impossible.
+      ATTACK: Flood queue with malformed messages → no dead-letter capture → critical messages silently dropped → service disruption or data loss invisible to operators
+      TOOLS: az-cli, Azure Service Bus SDK, ServiceBusExplorer, MicroBurst
+      CHAIN: queue access → malformed message flooding → no dead-letter routing → silent message loss → data integrity violation → incident investigation impossible
+      IMPACT: Critical messages silently lost with no audit trail; data integrity violations undetectable; incident investigation severely hampered by absence of dead-letter records
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

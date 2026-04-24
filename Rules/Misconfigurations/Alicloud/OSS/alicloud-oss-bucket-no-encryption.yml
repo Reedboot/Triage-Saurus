@@ -4,6 +4,10 @@ rules:
       OSS bucket does not have server-side encryption configured.
       Without encryption, data at rest is unprotected.
       Add a server_side_encryption_rule block to enable SSE.
+      ATTACK: compromised OSS credentials → ossutil cp oss://<bucket>/ . → download all plaintext unencrypted objects
+      TOOLS: aliyun-cli, ossutil, cloud_enum
+      CHAIN: storage access compromise → unencrypted object download → plaintext data exfiltration → data breach
+      IMPACT: Plaintext exfiltration of all bucket data; no encryption layer to impede attackers with storage-level access
     severity: MEDIUM
     languages: [terraform, hcl]
     patterns:

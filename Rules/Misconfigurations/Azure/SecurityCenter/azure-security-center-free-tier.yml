@@ -4,6 +4,10 @@ rules:
       Azure Security Center subscription pricing is set to the Free tier.
       The Free tier lacks Defender threat detection, vulnerability assessments, and just-in-time VM access.
       Set tier = "Standard" or higher to enable Microsoft Defender for the resource type.
+      ATTACK: Attack any Azure resource without Defender threat detection → no JIT VM access control → no vulnerability assessments → no threat intelligence alerts → exploit proceeds undetected
+      TOOLS: az-cli, MicroBurst, Prowler, Metasploit, nmap, Shodan
+      CHAIN: Free tier gap → no Defender anomaly detection → no JIT access enforcement → open management ports exploited → VM or service compromise without any alert
+      IMPACT: No threat detection coverage across Defender-covered resource types; VM JIT access unavailable; vulnerability assessments absent; attacks proceed fully undetected
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

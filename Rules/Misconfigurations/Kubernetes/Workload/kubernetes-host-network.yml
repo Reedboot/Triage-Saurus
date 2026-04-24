@@ -4,6 +4,10 @@ rules:
       Pod uses hostNetwork: true, bypassing network isolation.
       This allows pod to access host network stack and sniff traffic.
       Remove hostNetwork or use specific port bindings.
+      ATTACK: tcpdump -i eth0 → capture pod-to-pod plaintext traffic → intercept service account tokens in-flight → replay token to API server
+      TOOLS: tcpdump, Wireshark, arpspoof, ettercap, Peirates
+      CHAIN: hostNetwork → host network stack access → traffic sniffing → SA token interception → API server auth → RBAC escalation → lateral movement
+      IMPACT: Full visibility into host and pod network traffic; credential/token interception; potential to disrupt node networking; lateral movement via stolen tokens
     severity: ERROR
     languages: [yaml]
     pattern: "hostNetwork: true"

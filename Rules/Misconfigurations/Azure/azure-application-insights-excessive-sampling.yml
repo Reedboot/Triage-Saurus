@@ -15,6 +15,10 @@ rules:
         sampling_percentage = 20
       
       Use adaptive sampling (default) which keeps all errors regardless of rate.
+      ATTACK: Exploit application vulnerability → high sampling rate discards majority of error/attack traces → attack activity absent from telemetry → sustained exploitation without forensic evidence
+      TOOLS: Burp Suite, az-cli, Application Insights REST API, nuclei
+      CHAIN: application exploit → errors and attack traces generated → high sampling discards telemetry → no alert triggered → sustained attack invisible in Application Insights
+      IMPACT: Attack activity largely absent from telemetry; incident response and forensics severely hampered by missing trace data; compliance audit trails incomplete
     severity: INFO
     languages: [terraform, hcl]
     pattern-regex: |

@@ -9,6 +9,11 @@ rules:
 
       Set enable_legacy_abac = false (the default in new clusters) and migrate
       authorization to Kubernetes RBAC with WorkloadIdentity.
+
+      ATTACK: kubectl --server=https://<gke-endpoint> --username=admin (legacy ABAC) → create privileged pod → mount host filesystem or steal node service account → access GCP APIs
+      TOOLS: kubectl, kube-hunter, kube-bench, gcloud (gcloud container clusters get-credentials), peirates
+      CHAIN: legacy ABAC bypass of RBAC → over-permissive resource access → privileged pod creation → node service account token theft → GCP API calls as node identity → project-wide lateral movement
+      IMPACT: Full Kubernetes cluster compromise by bypassing RBAC; node service account access enables GCP project-level privilege escalation
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

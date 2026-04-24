@@ -5,6 +5,10 @@ rules:
       exposure of VMs increases attack surface. Use Azure Bastion or a jump host
       for management access. Remove public IP and route through a load balancer or
       Application Gateway.
+      ATTACK: Discover public VM IP via Shodan → scan open ports → exploit application/SSH/RDP vulnerability → VM shell → query IMDS at 169.254.169.254 → steal managed identity token
+      TOOLS: nmap, Shodan, Masscan, Metasploit, ssh, xfreerdp, curl (IMDS), MicroBurst
+      CHAIN: public IP discovery → port scan → service exploitation → VM compromise → IMDS query → managed identity token → Azure control plane access
+      IMPACT: VM directly reachable from internet; any port vulnerability exploitable; managed identity token yields access to all associated Azure resources
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

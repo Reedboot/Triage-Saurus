@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+import json
 import re
 import sqlite3
 
@@ -146,23 +147,31 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
         if pattern_types:
             # Determine friendly name based on pattern and resources
             if pattern_name == "api_gateway":
-                # Separate APIM instance from APIs, operations, products for proper nesting
+                # Separate the gateway instance from its child resources (methods, integrations etc.)
                 instance_types = [rt for rt in pattern_types if rt in (
                     "azurerm_api_management", "aws_api_gateway_rest_api", "aws_apigatewayv2_api",
                     "google_api_gateway_gateway", "oci_apigateway_gateway", "alicloud_api_gateway_group"
                 )]
                 child_types = [rt for rt in pattern_types if rt not in instance_types]
-                
+
                 if instance_types:
-                    grouped["API Management"] = instance_types
+                    # Use provider-correct label:
+                    # Azure → "API Management" (Azure API Management / APIM)
+                    # AWS   → "API Gateway"
+                    # GCP / others → "API Gateway"
+                    if any(rt.startswith("azurerm_") for rt in instance_types):
+                        api_label = "API Management"
+                    else:
+                        api_label = "API Gateway"
+                    grouped[api_label] = instance_types
                     pattern_resources.update(instance_types)
-                
+
                 # Group API children by their specific type
                 for child_rt in child_types:
                     child_friendly = _rtdb.get_friendly_name(_get_db(), child_rt)
                     grouped.setdefault(child_friendly, []).append(child_rt)
                     pattern_resources.add(child_rt)
-                
+
                 continue
             elif pattern_name == "storage":
                 if any(rt.startswith("aws_") for rt in pattern_types):
@@ -232,7 +241,13 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                 friendly = "Serverless Functions"
                 grouped[friendly] = pattern_types
             elif pattern_name == "key_vault":
-                friendly = "Key Vault"
+                # Use provider-appropriate label
+                if any(rt.startswith("aws_") for rt in pattern_types):
+                    friendly = "Secrets Manager"
+                elif any(rt.startswith("google_") for rt in pattern_types):
+                    friendly = "Secret Manager"
+                else:
+                    friendly = "Key Vault"
                 grouped[friendly] = pattern_types
             elif pattern_name == "database":
                 # Determine database type
@@ -256,7 +271,13 @@ def _group_parent_services(resource_types: list[str]) -> dict[str, list[str]]:
                 friendly = "Kubernetes Cluster"  # Will be overridden by inferred cluster logic
                 grouped[friendly] = pattern_types
             elif pattern_name == "app_service":
-                friendly = "App Service Plan"
+                # Use provider-appropriate label
+                if any(rt.startswith("google_") for rt in pattern_types):
+                    friendly = "App Engine"
+                elif any(rt.startswith("aws_") for rt in pattern_types):
+                    friendly = "Elastic Beanstalk"
+                else:
+                    friendly = "App Service Plan"
                 grouped[friendly] = pattern_types
             elif pattern_name == "monitoring":
                 if any("application_insights" in rt for rt in pattern_types):
@@ -853,6 +874,33 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "_transparent_data_encryption", # TDE is config, not a service endpoint
         "_virtual_network_rule",        # VNet access rules are network controls, not services
         "_machine_extension",           # VM extensions are agents installed on VMs, not separate services
+        # AWS API Gateway child resources — not entry points; only the REST API itself is
+        "api_gateway_resource",         # aws_api_gateway_resource (URL path segment)
+        "api_gateway_method",           # aws_api_gateway_method
+        "api_gateway_integration",      # aws_api_gateway_integration
+        "api_gateway_deployment",       # aws_api_gateway_deployment
+        "api_gateway_stage",            # aws_api_gateway_stage — deployment stage, not a separate endpoint
+        "apigatewayv2_stage",           # HTTP API stage
+        "apigatewayv2_integration",     # HTTP API equivalent
+        "apigatewayv2_route",           # HTTP API route
+        # AWS S3 config sub-resources — config on the bucket, not separate services
+        "s3_bucket_acl",
+        "s3_bucket_policy",
+        "s3_bucket_public_access_block",
+        "s3_bucket_ownership_controls",
+        "s3_bucket_versioning",
+        "s3_bucket_cors",
+        "s3_bucket_lifecycle",
+        "s3_bucket_notification",
+        "s3_bucket_website",
+        "s3_object",                    # S3 objects are data, not services
+        # GCP storage ACL/policy resources — config on buckets, not separate services
+        "storage_bucket_acl",
+        "storage_default_object_acl",
+        "storage_object_access_control",
+        "storage_bucket_access_control",
+        "storage_bucket_iam",
+        "storage_object_acl",
     )
     if any(token in resource_type for token in exclude_tokens):
         return False
@@ -860,10 +908,12 @@ def _is_data_routing_resource(resource_type: str) -> bool:
     include_tokens = (
         "application_gateway",
         "api_management",
+        "api_gateway",      # AWS API Gateway (aws_api_gateway_rest_api, etc.)
         "ingress",
         "load_balancer",
         "elb",
         "_lb",
+        "aws_alb",          # AWS Application Load Balancer (aws_alb)
         "forwarding_rule",
         "registry",
         "ecr",
@@ -886,9 +936,21 @@ def _is_data_routing_resource(resource_type: str) -> bool:
         "key_vault",
         "redis",
         "cosmos",
+        "dynamodb",         # AWS DynamoDB
         "neptune",
         "rds",
         "bigquery",
+        "ecs_service",      # AWS ECS Service (not just cluster)
+        "ecs_task",         # AWS ECS Task Definition
+        "autoscaling_group",# AWS Auto Scaling Group
+        "secret",           # Secrets Manager, Key Vault secrets
+        "cosmosdb",         # Azure Cosmos DB
+        "automation",       # Azure Automation Account (runbooks)
+        "pubsub",           # GCP Pub/Sub
+        "cloudrun",         # GCP Cloud Run
+        "cloud_run",
+        "cloud_function",   # GCP Cloud Functions
+        "app_engine",       # GCP App Engine
     )
     return any(token in resource_type for token in include_tokens)
 
@@ -1352,6 +1414,7 @@ def _resource_has_explicit_public_signal(resource: object) -> bool:
         "has_public_ip",
         "public_fqdn_enabled",
         "is_ingress_endpoint",  # Added for API operations and LB listeners
+        "internet_ingress_open",  # GCP/Azure firewall rules open to 0.0.0.0/0
     ):
         if _boolish(props.get(key)) is True:
             return True
@@ -1402,7 +1465,34 @@ def _evaluate_service_internet_access(
     if not service_resources:
         return (False, "Known ingress", False)
 
-    if not any(_resource_has_explicit_public_signal(res) for res in service_resources):
+    # Build the set of resource types that are internet-facing by design
+    # (e.g. azurerm_function_app, aws_elb, google_cloud_run_service)
+    try:
+        from internet_exposure_detector import InternetExposureDetector
+        public_by_design = InternetExposureDetector.get_public_entry_types()
+    except Exception:
+        public_by_design = set()
+
+    def _is_public_resource(res: object) -> bool:
+        if _resource_has_explicit_public_signal(res):
+            return True
+        rt = getattr(res, "resource_type", "").lower()
+        return rt in public_by_design
+
+    # For VMs/instances: also check if a public IP resource (azurerm_public_ip /
+    # aws_eip) exists in the same provider scope — that signals internet exposure
+    # even when the VM itself carries no explicit property.
+    vm_tokens = ("virtual_machine", "_instance", "aws_instance", "google_compute_instance")
+    is_vm_service = any(tok in rt.lower() for rt in service_raw_types for tok in vm_tokens)
+    has_public_ip_in_scope = False
+    if is_vm_service:
+        public_ip_types = {"azurerm_public_ip", "aws_eip", "google_compute_address"}
+        has_public_ip_in_scope = any(
+            getattr(r, "resource_type", "") in public_ip_types
+            for r in provider_scoped_resources
+        )
+
+    if not any(_is_public_resource(res) for res in service_resources) and not has_public_ip_in_scope:
         return (False, "Known ingress", False)
 
     if _is_edge_gateway_service(service_name):
@@ -1764,12 +1854,25 @@ def _build_simple_architecture_diagram(
             link_styles.append(f"  linkStyle {link_index} stroke:#ff8c00, stroke-width:3px")
         link_index += 1
 
-    lines.append('  Internet[Internet Users]')
-    lines.append('  Client[Client / Unknown Source]')
+    # Internet and Client nodes — declared up front, removed below if no edges use them.
+    # This ensures `Internet` is always a styled node, not an auto-created plain node.
+    INTERNET_EDGE_LINES = [
+        '  subgraph Internet_Edge["🌐 Internet Edge"]',
+        '    Internet["🌐 Internet"]',
+        '  end',
+    ]
+    INTERNET_EDGE_STYLE = '  style Internet_Edge stroke:#cc0000, stroke-width:2px'
+
     if not provider_resources:
+        lines.extend(INTERNET_EDGE_LINES)
         lines.append('  Internet -->|No cloud provider evidence| Unknown[No cloud provider resources detected]')
         style_id("Unknown", "security")
+        lines.append(INTERNET_EDGE_STYLE)
+        styled_ids.add('Internet_Edge')
         return "\n".join(lines)
+
+    # Declare Internet node now; remove block later if no internet edges found
+    lines.extend(INTERNET_EDGE_LINES)
 
     for provider, resources in provider_resources.items():
         provider_title = _provider_title(provider)
@@ -1849,6 +1952,11 @@ def _build_simple_architecture_diagram(
                 "monitor",
                 "diagnostic",
             )
+            # Module call blocks are meta-resources — never show them as diagram nodes.
+            # What they CREATE is shown via resource resolution in context_extraction.
+            module_call_types = ("terraform_module", "module_call", "helm_release")
+            if all(rt.lower() in module_call_types for rt in raw_types):
+                return True
             # Collect types that are NOT API-gateway components (those are always kept)
             non_api_types = [
                 rt for rt in raw_types
@@ -1892,6 +2000,69 @@ def _build_simple_architecture_diagram(
             for raw in raw_types
         )
         service_anchor_nodes: dict[str, str] = {}
+
+        # ── AWS Security Group → member-resource mapping ──────────────────────
+        # Build: sg_actual_name → list of resources whose security_group_refs
+        # include that SG.  security_group_refs stores TF resource keys (e.g.
+        # "ecs_sg") while DB resource_name stores the actual name attribute
+        # (e.g. "ECS-SG") — resolve via _terraform_actual_names.
+        aws_sg_members: dict[str, list] = {}   # sg_actual_name → [resource, ...]
+        aws_sg_display: dict[str, str] = {}    # sg_actual_name → display label
+        if provider.lower() in ("aws", "terraform"):
+            _actual_names_for_sg = _terraform_actual_names(repo_path)
+            # Build TF-key → actual_name lookup for aws_security_group
+            sg_key_to_actual: dict[str, str] = {}
+            for r in resources:
+                if r.resource_type != "aws_security_group":
+                    continue
+                # r.name may already be the actual name; also check _actual_names
+                raw_disp = _actual_names_for_sg.get((r.resource_type, r.name), r.name) or r.name
+                actual = _mermaid_safe_name(raw_disp)
+                aws_sg_display[r.name] = actual
+                # Allow lookup by TF key AND by actual name
+                sg_key_to_actual[r.name] = r.name   # identity mapping for r.name
+                # If actual differs (resolved from TF name attr), add alias
+                if raw_disp and raw_disp != r.name:
+                    sg_key_to_actual[raw_disp] = r.name
+            for r in resources:
+                props_r = getattr(r, "properties", {}) or {}
+                sg_refs_raw = props_r.get("security_group_refs")
+                if not sg_refs_raw:
+                    continue
+                try:
+                    sg_list: list[str] = (
+                        sg_refs_raw if isinstance(sg_refs_raw, list)
+                        else json.loads(sg_refs_raw)
+                        if isinstance(sg_refs_raw, str) and sg_refs_raw.startswith("[")
+                        else [sg_refs_raw]
+                    )
+                except Exception:
+                    sg_list = [sg_refs_raw] if not isinstance(sg_refs_raw, list) else sg_refs_raw
+                for sg_ref in sg_list:
+                    sg_ref = str(sg_ref).strip()
+                    if not sg_ref:
+                        continue
+                    # Resolve TF key → actual DB name; fallback to looking up via
+                    # _actual_names (TF file name attribute for the key)
+                    resolved = sg_key_to_actual.get(sg_ref)
+                    if not resolved:
+                        looked_up = _actual_names_for_sg.get(("aws_security_group", sg_ref))
+                        resolved = sg_key_to_actual.get(looked_up, looked_up) if looked_up else sg_ref
+                    aws_sg_members.setdefault(resolved, []).append(r)
+        # Services whose resource types are all inside SGs — skip normal rendering.
+        # Use the non_boundary_parents reverse-map so names match services_by_layer exactly.
+        aws_sg_nested_services: set[str] = set()
+        if aws_sg_members:
+            _rtype_to_parent: dict[str, str] = {}
+            for _parent, _raw_types in non_boundary_parents.items():
+                for _rt in _raw_types:
+                    _rtype_to_parent[_rt] = _parent
+            for sg_res_list in aws_sg_members.values():
+                for r in sg_res_list:
+                    _parent_svc = _rtype_to_parent.get(r.resource_type)
+                    if _parent_svc:
+                        aws_sg_nested_services.add(_parent_svc)
+        # ─────────────────────────────────────────────────────────────────────
 
         lines.append(f'  subgraph {provider_id}_Cloud["{provider_title} Services"]')
         lines.append("    direction TB")
@@ -1983,6 +2154,15 @@ def _build_simple_architecture_diagram(
         except Exception:
             pass
 
+        # Inject Security Group as a visible service when it has nested member resources.
+        # Normally filtered out as a control-only resource; here it acts as a structural
+        # subgraph container for EC2, RDS, ECS etc.
+        _SG_FRIENDLY = "Security Group"
+        if aws_sg_members and _SG_FRIENDLY not in services_by_layer.get("security", []):
+            services_by_layer.setdefault("security", []).append(_SG_FRIENDLY)
+            non_boundary_parents.setdefault(_SG_FRIENDLY, ["aws_security_group"])
+            routable_parents.setdefault(_SG_FRIENDLY, ["aws_security_group"])
+
         svc_global_idx = 0
         for layer_key in layer_order:
             layer_services = services_by_layer.get(layer_key, [])
@@ -2030,6 +2210,7 @@ def _build_simple_architecture_diagram(
                 | sb_nested_services
                 | ecs_nested_instances
                 | cosmos_nested_services
+                | aws_sg_nested_services   # resources rendered inside their SG subgraph
             )
 
             # Adjust layer service count to account for all nested services
@@ -2058,6 +2239,53 @@ def _build_simple_architecture_diagram(
                 service_raw_all = sorted(set(non_boundary_parents.get(service, [])))
                 exposure_target = None
                 
+                # ── AWS Security Group with nested protected resources ─────────
+                # Each individual SG becomes a subgraph; the resources it protects
+                # (EC2, RDS, ECS, ALB, …) are rendered as nodes inside that subgraph.
+                is_aws_sg_service = (
+                    "security group" in service.lower()
+                    and any("aws_security_group" == rt for rt in service_raw_all)
+                    and bool(aws_sg_members)
+                )
+                if is_aws_sg_service:
+                    _db_sg = _get_db()
+                    # Outer subgraph wraps all SGs for this provider
+                    sg_outer = f"{layer_id}_Svc_{p_idx}"
+                    lines.append(f'      subgraph {sg_outer}["Security Groups"]')
+                    style_id(sg_outer, layer_cat)
+                    for sg_idx, (sg_name, member_resources) in enumerate(sorted(aws_sg_members.items())):
+                        disp = aws_sg_display.get(sg_name, sg_name)
+                        sg_sub = f"{sg_outer}_SG_{sg_idx}"
+                        lines.append(f'        subgraph {sg_sub}["🛡️ {disp}"]')
+                        style_id(sg_sub, layer_cat)
+                        # Group members by friendly name to avoid duplicate nodes
+                        member_by_friendly: dict[str, list[str]] = {}
+                        for mr in member_resources:
+                            fn = _rtdb.get_friendly_name(_db_sg, mr.resource_type)
+                            raw_disp_m = _actual_names.get((mr.resource_type, mr.name), mr.name) or mr.name
+                            member_by_friendly.setdefault(fn, []).append(_mermaid_safe_name(raw_disp_m))
+                        for m_idx, (m_friendly, m_names) in enumerate(sorted(member_by_friendly.items())):
+                            m_label = f"{m_friendly} ({m_names[0]})" if len(m_names) == 1 else m_friendly
+                            m_node = f"{sg_sub}_M{m_idx}"
+                            lines.append(f'          {m_node}["{m_label}"]')
+                            # Infer category for member node colouring
+                            m_raw_types = non_boundary_parents.get(m_friendly, [])
+                            m_cat = category_for_raw_types(m_raw_types) if m_raw_types else "app"
+                            style_id(m_node, m_cat)
+                            # Propagate internet exposure from the SG to the member node
+                            sg_resources = [r for r in resources if r.resource_type == "aws_security_group" and r.name == sg_name]
+                            sg_raw = ["aws_security_group"]
+                            is_pub, ing_label, ins_http = _service_internet_posture("Security Group", sg_raw)
+                            if is_pub:
+                                add_link("Internet", m_node, label=None, red=ins_http)
+                            service_anchor_nodes[m_friendly] = m_node
+                        lines.append("        end")
+                    lines.append("      end")
+                    service_anchor_nodes[service] = sg_outer
+                    exposure_target = sg_outer
+                    continue
+                # ─────────────────────────────────────────────────────────────
+
                 # Check if this is an API Management service with multiple components
                 is_apim_service = service == "API Management" or any(_is_apim_component(r) for r in service_raw)
                 non_apim_resources, apim_structure = _group_apim_resources(service_raw, resources, repo_path) if is_apim_service else (service_raw, {})
@@ -2256,9 +2484,18 @@ def _build_simple_architecture_diagram(
                     ecs_names = service_instances.get(service, [])
                     ecs_label = f"{service} ({ecs_names[0]})" if len(ecs_names) == 1 else service
                     svc_subgraph = f"{layer_id}_Svc_{p_idx}"
+                    # Only nest instance services that are NOT already inside an SG subgraph
+                    ecs_to_render = [s for s in sorted(ecs_nested_instances) if s not in aws_sg_nested_services]
+                    if not ecs_to_render:
+                        # All instances are inside SGs — render ECS Cluster as a plain node
+                        node_id = f"{layer_id}_Svc_{p_idx}"
+                        lines.append(f'      {node_id}["{ecs_label}"]')
+                        style_id(node_id, layer_cat)
+                        service_anchor_nodes[service] = node_id
+                        continue
                     lines.append(f'      subgraph {svc_subgraph}["{ecs_label}"]')
                     style_id(svc_subgraph, layer_cat)
-                    for inst_svc in sorted(ecs_nested_instances):
+                    for inst_svc in ecs_to_render:
                         inst_names = service_instances.get(inst_svc, [])
                         inst_label = f"{inst_svc} ({inst_names[0]})" if len(inst_names) == 1 else inst_svc
                         inst_node = f"{svc_subgraph}_{re.sub(r'[^A-Za-z0-9]', '_', inst_svc)}"
@@ -2288,14 +2525,9 @@ def _build_simple_architecture_diagram(
                     is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
                     will_be_internet_exposed = not _is_edge_gateway_service(service) and is_public
                     
-                    # For internet-exposed single-node services, define outside layer subgraph
-                    # to avoid Mermaid error: "node defined inside subgraph, referenced outside"
-                    if will_be_internet_exposed:
-                        # Define at provider level (4 spaces inside provider subgraph)
-                        lines.append(f'    {node_id}["{service}{name_suffix}"]')
-                    else:
-                        # For non-exposed nodes, keep inside layer subgraph (6 spaces)
-                        lines.append(f'      {node_id}["{service}{name_suffix}"]')
+                    # Mermaid 11.x allows cross-subgraph edge references, so always
+                    # define nodes inside their layer subgraph (6 spaces).
+                    lines.append(f'      {node_id}["{service}{name_suffix}"]')
                     style_id(node_id, layer_cat)
                     exposure_target = node_id
                 elif apim_structure:
@@ -2625,7 +2857,12 @@ def _build_simple_architecture_diagram(
                         # Standard case: single exposure point
                         service_anchor_nodes[service] = exposure_target
                         is_public, ingress_label, insecure_http = _service_internet_posture(service, service_raw_all)
-                        if not _is_edge_gateway_service(service) and is_public:
+                        # Edge gateway services (LBs, App Gateway) are added in the dedicated
+                        # edge-gateway loop below. But API Gateways that used the single-node
+                        # path (not the APIM operation tuple path) are skipped by that loop,
+                        # so handle them here.
+                        is_api_gw = any(tok in service.lower() for tok in ('api gateway', 'api management', 'apim'))
+                        if is_public and (not _is_edge_gateway_service(service) or is_api_gw):
                             add_link("Internet", exposure_target, label=ingress_label, red=insecure_http)
                     
                     # Alerting links (use first node if tuple/list)
@@ -2750,12 +2987,73 @@ def _build_simple_architecture_diagram(
 
         lines.append("  end")
 
-    # Remove unused ingress nodes (Internet/Client)
+    # ── Post-process: remove empty subgraphs ───────────────────────────────
+    # Mermaid 11.x rejects subgraphs that contain only a `direction` directive
+    # and no actual nodes. Strip those out along with their style entries.
+    def _remove_empty_subgraphs(src: list[str]) -> list[str]:
+        out: list[str] = []
+        i = 0
+        while i < len(src):
+            line = src[i]
+            # Detect subgraph opening
+            sg_m = re.match(r'(\s*)subgraph (\S+)\[', line)
+            if sg_m:
+                sg_id = sg_m.group(2)
+                # Collect lines until matching 'end'
+                block = [line]
+                depth = 1
+                j = i + 1
+                while j < len(src) and depth > 0:
+                    bl = src[j]
+                    if re.match(r'\s*subgraph ', bl):
+                        depth += 1
+                    elif re.match(r'\s*end\s*$', bl):
+                        depth -= 1
+                    block.append(bl)
+                    j += 1
+                # Check if block has any node definition (contains `["`)
+                inner = block[1:-1]  # exclude opening and 'end'
+                has_nodes = any('["' in bl or "-->" in bl for bl in inner
+                                if not re.match(r'\s*direction\s+', bl))
+                if has_nodes:
+                    # Recurse into inner content to remove any nested empty subgraphs
+                    cleaned_inner = _remove_empty_subgraphs(inner)
+                    out.append(block[0])
+                    out.extend(cleaned_inner)
+                    out.append(block[-1])
+                else:
+                    # Empty subgraph — also remove its style line from node_styles
+                    node_styles[:] = [ns for ns in node_styles
+                                      if not re.search(rf'\bstyle {re.escape(sg_id)}\b', ns)]
+                i = j
+                continue
+            out.append(line)
+            i += 1
+        return out
+
+    lines = _remove_empty_subgraphs(lines)
     has_internet_edges = any(line.strip().startswith("Internet -->") for line in edge_lines)
     has_client_edges = any(line.strip().startswith("Client -->") for line in edge_lines)
     
     if not has_internet_edges:
-        lines = [line for line in lines if line.strip() != "Internet[Internet Users]"]
+        # Remove the entire Internet_Edge subgraph block (3 lines)
+        new_lines = []
+        skip_until_end = False
+        for line in lines:
+            if line.strip() == 'subgraph Internet_Edge["🌐 Internet Edge"]':
+                skip_until_end = True
+                continue
+            if skip_until_end and line.strip() == 'end':
+                skip_until_end = False
+                continue
+            if skip_until_end:
+                continue
+            new_lines.append(line)
+        lines = new_lines
+    else:
+        # Internet_Edge is used — add its style
+        node_styles.append(INTERNET_EDGE_STYLE)
+        styled_ids.add('Internet_Edge')
     if not has_client_edges:
         lines = [line for line in lines if line.strip() != "Client[Client / Unknown Source]"]
 
@@ -2766,7 +3064,13 @@ def _build_simple_architecture_diagram(
         for ls in link_styles:
             lines.append(f'  {ls.strip()}')
     if node_styles:
+        # Per Styling.md: only apply stroke styles to subgraph containers, never to leaf nodes.
+        # Leaf node styles cause white backgrounds on dark themes.
+        subgraph_ids_in_diagram = set(re.findall(r'subgraph (\S+)\[', '\n'.join(lines)))
         for ns in node_styles:
+            m = re.match(r'\s*style (\S+)', ns)
+            if m and m.group(1) not in subgraph_ids_in_diagram:
+                continue  # skip leaf node styles
             lines.append(f'  {ns.strip()}')
     
     diagram = "\n".join(lines)
@@ -3191,10 +3495,21 @@ def _infer_protocol_port(resource_type: str, resource_name: str) -> tuple[str | 
     return (None, None)
 
 
+_MERMAID_RESERVED = frozenset({
+    "default", "end", "graph", "subgraph", "style", "classDef", "class",
+    "click", "call", "flowchart", "sequenceDiagram", "gantt", "pie",
+    "linkStyle", "direction", "TB", "LR", "BT", "RL", "TD",
+    "null", "true", "false",
+})
+
+
 def _mermaid_node_id(label: str, used_ids: set[str]) -> str:
     base = re.sub(r"[^A-Za-z0-9_]", "_", label.strip()) or "node"
     if base[0].isdigit():
         base = f"n_{base}"
+    # Prefix reserved Mermaid keywords to prevent parse errors
+    if base.lower() in {k.lower() for k in _MERMAID_RESERVED}:
+        base = f"nd_{base}"
     node_id = base
     idx = 2
     while node_id in used_ids:
@@ -3849,21 +4164,16 @@ def write_repo_summary(
         db_connections=db_topology_connections,
     )
 
-    # Build service-only diagram (inner mermaid) and prefer provider-level cloud architecture if available.
+    # Build architecture diagram from this repo's own resources only.
+    # Do NOT read the shared cloud-level Architecture_<Provider>.md — that file aggregates
+    # resources across all repos for the same provider and would contaminate repo-specific diagrams.
+    # Use _build_simple_architecture_diagram with ALL providers so multi-cloud repos are complete.
     svc_diagram = _build_service_only_architecture_diagram(repo_name, context, repo_path=repo)
-    architecture_diagram_content = svc_diagram
-    try:
-        if providers:
-            provider_file = summary_dir / "Cloud" / f"Architecture_{_provider_title(providers[0])}.md"
-            if provider_file.exists():
-                txt = provider_file.read_text(encoding="utf-8", errors="ignore")
-                start_idx = txt.find("```mermaid")
-                if start_idx != -1:
-                    start_idx = txt.find("\n", start_idx) + 1
-                    end_idx = txt.find("```", start_idx)
-                    if end_idx != -1:
-                        architecture_diagram_content = txt[start_idx:end_idx].strip()
-    except Exception:
+    if provider_resources:
+        architecture_diagram_content = _build_simple_architecture_diagram(
+            repo_name, provider_resources, repo_path=repo
+        )
+    else:
         architecture_diagram_content = svc_diagram
 
     # If the generated service diagram looks like a permissions map and no explicit permissions

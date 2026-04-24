@@ -11,7 +11,11 @@ rules:
       Enable content trust by setting trust_policy { enabled = true } on the
       azurerm_container_registry resource. Combine with quarantine_policy_enabled
       and retention_policy to enforce image governance.
-    severity: WARNING
+      ATTACK: Compromise CI/CD pipeline or registry credentials → push malicious unsigned image with legitimate name → clusters pull and run malicious container → backdoor deployed across environment
+      TOOLS: docker, az-cli, Cosign, AzureHound, Trivy, crane
+      CHAIN: CI/CD compromise or credential theft → unsigned malicious image push → cluster image pull (no verification) → malicious container execution → supply chain backdoor
+      IMPACT: Malicious container images deployed across all clusters pulling from registry; supply chain backdoor enables persistent access, data theft, and further compromise
+    severity:WARNING
     languages: [terraform, hcl]
     pattern-either:
       - patterns:

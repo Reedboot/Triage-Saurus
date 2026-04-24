@@ -4,6 +4,10 @@ rules:
       Azure Managed Disk has encryption_settings with enabled = false.
       Disabling disk encryption exposes data at rest if underlying storage is compromised.
       Remove the encryption_settings block (encryption is on by default) or set enabled = true.
+      ATTACK: Compromise Azure account with disk snapshot permissions → create snapshot of unencrypted disk → mount snapshot → read plaintext data → exfiltrate secrets and PII
+      TOOLS: az-cli, Azure portal, PowerShell Az module, MicroBurst
+      CHAIN: disk snapshot via compromised account → unencrypted volume mount → plaintext data read → secrets/PII exfiltration → lateral movement with extracted credentials
+      IMPACT: All data on disk exposed if storage layer or account is compromised; disk snapshots and exports yield fully plaintext data without any key material
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

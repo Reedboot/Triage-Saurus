@@ -4,7 +4,11 @@ rules:
       Network Security Group does not have flow logs enabled.
       Network traffic patterns will not be captured for forensics.
       Add azurerm_network_watcher_flow_log resource.
-    severity: INFO
+      ATTACK: Exploit open NSG rules to move laterally through network → no flow log data to detect or record traffic → sustained lateral movement completely invisible
+      TOOLS: nmap, Metasploit, Impacket, CrackMapExec, Azure Sentinel, Network Watcher
+      CHAIN: network access via exploited rule → lateral movement between subnets → no flow logs capture traffic → incident response blind → persistent undetected presence
+      IMPACT: Network traffic patterns unrecorded; lateral movement and data exfiltration invisible to forensic investigation and incident response
+    severity:INFO
     languages: [terraform, hcl]
     pattern-regex: '(?s)^(?=[\s\S]*resource "azurerm_network_security_group")(?![\s\S]*resource "azurerm_network_watcher_flow_log")'
     metadata:

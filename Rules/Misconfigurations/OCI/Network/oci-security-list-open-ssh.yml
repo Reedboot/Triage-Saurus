@@ -3,6 +3,10 @@ rules:
     message: |
       OCI Security List allows SSH (port 22) from the internet (0.0.0.0/0).
       Restrict SSH ingress to known, trusted IP ranges or use a bastion service.
+      ATTACK: nmap -p 22 0.0.0.0/0 → discover open SSH → Hydra brute force credentials or leaked key → instance access
+      TOOLS: nmap, masscan, Hydra, ssh-audit, Metasploit
+      CHAIN: internet scanning → open SSH discovery → credential brute force → instance compromise → lateral movement
+      IMPACT: Full instance compromise with potential for lateral movement across the VCN
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

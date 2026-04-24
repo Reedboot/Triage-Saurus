@@ -6,6 +6,10 @@ rules:
       deprecated by PCI-DSS, Microsoft, and most compliance frameworks.
       Set min_tls_version = "1.2" in the site_config block. TLS 1.3 is preferred
       where supported.
+      ATTACK: Negotiate legacy TLS 1.0/1.1 with App Service → POODLE/BEAST/SWEET32 exploit → decrypt HTTPS → steal credentials
+      TOOLS: testssl.sh, nmap ssl-enum-ciphers, SSLscan, Bettercap, Wireshark, SSLstrip
+      CHAIN: legacy TLS negotiated → protocol downgrade attack → HTTPS session decryption → credential and token extraction → account takeover
+      IMPACT: Application HTTPS traffic decrypted; authentication credential theft enabling persistent unauthorized application access
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

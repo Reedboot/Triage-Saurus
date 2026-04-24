@@ -8,6 +8,10 @@ rules:
       and API keys stored as String type are also visible in the AWS Console without
       any additional permissions. Use SecureString for all sensitive values to
       ensure KMS encryption at rest and more granular access control.
+      ATTACK: Compromise IAM credentials with ssm:GetParameter → aws ssm get-parameters --names /app/db/password → retrieve plaintext secrets without KMS decryption
+      TOOLS: aws-cli, Pacu, ScoutSuite, CloudSploit, enumerate-iam
+      CHAIN: IAM credential theft → SSM parameter path enumeration → plaintext secret retrieval → database/API credential use → lateral movement
+      IMPACT: Plaintext secret exposure to any IAM principal with GetParameter; no KMS step means any ssm:GetParameter grant exposes secrets without additional controls
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

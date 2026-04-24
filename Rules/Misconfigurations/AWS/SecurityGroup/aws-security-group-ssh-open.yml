@@ -5,6 +5,10 @@ rules:
       0.0.0.0/0 or ::/0. This exposes the instance management interface to the internet,
       enabling brute-force and exploit attacks. Restrict ingress to known CIDR ranges,
       use a bastion host, or enforce AWS Systems Manager Session Manager instead.
+      ATTACK: Scan internet for port 22/3389 open on EC2 IPs → brute force SSH/RDP credentials or exploit unpatched CVE → gain remote shell on EC2 instance
+      TOOLS: nmap, masscan, hydra, Metasploit, ssh-audit, Shodan, Pacu
+      CHAIN: Port scan discovery → SSH/RDP credential brute force or CVE exploit → remote shell access → IMDS credential theft → full AWS account pivot
+      IMPACT: Remote shell access to EC2 instance; leads to IMDS IAM credential theft, host compromise, and lateral movement through the VPC to internal services
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

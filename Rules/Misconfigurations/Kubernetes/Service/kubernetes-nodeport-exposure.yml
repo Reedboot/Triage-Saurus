@@ -3,6 +3,10 @@ rules:
     message: |
       Service uses type: NodePort, exposing service on all node IPs.
       Prefer ClusterIP with Ingress for better security controls.
+      ATTACK: nmap <node-IP>:30000-32767 → discover NodePort services → exploit service directly on node interface → access internal cluster workloads
+      TOOLS: nmap, masscan, nuclei, curl, metasploit
+      CHAIN: NodePort on all nodes → direct service exposure → bypass ingress security controls → service exploitation → cluster internal access
+      IMPACT: Service exposed on all node IPs; accessible to any host with network access to nodes; bypasses ingress WAF and auth annotations
     severity: INFO
     languages: [yaml]
     pattern: "type: NodePort"

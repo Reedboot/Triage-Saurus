@@ -4,6 +4,10 @@ rules:
       Security group rule allows SSH (port 22) from any IP (0.0.0.0/0).
       Unrestricted SSH access exposes instances to brute-force and exploitation.
       Restrict cidr_ip to known administrative IP ranges.
+      ATTACK: nmap -p 22 0.0.0.0/0 → discover open SSH → Hydra brute force or leaked key exploitation → instance root access
+      TOOLS: nmap, masscan, Hydra, ssh-audit, Metasploit
+      CHAIN: internet scanning → open SSH discovery → credential brute force → SSH authentication → instance compromise → lateral movement
+      IMPACT: Full compute instance compromise with access to all data and credentials stored on the host
     severity: HIGH
     languages: [terraform, hcl]
     patterns:

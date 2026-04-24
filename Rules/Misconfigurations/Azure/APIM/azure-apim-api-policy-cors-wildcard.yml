@@ -18,6 +18,10 @@ rules:
         </cors>
       
       Never use <origin>*</origin> in production APIs.
+      ATTACK: Create malicious website → issue cross-origin request to APIM API → steal API response data from authenticated user's session
+      TOOLS: Burp Suite, custom HTML/JS CSRF page, mitmproxy, Browser DevTools
+      CHAIN: wildcard CORS policy → CSRF request from malicious site → exfiltrate API response using victim's session cookies → data theft
+      IMPACT: Sensitive API data theft via cross-origin attacks; session token theft enabling full account takeover
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

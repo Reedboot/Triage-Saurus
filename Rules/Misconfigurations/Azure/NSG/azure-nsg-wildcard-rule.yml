@@ -4,6 +4,10 @@ rules:
       Network Security Group rule uses wildcard "*" for source or destination.
       This effectively allows traffic from/to ANY IP address, similar to 0.0.0.0/0.
       Restrict to specific IP ranges, service tags, or application security groups.
+      ATTACK: Discover wildcard NSG Allow rule via Shodan/nmap → direct unrestricted access to all exposed services → exploit application vulnerabilities → lateral movement across network
+      TOOLS: nmap, Shodan, Masscan, Metasploit, Nuclei, CrackMapExec
+      CHAIN: wildcard rule discovery → unrestricted port/address access → application or service exploitation → VM/service compromise → lateral movement to adjacent resources
+      IMPACT: All traffic to/from affected address permitted; any service on affected hosts exposed to entire internet or all VMs in the network segment
     severity: WARNING
     languages: [terraform, hcl]
     pattern-either:

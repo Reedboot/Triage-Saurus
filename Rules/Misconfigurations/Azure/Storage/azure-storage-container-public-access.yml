@@ -37,6 +37,10 @@ rules:
       ```
       
       Reference: https://learn.microsoft.com/en-us/azure/storage/blobs/storage-manage-access-to-resources
+      ATTACK: az storage blob list --container-name <name> (anonymous) → enumerate all blobs → download and extract embedded secrets
+      TOOLS: az-cli, azcopy, MicroBurst, AzureHound, BlobHunter, Storage Explorer
+      CHAIN: public container discovered → anonymous blob enumeration → bulk download → credential extraction → Azure subscription pivot
+      IMPACT: Full data exfiltration from storage containers; credential theft enabling broader Azure subscription compromise
     severity: ERROR
     languages: [terraform, json]
     pattern-either:

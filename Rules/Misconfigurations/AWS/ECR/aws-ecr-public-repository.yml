@@ -8,6 +8,10 @@ rules:
 
       Use private ECR repositories with appropriate IAM resource policies limiting
       pull access to specific AWS accounts and roles.
+      ATTACK: aws ecr-public get-login-password → docker pull public.ecr.aws/<registry>/<repo> → extract image layers → grep for secrets, API keys, passwords
+      TOOLS: aws-cli, docker, dive, truffleHog, strings, grep, container-explorer
+      CHAIN: Public image pull (no auth required) → layer-by-layer extraction → static secret analysis → credential harvest → AWS/external API access
+      IMPACT: Any internet user can pull images and extract hardcoded secrets, proprietary code, and internal configuration baked into image layers
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

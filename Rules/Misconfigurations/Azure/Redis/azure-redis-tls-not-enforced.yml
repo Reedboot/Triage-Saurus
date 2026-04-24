@@ -10,7 +10,11 @@ rules:
       Set non_ssl_port_enabled = false (or omit it, as false is the default) and
       set minimum_tls_version = "1.2" on azurerm_redis_cache resources.
       Only connect to Redis on SSL port 6380.
-    severity: WARNING
+      ATTACK: Obtain network access between client and Redis → intercept plaintext port 6379 traffic → capture AUTH password and cache contents → replay credentials for full Redis access
+      TOOLS: tcpdump, Wireshark, mitmproxy, Ettercap, redis-cli, Scapy
+      CHAIN: network access (shared VNet or MITM position) → plaintext traffic interception on port 6379 → credential capture → authentication bypass → full cache read/write
+      IMPACT: AUTH password and all cache contents transmitted in plaintext; MITM attacker gains full Redis access and reads all cached sessions, tokens, and sensitive data
+    severity:WARNING
     languages: [terraform, hcl]
     pattern-either:
       - patterns:

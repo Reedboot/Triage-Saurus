@@ -4,6 +4,10 @@ rules:
       Key Vault resources should define network_acls to restrict access.
       Add a network_acls block with default_action = "Deny" and explicit allow rules
       or private endpoints to avoid exposing secrets to the public internet.
+      ATTACK: Steal access token with Key Vault permissions → call Key Vault API from any internet IP → enumerate and read all secrets → lateral movement with exfiltrated credentials
+      TOOLS: az-cli, MicroBurst, AzureHound, Stormspotter, curl
+      CHAIN: token theft via phishing or credential spray → Key Vault API call from any IP → secret enumeration → credential exfiltration → lateral movement across dependent services
+      IMPACT: Key Vault accessible from any IP with valid token; no network-layer defense-in-depth; all secrets reachable once any token is compromised
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

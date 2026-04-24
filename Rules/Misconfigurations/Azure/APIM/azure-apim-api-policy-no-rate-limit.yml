@@ -14,6 +14,10 @@ rules:
       Example:
         <rate-limit calls="100" renewal-period="60" />
         <quota calls="10000" bandwidth="40960" renewal-period="604800" />
+      ATTACK: Send automated requests at maximum rate → exhaust backend resources or billing limits → DoS or credential stuffing at scale
+      TOOLS: Hydra, ab (Apache Benchmark), k6, Locust, Burp Intruder, nuclei
+      CHAIN: no rate limit → unlimited request volume → backend resource exhaustion or credential stuffing → service DoS or account takeover
+      IMPACT: Service unavailability via DoS; credential stuffing enabling account takeover; excessive cost via per-request billing backends
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

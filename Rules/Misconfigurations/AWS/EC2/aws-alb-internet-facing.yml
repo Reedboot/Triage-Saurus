@@ -13,6 +13,10 @@ rules:
       - The load balancer appears as a public ingress node in the threat model
 
       If this is NOT intentional, set internal = true to create a private LB.
+      ATTACK: Enumerate public ALB DNS name → probe for unprotected routes → exploit missing WAF or weak security groups → reach backend services
+      TOOLS: nmap, masscan, Burp Suite, OWASP ZAP, nuclei, aws-cli, gobuster
+      CHAIN: ALB DNS enumeration → port/service discovery → application vulnerability scanning → exploitation of exposed endpoints or backend services
+      IMPACT: Direct internet exposure of application tier; attacker can probe, exploit, and DDoS application endpoints without any network perimeter barrier
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

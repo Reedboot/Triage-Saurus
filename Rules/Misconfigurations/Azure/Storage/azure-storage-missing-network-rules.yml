@@ -3,6 +3,10 @@ rules:
     message: |
       Storage accounts without network_rules blocks allow traffic from any network.
       Add network_rules with default_action = "Deny" and explicit allowlists or private endpoints.
+      ATTACK: Enumerate storage endpoints → authenticate with leaked shared key → exfiltrate all containers from any network
+      TOOLS: MicroBurst, az-cli, azcopy, AzureHound, BlobHunter, Storage Explorer
+      CHAIN: no network restrictions → internet-accessible storage → shared key authentication → full container enumeration and bulk download
+      IMPACT: Full storage account access from any network; all blob data exposed to exfiltration or ransomware encryption
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

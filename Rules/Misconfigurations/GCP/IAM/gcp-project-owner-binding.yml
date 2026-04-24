@@ -4,6 +4,11 @@ rules:
       Project IAM assignment grants roles/owner at the project level. Owner is a full
       administration role and should be avoided unless absolutely required. Prefer
       narrower predefined roles or custom roles with the minimum needed permissions.
+
+      ATTACK: compromised user/pipeline with roles/owner → gcloud iam service-accounts keys create → generate persistent SA key → exfiltrate → retain project-owner access indefinitely
+      TOOLS: gcloud, gcpwn, gcp_scanner, ScoutSuite, Rhino Security Labs GCP privesc scripts
+      CHAIN: roles/owner assignment → full project admin via any vector (phishing, pipeline compromise, leaked token) → create persistent SA key → exfiltrate all data → disable logging → maintain persistent access
+      IMPACT: Complete GCP project ownership; attacker can delete resources, exfiltrate all data, disable security controls, create backdoor service accounts, and pivot to other projects via org-level access
     severity: ERROR
     languages: [terraform, hcl]
     pattern-either:

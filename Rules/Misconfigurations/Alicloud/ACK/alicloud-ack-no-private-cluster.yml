@@ -4,6 +4,10 @@ rules:
       ACK (Alibaba Container Service for Kubernetes) cluster API server is publicly accessible.
       A public API server increases the risk of unauthorized access and cluster takeover.
       Set endpoint_public_access_enabled = false to restrict access to the cluster control plane.
+      ATTACK: kubectl --server https://<public-endpoint> get secrets → enumerate ACK cluster → exfiltrate secrets and credentials
+      TOOLS: kubectl, kube-hunter, aliyun-cli, k9s
+      CHAIN: internet access → public ACK API discovery → stolen kubeconfig or RBAC misconfiguration → cluster enumeration → secret exfiltration
+      IMPACT: Full ACK cluster compromise including workloads, Kubernetes secrets, and Alibaba Cloud credentials
     severity: HIGH
     languages: [terraform, hcl]
     pattern-either:

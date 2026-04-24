@@ -4,6 +4,10 @@ rules:
       Azure PostgreSQL server has SSL enforcement explicitly disabled.
       All data in transit between clients and the server is unencrypted.
       Set ssl_enforcement_enabled = true to require TLS for all connections.
+      ATTACK: Intercept network path between app and database → capture PostgreSQL wire protocol → extract credentials and query results
+      TOOLS: Wireshark, tcpdump, mitmproxy, pgsniffer, MITMf, Bettercap
+      CHAIN: unencrypted PostgreSQL traffic → network intercept → plaintext credential capture → offline replay → full database access
+      IMPACT: Full credential theft and sensitive data interception; attacker can replay queries and exfiltrate all data
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

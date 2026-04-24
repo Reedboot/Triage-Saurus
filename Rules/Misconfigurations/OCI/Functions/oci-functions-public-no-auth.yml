@@ -10,6 +10,10 @@ rules:
       Configure an API Gateway in front of the function with JWT or API key
       authentication. Alternatively, restrict invocation using OCI IAM policies
       to require function:invoke permission from authenticated principals only.
+      ATTACK: curl https://<fn-endpoint>.functions.oci.oraclecloud.com → invoke function unauthenticated → access OCI resources
+      TOOLS: curl, Postman, Burp Suite, OWASP ZAP
+      CHAIN: internet access → unauthenticated function invocation → OCI resource access (Storage/ATP/Vault) → data exfiltration
+      IMPACT: Unauthenticated access to OCI resources reachable by the function including Object Storage and databases
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

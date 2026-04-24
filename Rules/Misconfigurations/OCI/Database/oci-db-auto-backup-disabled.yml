@@ -3,6 +3,10 @@ rules:
     message: |
       OCI Autonomous Database does not have automatic backups enabled.
       Enable automatic backups to ensure data recovery in the event of failure.
+      ATTACK: ransomware or destructive actor deletes/encrypts OCI DB → no backup exists → permanent data loss
+      TOOLS: oci-cli, ransomware tooling (operational gap, not direct technical exploit)
+      CHAIN: database compromise → data encryption/deletion → backup absent → no recovery path → data loss
+      IMPACT: Permanent data loss with no recovery capability after a destructive attack or accidental deletion
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

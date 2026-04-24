@@ -8,6 +8,10 @@ rules:
 
       Restrict the resource policy Principal to specific AWS accounts, IAM roles, or
       use a condition with aws:SourceArn / aws:SourceAccount to limit the scope.
+      ATTACK: Discover public SQS queue → aws sqs send-message with malicious payload → inject into processing pipeline → trigger SSRF/RCE in message consumer
+      TOOLS: aws-cli, curl, Pacu, SQS message replay tools
+      CHAIN: Public queue discovery → unauthenticated SendMessage → malicious payload injection → consumer processing → SSRF/RCE in backend application
+      IMPACT: Message injection enabling backend exploitation; unauthorized ReceiveMessage exfiltrates data and deletes messages causing consumer DoS
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

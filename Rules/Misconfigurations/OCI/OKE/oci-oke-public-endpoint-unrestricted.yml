@@ -11,6 +11,10 @@ rules:
       If public access is required for operational reasons, configure
       nsg_ids with restricted Network Security Group rules limiting API access
       to specific CIDR ranges.
+      ATTACK: kubectl --server https://<public-api> get secrets → enumerate unrestricted OKE API → extract cluster secrets
+      TOOLS: kubectl, kube-hunter, Trivy, k9s, cloud_enum
+      CHAIN: internet scanning → public OKE API discovery → stolen kubeconfig or RBAC misconfiguration → cluster takeover → secret exfiltration
+      IMPACT: Full OKE cluster takeover including all pods, secrets, service accounts, and OCI IAM credentials
     severity: ERROR
     languages: [terraform, hcl]
     patterns:

@@ -9,6 +9,10 @@ rules:
 
       Associate a WAF v2 Web ACL (scope = CLOUDFRONT, must be in us-east-1)
       via the web_acl_id attribute on the aws_cloudfront_distribution resource.
+      ATTACK: Identify CloudFront distribution origin → send SQLi/XSS payloads directly through CDN → bypass no-WAF filtering → exploit backend
+      TOOLS: sqlmap, Burp Suite, OWASP ZAP, nuclei, CloudFront origin IP enumeration tools
+      CHAIN: CDN origin discovery → unfiltered injection payload delivery → backend exploitation → data exfiltration or application compromise
+      IMPACT: SQLi, XSS, and DDoS attacks reach all origins unfiltered; no rate limiting or bot control exposes applications to volumetric and injection attacks
     severity: WARNING
     languages: [terraform, hcl]
     patterns:

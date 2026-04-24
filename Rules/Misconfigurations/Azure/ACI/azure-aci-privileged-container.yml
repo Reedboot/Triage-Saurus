@@ -11,7 +11,11 @@ rules:
       
       Remediation: Set secure_environment_variables and remove privileged = true.
       Run containers as non-root users (security_context.run_as_user).
-    severity: ERROR
+      ATTACK: RCE in privileged ACI container → escape container namespace → query IMDS at 169.254.169.254 → obtain managed identity token → full Azure control plane access
+      TOOLS: az-cli, MicroBurst, curl (IMDS), Metasploit, PowerShell Empire
+      CHAIN: initial RCE → privileged container escape → IMDS token theft → Azure API access → lateral movement across subscription
+      IMPACT: Full Azure subscription access via stolen managed identity token; all resources accessible to that identity compromised
+    severity:ERROR
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

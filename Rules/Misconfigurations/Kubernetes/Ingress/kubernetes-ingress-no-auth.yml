@@ -4,6 +4,10 @@ rules:
       Ingress detected without authentication annotations.
       Publicly exposed services should have OAuth/OIDC/IP restrictions.
       Add nginx.ingress.kubernetes.io/auth annotations.
+      ATTACK: curl https://<ingress-host>/admin → access internal APIs without auth → enumerate endpoints with ffuf → exfiltrate sensitive data
+      TOOLS: curl, ffuf, gobuster, nuclei, Burp Suite
+      CHAIN: unauthenticated ingress → internal API access → endpoint enumeration → data exfiltration → lateral movement to backend pods
+      IMPACT: Unrestricted access to internal services; sensitive data exfiltration; potential pivot to backend pods and databases
     severity: WARNING
     languages: [yaml]
     patterns:
