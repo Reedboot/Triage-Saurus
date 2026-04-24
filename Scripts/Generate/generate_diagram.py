@@ -1315,6 +1315,7 @@ class HierarchicalDiagramBuilder:
             'monitor', 'alert',
             'cloudwatch', 'stackdriver',
             'diagnostic',
+            'api_management_logger',  # APIM logger ships telemetry to App Insights
         ])
 
     def is_application_tier_resource(self, resource: dict) -> bool:
@@ -4160,6 +4161,37 @@ class HierarchicalDiagramBuilder:
             for _ac in _act_mon:
                 if (_al['resource_name'], _ac['resource_name']) not in _mon_rendered:
                     self.connections.append({'source': _al['resource_name'], 'target': _ac['resource_name'], 'connection_type': 'triggers', 'confirmed': True})
+
+        # ── Synthetic: APIM logger → App Insights ────────────────────────────────
+        # The APIM logger ships telemetry to App Insights via instrumentation_key.
+        # context_extraction now captures this via the monitors pattern, but add a
+        # fallback synthetic edge so the connection always renders even on older scans.
+        _apim_loggers = [r for r in self.resources
+                         if 'api_management_logger' in (r.get('resource_type') or '').lower()]
+        for _lg in _apim_loggers:
+            for _ai in _ai_mon:
+                if (_lg['resource_name'], _ai['resource_name']) not in _mon_rendered:
+                    self.connections.append({
+                        'source': _lg['resource_name'],
+                        'target': _ai['resource_name'],
+                        'connection_type': 'monitors',
+                        'confirmed': True,
+                    })
+
+        # ── Synthetic: AKS workloads → App Insights ──────────────────────────────
+        # Background worker pods emit telemetry to App Insights at runtime.
+        # No Terraform attribute captures this directly — infer from co-existence.
+        _k8s_workers = [r for r in self.resources
+                        if (r.get('resource_type') or '').lower() == 'kubernetes_deployment']
+        for _dep in _k8s_workers:
+            for _ai in _ai_mon:
+                if (_dep['resource_name'], _ai['resource_name']) not in _mon_rendered:
+                    self.connections.append({
+                        'source': _dep['resource_name'],
+                        'target': _ai['resource_name'],
+                        'connection_type': 'monitors',
+                        'confirmed': False,
+                    })
 
         # ── APIM backend routing from service_url/backend_url properties ──────────
         # Query resource_properties for explicit backend URL declarations on APIM API

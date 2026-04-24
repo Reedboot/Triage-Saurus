@@ -3006,9 +3006,20 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         (re.compile(r'(?:virtual_network_subnet_id|subnet_id|subnet_ids?)\s*=\s*\[?\s*(?:[a-z][a-z0-9_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
          RelationshipType.RESTRICTS_ACCESS, False),
 
-        # monitors — diagnostic setting source_resource_id
-        (re.compile(r'target_resource_id\s*=\s*(?:[a-z][a-z0-9_]+)\.([a-z][a-z0-9_\-]+)\.', re.I),
+        # monitors — diagnostic setting source_resource_id / APIM logger → App Insights
+        (re.compile(
+            r'(?:target_resource_id|instrumentation_key|workspace_id|log_analytics_workspace_id)\s*=\s*'
+            r'(?:[a-z][a-z0-9_]+)\.([a-z][a-z0-9_\-]+)\.',
+            re.I,
+        ),
          RelationshipType.MONITORS, False),
+
+        # depends_on (telemetry/logger wiring) — api_management_logger_id, logger_id
+        (re.compile(
+            r'(?:api_management_logger_id|logger_id)\s*=\s*(?:[a-z][a-z0-9_]+)\.([a-z][a-z0-9_\-]+)\.',
+            re.I,
+        ),
+         RelationshipType.DEPENDS_ON, False),
 
         # routes_ingress_to — explicit backend/integration/origin references
         (re.compile(
