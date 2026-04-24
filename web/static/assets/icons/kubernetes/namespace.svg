@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <path d="M3 10 L16 3 L29 10 L29 22 L16 29 L3 22 Z" fill="#7B42F6"/>
+  <text x="16" y="22" font-family="Arial" font-size="12" font-weight="bold" fill="white" text-anchor="middle">NS</text>
+</svg>
