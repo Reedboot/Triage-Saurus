@@ -34,5 +34,6 @@ rules:
       confidence: HIGH
       likelihood: HIGH
       impact: HIGH
+      internet_exposure: true
       technology: [terraform, gcp, compute]
       five_pillars: Pillar 3 (Network Security)

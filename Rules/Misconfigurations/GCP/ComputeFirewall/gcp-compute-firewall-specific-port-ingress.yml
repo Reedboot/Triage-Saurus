@@ -1,0 +1,32 @@
+rules:
+  - id: gcp-compute-firewall-specific-port-ingress-world
+    message: |
+      GCP firewall INGRESS rule permits traffic from 0.0.0.0/0 (any internet source)
+      on specific ports. Any instance matching the target tags or target service accounts
+      is directly reachable from the internet on these ports.
+      Restrict source_ranges to known CIDR blocks or use IAP / Cloud VPN for admin access.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_compute_firewall" $NAME {
+            ...
+          }
+      - pattern-either:
+          - pattern: source_ranges = ["0.0.0.0/0"]
+          - pattern: source_ranges = ["0.0.0.0/0", ...]
+          - pattern: source_ranges = [..., "0.0.0.0/0", ...]
+      - pattern-inside: |
+          allow {
+            ...
+          }
+    metadata:
+      category: security
+      subcategory: [network, exposure]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      internet_exposure: true
+      technology: [terraform, gcp, compute]
+      five_pillars: Pillar 3 (Network Security)

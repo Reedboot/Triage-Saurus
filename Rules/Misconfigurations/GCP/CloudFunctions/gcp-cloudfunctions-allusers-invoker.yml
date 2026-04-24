@@ -1,0 +1,28 @@
+rules:
+  - id: gcp-cloudfunctions-allusers-invoker
+    message: |
+      A Cloud Function IAM binding grants the `roles/cloudfunctions.invoker` role to
+      `allUsers` or `allAuthenticatedUsers`. This makes the function invocable by anyone
+      on the internet without authentication.
+      Remove the public binding and use service-account-to-service-account authentication,
+      or protect the endpoint with Cloud Endpoints / Cloud Run + IAP.
+    severity: ERROR
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-inside: |
+          resource "google_cloudfunctions_function_iam_member" $NAME {
+            ...
+          }
+      - pattern-either:
+          - pattern: member = "allUsers"
+          - pattern: member = "allAuthenticatedUsers"
+    metadata:
+      category: security
+      subcategory: [iam, exposure]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      internet_exposure: true
+      technology: [terraform, gcp, cloud-functions]
+      five_pillars: Pillar 2 (Identity & Access Management)
