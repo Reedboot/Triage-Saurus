@@ -51,7 +51,7 @@ rules:
       TOOLS: az-cli, truffleHog, gitleaks, AzureHound, MicroBurst, Stormspotter
       CHAIN: credential leak (Git/CI logs) → SP authentication → subscription-level role abuse → resource enumeration → data exfiltration or destruction
       IMPACT: Leaked SP credentials grant full subscription access; all resources readable/modifiable; enables data theft, resource deletion, or persistent backdoor creation
-    severity:ERROR
+    severity: "ERROR"
     languages: [terraform, json]
     pattern-either:
       - pattern-regex: "role_definition_name\\s*=\\s*\"(?:Contributor|Owner)\""

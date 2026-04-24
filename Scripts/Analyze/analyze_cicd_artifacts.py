@@ -214,21 +214,25 @@ class CICDArtifactAnalyzer:
     
     def store_findings(self, conn) -> int:
         """Store all generated findings in the database."""
+        _SEVERITY_SCORES = {"CRITICAL": 10, "HIGH": 8, "MEDIUM": 6, "LOW": 3, "INFO": 1, "NONE": 0}
         stored = 0
         
         for finding in self.findings:
             try:
                 resource_id = finding.get('resource_id')
+                base_severity = finding.get('severity', 'MEDIUM').upper()
+                severity_score = _SEVERITY_SCORES.get(base_severity, 6)
                 
                 conn.execute(
                     """INSERT INTO findings 
-                       (experiment_id, title, description, severity, resource_id, rule_id)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                       (experiment_id, title, description, base_severity, severity_score, resource_id, rule_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         self.experiment_id,
                         finding.get('title', 'Artifact issue'),
                         finding.get('description', ''),
-                        finding.get('severity', 'MEDIUM'),
+                        base_severity,
+                        severity_score,
                         resource_id if resource_id else None,
                         'artifact_security',
                     )

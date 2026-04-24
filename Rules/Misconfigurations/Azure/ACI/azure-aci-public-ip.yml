@@ -15,7 +15,7 @@ rules:
       TOOLS: nmap, Shodan, Metasploit, curl (IMDS), az-cli, MicroBurst
       CHAIN: internet exposure → application exploit → container RCE → IMDS query → managed identity token → Azure resource abuse
       IMPACT: Internet-facing container compromised; managed identity token grants access to all associated Azure resources
-    severity:ERROR
+    severity: "ERROR"
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

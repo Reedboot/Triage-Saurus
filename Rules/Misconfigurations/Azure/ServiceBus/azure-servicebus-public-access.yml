@@ -7,7 +7,7 @@ rules:
       TOOLS: az-cli, ServiceBusExplorer, MicroBurst, Azure Service Bus SDK, Shodan
       CHAIN: public endpoint + connection string leak → queue/topic access → message interception → malicious message injection → downstream consumer exploitation
       IMPACT: All messages readable and injectable; message queue poisoning corrupts business workflows; sensitive data in messages exposed to unauthorized parties
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     pattern-either:
       - pattern: |

@@ -8,7 +8,7 @@ rules:
       TOOLS: az-cli, MicroBurst, AzureHound, Prowler, Stormspotter
       CHAIN: over-privileged identity access → Key Vault secret enumeration → secret reading without audit trail → sustained exfiltration undetected → compliance violation
       IMPACT: Secret access completely undetected; no forensic evidence of exfiltration; PCI-DSS/GDPR audit failures; impossible to determine blast radius after breach
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     pattern-regex: '(?s)^(?=[\s\S]*resource "azurerm_key_vault")(?![\s\S]*resource "azurerm_monitor_diagnostic_setting")'
     metadata:

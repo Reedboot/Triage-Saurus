@@ -2526,11 +2526,17 @@ class HierarchicalDiagramBuilder:
         return lines
     
     def render_apim_hierarchy(self, apim_apis: List[dict], products: List[dict]) -> List[str]:
-        """Render APIM with Products and Operations nested properly.
+        """Render APIM with Products → APIs → Operations nested properly.
 
-        When API operations are available (from DB or OpenAPI specs), each API is
-        rendered as a named subgraph with its operations inside.  When no operations
-        are available, products are shown as flat nodes.
+        Hierarchy:
+          API Management subgraph
+            └── Product subgraph  (azurerm_api_management_product — subscription gatekeeper)
+                  └── API subgraph  (azurerm_api_management_api — versioned API)
+                        └── Operation nodes  (azurerm_api_management_api_operation)
+
+        Product→API mapping is resolved via azurerm_api_management_product_api join resources
+        stored as children of each product in children_by_parent.  APIs belonging to multiple
+        products (many-to-many) are rendered under the first product that claims them.
         """
         if not apim_apis and not products:
             return []
@@ -2538,18 +2544,25 @@ class HierarchicalDiagramBuilder:
         lines = []
         lines.append(f"  subgraph apim[{self._quote_mermaid_label('API Management')}]")
 
-        # Build a map: product_name → APIM API resource (so we can render ops per API)
-        # Products and APIs typically share the same name in APIM Terraform.
-        api_by_name: Dict[str, dict] = {
-            a['resource_name']: a for a in apim_apis
-        }
-        # Also normalise with hyphen/underscore variants so drtestapp-sql matches drtestapp_sql.
+        # Index APIs by name (and normalised hyphen→underscore variant) for lookup.
+        api_by_name: Dict[str, dict] = {a['resource_name']: a for a in apim_apis}
         for a in apim_apis:
             normalised = a['resource_name'].replace('-', '_')
             if normalised not in api_by_name:
                 api_by_name[normalised] = a
+        # Sort names longest-first so prefix matching prefers the most specific match.
+        api_names_sorted = sorted(api_by_name.keys(), key=len, reverse=True)
 
-        # Products to render (always show all — even without connections)
+        def _match_api_for_product_api(pa_name: str) -> Optional[dict]:
+            """Find the API whose name is the longest prefix of a product_api label."""
+            pa_norm = pa_name.replace('-', '_')
+            for an in api_names_sorted:
+                an_norm = an.replace('-', '_')
+                if pa_norm == an_norm or pa_norm.startswith(an_norm + '_') or pa_norm.startswith(an_norm + '-'):
+                    return api_by_name[an]
+            return None
+
+        rendered_api_ids: Set[int] = set()
         rendered_product_names: Set[str] = set()
 
         for product in products:
@@ -2557,42 +2570,56 @@ class HierarchicalDiagramBuilder:
             if pname in rendered_product_names:
                 continue
 
-            # Try to find matching API to get operations.
-            matched_api = api_by_name.get(pname)
-            ops_for_product: List[dict] = []
-            if matched_api:
-                api_children = self.children_by_parent.get(matched_api['id'], [])
-                ops_for_product = [c for c in api_children if self.is_api_operation(c)]
-                # When API ops toggle is off, prune unconnected operations.
-                if not self.include_api_operations:
-                    ops_for_product = [op for op in ops_for_product
-                                       if self._is_connected_name(op.get('resource_name', ''))]
+            # Resolve which APIs this product gates via product_api join children.
+            product_api_children = [
+                c for c in self.children_by_parent.get(product['id'], [])
+                if (c.get('resource_type') or '') == 'azurerm_api_management_product_api'
+            ]
+            apis_for_product: List[dict] = []
+            for pa in product_api_children:
+                matched = _match_api_for_product_api(pa.get('resource_name', ''))
+                if matched and matched['id'] not in rendered_api_ids and matched not in apis_for_product:
+                    apis_for_product.append(matched)
 
-            if ops_for_product:
-                product_id = sanitize_id(pname)
-                lines.append(f"    subgraph {product_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(pname))}]")
-                seen_op_ids: Set[str] = set()
-                for op in ops_for_product:
-                    op_id = sanitize_id(op.get('resource_name', ''))
-                    if op_id in seen_op_ids:
-                        continue
-                    seen_op_ids.add(op_id)
-                    lines.append(self.render_node(op, indent="      "))
+            if apis_for_product:
+                product_subgraph_id = sanitize_id(pname)
+                lines.append(f"    subgraph {product_subgraph_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(pname))}]")
+                for api in apis_for_product:
+                    aname = api['resource_name']
+                    api_children = self.children_by_parent.get(api['id'], [])
+                    ops = [c for c in api_children if self.is_api_operation(c)]
+                    if not self.include_api_operations:
+                        ops = [op for op in ops if self._is_connected_name(op.get('resource_name', ''))]
+                    if ops:
+                        api_id = sanitize_id(aname)
+                        lines.append(f"      subgraph {api_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(aname))}]")
+                        seen_op_ids: Set[str] = set()
+                        for op in ops:
+                            op_id = sanitize_id(op.get('resource_name', ''))
+                            if op_id not in seen_op_ids:
+                                seen_op_ids.add(op_id)
+                                lines.append(self.render_node(op, indent="        "))
+                        lines.append("      end")
+                    else:
+                        lines.append(self.render_node(api, indent="      "))
+                    self.emitted_nodes.add(aname)
+                    self.emitted_nodes.add(aname.replace('-', '_'))
+                    rendered_api_ids.add(api['id'])
                 lines.append("    end")
                 self.emitted_nodes.add(pname)
             else:
+                # No product_api join children resolved — fall back to flat product node.
                 lines.append(self.render_node(product, indent="    "))
+                self.emitted_nodes.add(pname)
 
             rendered_product_names.add(pname)
 
-        # Render any APIM APIs that don't have a corresponding product node yet.
+        # Render any APIs not yet claimed by a product (e.g. attached only to root product).
         for api in apim_apis:
             aname = api['resource_name']
             normalised = aname.replace('-', '_')
-            if aname in rendered_product_names or normalised in rendered_product_names:
-                # API was already rendered via its matching product — register both
-                # name forms in emitted_nodes so render_connections can route edges.
-                # Also map the hyphenated name to the subgraph ID (underscore form).
+            if api['id'] in rendered_api_ids:
+                # Already rendered — register both name forms so connections resolve.
                 self.emitted_nodes.add(aname)
                 self.emitted_nodes.add(normalised)
                 if aname != normalised:
@@ -2608,10 +2635,9 @@ class HierarchicalDiagramBuilder:
                 seen_op_ids = set()
                 for op in ops:
                     op_id = sanitize_id(op.get('resource_name', ''))
-                    if op_id in seen_op_ids:
-                        continue
-                    seen_op_ids.add(op_id)
-                    lines.append(self.render_node(op, indent="      "))
+                    if op_id not in seen_op_ids:
+                        seen_op_ids.add(op_id)
+                        lines.append(self.render_node(op, indent="      "))
                 lines.append("    end")
                 self.emitted_nodes.add(aname)
             else:

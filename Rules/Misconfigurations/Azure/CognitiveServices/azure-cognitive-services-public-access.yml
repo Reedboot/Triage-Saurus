@@ -17,7 +17,7 @@ rules:
       TOOLS: az-cli, MicroBurst, Shodan, curl, Prowler, Burp Suite
       CHAIN: public endpoint discovery → API key brute force or leak → unauthorized API access → sensitive prompt/response interception or resource cost abuse
       IMPACT: API key compromise enables unlimited inference calls causing cost spike; sensitive AI prompts and responses exposed; MITM possible on public internet transit
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

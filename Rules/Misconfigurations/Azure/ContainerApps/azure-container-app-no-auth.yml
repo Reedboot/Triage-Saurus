@@ -15,7 +15,7 @@ rules:
       TOOLS: curl, Burp Suite, ffuf, az-cli, MicroBurst, nuclei
       CHAIN: unauthenticated app access → SSRF to 169.254.169.254 → managed identity token exfiltration → Azure API calls → data exfiltration or resource manipulation
       IMPACT: Any internet user can interact with application; SSRF to IMDS enables managed identity token theft and full access to all associated Azure resources
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     patterns:
       - pattern: |

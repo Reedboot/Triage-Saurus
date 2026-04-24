@@ -14,7 +14,7 @@ rules:
       TOOLS: tcpdump, Wireshark, mitmproxy, Ettercap, redis-cli, Scapy
       CHAIN: network access (shared VNet or MITM position) → plaintext traffic interception on port 6379 → credential capture → authentication bypass → full cache read/write
       IMPACT: AUTH password and all cache contents transmitted in plaintext; MITM attacker gains full Redis access and reads all cached sessions, tokens, and sensitive data
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     pattern-either:
       - patterns:

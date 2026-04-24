@@ -44,6 +44,10 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "azurerm_api_management_api": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
     "azurerm_api_management_api_operation": {"parent_type": "azurerm_api_management_api", "parent_field": "api_name"},
     "azurerm_api_management_product": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
+    # Backend belongs to the APIM instance in Terraform, but is wired to a specific API
+    # indirectly via azurerm_api_management_api_policy xml_content (backend_id = backend.name).
+    # Parent stays at APIM level; the API→backend link is a policy-level connection, not a
+    # structural parent-child relationship.
     "azurerm_api_management_backend": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
     "azurerm_kubernetes_cluster_node_pool": {"parent_type": "azurerm_kubernetes_cluster", "parent_field": "kubernetes_cluster_id"},
     "azurerm_lb_rule": {"parent_type": "azurerm_lb", "parent_field": "loadbalancer_id"},
@@ -149,6 +153,11 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     # Azure – API Management (extended)
     "azurerm_api_management_api_policy": {"parent_type": "azurerm_api_management_api", "parent_field": "api_name"},
     "azurerm_api_management_api_operation_policy": {"parent_type": "azurerm_api_management_api_operation", "parent_field": "api_name"},
+    # Diagnostic is per-API, not per-APIM instance
+    "azurerm_api_management_api_diagnostic": {"parent_type": "azurerm_api_management_api", "parent_field": "api_name"},
+    # product_api is a many-to-many join: one API can belong to multiple products (e.g. accounts,
+    # accounts_interest, accounts_transaction_notifications, root).  Primary parent is the product
+    # (gatekeeper/subscription boundary); the api_name field links the other side.
     "azurerm_api_management_product_api": {"parent_type": "azurerm_api_management_product", "parent_field": "product_id"},
     "azurerm_api_management_api_version_set": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},
     "azurerm_api_management_named_value": {"parent_type": "azurerm_api_management", "parent_field": "api_management_name"},

@@ -15,7 +15,7 @@ rules:
       TOOLS: az-cli, MicroBurst, curl (IMDS), Metasploit, PowerShell Empire
       CHAIN: initial RCE → privileged container escape → IMDS token theft → Azure API access → lateral movement across subscription
       IMPACT: Full Azure subscription access via stolen managed identity token; all resources accessible to that identity compromised
-    severity:ERROR
+    severity: "ERROR"
     languages: [terraform, hcl]
     patterns:
       - pattern-inside: |

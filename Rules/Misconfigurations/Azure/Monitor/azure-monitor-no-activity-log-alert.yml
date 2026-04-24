@@ -20,7 +20,7 @@ rules:
       TOOLS: az-cli, AzureHound, Stormspotter, Prowler, Azure Activity Log API
       CHAIN: initial access → privileged role assignment without alert → NSG rule modification → Key Vault manipulation → undetected persistence established
       IMPACT: Critical security events (role assignments, policy changes, resource modifications) go completely unnoticed; attack dwell time increases significantly
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     patterns:
       - pattern: |

@@ -1321,6 +1321,17 @@ flowchart TB
 
 **Keep it simple:** Focus on primary flows, omit minor dependencies
 
+**Omit from diagram unless they have a confirmed vulnerability/finding:**
+- Kubernetes `Config` / `ConfigMap` resources
+- Monitoring-only resources (alerts, diagnostics, dashboards)
+- Role assignments and permissions
+- App Configuration Keys
+
+**AKS module calls vs cluster resources:**
+- `module "aks_*" { source = "...terraform-aks..." }` = **AKS Workload Deployment** — the repo deploys apps to an external cluster it does not own. Show as `AKS Workloads (external cluster)` with a dashed border, not as `Kubernetes Cluster`.
+- `resource "azurerm_kubernetes_cluster"` = actual cluster definition owned by this repo.
+- The `config = { ... }` argument block inside an AKS module call is **not** a Kubernetes Config/ConfigMap resource — do not classify it as one.
+
 ## Knowledge Updates
 
 ### Update Output/Knowledge/<Provider>.md

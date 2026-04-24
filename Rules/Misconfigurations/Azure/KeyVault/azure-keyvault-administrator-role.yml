@@ -8,7 +8,7 @@ rules:
       TOOLS: az-cli, AzureHound, MicroBurst, Stormspotter, ROADtools
       CHAIN: group member identity compromise → Key Vault Administrator access → secret/key/certificate exfiltration → lateral movement with stolen credentials
       IMPACT: All Key Vault secrets, keys, and certificates compromised; enables lateral movement across all services using those credentials
-    severity:WARNING
+    severity: "WARNING"
     languages: [terraform, hcl]
     patterns:
       - pattern: |

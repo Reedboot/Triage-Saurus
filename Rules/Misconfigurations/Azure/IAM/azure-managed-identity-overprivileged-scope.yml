@@ -33,7 +33,7 @@ rules:
       TOOLS: curl (IMDS), az-cli, AzureHound, MicroBurst, Stormspotter
       CHAIN: RCE on compute resource → IMDS token theft → Contributor/Owner role abuse → full subscription resource access → backdoor identity creation
       IMPACT: Compromised compute resource grants Contributor/Owner access to all subscription resources; lateral movement across entire Azure environment enabled
-    severity:ERROR
+    severity: "ERROR"
     languages: [terraform, json]
     pattern-either:
       - pattern-regex: "role_definition_name\\s*=\\s*\"(?:Contributor|Owner)\""
