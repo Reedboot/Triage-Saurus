@@ -84,6 +84,9 @@ const MermaidIconInjector = (() => {
    * Inject an icon for a specific node
    */
   function injectIconForNode(node, iconMap, svgElement) {
+    // Skip nodes that already have an injected icon (idempotency guard)
+    if (node.querySelector('.mermaid-icon')) return;
+
     // Find the text element (label) within this node
     const textElement = node.querySelector('text');
     if (!textElement) return;
@@ -139,36 +142,41 @@ const MermaidIconInjector = (() => {
   }
 
   /**
-   * Process all Mermaid diagrams on the page and inject icons
-   * Call this after Mermaid has finished rendering
-   * 
-   * @param {Object} options - Configuration options
-   *   - containerSelector: CSS selector for diagram containers (default: '[id*="diagram"]')
-   *   - iconDataUrl: URL to fetch icon mappings (default: '/api/icon-mappings')
+   * Fetch icon map once and cache it.  Returns a Promise<iconMap>.
    */
-  async function processAllDiagrams(options = {}) {
-    const {
-      containerSelector = '[id*="diagram"]',
-      iconDataUrl = '/api/icon-mappings'
-    } = options;
-
+  let _iconMapCache = null;
+  async function _getIconMap(iconDataUrl = '/api/icon-mappings') {
+    if (_iconMapCache) return _iconMapCache;
     try {
-      // Fetch icon mappings from backend
       const response = await fetch(iconDataUrl);
       if (!response.ok) {
         console.warn(`[MermaidIconInjector] Failed to fetch icon mappings: ${response.status}`);
-        return;
+        return {};
       }
+      _iconMapCache = await response.json();
+      return _iconMapCache;
+    } catch (err) {
+      console.error('[MermaidIconInjector] Error fetching icon mappings:', err.message);
+      return {};
+    }
+  }
 
-      const iconMap = await response.json();
+  /**
+   * Process all rendered Mermaid SVGs on the page and inject icons.
+   * Targets `.mermaid svg` directly so it works regardless of wrapper IDs.
+   *
+   * @param {Object} options
+   *   - iconDataUrl: URL for icon mappings (default '/api/icon-mappings')
+   */
+  async function processAllDiagrams(options = {}) {
+    const { iconDataUrl = '/api/icon-mappings' } = options;
+    try {
+      const iconMap = await _getIconMap(iconDataUrl);
+      if (!iconMap || !Object.keys(iconMap).length) return;
 
-      // Find all diagram containers
-      const containers = document.querySelectorAll(containerSelector);
-      containers.forEach(container => {
-        const svgElement = container.querySelector('svg');
-        if (svgElement) {
-          injectIcons(svgElement, iconMap);
-        }
+      // Target every rendered Mermaid SVG directly — works for all tabs, visible or not
+      document.querySelectorAll('.mermaid svg').forEach(svgElement => {
+        injectIcons(svgElement, iconMap);
       });
     } catch (err) {
       console.error('[MermaidIconInjector] Failed to process diagrams:', err.message);
@@ -176,8 +184,8 @@ const MermaidIconInjector = (() => {
   }
 
   /**
-   * Hook into Mermaid's rendering pipeline
-   * Call this once to auto-inject icons whenever Mermaid renders
+   * Hook into Mermaid's rendering pipeline.
+   * Also installs a MutationObserver so icons are injected whenever new SVGs appear.
    */
   function autoInitialize() {
     if (!window.mermaid) {
@@ -185,27 +193,55 @@ const MermaidIconInjector = (() => {
       return;
     }
 
-    // Listen for Mermaid render events
+    // Wrap mermaid.init so icons are injected after each render call
     const originalInit = window.mermaid.init;
     window.mermaid.init = function(...args) {
-      // Call original init
       const result = originalInit.apply(window.mermaid, args);
 
-      // After a short delay to allow rendering, inject icons
+      const inject = () => setTimeout(() => processAllDiagrams(), 300);
       if (result && typeof result.then === 'function') {
-        result.then(() => {
-          setTimeout(() => {
-            processAllDiagrams();
-          }, 100);
-        });
+        result.then(inject).catch(inject);
       } else {
-        setTimeout(() => {
-          processAllDiagrams();
-        }, 100);
+        inject();
       }
-
       return result;
     };
+
+    // Also wrap mermaid.run (used by Mermaid v10+)
+    if (typeof window.mermaid.run === 'function') {
+      const originalRun = window.mermaid.run;
+      window.mermaid.run = function(...args) {
+        const result = originalRun.apply(window.mermaid, args);
+        const inject = () => setTimeout(() => processAllDiagrams(), 300);
+        if (result && typeof result.then === 'function') {
+          result.then(inject).catch(inject);
+        } else {
+          inject();
+        }
+        return result;
+      };
+    }
+
+    // MutationObserver: catch any SVG that appears after initial load
+    // (e.g., lazy-rendered tabs or dynamically injected diagrams)
+    const observer = new MutationObserver((mutations) => {
+      let hasSvg = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) {
+            if (node.tagName === 'svg' || node.querySelector?.('svg')) {
+              hasSvg = true;
+              break;
+            }
+          }
+        }
+        if (hasSvg) break;
+      }
+      if (hasSvg) {
+        setTimeout(() => processAllDiagrams(), 150);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   // Public API
@@ -217,11 +253,28 @@ const MermaidIconInjector = (() => {
   };
 })();
 
-// Auto-initialize when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
+// Expose on window so app.js and other scripts can reference it reliably
+window.MermaidIconInjector = MermaidIconInjector;
+
+// Auto-initialize: wrap mermaid.init/run if Mermaid is already loaded,
+// otherwise poll until it appears (handles async mermaid-loader.js race).
+function _initIconInjector() {
+  if (window.mermaid) {
     MermaidIconInjector.autoInitialize();
-  });
+  } else {
+    const poll = setInterval(() => {
+      if (window.mermaid) {
+        clearInterval(poll);
+        MermaidIconInjector.autoInitialize();
+      }
+    }, 100);
+    // Give up after 15 s to avoid infinite polling
+    setTimeout(() => clearInterval(poll), 15000);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initIconInjector);
 } else {
-  MermaidIconInjector.autoInitialize();
+  _initIconInjector();
 }

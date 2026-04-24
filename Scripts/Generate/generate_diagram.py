@@ -242,6 +242,8 @@ class HierarchicalDiagramBuilder:
         significant_tokens = (
             'key_vault', 'keyvault', 'database', 'sql', 'cosmos', 'storage',
             'managed_identity', 'user_assigned_identity', 'automation_account',
+            'ecs_cluster', 'lambda_function', 'ecs_service', 'ecs_task',
+            'secretsmanager', 'secrets_manager',
         )
         return any(tok in rtype for tok in significant_tokens)
 
@@ -1218,7 +1220,12 @@ class HierarchicalDiagramBuilder:
         return 'api_operation' in rtype or 'api_management_api_operation' in rtype
     
     def is_kubernetes(self, resource: dict) -> bool:
-        """Check if resource is Kubernetes-related."""
+        """Check if resource is Kubernetes-related.
+
+        Includes native kubernetes provider resources and AKS (Azure).
+        Excludes AWS EKS infra resources (aws_eks_cluster, aws_eks_node_group) —
+        those belong in the AWS network/compute tier, not the K8s cluster subgraph.
+        """
         rtype = (resource.get('resource_type') or '').lower()
         provider = (resource.get('provider') or '').lower()
         return provider == 'kubernetes' or 'kubernetes' in rtype or 'aks' in rtype
@@ -1349,7 +1356,8 @@ class HierarchicalDiagramBuilder:
         """Check if resource looks like a SQL/database endpoint."""
         rtype = (resource.get('resource_type') or '').lower()
         name = (resource.get('resource_name') or '').lower()
-        type_tokens = ['sql', 'database', 'mssql', 'postgres', 'mysql', 'cosmos', 'rds']
+        type_tokens = ['sql', 'database', 'mssql', 'postgres', 'mysql', 'cosmos', 'rds',
+                       'dynamodb', 'db_instance', 'rds_cluster', 'rds_instance']
         # Type-based match is authoritative; name-based match requires the type to not be a non-DB resource
         if any(tok in rtype for tok in type_tokens):
             # Exclude APIM subscriptions/revisions that happen to have 'sql' in their name
@@ -1363,16 +1371,22 @@ class HierarchicalDiagramBuilder:
     def is_compute_resource(self, resource: dict) -> bool:
         """Check if resource is a compute/VM resource that can have network interfaces as children."""
         rtype = (resource.get('resource_type') or '').lower()
-        vm_tokens = ['virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine', 
-                     'instance', 'ec2', 'compute_instance']
-        return any(tok in rtype for tok in vm_tokens)
+        vm_tokens = ['virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine',
+                     'ec2', 'compute_instance', 'ecs_cluster']
+        if any(tok in rtype for tok in vm_tokens):
+            return True
+        # Match 'instance' but not db_instance, rds_instance, elasticache, task_definition etc.
+        if 'instance' in rtype and not any(x in rtype for x in ['db_instance', 'rds_instance', 'cache_instance', 'task_']):
+            return True
+        return False
     
     def is_network_resource(self, resource: dict) -> bool:
         """Check if resource is a networking resource (VPC, subnet, security group, etc.)."""
         rtype = (resource.get('resource_type') or '').lower()
         net_tokens = ['vpc', 'vnet', 'subnet', 'network', 'network_interface', 'security_group', 
                       'security_group_rule', 'internet_gateway', 'nat_gateway', 'route_table', 
-                      'network_acl', 'load_balancer', 'firewall', 'availability_zone']
+                      'network_acl', 'load_balancer', 'firewall', 'availability_zone',
+                      'eks_cluster', 'eks_node_group', 'eks_fargate']
         return any(tok in rtype for tok in net_tokens)
     
     def is_security_group_or_rule(self, resource: dict) -> bool:
@@ -1901,62 +1915,127 @@ class HierarchicalDiagramBuilder:
         security_group_rules = [r for r in network_resources if 'security_group_rule' in (r.get('resource_type') or '').lower()]
         gateways = [r for r in network_resources if any(x in (r.get('resource_type') or '').lower() 
                     for x in ['gateway', 'firewall', 'nat', 'load_balancer'])]
-        
-        # Render VPCs with nested subnets
+        # Separate IGWs out — they are rendered as outer wrappers around VPCs, not as
+        # standalone gateway nodes. AWS IGW is 1:1 with a VPC; it IS the internet boundary.
+        igws = [r for r in network_resources if 'internet_gateway' in (r.get('resource_type') or '').lower()]
+        igw_ids_by_vpc_id = {}  # vpc_db_id -> igw_resource
+        for igw in igws:
+            vpc_parent_id = igw.get('parent_resource_id')
+            if vpc_parent_id:
+                igw_ids_by_vpc_id[vpc_parent_id] = igw
+
+        # Render VPCs with full AWS hierarchy:
+        # Internet → IGW → VPC → Route Table → Subnet → SG → EC2/RDS/ALB
         for vpc in vpcs:
             if vpc['resource_name'] in self.emitted_nodes:
                 continue
-            
-            vpc_id = sanitize_id(vpc['resource_name'])
-            vpc_children = self.children_by_parent.get(vpc.get('id'), [])
-            vpc_subnets = [s for s in subnets if s.get('id') in {c.get('id') for c in vpc_children}]
-            
-            if vpc_subnets:
-                vpc_label = self._wrap_mermaid_label(vpc['resource_name'])
-                lines.append(f'    subgraph {vpc_id}[{self._quote_mermaid_label(vpc_label)}]')
-                self._emitted_mermaid_ids.add(vpc_id)
-                self._node_id_first_owner[vpc_id] = str(vpc.get('id', ''))
-                
-                # Render subnets
-                for subnet in vpc_subnets:
-                    if subnet['resource_name'] in self.emitted_nodes:
+
+            vpc_db_id = vpc.get('id')
+            vpc_node_id = sanitize_id(vpc['resource_name'])
+            vpc_children_raw = self.children_by_parent.get(vpc_db_id, [])
+            vpc_child_ids = {c.get('id') for c in vpc_children_raw}
+
+            vpc_subnets  = [s for s in subnets if s.get('id') in vpc_child_ids]
+            vpc_rts      = [r for r in network_resources
+                            if r.get('id') in vpc_child_ids
+                            and 'route_table' in (r.get('resource_type') or '').lower()
+                            and 'association' not in (r.get('resource_type') or '').lower()]
+            vpc_sgs      = [r for r in security_groups if r.get('id') in vpc_child_ids]
+
+            # Determine indent levels — IGW wraps the whole VPC if attached
+            igw = igw_ids_by_vpc_id.get(vpc_db_id)
+            i0 = "    "   # inside network_tier
+            if igw and igw['resource_name'] not in self.emitted_nodes:
+                igw_node_id = sanitize_id(igw['resource_name'])
+                igw_label   = self._wrap_mermaid_label(igw['resource_name'])
+                lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]:::icon-aws-internet-gateway')
+                self._emitted_mermaid_ids.add(igw_node_id)
+                self._node_id_first_owner[igw_node_id] = str(igw.get('id', ''))
+                self.emitted_nodes.add(igw['resource_name'])
+                self.node_id_override[igw['resource_name']] = igw_node_id
+                self.subgraph_nodes.add(igw['resource_name'])
+                i0 = "      "   # push everything one level deeper
+
+            i1 = i0 + "  "   # inside VPC
+            i2 = i1 + "  "   # inside Subnet
+            i3 = i2 + "  "   # inside SG (inside Subnet)
+
+            # Open VPC subgraph
+            vpc_label = self._wrap_mermaid_label(vpc['resource_name'])
+            lines.append(f'{i0}subgraph {vpc_node_id}[{self._quote_mermaid_label(vpc_label)}]')
+            self._emitted_mermaid_ids.add(vpc_node_id)
+            self._node_id_first_owner[vpc_node_id] = str(vpc_db_id or '')
+
+            # Route Tables — shown as nodes inside VPC (the routing decision layer)
+            for rt in vpc_rts:
+                if rt['resource_name'] not in self.emitted_nodes:
+                    lines.append(self.render_node(rt, indent=i1))
+                    self.emitted_nodes.add(rt['resource_name'])
+
+            # Subnets — each subnet is a subgraph
+            for subnet in vpc_subnets:
+                if subnet['resource_name'] in self.emitted_nodes:
+                    continue
+                subnet_db_id  = subnet.get('id')
+                subnet_node_id = sanitize_id(subnet['resource_name'])
+                subnet_children = self.children_by_parent.get(subnet_db_id, [])
+                subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
+
+                # Find SGs whose resources live in this subnet (SGs are VPC-level in AWS,
+                # but we place them here if any of their protected resources are in this subnet)
+                subnet_compute_ids = {c.get('id') for c in subnet_computes}
+                sgs_for_subnet = []
+                for sg in vpc_sgs:
+                    if sg['resource_name'] in self.emitted_nodes:
                         continue
-                    
-                    subnet_id = sanitize_id(subnet['resource_name'])
-                    subnet_children = self.children_by_parent.get(subnet.get('id'), [])
-                    subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
-                    
-                    if subnet_computes:
-                        subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
-                        lines.append(f'      subgraph {subnet_id}[{self._quote_mermaid_label(subnet_label)}]')
-                        self._emitted_mermaid_ids.add(subnet_id)
-                        self._node_id_first_owner[subnet_id] = str(subnet.get('id', ''))
-                        
+                    sg_children = self.children_by_parent.get(sg.get('id'), [])
+                    # SG is "for" this subnet if one of its child resources is a subnet compute
+                    if any(c.get('id') in subnet_compute_ids for c in sg_children):
+                        sgs_for_subnet.append(sg)
+
+                if subnet_computes or sgs_for_subnet:
+                    subnet_label = self._wrap_mermaid_label(subnet['resource_name'])
+                    lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
+                    self._emitted_mermaid_ids.add(subnet_node_id)
+                    self._node_id_first_owner[subnet_node_id] = str(subnet_db_id or '')
+
+                    if sgs_for_subnet:
+                        # Render SG as subgraph containing the compute resources it protects
+                        for sg in sgs_for_subnet:
+                            sg_node_id = sanitize_id(sg['resource_name'])
+                            sg_label   = self._wrap_mermaid_label(sg['resource_name'])
+                            lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::icon-aws-security-group')
+                            self._emitted_mermaid_ids.add(sg_node_id)
+                            self._node_id_first_owner[sg_node_id] = str(sg.get('id', ''))
+                            self.subgraph_nodes.add(sg['resource_name'])
+                            for compute in subnet_computes:
+                                if compute['resource_name'] not in self.emitted_nodes:
+                                    self._emit_compute_node(compute, lines, i3)
+                            lines.append(f'{i2}end')
+                            self.emitted_nodes.add(sg['resource_name'])
+                    else:
+                        # No SG data — render compute directly in subnet
                         for compute in subnet_computes:
                             if compute['resource_name'] not in self.emitted_nodes:
-                                is_public = self.is_public_ec2_instance(compute)
-                                icon = "📡" if is_public else "🔒"
-                                label = f"{icon} {compute['resource_name']}"
-                                c_id = sanitize_id(compute['resource_name'])
-                                
-                                if c_id not in self._emitted_mermaid_ids:
-                                    self._emitted_mermaid_ids.add(c_id)
-                                    self._node_id_first_owner[c_id] = str(compute.get('id', ''))
-                                    c_label = self._wrap_mermaid_label(label)
-                                    lines.append(f'        {c_id}[{self._quote_mermaid_label(c_label)}]')
-                                
-                                self.emitted_nodes.add(compute['resource_name'])
-                        
-                        lines.append('      end')
-                    else:
-                        lines.append(self.render_node(subnet, indent="      "))
-                    
-                    self.emitted_nodes.add(subnet['resource_name'])
-                
-                lines.append('    end')
-            else:
-                lines.append(self.render_node(vpc, indent="    "))
-            
+                                self._emit_compute_node(compute, lines, i2)
+
+                    lines.append(f'{i1}end')
+                else:
+                    lines.append(self.render_node(subnet, indent=i1))
+
+                self.emitted_nodes.add(subnet['resource_name'])
+
+            # SGs that weren't placed inside a subnet — render at VPC level
+            for sg in vpc_sgs:
+                if sg['resource_name'] not in self.emitted_nodes:
+                    lines.append(self.render_node(sg, indent=i1))
+                    self.emitted_nodes.add(sg['resource_name'])
+
+            lines.append(f'{i0}end')  # close VPC
+
+            if igw and i0 != "    ":
+                lines.append('    end')  # close IGW subgraph
+
             self.emitted_nodes.add(vpc['resource_name'])
         
         # Render standalone subnets
@@ -2329,6 +2408,28 @@ class HierarchicalDiagramBuilder:
         """
         return resource.get('name') or resource.get('resource_name', 'Unknown')
 
+    def _emit_compute_node(self, compute: dict, lines: list, indent: str) -> None:
+        """Emit a single compute node line; marks it emitted. Used by render_network_hierarchy."""
+        if compute['resource_name'] in self.emitted_nodes:
+            return
+        is_public = self.is_public_ec2_instance(compute)
+        icon = "📡" if is_public else "🔒"
+        label = f"{icon} {compute['resource_name']}"
+        c_id = self._get_node_id(compute)
+        if c_id not in self._emitted_mermaid_ids:
+            self._emitted_mermaid_ids.add(c_id)
+            self._node_id_first_owner[c_id] = str(compute.get('id', ''))
+            c_label = self._wrap_mermaid_label(label)
+            resource_type = (compute.get('resource_type') or '').lower()
+            provider = _detect_provider_from_resource(compute)
+            css_class = get_icon_class(resource_type, provider) if resource_type and provider not in ('unknown', 'terraform') else None
+            if css_class:
+                lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]:::{css_class}")
+            else:
+                lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]")
+        self.node_id_override[compute['resource_name']] = c_id
+        self.emitted_nodes.add(compute['resource_name'])
+
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node.
 
@@ -2608,7 +2709,8 @@ class HierarchicalDiagramBuilder:
         # BUT: Always include K8s workload types (deployment, pod, service, cronjob, daemonset, statefulset)
         # because they are architecturally essential parts of the cluster infrastructure.
         _CATALOG_TYPES = ('component', 'kubernetes_api', 'kubernetes_config')
-        _WORKLOAD_TYPES = ('deployment', 'pod', 'service', 'cronjob', 'daemonset', 'statefulset', 'job', 'replicaset')
+        _WORKLOAD_TYPES = ('deployment', 'pod', 'service', 'cronjob', 'daemonset', 'statefulset',
+                           'job', 'replicaset', 'secret', 'configmap', 'networkpolicy')
         for r in k8s_resources:
             if r in cluster_resources or r['id'] in workload_ids_seen:
                 continue
@@ -2661,6 +2763,11 @@ class HierarchicalDiagramBuilder:
             namespace_prefix = "k8s_ns"
         
         lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]")
+        # Map all cluster resource names → subgraph ID so render_connections uses correct ID
+        if cluster_resources:
+            for r in cluster_resources:
+                self.node_id_override[r['resource_name']] = k8s_subgraph_id
+                self.subgraph_nodes.add(r['resource_name'])
 
         resources_by_namespace: Dict[str, List[dict]] = defaultdict(list)
         for res in workload_resources:
@@ -2674,7 +2781,15 @@ class HierarchicalDiagramBuilder:
             resources_by_namespace[namespace].append(res)
 
         if not resources_by_namespace:
-            # All workloads already rendered in another context - suppress this cluster
+            # No workloads inside this cluster. Render the cluster as a simple node
+            # so edges (connections from/to it) still have a valid target.
+            if cluster_resources:
+                cluster_res = cluster_resources[0]
+                node_id = self._get_node_id(cluster_res)
+                node_line = self.render_node(cluster_res, indent="  ")
+                self.emitted_nodes.add(cluster_res['resource_name'])
+                self.node_id_override[cluster_res['resource_name']] = node_id
+                return [node_line]
             return []
 
         for namespace, namespace_resources in resources_by_namespace.items():
@@ -2810,7 +2925,9 @@ class HierarchicalDiagramBuilder:
             # Render Services (network layer - NOT nested in deployments)
             for svc in services:
                 svc_id = self._get_node_id(svc)
-                if svc_id in self._emitted_mermaid_ids:
+                # Guard against already-rendered services (e.g. from a previous cluster call)
+                # Use emitted_nodes (name-based) not _emitted_mermaid_ids (pre-assigned IDs)
+                if svc['resource_name'] in self.emitted_nodes:
                     continue
                 svc_label = self._wrap_mermaid_label(self._get_node_label(svc) + " (Service)")
                 lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]")
@@ -3097,6 +3214,10 @@ class HierarchicalDiagramBuilder:
 
         has_internet = False
         edge_list = []  # Track (conn, src_id, tgt_id) for all rendered edges
+        # Fan-out suppression: track how many sources already connect to each target.
+        # Limit to MAX_INCOMING_EDGES per target node to prevent spider-web layouts.
+        _MAX_FANIN = 4
+        _target_incoming: Dict[str, int] = {}
 
         def _is_internet(name: Optional[str]) -> bool:
             return str(name or '').strip().lower() == 'internet'
@@ -3116,11 +3237,6 @@ class HierarchicalDiagramBuilder:
             if src == tgt or sanitize_id(src) == sanitize_id(tgt):
                 continue
             
-            # Skip connections to/from subgraph nodes (compound nodes with children).
-            # In Mermaid, edges cannot terminate on subgraph containers, only on leaf nodes.
-            if src in self.subgraph_nodes or tgt in self.subgraph_nodes:
-                continue
-
             # ── Special case: Internet → APIM subgraph ────────────────────────
             # Mermaid allows connecting to subgraph IDs directly.
             if tgt == '__apim_subgraph__':
@@ -3134,6 +3250,10 @@ class HierarchicalDiagramBuilder:
                 continue
             if not _is_internet(tgt) and tgt not in self.emitted_nodes:
                 continue
+
+            # For subgraph nodes: Mermaid supports edges to/from subgraph IDs,
+            # but NOT from within the same subgraph. Use the subgraph ID via
+            # node_id_override so the edge target is the subgraph container ID.
             
             # Skip connections to excluded resource types (RBAC, ServiceAccount, etc.)
             # These resources shouldn't appear in the diagram, so their connections shouldn't either
@@ -3188,6 +3308,13 @@ class HierarchicalDiagramBuilder:
             is_confirmed = conn.get('confirmed', True)  # Default to solid if not specified
             arrow = "-->" if is_confirmed else "-.->"  # Dashed for unconfirmed
 
+            # Fan-in suppression: skip if too many edges already point at this target.
+            # Internet-source edges are never suppressed; they represent direct exposure.
+            if not _is_internet(src) and not _is_internet(tgt):
+                _target_incoming[tgt_id] = _target_incoming.get(tgt_id, 0) + 1
+                if _target_incoming[tgt_id] > _MAX_FANIN:
+                    continue
+
             safe_label = label.replace('|', '&#124;') if label else ''
             if safe_label:
                 lines.append(f"  {src_id} {arrow}|{safe_label}| {tgt_id}")
@@ -3208,29 +3335,106 @@ class HierarchicalDiagramBuilder:
                 style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
         
         # Add Internet connections for detected exposed resources
+        # Build set of resource names whose parent is ALSO in exposed_resources.
+        # These children are skipped so we don't create duplicate Internet edges
+        # (e.g. a security_group AND each of its 28 rules all getting individual edges).
+        _exposed_parents: set = set()
+        for _rn in self.exposed_resources:
+            _r = self.resource_by_name.get(_rn)
+            if isinstance(_r, list):
+                _r = _r[0]
+            if _r and _r.get('id') in self.children_by_parent:
+                for _child in self.children_by_parent[_r['id']]:
+                    _cname = _child.get('resource_name')
+                    if _cname:
+                        _exposed_parents.add(_cname)
+
+        # Types whose children are the real internet targets (storage containers, blobs)
+        _EXPANDABLE_TYPES = ('storage_account', 'storage_container', 'storage_bucket',
+                             's3_bucket', 'container_registry', 'blob_container')
+
+        # Resource type tokens that are pure network config, not real internet endpoints.
+        # internet_gateway is intentionally NOT in this list — it is the actual entry point
+        # and should show an Internet→IGW edge.
+        _INFRA_ONLY_TOKENS = (
+            'route_table', 'network_acl', 'flow_log',
+            'security_group_rule', 'firewall_rule', 'firewall_policy',
+            'subnet_route', 'network_interface',
+        )
+
         if self.exposed_resources:
             for resource_name, exposure_detail in self.exposed_resources.items():
                 if resource_name not in self.emitted_nodes:
                     continue
-                
+
+                # Skip if this resource's parent is also internet-exposed to avoid duplicates
+                # (e.g. individual security group rules when the parent SG is already exposed)
+                if resource_name in _exposed_parents:
+                    continue
+
                 # Handle duplicate resource names (returns list when duplicates exist)
                 resource = self.resource_by_name.get(resource_name)
                 if isinstance(resource, list):
                     resource = resource[0]  # Use first resource if duplicates
-                
-                # Check if this resource has children that are exposed (for containers/blobs)
-                # If the parent is a storage account or similar container, drill down to children
+
+                resource_type = (resource.get('resource_type') or '').lower() if resource else ''
+
+                # Skip pure infrastructure types — they are network config, not internet endpoints
+                if any(tok in resource_type for tok in _INFRA_ONLY_TOKENS):
+                    continue
+
+                is_igw = 'internet_gateway' in resource_type
+
+                # For IGWs: connect Internet→IGW, then emit IGW→downstream edges for
+                # all other internet-exposed resources that are in the same VPC.
+                if is_igw:
+                    igw_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                    if ('internet', igw_id) not in {(e[1], e[2]) for e in edge_list}:
+                        has_internet = True
+                        lines.append(f"  internet -.->|Internet entry| {igw_id}")
+                        current_link_idx = len(edge_list)
+                        edge_list.append((None, 'internet', igw_id))
+                        style_lines.append(f"  linkStyle {current_link_idx} stroke:red,stroke-width:2px")
+                    # Add IGW→downstream edges for public resources in the same VPC
+                    igw_vpc_id = resource.get('parent_resource_id') if resource else None
+                    for other_name, other_detail in self.exposed_resources.items():
+                        if other_name == resource_name or other_name not in self.emitted_nodes:
+                            continue
+                        other_res = self.resource_by_name.get(other_name)
+                        if isinstance(other_res, list):
+                            other_res = other_res[0]
+                        if not other_res:
+                            continue
+                        other_type = (other_res.get('resource_type') or '').lower()
+                        if 'internet_gateway' in other_type:
+                            continue
+                        # Only link IGW → resources in the same VPC (direct or via subnet parent)
+                        other_vpc = other_res.get('parent_resource_id')
+                        if igw_vpc_id and other_vpc != igw_vpc_id:
+                            continue
+                        other_id = self.node_id_override.get(other_name) or sanitize_id(other_name)
+                        if (igw_id, other_id) not in {(e[1], e[2]) for e in edge_list}:
+                            lines.append(f"  {igw_id} --> {other_id}")
+                            edge_list.append((None, igw_id, other_id))
+                    continue  # IGW handled — skip the standard connection logic below
+
+                # Only expand to children for storage-container-type resources.
+                # Security groups, firewalls, and network ACLs should NOT expand — connect
+                # directly to the parent node to avoid a fan-out of individual rule edges.
                 targets_to_connect = []
-                
-                if resource and resource.get('id') in self.children_by_parent:
+                should_expand = (
+                    resource
+                    and resource.get('id') in self.children_by_parent
+                    and any(t in resource_type for t in _EXPANDABLE_TYPES)
+                    and not any(t in resource_type for t in ('security_group', '_rule', 'firewall', 'network_acl', 'nsg'))
+                )
+                if should_expand:
                     children = self.children_by_parent[resource['id']]
-                    # Check if any children are emitted
                     child_targets = [c for c in children if c.get('resource_name') in self.emitted_nodes]
                     if child_targets:
-                        # Use children as connection targets instead of parent
                         targets_to_connect = child_targets
-                
-                # If no children targets found, use the parent
+
+                # If no expandable children, connect directly to the resource itself
                 if not targets_to_connect:
                     targets_to_connect = [resource]
                 
@@ -3240,9 +3444,14 @@ class HierarchicalDiagramBuilder:
                     if target_name not in self.emitted_nodes:
                         continue
                     
+                    tgt_id = self.node_id_override.get(target_name) or sanitize_id(target_name)
+
+                    # Deduplicate: don't emit the same Internet→target edge twice
+                    if ('internet', tgt_id) in {(e[1], e[2]) for e in edge_list}:
+                        continue
+
                     has_internet = True
                     src_id = 'internet'
-                    tgt_id = self.node_id_override.get(target_name) or sanitize_id(target_name)
                     
                     # Build label from exposure detail
                     label = f"{exposure_detail.reason}"
@@ -3803,12 +4012,24 @@ class HierarchicalDiagramBuilder:
             if 'resource_group' in (r.get('resource_type') or '').lower()
         }
         _resource_ids_in_diagram = {r['id'] for r in self.resources}
+        # IAM/identity parents and app_service_plan never render as subgraphs; don't nest their children
+        _identity_parent_ids = {
+            r['id'] for r in self.resources
+            if self.is_paas_identity_resource(r)
+            or 'iam_role' in (r.get('resource_type') or '').lower()
+            or 'iam_policy' in (r.get('resource_type') or '').lower()
+            or 'iam_user' in (r.get('resource_type') or '').lower()
+            or 'app_service_plan' in (r.get('resource_type') or '').lower()
+            or 'service_plan' in (r.get('resource_type') or '').lower()
+        }
         all_children = set()
         for parent_id, children in self.children_by_parent.items():
             if parent_id in rg_ids:
                 continue  # Resource group children are standalone nodes, not nested items.
             if parent_id not in _resource_ids_in_diagram:
                 continue  # Parent not rendered; treat children as top-level nodes.
+            if parent_id in _identity_parent_ids:
+                continue  # IAM/identity resources don't render as subgraphs.
             all_children.update(c['id'] for c in children)
         
         # Categorize resources  

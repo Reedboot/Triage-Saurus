@@ -38,6 +38,18 @@ def _build_prompt(row: dict) -> str:
     rule_or_title = row.get("rule_id") or row.get("title") or "Finding"
     is_cred = _is_credential_finding(row)
 
+    # Attack intelligence from rule message (pre-authored, don't override)
+    attack_context = ""
+    attack_parts = [
+        ("Attack chain", row.get("attack_chain")),
+        ("Tools",        row.get("attack_tools")),
+        ("Kill chain",   row.get("attack_chain_steps")),
+        ("Impact",       row.get("attack_impact")),
+    ]
+    attack_lines = [f"  {label}: {val}" for label, val in attack_parts if val]
+    if attack_lines:
+        attack_context = "Pre-authored attack intelligence (use as context for description):\n" + "\n".join(attack_lines) + "\n"
+
     credential_block = ""
     if is_cred:
         credential_block = (
@@ -66,6 +78,7 @@ def _build_prompt(row: dict) -> str:
         f"File: {row.get('source_file')}:{row.get('source_line_start')}\n"
         f"Severity: {row.get('base_severity')} ({row.get('severity_score')}/10)\n"
         f"Scanner message: {row.get('reason') or ''}\n"
+        f"{attack_context}"
         f"Code snippet:\n```\n{snippet}\n```\n"
         f"{credential_block}\n"
         "Respond with JSON only:\n"
@@ -89,7 +102,8 @@ def main():
 
     query = """
         SELECT id, title, rule_id, source_file, source_line_start,
-               base_severity, severity_score, reason, code_snippet
+               base_severity, severity_score, reason, code_snippet,
+               attack_chain, attack_tools, attack_chain_steps, attack_impact
         FROM findings
         WHERE experiment_id = ? AND llm_enriched_at IS NULL
         ORDER BY severity_score DESC

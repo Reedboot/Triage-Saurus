@@ -1148,18 +1148,22 @@ def get_fallback_icon_data_uri(provider: str = 'azure') -> Optional[str]:
 
 def get_icon_class(resource_type: str, provider: str = 'azure') -> str:
     """Get a CSS class name for a resource type.
-    
+
+    The class name is derived solely from the resource type, which already
+    encodes the provider prefix (e.g. ``aws_``, ``azurerm_``, ``google_``).
+    Prepending the provider again would double the prefix and break the
+    lookup in ``mermaid-icon-injector.js``.
+
     Args:
-        resource_type: Terraform resource type
-        provider: Cloud provider
-    
+        resource_type: Terraform/Kubernetes resource type
+        provider: Cloud provider (kept for API compatibility, not used in name)
+
     Returns:
-        CSS class name (e.g., 'icon-azurerm-app-service')
+        CSS class name (e.g. 'icon-aws-security-group',
+        'icon-azurerm-app-service', 'icon-google-compute-instance')
     """
-    # Normalize to lowercase and replace underscores with hyphens
     rtype = (resource_type or '').lower().replace('_', '-')
-    provider_prefix = provider.lower().replace('_', '-')
-    return f"icon-{provider_prefix}-{rtype}"
+    return f"icon-{rtype}"
 
 
 def build_icon_css(resources: list, provider: str = 'azure') -> str:

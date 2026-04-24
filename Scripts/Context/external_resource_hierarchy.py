@@ -207,9 +207,19 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "azurerm_log_analytics_linked_service": {"parent_type": "azurerm_log_analytics_workspace", "parent_field": "workspace_id"},
     # --- AWS ---
     "aws_subnet": {"parent_type": "aws_vpc", "parent_field": "vpc_id"},
+    "aws_security_group": {"parent_type": "aws_vpc", "parent_field": "vpc_id"},
     "aws_instance": {"parent_type": "aws_subnet", "parent_field": "subnet_id"},
     "aws_network_interface": {"parent_type": "aws_subnet", "parent_field": "subnet_id"},
     "aws_eks_cluster": {"parent_type": "aws_subnet", "parent_field": "subnet_ids"},
+    # RDS instances live in a subnet; nearest addressable parent is the VPC
+    "aws_db_instance": {"parent_type": "aws_vpc", "parent_field": "vpc_security_group_ids"},
+    "aws_rds_cluster": {"parent_type": "aws_vpc", "parent_field": "vpc_security_group_ids"},
+    "aws_elasticache_cluster": {"parent_type": "aws_vpc", "parent_field": "subnet_group_name"},
+    "aws_elasticache_replication_group": {"parent_type": "aws_vpc", "parent_field": "subnet_group_name"},
+    # ECS cluster has no vpc_id — map service and tasks to subnet
+    "aws_ecs_task_definition": {"parent_type": "aws_ecs_cluster", "parent_field": "family"},
+    # Lambda in VPC
+    "aws_lambda_function": {"parent_type": "aws_subnet", "parent_field": "vpc_config.subnet_ids"},
     "aws_security_group_rule": {"parent_type": "aws_security_group", "parent_field": "security_group_id"},
     "aws_vpc_security_group_ingress_rule": {"parent_type": "aws_security_group", "parent_field": "security_group_id"},
     "aws_vpc_security_group_egress_rule": {"parent_type": "aws_security_group", "parent_field": "security_group_id"},
@@ -330,7 +340,7 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "aws_codepipeline_webhook": {"parent_type": "aws_codepipeline", "parent_field": "name"},
     "aws_codedeploy_deployment_group": {"parent_type": "aws_codedeploy_app", "parent_field": "app_name"},
     # --- GCP ---
-    "google_compute_instance": {"parent_type": "google_compute_network", "parent_field": "network"},
+    "google_compute_instance": {"parent_type": "google_compute_subnetwork", "parent_field": "subnetwork"},
     "google_compute_subnetwork": {"parent_type": "google_compute_network", "parent_field": "network"},
     "google_compute_firewall": {"parent_type": "google_compute_network", "parent_field": "network"},
     "google_compute_forwarding_rule": {"parent_type": "google_compute_backend_service", "parent_field": "backend_service"},

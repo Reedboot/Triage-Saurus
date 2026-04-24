@@ -469,7 +469,7 @@ class InternetExposureDetector:
                     resource_id=resource.get('id'),
                     exposure_type='heuristic',
                     confidence='medium',
-                    reason=f'Resource type {clean_type} is inherently public-facing',
+                    reason=f'Public: {clean_type}',
                     color=self.COLORS['heuristic'],
                     detection_methods=['Heuristic'],
                 )

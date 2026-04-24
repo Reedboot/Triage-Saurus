@@ -29,6 +29,22 @@ def _base_severity(severity: str) -> str:
     return "Medium"
 
 
+def _parse_attack_fields(message: str) -> dict:
+    """Extract ATTACK/TOOLS/CHAIN/IMPACT lines from an opengrep rule message."""
+    import re
+    fields = {}
+    for label, key in (
+        ("ATTACK", "attack_chain"),
+        ("TOOLS", "attack_tools"),
+        ("CHAIN", "attack_chain_steps"),
+        ("IMPACT", "attack_impact"),
+    ):
+        m = re.search(rf'^\s*{label}:\s*(.+)$', message, re.MULTILINE)
+        if m:
+            fields[key] = m.group(1).strip()
+    return fields
+
+
 def _clean_terraform_string(value: str) -> str:
     """Remove terraform string delimiters (quotes) from a captured value."""
     if not value:
@@ -347,6 +363,7 @@ def main():
             reason: str = message.split("\n")[0]
             code_snippet: str = extra.get("lines", "")
             category: str = metadata.get("category", "IaC")
+            attack_fields: dict = _parse_attack_fields(message)
 
             rule_id: str = check_id.split(".")[-1]
             title: str = rule_id.replace("-", " ").title()
@@ -384,6 +401,7 @@ def main():
                 'proposed_fix': None,
                 'code_snippet': code_snippet,
                 'reason': reason,
+                **attack_fields,
             })
 
         # Batch insert all findings

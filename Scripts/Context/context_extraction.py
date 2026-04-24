@@ -1428,7 +1428,7 @@ def _load_parent_type_map() -> Dict[str, str]:
         "aws_nat_gateway": "aws_subnet",
         "aws_internet_gateway": "aws_vpc",
         "aws_vpc_peering_connection": "aws_vpc",
-        "aws_vpn_gateway": "aws_vpc",
+        # aws_vpn_gateway is also standalone gateway infrastructure.
         "aws_vpn_connection": "aws_vpn_gateway",
         "aws_flow_log": "aws_vpc",
         # AWS EC2 & Auto Scaling

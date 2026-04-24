@@ -2822,6 +2822,7 @@ def _build_simple_architecture_diagram(
                     lines.append(f'      subgraph {svc_subgraph}["{service}"]')
                     style_id(svc_subgraph, layer_cat)
                     first_child = None
+                    internet_child = None  # prefer a publicly-exposed child (e.g. LoadBalancer Service)
                     for c_idx, child in enumerate(service_raw, start=1):
                         child_node = f"{svc_subgraph}_Child_{c_idx}"
                         child_label = _child_node_label(child, service)
@@ -2837,8 +2838,13 @@ def _build_simple_architecture_diagram(
                         style_id(child_node, layer_cat)
                         if first_child is None:
                             first_child = child_node
+                        # Prefer child with explicit internet signal as exposure target
+                        if internet_child is None:
+                            child_resources = [r for r in resources if r.resource_type == child]
+                            if any(_resource_has_explicit_public_signal(r) for r in child_resources):
+                                internet_child = child_node
                     lines.append("      end")
-                    exposure_target = first_child
+                    exposure_target = internet_child if internet_child else first_child
 
                 if exposure_target:
                     # Handle both single target and list of targets (for APIM operations)

@@ -4135,38 +4135,44 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
 @app.route("/api/icon-mappings")
 def api_icon_mappings():
     """Return icon mappings for Mermaid diagram nodes.
-    
-    Maps resource types (e.g., 'azurerm_app_service') to icon file paths.
-    Supports query parameter 'provider' (azure, aws, gcp).
+
+    Maps resource types (e.g. 'aws_security_group') to icon file paths.
+    Supports query parameter ``provider`` (azure|aws|gcp|all).
+    Defaults to ``all`` so a single fetch covers mixed-provider diagrams.
     """
     try:
-        provider = (request.args.get("provider") or "azure").strip().lower()
-        
+        provider = (request.args.get("provider") or "all").strip().lower()
+
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Generate.icon_resolver import (  # type: ignore
             AZURE_RESOURCE_TYPE_TO_ICON,
             AWS_RESOURCE_TYPE_TO_ICON,
-            GCP_RESOURCE_TYPE_TO_ICON
+            GCP_RESOURCE_TYPE_TO_ICON,
         )
-        
-        # Select the appropriate mapping for the provider
-        mappings = {
-            'azure': AZURE_RESOURCE_TYPE_TO_ICON,
-            'aws': AWS_RESOURCE_TYPE_TO_ICON,
-            'gcp': GCP_RESOURCE_TYPE_TO_ICON
+
+        provider_map = {
+            "azure": ("azure", AZURE_RESOURCE_TYPE_TO_ICON),
+            "aws":   ("aws",   AWS_RESOURCE_TYPE_TO_ICON),
+            "gcp":   ("gcp",   GCP_RESOURCE_TYPE_TO_ICON),
         }
-        
-        resource_to_icon = mappings.get(provider, AZURE_RESOURCE_TYPE_TO_ICON)
-        
-        # Build icon_map: resource_type -> relative path to icon
-        icon_map = {}
-        for resource_type, (category, icon_name) in resource_to_icon.items():
-            rel_path = f"/static/assets/icons/{provider}/{category}/{icon_name}.svg"
-            icon_map[resource_type] = rel_path
-        
+
+        icon_map: dict = {}
+
+        if provider == "all":
+            providers_to_merge = list(provider_map.values())
+        else:
+            entry = provider_map.get(provider)
+            providers_to_merge = [entry] if entry else list(provider_map.values())
+
+        for pname, mapping in providers_to_merge:
+            for resource_type, (category, icon_name) in mapping.items():
+                rel_path = f"/static/assets/icons/{pname}/{category}/{icon_name}.svg"
+                # Later providers don't overwrite earlier ones so Azure stays canonical
+                icon_map.setdefault(resource_type, rel_path)
+
         return jsonify(icon_map)
     except Exception as exc:
-        app.logger.exception("icon_mappings error for provider %s", request.args.get("provider", "azure"))
+        app.logger.exception("icon_mappings error for provider %s", request.args.get("provider", "all"))
         return jsonify({"error": f"Failed to get icon mappings: {str(exc)}"}), 500
 
 
@@ -7429,7 +7435,8 @@ def api_view_assets(experiment_id: str, repo_name: str):
         try:
             hierarchy_rows = conn.execute(
                 """
-                SELECT child.id AS child_id, child.parent_resource_id AS parent_id
+                SELECT child.id AS child_id, child.parent_resource_id AS parent_id,
+                       child.resource_type AS child_type
                 FROM resources child
                 JOIN repositories repo ON child.repo_id = repo.id
                 WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
@@ -7437,12 +7444,28 @@ def api_view_assets(experiment_id: str, repo_name: str):
                 """,
                 (repo_name, experiment_target),
             ).fetchall()
+            # IGW is 1:1 with VPC but architecturally wraps it: Internet → IGW → VPC.
+            # DB stores igw.parent_resource_id = vpc.id (from Terraform vpc_id field),
+            # so we invert: remove IGW from VPC's children and instead make VPC a child of IGW.
+            _IGW_TYPES = {'aws_internet_gateway', 'aws_egress_only_internet_gateway',
+                          'azurerm_virtual_network_gateway'}
             for hr in hierarchy_rows:
-                parent_id = hr['parent_id']
-                child_resource_ids.add(hr['child_id'])
-                if parent_id not in children_by_parent:
-                    children_by_parent[parent_id] = []
-                children_by_parent[parent_id].append(hr['child_id'])
+                child_type = (hr['child_type'] or '').lower()
+                if child_type in _IGW_TYPES:
+                    # Reverse: IGW (hr['child_id']) becomes parent of VPC (hr['parent_id'])
+                    igw_id = hr['child_id']
+                    vpc_id = hr['parent_id']
+                    children_by_parent.setdefault(igw_id, [])
+                    if vpc_id not in children_by_parent[igw_id]:
+                        children_by_parent[igw_id].append(vpc_id)
+                    child_resource_ids.add(vpc_id)   # VPC is now a child
+                    # IGW itself is top-level — do NOT add to child_resource_ids
+                else:
+                    parent_id = hr['parent_id']
+                    child_resource_ids.add(hr['child_id'])
+                    if parent_id not in children_by_parent:
+                        children_by_parent[parent_id] = []
+                    children_by_parent[parent_id].append(hr['child_id'])
         except Exception:
             pass
 
@@ -7693,8 +7716,16 @@ def api_view_findings(experiment_id: str, repo_name: str):
         if not resolved_exp_id:
             return _db_render("tab_findings.html", findings=[], error=f"No scan found for {repo_name}.")
         target_exp = resolved_exp_id
+
+        # Detect which attack intelligence columns exist (graceful for older DBs)
+        findings_cols_present = _table_columns(conn, "findings")
+        attack_chain_sel    = "f.attack_chain"         if "attack_chain"        in findings_cols_present else "NULL AS attack_chain"
+        attack_tools_sel    = "f.attack_tools"         if "attack_tools"        in findings_cols_present else "NULL AS attack_tools"
+        attack_steps_sel    = "f.attack_chain_steps"   if "attack_chain_steps"  in findings_cols_present else "NULL AS attack_chain_steps"
+        attack_impact_sel   = "f.attack_impact"        if "attack_impact"       in findings_cols_present else "NULL AS attack_impact"
+
         rows = conn.execute(
-            """
+            f"""
             SELECT f.id, f.title, f.description, f.base_severity,
                    f.severity_score, f.rule_id, f.source_file, f.source_line_start,
                    f.source_line_end, f.code_snippet, f.proposed_fix,
@@ -7702,6 +7733,7 @@ def api_view_findings(experiment_id: str, repo_name: str):
                    COALESCE(NULLIF(f.triage_status,''), 'valid') AS triage_status,
                    f.triage_reason, f.triage_set_by, f.triage_set_at,
                    f.credential_classification, f.credential_note,
+                   {attack_chain_sel}, {attack_tools_sel}, {attack_steps_sel}, {attack_impact_sel},
                    dev.adjusted_score AS dev_score, dev.confidence AS dev_confidence,
                    dev.reasoning AS dev_reasoning, dev.key_concerns AS dev_key_concerns,
                    plat.adjusted_score AS platform_score, plat.confidence AS platform_confidence,
@@ -7735,6 +7767,12 @@ def api_view_findings(experiment_id: str, repo_name: str):
             (repo_name, target_exp),
         ).fetchall()
         findings = [dict(r) for r in rows]
+
+        # Ensure attack intelligence fields exist (graceful fallback for older DBs)
+        for f in findings:
+            for field in ('attack_chain', 'attack_tools', 'attack_chain_steps', 'attack_impact'):
+                if field not in f:
+                    f[field] = None
         
         # Infer provider from rule_id if not set
         for f in findings:

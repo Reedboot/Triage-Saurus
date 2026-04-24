@@ -287,6 +287,43 @@
           </div>
           {% endif %}
 
+          {# Attack Intelligence #}
+          {% if f.attack_chain or f.attack_tools or f.attack_chain_steps or f.attack_impact %}
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--red-bright, #ff7b72); margin-bottom: 10px;">⚔️ Attack Intelligence</div>
+            <div style="display: grid; gap: 8px; font-size: 0.85rem;">
+              {% if f.attack_chain %}
+              <div style="background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--red-bright, #ff7b72); border-radius: 4px; padding: 8px 10px;">
+                <span style="font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em;">Attack</span>
+                <div style="margin-top: 4px; font-family: monospace; color: var(--text); line-height: 1.5;">{{ f.attack_chain }}</div>
+              </div>
+              {% endif %}
+              {% if f.attack_tools %}
+              <div style="background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--orange, #f0883e); border-radius: 4px; padding: 8px 10px;">
+                <span style="font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em;">Tools</span>
+                <div style="margin-top: 4px; color: var(--text);">
+                  {% for tool in f.attack_tools.split(', ') %}
+                  <span style="display: inline-block; background: var(--surface-2, var(--bg-subtle)); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 2px 2px 2px 0; font-family: monospace; font-size: 0.8rem;">{{ tool.strip() }}</span>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+              {% if f.attack_chain_steps %}
+              <div style="background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--yellow, #e3b341); border-radius: 4px; padding: 8px 10px;">
+                <span style="font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em;">Kill Chain</span>
+                <div style="margin-top: 4px; color: var(--text); line-height: 1.5;">{{ f.attack_chain_steps }}</div>
+              </div>
+              {% endif %}
+              {% if f.attack_impact %}
+              <div style="background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--purple-bright, #d29eff); border-radius: 4px; padding: 8px 10px;">
+                <span style="font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em;">Impact</span>
+                <div style="margin-top: 4px; color: var(--text);">{{ f.attack_impact }}</div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+
           {# Scoring & Skeptic Reviews #}
           <div style="border-top: 1px solid var(--border-subtle); padding-top: 12px;">
             <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 10px;">📊 Scoring & Reviews</div>

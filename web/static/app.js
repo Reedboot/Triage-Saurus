@@ -1083,6 +1083,12 @@
         // Load new diagram state
         currentDiagramIndex = idx;
         loadDiagramState(idx);
+
+        // Re-inject icons for the newly visible diagram tab (in case it wasn't
+        // visible during initial injection and getBBox returned zeros).
+        if (window.MermaidIconInjector) {
+          setTimeout(() => MermaidIconInjector.processAllDiagrams(), 100);
+        }
       });
     });
 
@@ -1108,13 +1114,14 @@
         });
         
         window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
-        // Initialize pan/zoom after rendering
+        // Initialize pan/zoom after rendering, then inject icons
         setTimeout(() => {
           initPanZoom();
           // Reset zoom and center for first diagram once layout has settled
           currentDiagramIndex = 0;
           scheduleDiagramFit();
         }, 150);
+        setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
         console.error('[Diagrams] Full error stack:', e.stack);
@@ -1134,13 +1141,14 @@
               }
             });
             window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
-            // Initialize pan/zoom after rendering
+            // Initialize pan/zoom after rendering, then inject icons
             setTimeout(() => {
               initPanZoom();
               // Reset zoom and center for first diagram once layout has settled
               currentDiagramIndex = 0;
               scheduleDiagramFit();
             }, 150);
+            setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
           } catch (e) {
             console.error('[Diagrams] Mermaid render error:', e);
           }
@@ -1307,6 +1315,25 @@
     }
   }
 
+  function _showDiagramNotReady(message) {
+    const placeholder = document.getElementById('diagram-placeholder');
+    const diagramViews = document.getElementById('diagram-views');
+    if (placeholder) {
+      placeholder.innerHTML = `
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <p style="color:var(--text-muted)">${message}</p>
+        <button class="btn-small retry-diagram-btn" style="margin-top:8px">↺ Retry</button>`;
+      placeholder.style.removeProperty('display');
+    }
+    if (diagramViews) {
+      Array.from(diagramViews.querySelectorAll('.diagram-view')).forEach(v => v.remove());
+    }
+    const tabsEl = document.getElementById('diagram-tabs');
+    if (tabsEl) tabsEl.innerHTML = '';
+  }
+
   function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
     // Fetch and render diagrams for the current experiment with API ops filtering.
     const experimentId = currentExperimentId;
@@ -1335,7 +1362,7 @@
 
     fetch(url.toString())
       .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
         return r.json();
       })
       .then(data => {
@@ -1346,10 +1373,17 @@
           renderDiagrams(data.diagrams);
         } else {
           console.log('[Diagrams] No diagrams in response:', data);
+          _showDiagramNotReady('No diagram data was returned.');
         }
       })
       .catch(err => {
-        console.error('[Diagrams] Failed to fetch:', err);
+        console.warn('[Diagrams] Failed to fetch:', err);
+        const is404 = err.status === 404;
+        _showDiagramNotReady(
+          is404
+            ? 'Diagram not available yet — the scan may still be in progress.'
+            : `Could not load diagram (${err.message}).`
+        );
       });
   }
 
@@ -2004,6 +2038,16 @@
     const refreshDiagramBtn = document.getElementById('refresh-diagram-btn');
     if (refreshDiagramBtn) {
       refreshDiagramBtn.addEventListener('click', refreshDiagram);
+    }
+
+    // Delegated handler for the "Retry" button injected by _showDiagramNotReady
+    const diagramPanel = document.getElementById('diagram-panel');
+    if (diagramPanel) {
+      diagramPanel.addEventListener('click', e => {
+        if (e.target.closest('.retry-diagram-btn')) {
+          refetchDiagramsWithApiOpsMode(true);
+        }
+      });
     }
 
     const architectureAiBtnEl = document.getElementById('architecture-run-ai-btn');
