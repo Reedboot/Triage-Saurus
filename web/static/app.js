@@ -1066,6 +1066,7 @@
       const pre = document.createElement('pre');
       pre.className = 'mermaid';
       pre.style.background = 'transparent';
+      pre.dataset.source = code;
       pre.textContent = code;
       viewDiv.appendChild(pre);
       diagramViews.appendChild(viewDiv);
@@ -1211,7 +1212,7 @@
     if (!diagramView) return null;
     const preEl = diagramView.querySelector('pre.mermaid');
     if (!preEl) return null;
-    return preEl.textContent || '';
+    return preEl.dataset.source || preEl.textContent || '';
   }
 
   function refreshDiagram() {
@@ -1248,6 +1249,10 @@
       if (svg && svg.tagName === 'svg') {
         svg.remove();
       }
+
+      // Mermaid mutates the <pre>; restore raw source before re-rendering.
+      preEl.removeAttribute('data-processed');
+      preEl.textContent = source;
 
       // Re-initialize mermaid on this element
       if (window.mermaid) {

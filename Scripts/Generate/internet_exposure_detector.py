@@ -74,7 +74,7 @@ class InternetExposureDetector:
         },
         'azure': {
             'api_management_api', 'api_management_product',
-            'app_service', 'app_service_plan',
+            'app_service',
             'function_app', 'app_gateway', 'application_gateway',
             'front_door', 'frontdoor', 'cdn_profile',
             'api_management', 'apim',
@@ -421,6 +421,7 @@ class InternetExposureDetector:
         for resource in resources:
             resource_name = resource.get('resource_name')
             resource_type = (resource.get('resource_type') or '').lower()
+            cleaned_resource_type = _clean_resource_type(resource_type).lower()
 
             if not resource_name:
                 continue
@@ -434,9 +435,15 @@ class InternetExposureDetector:
             matched_type = None
 
             for public_type in public_types:
-                if public_type in resource_type or resource_type in public_type:
+                normalized_public_type = str(public_type or '').lower()
+                if (
+                    resource_type == normalized_public_type
+                    or cleaned_resource_type == normalized_public_type
+                    or resource_type.endswith(f"_{normalized_public_type}")
+                    or normalized_public_type.endswith(f"_{cleaned_resource_type}")
+                ):
                     matches_public_type = True
-                    matched_type = public_type
+                    matched_type = normalized_public_type
                     break
 
             if matches_public_type:

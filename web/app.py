@@ -4237,7 +4237,47 @@ def api_diagrams(experiment_id: str):
             return 0
         return sum(1 for ln in code.splitlines() if ("-->" in ln or "-.>" in ln))
 
+    def _diagram_has_icon_classes(code: str) -> bool:
+        return ":::icon-" in (code or "")
+
+    def _diagram_has_icon_defs(code: str, css_code: str) -> bool:
+        merged = f"{code or ''}\n{css_code or ''}"
+        return "classDef icon-" in merged
+
+    def _normalize_diagram_payload(diagrams: list[dict]) -> list[dict]:
+        normalized: list[dict] = []
+        for d in diagrams:
+            code = d.get("mermaid_code") or ""
+            css_code = d.get("css_code") or ""
+            provider_key = _canonical_provider_key(d.get("provider"))
+
+            if (
+                repo_name
+                and code
+                and _diagram_has_icon_classes(code)
+                and not _diagram_has_icon_defs(code, css_code)
+                and provider_key not in ("", "unknown")
+            ):
+                try:
+                    from Scripts.Generate.generate_diagram import generate_architecture_diagram_with_css  # type: ignore
+                    regenerated_code, regenerated_css = generate_architecture_diagram_with_css(
+                        experiment_id,
+                        repo_name=repo_name,
+                        provider=provider_key,
+                        include_operation_resources=include_api_operations_override,
+                    )
+                    if regenerated_code:
+                        d = dict(d)
+                        d["mermaid_code"] = regenerated_code
+                        d["css_code"] = regenerated_css or ""
+                except Exception:
+                    pass
+
+            normalized.append(d)
+        return normalized
+
     def _response_payload(diagrams: list[dict]) -> dict:
+        diagrams = _normalize_diagram_payload(diagrams)
         return {
             "diagrams": [
                 {
@@ -4505,7 +4545,7 @@ def api_diagrams(experiment_id: str):
 @app.route("/api/repo_summary/<experiment_id>/<repo_name>")
 def api_repo_summary(experiment_id: str, repo_name: str):
     """Return parsed sections for a repo summary Markdown file inside an experiment folder."""
-    candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}_*"))
+    candidates = sorted(EXPERIMENTS_DIR.glob(f"{experiment_id}*"))
     if not candidates:
         return jsonify({"sections": [], "error": f"Experiment {experiment_id} not found"}), 404
     exp_dir = candidates[0]

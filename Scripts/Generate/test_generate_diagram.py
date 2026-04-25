@@ -676,3 +676,82 @@ def test_distinct_resources_with_same_sanitized_name_get_unique_ids(monkeypatch)
     diagram = builder.generate()
     assert isinstance(diagram, str)
     assert diagram.startswith("flowchart TB")
+
+
+def test_validate_diagram_syntax_detects_emoji_class_errors():
+    """Test that _validate_diagram_syntax detects emoji+class suffix errors."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+    
+    bad_diagram = '''flowchart TB
+  subgraph n23["🔒 dev-vm"]:::icon-azurerm-virtual-machine
+    n20["VM PublicIP"]
+  end'''
+    
+    # Should raise ValueError for emoji+class syntax error
+    try:
+        builder._validate_diagram_syntax(bad_diagram)
+        assert False, "Expected ValueError for emoji+class syntax error"
+    except ValueError as e:
+        assert "emoji" in str(e).lower()
+        assert "class suffix" in str(e).lower()
+
+
+def test_validate_diagram_syntax_allows_valid():
+    """Test that _validate_diagram_syntax allows valid diagrams."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+    
+    good_diagram = '''flowchart TB
+  subgraph n23["dev-vm"]:::icon-azurerm-virtual-machine
+    n20["VM PublicIP"]
+  end'''
+    
+    # Should NOT raise ValueError for valid diagram
+    builder._validate_diagram_syntax(good_diagram)
+
+
+def test_validate_diagram_syntax_detects_unbalanced_brackets():
+    """Test that _validate_diagram_syntax detects unbalanced brackets."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+    
+    bad_diagram = '''flowchart TB
+  n1["label without closing bracket
+  n2["valid"]
+  end'''
+    
+    # Should raise ValueError for unbalanced brackets
+    try:
+        builder._validate_diagram_syntax(bad_diagram)
+        assert False, "Expected ValueError for unbalanced brackets"
+    except ValueError as e:
+        assert "bracket" in str(e).lower()
+
+
+def test_diagram_validation_passes_valid_diagrams(monkeypatch):
+    """Test that diagram generation validation passes valid diagrams."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+    
+    def fake_load_data():
+        builder.resources = [
+            {
+                "id": 1,
+                "resource_name": "app-gateway",
+                "resource_type": "azurerm_application_gateway",
+                "provider": "azure",
+                "repo_name": "repo",
+            }
+        ]
+        builder.connections = []
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {1: builder.resources[0]}
+        builder.resource_by_name = {"app-gateway": builder.resources[0]}
+    
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+    
+    # Valid diagram should not raise any errors
+    diagram = builder.generate()
+    assert isinstance(diagram, str)
+    assert diagram.startswith("flowchart TB")
+    assert "app-gateway" in diagram
+

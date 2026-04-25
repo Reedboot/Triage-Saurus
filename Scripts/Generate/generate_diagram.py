@@ -276,6 +276,19 @@ class HierarchicalDiagramBuilder:
         """Return a Mermaid label wrapped in quotes with embedded quotes escaped."""
         safe = str(label or '').replace('\\', '\\\\').replace('"', '\\"')
         return f'"{safe}"'
+
+    def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:
+        """Return Mermaid class suffix for a subgraph resource when an icon exists."""
+        if not resource:
+            return ""
+        resource_type = (resource.get('resource_type') or '').lower()
+        if not resource_type:
+            return ""
+        provider = _detect_provider_from_resource(resource)
+        if provider in ('unknown', 'terraform'):
+            return ""
+        css_class = get_icon_class(resource_type, provider)
+        return f':::{css_class}' if css_class else ''
         
     def load_data(self):
         """Load resources and connections from database."""
@@ -1783,13 +1796,14 @@ class HierarchicalDiagramBuilder:
         parsed = self._parse_sql_connection_string(normalized)
         return str(parsed.get('auth_method') or normalized).strip()
 
-    def render_sql_hierarchy(self, sql_resources: List[dict]) -> List[str]:
+    def render_sql_hierarchy(self, sql_resources: List[dict], indent: str = "  ") -> List[str]:
         """Render SQL server nodes, optionally as subgraphs with child database nodes."""
         if not sql_resources:
             return []
 
         lines: List[str] = []
         preferred_database = str(self.sql_hints.get('database') or '').strip()
+        child_indent = indent + "  "
 
         for res in sql_resources:
             server_name = res['resource_name']
@@ -1805,23 +1819,26 @@ class HierarchicalDiagramBuilder:
                 # Databases / children are rendered as child nodes inside.
                 raw_label = f"SQL Server: {server_name}" if database_name or 'sql' in (res.get('resource_type') or '').lower() else server_name
                 label = self._wrap_mermaid_label(raw_label)
-                lines.append(f"  subgraph {server_id}[{self._quote_mermaid_label(label)}]")
+                # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
+                lines.append(f"{indent}subgraph {server_id}[{self._quote_mermaid_label(label)}]")
                 if database_name:
-                    lines.append(f"    {db_node_id}[\"{database_name}\"]")
+                    lines.append(f"{child_indent}{db_node_id}[\"{database_name}\"]")
                 for child in children:
                     if self.children_by_parent.get(child['id']):
-                        lines.extend(self._render_nested_resource(child, indent="    "))
+                        lines.extend(self._render_nested_resource(child, indent=child_indent))
                     else:
-                        lines.append(self.render_node(child, indent="    "))
+                        lines.append(self.render_node(child, indent=child_indent))
                         self.emitted_nodes.add(child['resource_name'])
-                lines.append("  end")
+                lines.append(f"{indent}end")
                 self.emitted_nodes.add(server_name)
                 self.emitted_nodes.add(database_name)
+                self.node_id_override[server_name] = server_id
+                self.subgraph_nodes.add(server_name)
                 self._emitted_mermaid_ids.add(server_id)
                 if server_id not in self._node_id_first_owner:
                     self._node_id_first_owner[server_id] = str(res.get('id', ''))
             else:
-                lines.append(self.render_node(res, indent="  "))
+                lines.append(self.render_node(res, indent=indent))
                 self.emitted_nodes.add(server_name)
 
         return lines
@@ -1847,9 +1864,13 @@ class HierarchicalDiagramBuilder:
             return [self.render_node(resource, indent=indent)]
 
         lines: List[str] = []
+        # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
+        # Use 'style' commands instead if styling is needed
         lines.append(f'{indent}subgraph {node_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(name))}]')
         self._emitted_mermaid_ids.add(node_id)
         self._rendered_subgraph_resource_ids.add(resource_id)  # Track this resource ID
+        self.node_id_override[name] = node_id
+        self.subgraph_nodes.add(name)
         if node_id not in self._node_id_first_owner:
             self._node_id_first_owner[node_id] = str(resource_id)
 
@@ -1867,6 +1888,7 @@ class HierarchicalDiagramBuilder:
         lines.append(f'{indent}end')
         self.emitted_nodes.add(name)
         return lines
+        return lines
 
     def render_data_hierarchy(self, sql_resources: List[dict], storage_resources: List[dict]) -> List[str]:
         """Render the data tier with SQL, Cosmos DB, and storage resources nested."""
@@ -1877,7 +1899,7 @@ class HierarchicalDiagramBuilder:
         lines.append('  subgraph data_tier["Data Tier"]')
 
         for res in sql_resources:
-            lines.extend(self.render_sql_hierarchy([res]))
+            lines.extend(self.render_sql_hierarchy([res], indent="    "))
 
         for res in storage_resources:
             lines.extend(self._render_nested_resource(res, indent="    "))
@@ -2377,12 +2399,14 @@ class HierarchicalDiagramBuilder:
                         display_label = compute_name
                     
                     # Start compute subgraph
+                    # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
                     lines.append(f'    subgraph {compute_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(display_label))}]')
                     self._emitted_mermaid_ids.add(compute_id)
                     if compute_id not in self._node_id_first_owner:
                         self._node_id_first_owner[compute_id] = str(compute.get('id', ''))
                     # Mark this compute resource as a subgraph (cannot be connection endpoint)
-                    self.subgraph_nodes.add(compute_id)
+                    self.subgraph_nodes.add(compute_name)
+                    self.node_id_override[compute_name] = compute_id
                     
                     # Render child resources inside compute (NICs, disks, extensions, etc.)
                     compute_children = self.children_by_parent.get(compute.get('id'), [])
@@ -2433,6 +2457,7 @@ class HierarchicalDiagramBuilder:
                                 lines.append(line)
                     
                     lines.append('    end')
+                    self.node_id_override[compute_name] = compute_id
                     self.emitted_nodes.add(compute_name)
         
         lines.append('  end')
@@ -2489,12 +2514,14 @@ class HierarchicalDiagramBuilder:
             
             if has_k8s or has_children or has_containers:
                 # Render VM as subgraph with children
+                # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
                 lines.append(f"  subgraph {vm_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(vm_name))}]")
                 self._emitted_mermaid_ids.add(vm_id)
                 if vm_id not in self._node_id_first_owner:
                     self._node_id_first_owner[vm_id] = str(vm.get('id', ''))
                 # Mark this node as a subgraph (cannot be connection endpoint)
-                self.subgraph_nodes.add(vm_id)
+                self.subgraph_nodes.add(vm_name)
+                self.node_id_override[vm_name] = vm_id
                 
                 # Render regular children (NICs, disks, etc.)
                 for child in other_children:
@@ -2583,8 +2610,11 @@ class HierarchicalDiagramBuilder:
                 non_circular_children.append(child)
 
             if non_circular_children:
+                # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
                 lines.append(f'    subgraph {app_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(app_name))}]')
                 self._emitted_mermaid_ids.add(app_id)
+                self.node_id_override[app_name] = app_id
+                self.subgraph_nodes.add(app_name)
                 if app_id not in self._node_id_first_owner:
                     self._node_id_first_owner[app_id] = str(app.get('id', ''))
                 for child in non_circular_children:
@@ -2639,17 +2669,27 @@ class HierarchicalDiagramBuilder:
         if compute['resource_name'] in self.emitted_nodes:
             return
         is_public = self.is_public_ec2_instance(compute)
-        icon = "📡" if is_public else "🔒"
-        label = f"{icon} {compute['resource_name']}"
         c_id = self._get_node_id(compute)
         resource_type = (compute.get('resource_type') or '').lower()
         provider = _detect_provider_from_resource(compute)
         css_class = get_icon_class(resource_type, provider) if resource_type and provider not in ('unknown', 'terraform') else None
         css_suffix = f':::{css_class}' if css_class else ''
+        
+        # Only add emoji to label if no class suffix (avoid Mermaid parsing issues with emoji + class suffix)
+        if css_suffix:
+            label = compute['resource_name']
+        else:
+            icon = "📡" if is_public else "🔒"
+            label = f"{icon} {compute['resource_name']}"
         c_label = self._wrap_mermaid_label(label)
 
         # Check for renderable children (NICs, VM extensions, role assignments etc.)
-        _SKIP_CHILD_TYPES = frozenset({'iam_role', 'role_assignment', 'policy', 'user_assigned_identity'})
+        # Skip implementation details and Azure plumbing: VM extensions, SG associations, IAM roles, etc.
+        _SKIP_CHILD_TYPES = frozenset({
+            'iam_role', 'role_assignment', 'policy', 'user_assigned_identity',
+            'virtual_machine_extension', 'azurerm_virtual_machine_extension',  # Implementation detail
+            'network_interface_security_group_association'  # Azure plumbing; NSG is shown at subnet level
+        })
         compute_children = self.children_by_parent.get(compute.get('id'), [])
         renderable_children = [
             c for c in compute_children
@@ -2659,10 +2699,11 @@ class HierarchicalDiagramBuilder:
 
         if renderable_children and c_id not in self._emitted_mermaid_ids:
             # Render as subgraph so children appear nested inside
+            # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
             self._emitted_mermaid_ids.add(c_id)
             self._node_id_first_owner[c_id] = str(compute.get('id', ''))
             self.subgraph_nodes.add(compute['resource_name'])
-            lines.append(f'{indent}subgraph {c_id}[{self._quote_mermaid_label(c_label)}]{css_suffix}')
+            lines.append(f'{indent}subgraph {c_id}[{self._quote_mermaid_label(c_label)}]')
             inner = indent + "  "
             for child in renderable_children:
                 lines.append(self.render_node(child, indent=inner))
@@ -3044,7 +3085,7 @@ class HierarchicalDiagramBuilder:
             k8s_subgraph_id = "k8s"
             namespace_prefix = "k8s_ns"
         
-        lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]:::icon-kubernetes-cluster")
+        lines.append(f"  subgraph {k8s_subgraph_id}[{self._quote_mermaid_label(cluster_label)}]")
         # Map all cluster resource names → subgraph ID so render_connections uses correct ID
         if cluster_resources:
             for r in cluster_resources:
@@ -3080,7 +3121,7 @@ class HierarchicalDiagramBuilder:
             namespace_id = f"{namespace_prefix}_{first_res_id}"
             # Add resource type to label for clarity (Namespace)
             namespace_display = f"Namespace - {namespace}"
-            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]:::icon-kubernetes-namespace")
+            lines.append(f"    subgraph {namespace_id}[{self._quote_mermaid_label(namespace_display)}]")
 
             # Separate resources by type for proper nesting (use exact type matching, not substrings)
             # Filter out Helm template variables ({{ ... }}) from resource names
@@ -3125,7 +3166,7 @@ class HierarchicalDiagramBuilder:
             for dep in deployments:
                 dep_id = self._get_node_id(dep)
                 dep_label = _render_workload_label(dep, "Deployment")
-                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]:::icon-kubernetes-deployment")
+                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
                 
                 # Add pods as children (if present in DB)
                 dep_children = self.children_by_parent.get(dep['id'], [])
@@ -3147,6 +3188,7 @@ class HierarchicalDiagramBuilder:
                         lines.append(f'        k8s_dep_pod_tpl_{dep_id}["📦 Pod Template"]')
                 
                 lines.append("      end")
+                lines.append(f"      class {dep_id} icon-kubernetes-deployment")
                 self._emitted_mermaid_ids.add(dep_id)
                 self.emitted_nodes.add(dep['resource_name'])
                 self.node_id_override[dep['resource_name']] = dep_id
@@ -3155,7 +3197,7 @@ class HierarchicalDiagramBuilder:
             for ss in statefulsets:
                 ss_id = self._get_node_id(ss)
                 ss_label = _render_workload_label(ss, "StatefulSet")
-                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]:::icon-kubernetes-statefulset")
+                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
                 
                 ss_children = self.children_by_parent.get(ss['id'], [])
                 pods = [c for c in ss_children if 'pod' in (c.get('resource_type') or '').lower()]
@@ -3176,6 +3218,7 @@ class HierarchicalDiagramBuilder:
                         lines.append(f'        k8s_ss_pod_tpl_{ss_id}["📦 Pod Template"]')
                 
                 lines.append("      end")
+                lines.append(f"      class {ss_id} icon-kubernetes-statefulset")
                 self._emitted_mermaid_ids.add(ss_id)
                 self.emitted_nodes.add(ss['resource_name'])
                 self.node_id_override[ss['resource_name']] = ss_id
@@ -3184,7 +3227,7 @@ class HierarchicalDiagramBuilder:
             for cj in cronjobs:
                 cj_id = self._get_node_id(cj)
                 cj_label = _render_workload_label(cj, "CronJob")
-                lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]:::icon-kubernetes-cronjob")
+                lines.append(f"      subgraph {cj_id}[{self._quote_mermaid_label(cj_label)}]")
                 
                 cj_children = self.children_by_parent.get(cj['id'], [])
                 jobs = [c for c in cj_children if 'job' in (c.get('resource_type') or '').lower()]
@@ -3205,6 +3248,7 @@ class HierarchicalDiagramBuilder:
                         lines.append(f"        k8s_cron_job_tpl_{cj_id}[⏰ Job Pod]")
                 
                 lines.append("      end")
+                lines.append(f"      class {cj_id} icon-kubernetes-cronjob")
                 self._emitted_mermaid_ids.add(cj_id)
                 self.emitted_nodes.add(cj['resource_name'])
                 self.node_id_override[cj['resource_name']] = cj_id
@@ -3292,8 +3336,10 @@ class HierarchicalDiagramBuilder:
                 self.node_id_override[res['resource_name']] = node_id
 
             lines.append("    end")
+            lines.append(f"    class {namespace_id} icon-kubernetes-namespace")
 
         lines.append("  end")
+        lines.append(f"class {k8s_subgraph_id} icon-kubernetes-cluster")
         return lines
     
     def render_service_bus(self, sb_resources: List[dict]) -> List[str]:
@@ -3550,6 +3596,32 @@ class HierarchicalDiagramBuilder:
         def _is_internet(name: Optional[str]) -> bool:
             return str(name or '').strip().lower() == 'internet'
 
+        def _resolve_node_id(name: Optional[str]) -> str:
+            if _is_internet(name):
+                return 'internet'
+            if not name:
+                return 'node'
+            override = self.node_id_override.get(name)
+            if override:
+                return override
+            normalized = sanitize_id(name)
+            matched_override = None
+            for candidate_name, candidate_id in self.node_id_override.items():
+                if not candidate_name or candidate_name.startswith('css_class_'):
+                    continue
+                if sanitize_id(candidate_name) != normalized:
+                    continue
+                if matched_override and matched_override != candidate_id:
+                    matched_override = None
+                    break
+                matched_override = candidate_id
+            if matched_override:
+                return matched_override
+            resource = self._get_primary_resource(name)
+            if resource:
+                return self._get_node_id(resource)
+            return normalized
+
         for conn in self.connections:
             src = conn.get('source')
             tgt = conn.get('target')
@@ -3617,8 +3689,8 @@ class HierarchicalDiagramBuilder:
                     # Target resource type should be excluded, skip this connection
                     continue
             
-            src_id = self.node_id_override.get(src) or (sanitize_id(src) if not _is_internet(src) else 'internet')
-            tgt_id = self.node_id_override.get(tgt) or (sanitize_id(tgt) if not _is_internet(tgt) else 'internet')
+            src_id = _resolve_node_id(src)
+            tgt_id = _resolve_node_id(tgt)
             if _is_internet(src):
                 has_internet = True
             
@@ -3734,7 +3806,7 @@ class HierarchicalDiagramBuilder:
                 # For IGWs: connect Internet→IGW, then emit IGW→downstream edges for
                 # all other internet-exposed resources that are in the same VPC.
                 if is_igw:
-                    igw_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                    igw_id = _resolve_node_id(resource_name)
                     if ('internet', igw_id) not in {(e[1], e[2]) for e in edge_list}:
                         has_internet = True
                         lines.append(f"  internet -.->|Internet entry| {igw_id}")
@@ -3758,7 +3830,7 @@ class HierarchicalDiagramBuilder:
                         other_vpc = other_res.get('parent_resource_id')
                         if igw_vpc_id and other_vpc != igw_vpc_id:
                             continue
-                        other_id = self.node_id_override.get(other_name) or sanitize_id(other_name)
+                        other_id = _resolve_node_id(other_name)
                         if (igw_id, other_id) not in {(e[1], e[2]) for e in edge_list}:
                             lines.append(f"  {igw_id} --> {other_id}")
                             edge_list.append((None, igw_id, other_id))
@@ -3790,7 +3862,7 @@ class HierarchicalDiagramBuilder:
                     if target_name not in self.emitted_nodes:
                         continue
                     
-                    tgt_id = self.node_id_override.get(target_name) or sanitize_id(target_name)
+                    tgt_id = _resolve_node_id(target_name)
 
                     # Deduplicate: don't emit the same Internet→target edge twice
                     if ('internet', tgt_id) in {(e[1], e[2]) for e in edge_list}:
@@ -4922,7 +4994,57 @@ class HierarchicalDiagramBuilder:
         lines.append("")
       #  lines.append("%%{init: {'theme':'dark'} }%%")
         
-        return "\n".join(lines)
+        diagram_text = "\n".join(lines)
+        
+        # Validate diagram syntax before returning
+        self._validate_diagram_syntax(diagram_text)
+        
+        return diagram_text
+
+    
+    def _validate_diagram_syntax(self, diagram_text: str) -> None:
+        """Validate Mermaid diagram syntax and raise exception on errors.
+        
+        Uses markdown_validator to catch common syntax errors before the diagram
+        is rendered, avoiding browser-side rendering failures.
+        
+        Raises ValueError if syntax errors are detected.
+        """
+        try:
+            import sys
+            from pathlib import Path
+            # Add Validate directory to path if not already present
+            validate_path = str(Path(__file__).parent.parent / "Validate")
+            if validate_path not in sys.path:
+                sys.path.insert(0, validate_path)
+            
+            from markdown_validator import validate_and_fix_mermaid_blocks
+            
+            # Wrap diagram in markdown fence for validation
+            text_with_fence = f"```mermaid\n{diagram_text}\n```"
+            
+            # Validate without attempting fixes (strict mode)
+            problems, _, _ = validate_and_fix_mermaid_blocks(text_with_fence, fix=False)
+            
+            # Filter to ERROR level problems only (ignore WARNINGs)
+            errors = [p for p in problems if p.level == "ERROR"]
+            
+            if errors:
+                # Build detailed error message
+                error_messages = []
+                for err in errors:
+                    line_info = f" (line {err.line})" if err.line else ""
+                    error_messages.append(f"  • {err.message}{line_info}")
+                
+                raise ValueError(
+                    f"Mermaid diagram syntax errors detected:\n" + 
+                    "\n".join(error_messages) +
+                    "\n\nPlease fix the diagram generation code and try again."
+                )
+        except ImportError:
+            # If validator is not available, skip validation (development fallback)
+            pass
+
     
     def render_styles(self, diagram_lines: List[str]) -> List[str]:
         """Generate color-coded borders for resource categories.
