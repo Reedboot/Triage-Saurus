@@ -580,6 +580,18 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_virtual_enclaves': ('other', 'virtual-enclaves'),
     'azurerm_virtual_instance_for_sap': ('other', 'virtual-instance-for-sap'),
     'azurerm_virtual_machine': ('other', 'virtual-machine'),
+    'azurerm_linux_virtual_machine': ('compute', 'virtual-machine'),
+    'azurerm_windows_virtual_machine': ('compute', 'virtual-machine'),
+    'azurerm_virtual_machine_extension': ('compute', 'virtual-machine'),
+    'azurerm_managed_disk': ('compute', 'disk'),
+    'azurerm_application_gateway': ('networking', 'load-balancer'),
+    'azurerm_network_security_group': ('networking', 'nsg'),
+    'azurerm_network_watcher_flow_log': ('networking', 'network-watcher'),
+    'azurerm_mssql_server_security_alert_policy': ('security', 'microsoft-defender-for-cloud'),
+    'azurerm_mysql_server': ('databases', 'sql'),
+    'azurerm_postgresql_server': ('other', 'postgresql'),
+    'azurerm_cosmosdb_account': ('databases', 'cosmos-db'),
+    'azurerm_storage_blob': ('general', 'blob-block'),
     'azurerm_virtual_router': ('networking', 'virtual-router'),
     'azurerm_virtual_visits_builder': ('other', 'virtual-visits-builder'),
     'azurerm_virtual_wan_hub': ('networking', 'virtual-wan-hub'),
@@ -920,6 +932,41 @@ AWS_RESOURCE_TYPE_TO_ICON = {
     'aws_workmail': ('Arch_Business-Applications', 'workmail'),
     'aws_workspaces': ('Arch_End-User-Computing', 'workspaces'),
     'aws_x_ray': ('Arch_Developer-Tools', 'x-ray'),
+    # Terraform resource type aliases — map Terraform names to matching product icons
+    'aws_instance':                   ('Arch_Compute', 'ec2'),
+    'aws_lambda_function':            ('Arch_Compute', 'lambda'),
+    'aws_s3_bucket':                  ('Arch_Storage', 's3'),
+    'aws_s3_bucket_policy':           ('Arch_Storage', 's3'),
+    'aws_s3_object':                  ('Arch_Storage', 's3'),
+    'aws_s3_bucket_object':           ('Arch_Storage', 's3'),
+    'aws_db_instance':                ('Arch_Databases', 'rds'),
+    'aws_rds_cluster':                ('Arch_Databases', 'aurora'),
+    'aws_ecr_repository':             ('Arch_Security-Identity', 'ecr'),
+    'aws_elb':                        ('Arch_Networking-Content-Delivery', 'elastic-load-balancing'),
+    'aws_neptune_cluster':            ('Arch_Databases', 'neptune'),
+    'aws_network_interface':          ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_dynamodb_table':             ('Arch_Databases', 'dynamodb'),
+    'aws_api_gateway_rest_api':       ('Arch_Networking-Content-Delivery', 'api-gateway'),
+    'aws_api_gateway_v2_api':         ('Arch_Networking-Content-Delivery', 'api-gateway'),
+    'aws_alb':                        ('Arch_Networking-Content-Delivery', 'elastic-load-balancing'),
+    'aws_lb':                         ('Arch_Networking-Content-Delivery', 'elastic-load-balancing'),
+    'aws_lb_listener':                ('Arch_Networking-Content-Delivery', 'elastic-load-balancing'),
+    'aws_ecs_service':                ('Arch_Containers', 'ecs'),
+    'aws_ecs_task_definition':        ('Arch_Containers', 'ecs'),
+    'aws_ecs_cluster':                ('Arch_Containers', 'ecs'),
+    'aws_eks_cluster':                ('Arch_Containers', 'elastic-kubernetes-service'),
+    'aws_internet_gateway':           ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_subnet':                     ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_vpc':                        ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_security_group':             ('Arch_Security-Identity', 'network-firewall'),
+    'aws_route_table':                ('Arch_Networking-Content-Delivery', 'route53'),
+    'aws_secretsmanager_secret':      ('Arch_Security-Identity', 'key-management-service'),
+    'aws_iam_role':                   ('Arch_Security-Identity', 'iam'),
+    'aws_iam_policy':                 ('Arch_Security-Identity', 'iam'),
+    'aws_cloudfront_distribution':    ('Arch_Networking-Content-Delivery', 'cloudfront'),
+    'aws_elasticache_cluster':        ('Arch_Databases', 'elasticache'),
+    'aws_sqs_queue':                  ('Arch_Application-Integration', 'sqs'),
+    'aws_sns_topic':                  ('Arch_Application-Integration', 'sns'),
 }
 
 # GCP resource type to icon mapping
@@ -944,6 +991,28 @@ GCP_RESOURCE_TYPE_TO_ICON = {
     'google_securitycommandcenter': ('Security_Command_Center', 'securitycommandcenter'),
     'google_threatintelligence': ('Threat_Intelligence', 'threatintelligence'),
     'google_vertexai': ('Vertex_AI', 'vertexai'),
+    # Terraform resource type aliases — map Terraform resource names to available GCP icons
+    'google_compute_instance':           ('Compute_Engine', 'compute-engine'),
+    'google_compute_firewall':           ('Compute_Engine', 'compute-engine'),
+    'google_compute_network':            ('Compute_Engine', 'compute-engine'),
+    'google_compute_subnetwork':         ('Compute_Engine', 'compute-engine'),
+    'google_storage_bucket':             ('Cloud_Storage', 'cloud-storage'),
+    'google_storage_bucket_object':      ('Cloud_Storage', 'cloud-storage'),
+    'google_cloudfunctions_function':    ('Cloud_Run', 'cloud-run'),
+    'google_cloudfunctions2_function':   ('Cloud_Run', 'cloud-run'),
+    'google_app_engine_application':     ('Cloud_Run', 'cloud-run'),
+    'google_cloud_run_service':          ('Cloud_Run', 'cloud-run'),
+    'google_cloud_run_v2_service':       ('Cloud_Run', 'cloud-run'),
+    'google_sql_database_instance':      ('Cloud_SQL', 'cloud-sql'),
+    'google_sql_database':               ('Cloud_SQL', 'cloud-sql'),
+    'google_bigquery_dataset':           ('BigQuery', 'bigquery'),
+    'google_bigquery_table':             ('BigQuery', 'bigquery'),
+    'google_container_cluster':          ('GKE', 'kubernetes-engine'),
+    'google_container_node_pool':        ('GKE', 'kubernetes-engine'),
+    'google_spanner_instance':           ('Cloud_Spanner', 'cloudspanner'),
+    'google_firestore_document':         ('Cloud_Storage', 'cloud-storage'),
+    'google_kms_key_ring':               ('Cloud_SQL', 'cloud-sql'),
+    'google_kms_crypto_key':             ('Cloud_SQL', 'cloud-sql'),
 }
 
 @lru_cache(maxsize=512)
@@ -1047,7 +1116,16 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
     rtype = (resource_type or '').lower().strip()
     if not rtype:
         return None
-    
+
+    # Check OTHER_RESOURCE_TYPE_TO_ICON first (alicloud, oci, synthetic, etc.)
+    if rtype in OTHER_RESOURCE_TYPE_TO_ICON:
+        prov_name, icon_rel = OTHER_RESOURCE_TYPE_TO_ICON[rtype]
+        parts = icon_rel.split('/', 1)
+        if len(parts) == 2:
+            cat, name = parts
+            return _find_icon_file(cat, name, prov_name)
+        return None
+
     # Select the mapping based on provider
     if provider.lower() == 'azure':
         mapping = AZURE_RESOURCE_TYPE_TO_ICON
@@ -1059,7 +1137,7 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
         mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
         if rtype in mapping:
             category, icon_name = mapping[rtype]
-            # Kubernetes icons live directly in icons/kubernetes/
+            # Kubernetes icons live in icons/kubernetes/
             icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
             if icon_file.exists():
                 return icon_file
@@ -1079,6 +1157,14 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
                 icon_file = ICONS_ROOT / category / f"{icon_name}.svg"
                 if icon_file.exists():
                     return icon_file
+            return None
+        elif rtype in OTHER_RESOURCE_TYPE_TO_ICON:
+            prov_name, icon_rel = OTHER_RESOURCE_TYPE_TO_ICON[rtype]
+            # icon_rel is 'category/icon-name', prov_name is the fallback provider
+            parts = icon_rel.split('/', 1)
+            if len(parts) == 2:
+                cat, name = parts
+                return _find_icon_file(cat, name, prov_name)
             return None
         else:
             return None
@@ -1189,6 +1275,31 @@ KUBERNETES_RESOURCE_TYPE_TO_ICON = {
     'kubernetes_replicaset': ('kubernetes', 'deployment'),
     'kubernetes_networkpolicy': ('kubernetes', 'ingress'),
     'kubernetes_serviceaccount': ('kubernetes', 'service'),
+}
+
+# Alicloud, OCI, and synthetic resource types — use provider-agnostic fallback icons
+# These live in the Azure/GCP icon directories which are already served under /static
+OTHER_RESOURCE_TYPE_TO_ICON: dict = {
+    # Alicloud
+    'alicloud_db_instance':       ('azure', 'databases/sql-database'),
+    'alicloud_oss_bucket':        ('azure', 'storage/storage-account'),
+    'alicloud_instance':          ('azure', 'compute/virtual-machine'),
+    'alicloud_vpc':               ('azure', 'networking/virtual-networks'),
+    'alicloud_vswitch':           ('azure', 'networking/virtual-networks'),
+    'alicloud_security_group':    ('azure', 'networking/nsg'),
+    'alicloud_ram_role':          ('azure', 'identity/managed-identities'),
+    'alicloud_ram_policy':        ('azure', 'security/microsoft-defender-for-cloud'),
+    # Oracle Cloud Infrastructure
+    'oci_objectstorage_bucket':   ('azure', 'storage/storage-account'),
+    'oci_core_instance':          ('azure', 'compute/virtual-machine'),
+    'oci_core_vcn':               ('azure', 'networking/virtual-networks'),
+    'oci_core_subnet':            ('azure', 'networking/virtual-networks'),
+    'oci_database_db_system':     ('azure', 'databases/sql-database'),
+    # Synthetic/inferred nodes (created by diagram generator)
+    'synthetic_sql_server':       ('azure', 'databases/sql-database'),
+    'synthetic_database':         ('azure', 'databases/sql-database'),
+    'synthetic_storage':          ('azure', 'storage/storage-accounts'),
+    'synthetic_server':           ('azure', 'compute/virtual-machine'),
 }
 
 

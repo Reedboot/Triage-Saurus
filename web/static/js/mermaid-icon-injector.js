@@ -56,8 +56,14 @@ const MermaidIconInjector = (() => {
    */
   function findMermaidNodes(svgElement) {
     // Look for: <g class="node ..." or class="...node..."
-    // These typically contain a <rect> (the box) and <text> (the label)
-    return Array.from(svgElement.querySelectorAll('g[class*="node"]'));
+    // Also include <g class="...cluster..."> which is how Mermaid renders subgraphs
+    // (subgraphs can have :::icon-xxx classes too, e.g. K8s cluster/namespace/deployment)
+    const seen = new Set();
+    const results = [];
+    for (const el of svgElement.querySelectorAll('g[class*="node"], g[class*="cluster"]')) {
+      if (!seen.has(el)) { seen.add(el); results.push(el); }
+    }
+    return results;
   }
 
   /**

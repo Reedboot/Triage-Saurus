@@ -198,7 +198,8 @@ class HierarchicalDiagramBuilder:
         # definitions when multiple resources with the same name appear in a parent-child chain
         self._rendered_subgraph_resource_ids: Set[str] = set()
         # K8s services that need internet → service edges added after cluster rendering
-        self._k8s_internet_services: List[str] = []
+        # Each entry is a tuple of (svc_id, label)
+        self._k8s_internet_services: List[tuple] = []
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -252,16 +253,23 @@ class HierarchicalDiagramBuilder:
     def _wrap_mermaid_label(self, label: str, width: int = 28) -> str:
         """Wrap a Mermaid-visible label so long box titles stay inside their bounds.
         
-        Note: Mermaid does not support <br/> tags in labels. This function now
-        returns labels without HTML wrapping. Mermaid handles long labels itself.
+        - For file paths (contains '/'), use just the last path component (filename).
+        - Truncate anything over 35 characters to 35 + '…' so text fits in rendered boxes.
         """
         text = re.sub(r'\s+', ' ', str(label or '').strip())
         if not text:
             return text
         
-        # Don't add HTML tags - just return normalized text
-        # Mermaid will handle wrapping/overflow itself
+        # If label looks like a file path, use just the final component
+        if '/' in text:
+            parts = [p for p in text.split('/') if p.strip()]
+            if parts:
+                text = parts[-1]
+        
         normalized = text.replace('_', ' ').replace('/', ' / ')
+        # Truncate at 35 chars to ensure text fits in rendered diagram boxes
+        if len(normalized) > 35:
+            normalized = normalized[:34] + '…'
         return normalized
 
     def _quote_mermaid_label(self, label: str) -> str:
@@ -635,9 +643,27 @@ class HierarchicalDiagramBuilder:
             if len(providers_in_diagram) == 1:
                 provider_to_detect = providers_in_diagram.pop()
         
+        # For multi-provider diagrams, run detection per-provider and combine
         if not provider_to_detect or provider_to_detect not in valid_providers:
-            return  # Skip detection for mixed providers, terraform, kubernetes
-        
+            if not self.resources:
+                return
+            # Run per-provider detection and combine
+            providers_in_diagram = {(r.get('provider') or '').lower() for r in self.resources} & valid_providers
+            if not providers_in_diagram:
+                return
+            combined_exposed: Dict[str, 'ExposureDetail'] = {}
+            try:
+                for prov in providers_in_diagram:
+                    prov_resources = [r for r in self.resources if (r.get('provider') or '').lower() == prov]
+                    prov_detector = InternetExposureDetector(prov)
+                    prov_exposed = prov_detector.detect_exposed_resources(prov_resources, self.connections)
+                    combined_exposed.update(prov_exposed)
+                self.exposed_resources = combined_exposed
+            except Exception as e:
+                print(f"Warning: Multi-provider exposure detection failed: {e}", file=sys.stderr)
+                self.exposed_resources = {}
+            return
+
         try:
             detector = InternetExposureDetector(provider_to_detect)
             
@@ -1948,7 +1974,8 @@ class HierarchicalDiagramBuilder:
                 continue
 
             vpc_db_id = vpc.get('id')
-            vpc_node_id = sanitize_id(vpc['resource_name'])
+            vpc_node_id = self._get_node_id(vpc)
+            self.node_id_override[vpc['resource_name']] = vpc_node_id
             vpc_children_raw = self.children_by_parent.get(vpc_db_id, [])
             vpc_child_ids = {c.get('id') for c in vpc_children_raw}
 
@@ -1998,7 +2025,7 @@ class HierarchicalDiagramBuilder:
             igw = igw_ids_by_vpc_id.get(vpc_db_id)
             i0 = "    "   # inside network_tier
             if igw and igw['resource_name'] not in self.emitted_nodes:
-                igw_node_id = sanitize_id(igw['resource_name'])
+                igw_node_id = self._get_node_id(igw)
                 igw_label   = self._wrap_mermaid_label(igw['resource_name'])
                 lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]:::icon-aws-internet-gateway')
                 self._emitted_mermaid_ids.add(igw_node_id)
@@ -2017,6 +2044,7 @@ class HierarchicalDiagramBuilder:
             lines.append(f'{i0}subgraph {vpc_node_id}[{self._quote_mermaid_label(vpc_label)}]')
             self._emitted_mermaid_ids.add(vpc_node_id)
             self._node_id_first_owner[vpc_node_id] = str(vpc_db_id or '')
+            self.subgraph_nodes.add(vpc['resource_name'])
 
             # Route Tables — shown as nodes inside VPC (the routing decision layer)
             for rt in vpc_rts:
@@ -2029,7 +2057,8 @@ class HierarchicalDiagramBuilder:
                 if subnet['resource_name'] in self.emitted_nodes:
                     continue
                 subnet_db_id  = subnet.get('id')
-                subnet_node_id = sanitize_id(subnet['resource_name'])
+                subnet_node_id = self._get_node_id(subnet)
+                self.node_id_override[subnet['resource_name']] = subnet_node_id
                 subnet_children = self.children_by_parent.get(subnet_db_id, [])
                 subnet_computes = [c for c in subnet_children if self.is_compute_resource(c)]
 
@@ -2109,13 +2138,15 @@ class HierarchicalDiagramBuilder:
                     lines.append(f'{i1}subgraph {subnet_node_id}[{self._quote_mermaid_label(subnet_label)}]')
                     self._emitted_mermaid_ids.add(subnet_node_id)
                     self._node_id_first_owner[subnet_node_id] = str(subnet_db_id or '')
+                    self.subgraph_nodes.add(subnet['resource_name'])
 
                     if sgs_for_subnet:
                         # Render SG as subgraph containing the compute resources it protects.
                         # If there are no compute children (e.g. SG pulled in for EKS subnet),
                         # render as a plain node to avoid an empty subgraph.
                         for sg in sgs_for_subnet:
-                            sg_node_id = sanitize_id(sg['resource_name'])
+                            sg_node_id = self._get_node_id(sg)
+                            self.node_id_override[sg['resource_name']] = sg_node_id
                             sg_label   = self._wrap_mermaid_label(sg['resource_name'])
                             has_compute_to_wrap = bool(subnet_computes)
                             if has_compute_to_wrap:
@@ -2197,11 +2228,11 @@ class HierarchicalDiagramBuilder:
                     self.emitted_nodes.add(sg['resource_name'])
 
             # GCP / no-subnet fallback: if this VPC has no subnets in DB (e.g. GCP
-            # auto_create_subnetworks) but has unplaced compute resources, render them
-            # directly inside the VPC subgraph so they're not floating at tier level.
-            if not vpc_subnets and compute_resources:
+            # auto_create_subnetworks) but has unplaced compute resources that are DB children
+            # of this VPC, render them directly inside the VPC subgraph.
+            if not vpc_subnets:
                 for comp in compute_resources:
-                    if comp['resource_name'] not in self.emitted_nodes:
+                    if comp['resource_name'] not in self.emitted_nodes and comp.get('parent_resource_id') == vpc_db_id:
                         self._emit_compute_node(comp, lines, i1)
 
             # Render gateways/firewalls that are DB children of this VPC inside the VPC subgraph
@@ -2266,7 +2297,8 @@ class HierarchicalDiagramBuilder:
             if sg['resource_name'] in self.emitted_nodes:
                 continue
             
-            sg_id = sanitize_id(sg['resource_name'])
+            sg_id = self._get_node_id(sg)
+            self.node_id_override[sg['resource_name']] = sg_id
             sg_children = self.children_by_parent.get(sg.get('id'), [])
             sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
             
@@ -2585,6 +2617,9 @@ class HierarchicalDiagramBuilder:
             # Mermaid node IDs cannot start with '-': prefix synthetic negative IDs
             if node_id_str.startswith('-'):
                 return f"synthetic_{node_id_str[1:]}"
+            # Mermaid subgraph IDs cannot start with a digit — prefix all numeric IDs
+            if node_id_str[0].isdigit():
+                return f"n{node_id_str}"
             return node_id_str
         return sanitize_id(resource.get('resource_name', 'node'))
 
@@ -2662,9 +2697,6 @@ class HierarchicalDiagramBuilder:
         # Emoji patterns: common emoticons (e.g., 📬, 📥, 🐳, etc.)
         label = re.sub(r'[\U0001F300-\U0001F9FF]+\s*', '', label).strip()
         
-        if len(label) > 50:
-            label = label[:47] + "..."
-
         label = self._wrap_mermaid_label(label)
 
         # Append test-variant badge if this node is the primary representative
@@ -2753,7 +2785,16 @@ class HierarchicalDiagramBuilder:
         stored as children of each product in children_by_parent.  APIs belonging to multiple
         products (many-to-many) are rendered under the first product that claims them.
         """
-        if not apim_apis and not products:
+        # Only render APIM hierarchy for actual Azure API Management resources.
+        # AWS API Gateways / GCP Cloud Endpoints are rendered in the app tier instead.
+        azure_apim_types = {'azurerm_api_management', 'azurerm_api_management_api',
+                            'azurerm_api_management_product', 'azurerm_api_management_api_operation'}
+        has_azure_apim = any(
+            (r.get('resource_type') or '').lower() in azure_apim_types
+            or 'api_management' in (r.get('resource_type') or '').lower()
+            for r in apim_apis
+        )
+        if not has_azure_apim or (not apim_apis and not products):
             return []
 
         lines = []
@@ -3103,7 +3144,7 @@ class HierarchicalDiagramBuilder:
                             lines.append(line)
                     else:
                         # If no containers either, show pod template placeholder
-                        lines.append(f"        k8s_dep_pod_tpl_{dep_id}[📦 Pod Template]")
+                        lines.append(f'        k8s_dep_pod_tpl_{dep_id}["📦 Pod Template"]')
                 
                 lines.append("      end")
                 self._emitted_mermaid_ids.add(dep_id)
@@ -3132,7 +3173,7 @@ class HierarchicalDiagramBuilder:
                             lines.append(line)
                     else:
                         # If no containers either, show pod template placeholder
-                        lines.append(f"        k8s_ss_pod_tpl_{ss_id}[📦 Pod Template]")
+                        lines.append(f'        k8s_ss_pod_tpl_{ss_id}["📦 Pod Template"]')
                 
                 lines.append("      end")
                 self._emitted_mermaid_ids.add(ss_id)
@@ -3207,7 +3248,8 @@ class HierarchicalDiagramBuilder:
                 props = svc.get('properties', {}) or {}
                 svc_type = str(props.get('service_type', '') or props.get('type', '') or '').strip()
                 if svc_type.lower() in ('loadbalancer', 'nodeport'):
-                    self._k8s_internet_services.append(svc_id)
+                    label = f"{svc_type}: {svc['resource_name']}"
+                    self._k8s_internet_services.append((svc_id, label))
 
             # Render other workloads (DaemonSet, Job, etc.)
             # But skip RBAC/account types (role, rolebinding, clusterrole, clusterrolebinding, serviceaccount)
@@ -3537,6 +3579,24 @@ class HierarchicalDiagramBuilder:
             if not _is_internet(tgt) and tgt not in self.emitted_nodes:
                 continue
 
+            # Skip self-edges: if tgt is a subgraph container and src is nested inside it,
+            # drawing an edge from src → tgt would visually point inward to its own container.
+            if tgt in self.subgraph_nodes and not _is_internet(src):
+                tgt_res_list = self.resource_by_name.get(tgt)
+                if tgt_res_list:
+                    if not isinstance(tgt_res_list, list):
+                        tgt_res_list = [tgt_res_list]
+                    _is_self_edge = False
+                    for tgt_res in tgt_res_list:
+                        tgt_db_id = tgt_res.get('id')
+                        if tgt_db_id is not None:
+                            children_names = {c['resource_name'] for c in self.children_by_parent.get(tgt_db_id, [])}
+                            if src in children_names:
+                                _is_self_edge = True
+                                break
+                    if _is_self_edge:
+                        continue
+
             # For subgraph nodes: Mermaid supports edges to/from subgraph IDs,
             # but NOT from within the same subgraph. Use the subgraph ID via
             # node_id_override so the edge target is the subgraph container ID.
@@ -3739,11 +3799,11 @@ class HierarchicalDiagramBuilder:
                     has_internet = True
                     src_id = 'internet'
                     
-                    # Build label from exposure detail
-                    label = f"{exposure_detail.reason}"
+                    # Build label from exposure detail — sanitize pipe chars (Mermaid delimiter)
+                    label = exposure_detail.reason.replace("|", "/").replace('"', "'")
                     
                     # Create the connection line
-                    lines.append(f"  {src_id} -.->|{label}| {tgt_id}")
+                    lines.append(f'  {src_id} -.->|"{label}"| {tgt_id}')
                     
                     # Track the link index for this new connection (link_index = len(edge_list))
                     current_link_idx = len(edge_list)
@@ -3753,15 +3813,18 @@ class HierarchicalDiagramBuilder:
                     
                     # Add color styling for this link
                     style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
-        
+
+        # Add internet → K8s LoadBalancer/NodePort service edges (before style_lines so linkStyle indices are correct)
+        if self._k8s_internet_services:
+            for svc_id, svc_label in self._k8s_internet_services:
+                lines.append(f"  internet -.->|\"{svc_label}\"| {svc_id}")
+                current_link_idx = len(edge_list)
+                edge_list.append((None, 'internet', svc_id))
+                style_lines.append(f"  linkStyle {current_link_idx} stroke:#ffff00,stroke-width:2px")
+                has_internet = True
+
         # Add all style lines at the end
         lines.extend(style_lines)
-
-        # Add internet → K8s LoadBalancer/NodePort service edges
-        if self._k8s_internet_services:
-            for svc_id in self._k8s_internet_services:
-                lines.append(f"  internet -.->|\"Public\"| {svc_id}")
-                has_internet = True
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
@@ -4231,13 +4294,25 @@ class HierarchicalDiagramBuilder:
         providers_with_resources: Dict[str, Set[str]] = defaultdict(set)
         
         for res in self.resources:
-            provider = _detect_provider_from_resource(res).lower()
+            rtype = res.get('resource_type', '').lower()
+            # Kubernetes resources are tagged 'unknown' provider by design (they run ON cloud),
+            # but still need classDef lines so icons can be injected
+            if rtype.startswith('kubernetes_'):
+                provider = 'kubernetes'
+            else:
+                provider = _detect_provider_from_resource(res).lower()
             if provider not in ('unknown', 'terraform'):
                 self.detected_providers.add(provider)
-                rtype = res.get('resource_type', '').lower()
                 if rtype:
                     providers_with_resources[provider].add(rtype)
         
+        # Kubernetes cluster/namespace subgraphs are synthetic (rendered without a DB resource),
+        # but the renderer hardcodes :::icon-kubernetes-cluster / :::icon-kubernetes-namespace.
+        # Ensure those classDefs are always present when kubernetes resources exist.
+        if 'kubernetes' in providers_with_resources:
+            providers_with_resources['kubernetes'].add('kubernetes_cluster')
+            providers_with_resources['kubernetes'].add('kubernetes_namespace')
+
         # Generate classDef for each resource type per provider
         for provider in sorted(providers_with_resources.keys()):
             resource_types = providers_with_resources[provider]
@@ -4552,8 +4627,9 @@ class HierarchicalDiagramBuilder:
                 'notes': 'service_url not found — check IaC repo for backend URL',
             })
 
-        # ── Internet/Client → APIM entry point (visibility unknown) ─────────────
-        if apim_apis:
+        # ── Internet/Client → APIM entry point (visibility unknown) — Azure only ──
+        # Only add this edge when there are actual Azure API Management resources.
+        if apim_apis and any('api_management' in (r.get('resource_type') or '').lower() for r in apim_apis):
             _internet_targets = {c.get('target') for c in self.connections if c.get('source') == 'Internet'}
             if 'apim' not in _internet_targets:
                 self.connections.append({
@@ -4810,10 +4886,26 @@ class HierarchicalDiagramBuilder:
             )
         ]
         
-        for res in other_resources:
-            lines.append(self.render_node(res))
-        
         if other_resources:
+            # Group by provider so we can nest inside a provider-level subgraph
+            by_provider: Dict[str, List[dict]] = defaultdict(list)
+            for res in other_resources:
+                prov = _detect_provider_from_resource(res)
+                by_provider[prov].append(res)
+
+            for prov, prov_resources in sorted(by_provider.items()):
+                if len(prov_resources) > 1 and prov not in ('unknown', 'terraform'):
+                    # Wrap parentless resources in a named region/provider subgraph
+                    prov_label = prov.upper() if prov != 'unknown' else 'Cloud'
+                    prov_sg_id = sanitize_id(f"other_{prov}")
+                    lines.append(f"  subgraph {prov_sg_id}[\"{prov_label} Region\"]")
+                    for res in prov_resources:
+                        lines.append(self.render_node(res, indent="    "))
+                    lines.append("  end")
+                else:
+                    for res in prov_resources:
+                        lines.append(self.render_node(res))
+
             lines.append("")
         
         # Render connections

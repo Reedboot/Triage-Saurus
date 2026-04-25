@@ -1541,8 +1541,8 @@ def _load_parent_type_map() -> Dict[str, str]:
         "aws_ssm_document": None,
         "aws_ssm_parameter": None,
         "aws_ssm_patch_group": None,
-        # GCP Compute & Networking
-        "google_compute_instance": "google_compute_zone",
+        # GCP Compute & Networking — prefer VPC parent when network_interface references one
+        "google_compute_instance": "google_compute_subnetwork|google_compute_network",
         "google_compute_subnetwork": "google_compute_network",
         "google_compute_firewall": "google_compute_network",
         "google_compute_route": "google_compute_network",
@@ -2443,6 +2443,34 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 _append_signal(props, "compute instance has access_config (external/NAT IP)")
             if re.search(r'network_tier\s*=\s*"(PREMIUM|STANDARD)"', block_text, re.I):
                 props["network_tier"] = "external"
+            # Extract network_interface.network to link VM to its VPC
+            ni_network_match = re.search(
+                r'network_interface\s*\{[^}]*\bnetwork\s*=\s*(?:google_compute_network\.[A-Za-z0-9_]+\.name|"([^"]+)")',
+                block_text, re.S | re.I,
+            )
+            ni_subnet_sym_match = re.search(
+                r'network_interface\s*\{[^}]*\bsubnetwork\s*=\s*google_compute_subnetwork\.([A-Za-z0-9_-]+)',
+                block_text, re.S | re.I,
+            )
+            if ni_subnet_sym_match:
+                # subnetwork = google_compute_subnetwork.xxx.name — link to subnetwork
+                props["subnet_ref_sym"] = ni_subnet_sym_match.group(1)
+            elif ni_network_match:
+                # May be a reference like google_compute_network.vpc.name or a literal "vm-vpc"
+                ni_subnet_ref = re.search(
+                    r'network_interface\s*\{[^}]*\bsubnetwork\s*=\s*(?:google_compute_subnetwork\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?|"([^"]+)")',
+                    block_text, re.S | re.I,
+                )
+                if ni_subnet_ref and ni_subnet_ref.group(1):
+                    props["vpc_ref"] = ni_subnet_ref.group(1)
+                elif ni_network_match.group(1):
+                    props["vpc_ref"] = ni_network_match.group(1)
+                else:
+                    # Resolve symbolic reference like google_compute_network.vpc.name
+                    sym_match = re.search(r'network\s*=\s*google_compute_network\.([A-Za-z0-9_]+)', block_text, re.I)
+                    if sym_match:
+                        props["vpc_ref_sym"] = sym_match.group(1)  # terraform resource label
+
 
         # GCP Cloud Function — HTTP trigger makes it internet-accessible
         if resource_type == "google_cloudfunctions_function":
@@ -2606,7 +2634,12 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 props["security_group_refs"] = sg_refs
 
         if resource_type in {"azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine", "azurerm_virtual_machine"}:
+            # First try ARM path format: /networkInterfaces/name
             nic_names = _extract_arm_resource_names(attrs.get("network_interface_ids"), "networkInterfaces")
+            if not nic_names:
+                # Fall back to Terraform reference format: azurerm_network_interface.LABEL.id
+                ni_ids_raw = str(attrs.get("network_interface_ids") or "")
+                nic_names = re.findall(r'azurerm_network_interface\.([A-Za-z0-9_-]+)', ni_ids_raw)
             if nic_names:
                 props["network_interface_names"] = nic_names
         
@@ -2811,6 +2844,22 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     resource.parent = f"{candidate.resource_type}.{candidate.name}"
                     break
 
+        # GCP compute instance: parent via subnetwork reference (network_interface.subnetwork)
+        if resource.resource_type == "google_compute_instance" and not resource.parent:
+            props = resource.properties or {}
+            subnet_sym = props.get("subnet_ref_sym")
+            vpc_sym = props.get("vpc_ref_sym")
+            if subnet_sym:
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == "google_compute_subnetwork" and candidate.name == subnet_sym:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
+            elif vpc_sym:
+                for candidate, _ in resource_blocks:
+                    if candidate.resource_type == "google_compute_network" and candidate.name == vpc_sym:
+                        resource.parent = f"{candidate.resource_type}.{candidate.name}"
+                        break
+
         # Otherwise, use the first explicit resource reference unless this is a top-level edge
         # component where generic reference-parenting frequently misclassifies ownership.
         if resource.resource_type in no_generic_parent_types:
@@ -2818,6 +2867,31 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
 
         if ref_candidates:
             resource.parent = ref_candidates[0]
+
+    # -------------------------------------------------------------------------
+    # Post-loop: Azure VM parent via NIC chain (requires NIC parents already resolved)
+    # -------------------------------------------------------------------------
+    for resource, _ in resource_blocks:
+        if resource.resource_type not in {"azurerm_linux_virtual_machine", "azurerm_windows_virtual_machine", "azurerm_virtual_machine"}:
+            continue
+        if resource.parent:
+            continue
+        props = resource.properties or {}
+        nic_names_raw = props.get("network_interface_names")
+        if nic_names_raw is None:
+            nic_names = []
+        elif isinstance(nic_names_raw, list):
+            nic_names = [str(x) for x in nic_names_raw if str(x).strip()]
+        else:
+            nic_names = [str(nic_names_raw)]
+        for nic_name in nic_names:
+            for candidate, _ in resource_blocks:
+                if candidate.resource_type == "azurerm_network_interface" and candidate.name == nic_name:
+                    if candidate.parent:
+                        resource.parent = candidate.parent  # inherit NI's subnet parent
+                    break
+            if resource.parent:
+                break
 
     # -------------------------------------------------------------------------
     # Public-access signal post-processing:

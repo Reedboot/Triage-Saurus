@@ -4149,6 +4149,9 @@ def api_icon_mappings():
             AWS_RESOURCE_TYPE_TO_ICON,
             GCP_RESOURCE_TYPE_TO_ICON,
             KUBERNETES_RESOURCE_TYPE_TO_ICON,
+            OTHER_RESOURCE_TYPE_TO_ICON,
+            get_icon_path,
+            ICONS_ROOT,
         )
 
         provider_map = {
@@ -4156,6 +4159,7 @@ def api_icon_mappings():
             "aws":        ("aws",        AWS_RESOURCE_TYPE_TO_ICON),
             "gcp":        ("gcp",        GCP_RESOURCE_TYPE_TO_ICON),
             "kubernetes": ("kubernetes", KUBERNETES_RESOURCE_TYPE_TO_ICON),
+            "other":      ("other",      OTHER_RESOURCE_TYPE_TO_ICON),
         }
 
         icon_map: dict = {}
@@ -4166,14 +4170,21 @@ def api_icon_mappings():
             entry = provider_map.get(provider)
             providers_to_merge = [entry] if entry else list(provider_map.values())
 
+        # web/static is the root served under /static — strip the prefix to get URL path
+        static_root = ICONS_ROOT.parent.parent  # → web/static
+        web_root = static_root.parent           # → web/
+
         for pname, mapping in providers_to_merge:
-            for resource_type, (category, icon_name) in mapping.items():
-                if category:
-                    rel_path = f"/static/assets/icons/{pname}/{category}/{icon_name}.svg"
-                else:
-                    rel_path = f"/static/assets/icons/{pname}/{icon_name}.svg"
-                # Later providers don't overwrite earlier ones so Azure stays canonical
-                icon_map.setdefault(resource_type, rel_path)
+            for resource_type in mapping:
+                if resource_type in icon_map:
+                    continue  # earlier provider (Azure) stays canonical
+                icon_file = get_icon_path(resource_type, pname)
+                if icon_file and icon_file.exists():
+                    try:
+                        rel = icon_file.relative_to(web_root)
+                        icon_map[resource_type] = "/" + str(rel)
+                    except ValueError:
+                        pass  # path outside web root — skip
 
         return jsonify(icon_map)
     except Exception as exc:
@@ -4229,7 +4240,11 @@ def api_diagrams(experiment_id: str):
     def _response_payload(diagrams: list[dict]) -> dict:
         return {
             "diagrams": [
-                {"title": d.get("diagram_title"), "code": d.get("mermaid_code")}
+                {
+                    "title": d.get("diagram_title"),
+                    "code": d.get("mermaid_code"),
+                    "css_code": d.get("css_code", ""),
+                }
                 for d in diagrams
                 if d.get("mermaid_code")
             ]
@@ -4401,6 +4416,17 @@ def api_diagrams(experiment_id: str):
                             _builder.load_data()
                             if _builder.resources:
                                 _code = _builder.generate()
+                                # Embed icon classDef statements into diagram code
+                                _classdefs = _builder.generate_icon_css()
+                                if _classdefs and _code:
+                                    _lines = _code.split('\n')
+                                    _insert = 1
+                                    for _i, _l in enumerate(_lines[1:], 1):
+                                        if _l.strip() and not _l.strip().startswith('%%'):
+                                            _insert = _i
+                                            break
+                                    _lines.insert(_insert, _classdefs)
+                                    _code = '\n'.join(_lines)
                                 provider_display = _provider_display_name(provider)
                                 if _code and "No resources found" not in _code:
                                     generated.append({
@@ -4430,6 +4456,17 @@ def api_diagrams(experiment_id: str):
                         repo_path=_repo_path,
                     )
                     _code = _builder.generate()
+                    # Embed icon classDef statements into diagram code
+                    _classdefs = _builder.generate_icon_css()
+                    if _classdefs and _code:
+                        _lines = _code.split('\n')
+                        _insert = 1
+                        for _i, _l in enumerate(_lines[1:], 1):
+                            if _l.strip() and not _l.strip().startswith('%%'):
+                                _insert = _i
+                                break
+                        _lines.insert(_insert, _classdefs)
+                        _code = '\n'.join(_lines)
                     _provider = _canonical_provider_key(_builder.detect_cloud_provider())
                     _provider_display = _provider_display_name(_provider)
 
