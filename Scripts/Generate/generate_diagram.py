@@ -1426,6 +1426,11 @@ class HierarchicalDiagramBuilder:
     def is_compute_resource(self, resource: dict) -> bool:
         """Check if resource is a compute/VM resource that can have network interfaces as children."""
         rtype = (resource.get('resource_type') or '').lower()
+        
+        # Skip extensions and other auxiliary resources that are attached to VMs
+        if any(tok in rtype for tok in ['extension', 'vm_extension', 'security_group_association']):
+            return False
+        
         vm_tokens = ['virtual_machine', 'linux_virtual_machine', 'windows_virtual_machine',
                      'ec2', 'compute_instance', 'ecs_cluster']
         if any(tok in rtype for tok in vm_tokens):
