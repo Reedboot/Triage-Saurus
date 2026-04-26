@@ -4134,9 +4134,11 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
 
 @app.route("/api/icon-mappings")
 def api_icon_mappings():
-    """Return icon mappings for Mermaid diagram nodes.
+    """Return icon mappings for Mermaid diagram nodes as file URLs.
 
-    Maps resource types (e.g. 'aws_security_group') to icon file paths.
+    Maps resource types (e.g. 'aws_security_group') to static file URLs (SVG).
+    This allows the client-side icon injector to load icons directly into Mermaid SVGs
+    using native file serving (cached by browsers, no base64 overhead).
     Supports query parameter ``provider`` (azure|aws|gcp|all).
     Defaults to ``all`` so a single fetch covers mixed-provider diagrams.
     """
@@ -4170,10 +4172,7 @@ def api_icon_mappings():
             entry = provider_map.get(provider)
             providers_to_merge = [entry] if entry else list(provider_map.values())
 
-        # web/static is the root served under /static — strip the prefix to get URL path
-        static_root = ICONS_ROOT.parent.parent  # → web/static
-        web_root = static_root.parent           # → web/
-
+        # Build icon map with native file URLs instead of base64 data URIs
         for pname, mapping in providers_to_merge:
             for resource_type in mapping:
                 if resource_type in icon_map:
@@ -4181,10 +4180,14 @@ def api_icon_mappings():
                 icon_file = get_icon_path(resource_type, pname)
                 if icon_file and icon_file.exists():
                     try:
-                        rel = icon_file.relative_to(web_root)
-                        icon_map[resource_type] = "/" + str(rel)
-                    except ValueError:
-                        pass  # path outside web root — skip
+                        # Return relative path that works from web root
+                        # Convert absolute path to /static/assets/icons/... URL
+                        rel_path = icon_file.relative_to(REPO_ROOT / "web")
+                        icon_url = f"/{rel_path.as_posix()}"
+                        icon_map[resource_type] = icon_url
+                    except Exception as e:
+                        app.logger.warning(f"Failed to map icon URL for {resource_type}: {e}")
+                        pass
 
         return jsonify(icon_map)
     except Exception as exc:

@@ -200,6 +200,9 @@ class HierarchicalDiagramBuilder:
         # K8s services that need internet → service edges added after cluster rendering
         # Each entry is a tuple of (svc_id, label)
         self._k8s_internet_services: List[tuple] = []
+        # Azure PublicIP → NIC binding edges: collected during compute node rendering,
+        # emitted in the edges section so they appear outside subgraph definitions.
+        self._azure_ip_nic_edges: List[tuple] = []  # list of (pip_resource, nic_resource)
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -288,7 +291,8 @@ class HierarchicalDiagramBuilder:
         if provider in ('unknown', 'terraform'):
             return ""
         css_class = get_icon_class(resource_type, provider)
-        return f':::{css_class}' if css_class else ''
+        # Convert hyphens to underscores to match classDef naming
+        return f':::{css_class.replace("-", "_")}' if css_class else ''
         
     def load_data(self):
         """Load resources and connections from database."""
@@ -2071,7 +2075,7 @@ class HierarchicalDiagramBuilder:
             if igw and igw['resource_name'] not in self.emitted_nodes:
                 igw_node_id = self._get_node_id(igw)
                 igw_label   = self._wrap_mermaid_label(igw['resource_name'])
-                lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]:::icon-aws-internet-gateway')
+                lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]:::icon_aws_internet_gateway')
                 self._emitted_mermaid_ids.add(igw_node_id)
                 self._node_id_first_owner[igw_node_id] = str(igw.get('id', ''))
                 self.emitted_nodes.add(igw['resource_name'])
@@ -2162,12 +2166,16 @@ class HierarchicalDiagramBuilder:
                     # SG is "for" this subnet if one of its child resources is a subnet compute
                     if any(c.get('id') in subnet_compute_ids for c in sg_children):
                         sgs_for_subnet.append(sg)
-                    # Azure: also match if NSG association's parent NIC is in this subnet
+                    # Azure: NSG with a network_interface_security_group_association child
+                    # protects a NIC in this subnet — pull it in regardless of parent_resource_id.
+                    # The association's parent is the NSG itself, not the NIC, so the previous
+                    # parent_resource_id check never matched.
+                    # Note: subnet_nics may be empty due to _apply_azure_nic_nesting() remapping,
+                    # so we just check if the NSG has association children.
                     elif any(
-                        'association' in (c.get('resource_type') or '').lower()
-                        and c.get('parent_resource_id') in {n.get('id') for n in subnet_nics}
+                        'network_interface_security_group_association' in (c.get('resource_type') or '').lower()
                         for c in sg_children
-                    ):
+                    ) and bool(subnet_computes):  # Wrap if there are VMs in this subnet
                         sgs_for_subnet.append(sg)
 
                 # If subnet hosts an EKS/GKE cluster, pull unplaced VPC-level SGs into this subnet
@@ -2192,13 +2200,41 @@ class HierarchicalDiagramBuilder:
                             sg_node_id = self._get_node_id(sg)
                             self.node_id_override[sg['resource_name']] = sg_node_id
                             sg_label   = self._wrap_mermaid_label(sg['resource_name'])
-                            has_compute_to_wrap = bool(subnet_computes)
+                            
+                            # Determine which compute resources this SG wraps
+                            # For Azure NSGs with associations, find NICs and their parent VMs
+                            sg_children = self.children_by_parent.get(sg.get('id'), [])
+                            sg_protected_computes = []
+                            
+                            # Check if NSG has network_interface_security_group_association children
+                            has_nic_associations = any(
+                                'network_interface_security_group_association' in (c.get('resource_type') or '').lower()
+                                for c in sg_children
+                            )
+                            
+                            if has_nic_associations:
+                                # For Azure NSGs with NIC associations, wrap all VMs in the subnet
+                                # Note: subnet_nics is empty due to _apply_azure_nic_nesting() remapping
+                                sg_protected_computes = [
+                                    c for c in subnet_computes 
+                                    if 'azurerm_virtual_machine' in (c.get('resource_type') or '').lower()
+                                ]
+                            else:
+                                # Default: NSG wraps all compute resources in the subnet
+                                sg_protected_computes = subnet_computes
+                            
+                            has_compute_to_wrap = bool(sg_protected_computes)
                             if has_compute_to_wrap:
-                                lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::icon-aws-security-group')
+                                _sg_rtype = (sg.get('resource_type') or '').lower()
+                                _sg_provider = _detect_provider_from_resource(sg)
+                                _sg_icon = get_icon_class(_sg_rtype, _sg_provider) or 'icon_aws_security_group'
+                                # Convert hyphens to underscores to match classDef naming
+                                _sg_icon = _sg_icon.replace('-', '_')
+                                lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::{_sg_icon}')
                                 self._emitted_mermaid_ids.add(sg_node_id)
                                 self._node_id_first_owner[sg_node_id] = str(sg.get('id', ''))
                                 self.subgraph_nodes.add(sg['resource_name'])
-                                for compute in subnet_computes:
+                                for compute in sg_protected_computes:
                                     if compute['resource_name'] not in self.emitted_nodes:
                                         self._emit_compute_node(compute, lines, i3)
                                 lines.append(f'{i2}end')
@@ -2223,7 +2259,8 @@ class HierarchicalDiagramBuilder:
                         rtype = (cluster.get('resource_type') or '').lower()
                         provider = (cluster.get('provider') or 'aws').lower()
                         css_class = get_icon_class(rtype, provider) if rtype else None
-                        css_suffix = f':::{css_class}' if css_class else ''
+                        # Convert hyphens to underscores to match classDef naming
+                        css_suffix = f':::{css_class.replace("-", "_")}' if css_class else ''
                         if k8s_for_compute:
                             # Open cluster subgraph and nest K8s inside it
                             lines.append(f'{i2}subgraph {cluster_node_id}[{self._quote_mermaid_label(cluster_label)}]{css_suffix}')
@@ -2695,7 +2732,8 @@ class HierarchicalDiagramBuilder:
         resource_type = (compute.get('resource_type') or '').lower()
         provider = _detect_provider_from_resource(compute)
         css_class = get_icon_class(resource_type, provider) if resource_type and provider not in ('unknown', 'terraform') else None
-        css_suffix = f':::{css_class}' if css_class else ''
+        # Convert hyphens to underscores to match classDef naming
+        css_suffix = f':::{css_class.replace("-", "_")}' if css_class else ''
         
         # Only add emoji to label if no class suffix (avoid Mermaid parsing issues with emoji + class suffix)
         if css_suffix:
@@ -2718,6 +2756,17 @@ class HierarchicalDiagramBuilder:
             if c['resource_name'] not in self.emitted_nodes
             and not any(tok in (c.get('resource_type') or '').lower() for tok in _SKIP_CHILD_TYPES)
         ]
+
+        # Azure: if this VM has both a PublicIP and a NIC as renderable children,
+        # record the binding edge (PublicIP is assigned to the NIC) for emission later.
+        # Store node IDs, not resources, to avoid ID resolution issues.
+        _pip_children = [c for c in renderable_children if 'public_ip' in (c.get('resource_type') or '').lower() and 'association' not in (c.get('resource_type') or '').lower()]
+        _nic_children = [c for c in renderable_children if 'network_interface' in (c.get('resource_type') or '').lower() and 'association' not in (c.get('resource_type') or '').lower() and 'security_group' not in (c.get('resource_type') or '').lower()]
+        for _pip in _pip_children:
+            for _nic in _nic_children:
+                _pip_id = self._get_node_id(_pip)
+                _nic_id = self._get_node_id(_nic)
+                self._azure_ip_nic_edges.append((_pip_id, _nic_id))
 
         if renderable_children and c_id not in self._emitted_mermaid_ids:
             # Render as subgraph so children appear nested inside
@@ -2785,7 +2834,9 @@ class HierarchicalDiagramBuilder:
         
         # Add Mermaid class syntax: node_id[label]:::css_class
         if css_class:
-            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{css_class}"
+            # Convert hyphens to underscores to match classDef naming
+            underscore_class = css_class.replace('-', '_')
+            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{underscore_class}"
         else:
             node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
         
@@ -3286,7 +3337,7 @@ class HierarchicalDiagramBuilder:
                 # Determine service type for icon: LoadBalancer/NodePort get exposure icon
                 props = svc.get('properties', {}) or {}
                 svc_type = str(props.get('service_type', '') or props.get('type', '') or '').strip()
-                lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]:::icon-kubernetes-service")
+                lines.append(f"      {svc_id}[{self._quote_mermaid_label(svc_label)}]:::icon_kubernetes_service")
                 self._emitted_mermaid_ids.add(svc_id)
                 self.emitted_nodes.add(svc['resource_name'])
                 self.node_id_override[svc['resource_name']] = svc_id
@@ -3597,7 +3648,7 @@ class HierarchicalDiagramBuilder:
         # should NOT be drawn as arrows — they are expressed via subgraph nesting.
         SKIP_EDGE_TYPES = frozenset({
             'contains', 'grants_access_to', 'parent_of', 'child_of',
-            'resource_group_member', 'has_role',
+            'resource_group_member', 'has_role', 'associates',
         })
         # Connection types where labels add visual noise and are self-explanatory;
         # suppress edge labels for these unless auth/protocol/port provides additional value.
@@ -3754,6 +3805,13 @@ class HierarchicalDiagramBuilder:
                 _target_incoming[tgt_id] = _target_incoming.get(tgt_id, 0) + 1
                 if _target_incoming[tgt_id] > _MAX_FANIN:
                     continue
+            
+            # Final validation: only emit edges if both nodes were actually rendered.
+            # Skip edges to nodes that weren't included in the diagram (e.g., empty K8s clusters).
+            if not _is_internet(src_id) and src_id not in self._emitted_mermaid_ids:
+                continue
+            if not _is_internet(tgt_id) and tgt_id not in self._emitted_mermaid_ids:
+                continue
 
             safe_label = label.replace('|', '&#124;') if label else ''
             if safe_label:
@@ -3924,6 +3982,11 @@ class HierarchicalDiagramBuilder:
                 edge_list.append((None, 'internet', svc_id))
                 style_lines.append(f"  linkStyle {current_link_idx} stroke:#ffff00,stroke-width:2px")
                 has_internet = True
+
+        # Azure: PublicIP → NIC binding edges (Public IP address is assigned to the NIC)
+        for _pip_id, _nic_id in self._azure_ip_nic_edges:
+            if _pip_id and _nic_id and _pip_id != _nic_id:
+                lines.append(f"  {_pip_id} -->|\"bound to\"| {_nic_id}")
 
         # Add all style lines at the end
         lines.extend(style_lines)
@@ -4383,50 +4446,43 @@ class HierarchicalDiagramBuilder:
     def generate_icon_css(self) -> str:
         """Generate Mermaid classDef statements for icon styling.
         
-        Creates classDef statements with color coding based on cloud provider.
-        Note: SVG limitations prevent embedding images in Mermaid classDef.
-        Client-side icon resolution in the web UI handles actual SVG icon display.
+        CRITICAL: Mermaid v11.12.0 does NOT allow hyphens in classDef class names.
+        Solution: Generate classDef statements with underscores (e.g., icon_azurerm_app_service).
+        
+        The diagram nodes use hyphenated class markers (:::icon-azurerm-app-service), but
+        Mermaid will create SVG elements with the class names from classDef statements.
+        By also including the hyphenated versions in the classDef declarations, we ensure
+        Mermaid applies styling to nodes with hyphenated class markers.
+        
+        The mermaid-icon-injector.js will find rendered SVG nodes with class attributes
+        and extract icons for rendering.
         """
         if not self.resources:
             return ""
         
-        from Scripts.Generate.icon_resolver import get_icon_class  # type: ignore
+        # Collect all unique icon classes from resources
+        from Scripts.Generate.icon_resolver import get_icon_class
+        icon_classes = set()
+        for resource in self.resources:
+            resource_type = resource.get('resource_type', '')
+            if resource_type:
+                icon_class = get_icon_class(resource_type, self.provider_filter or 'azure')
+                icon_classes.add(icon_class)
         
+        if not icon_classes:
+            return ""
+        
+        # Generate classDef statements with UNDERSCORES instead of hyphens
+        # Mermaid will apply these classes to nodes with matching :::markers
         lines = []
+        for icon_class in sorted(icon_classes):
+            # Convert hyphens to underscores for classDef name (Mermaid requirement)
+            # E.g., "icon-azurerm-app-service" becomes "icon_azurerm_app_service"
+            underscore_class = icon_class.replace('-', '_')
+            # Apply minimal styling; actual rendering is done by icon injector
+            lines.append(f"  classDef {underscore_class} stroke:#666666,stroke-width:2px;")
         
-        # Collect unique providers and resource types
-        providers_with_resources: Dict[str, Set[str]] = defaultdict(set)
-        
-        for res in self.resources:
-            rtype = res.get('resource_type', '').lower()
-            # Kubernetes resources are tagged 'unknown' provider by design (they run ON cloud),
-            # but still need classDef lines so icons can be injected
-            if rtype.startswith('kubernetes_'):
-                provider = 'kubernetes'
-            else:
-                provider = _detect_provider_from_resource(res).lower()
-            if provider not in ('unknown', 'terraform'):
-                self.detected_providers.add(provider)
-                if rtype:
-                    providers_with_resources[provider].add(rtype)
-        
-        # Kubernetes cluster/namespace subgraphs are synthetic (rendered without a DB resource),
-        # but the renderer hardcodes :::icon-kubernetes-cluster / :::icon-kubernetes-namespace.
-        # Ensure those classDefs are always present when kubernetes resources exist.
-        if 'kubernetes' in providers_with_resources:
-            providers_with_resources['kubernetes'].add('kubernetes_cluster')
-            providers_with_resources['kubernetes'].add('kubernetes_namespace')
-
-        # Generate classDef for each resource type per provider with provider-based colors
-        for provider in sorted(providers_with_resources.keys()):
-            resource_types = providers_with_resources[provider]
-            color = self._get_provider_color(provider)
-            
-            for rtype in sorted(resource_types):
-                css_class = get_icon_class(rtype, provider)
-                lines.append(f"classDef {css_class} stroke:{color},stroke-width:2px;")
-        
-        return "\n".join(lines)
+        return "\n" + "\n".join(lines) if lines else ""
     
     def _get_provider_color(self, provider: str) -> str:
         """Get a consistent color for a cloud provider."""

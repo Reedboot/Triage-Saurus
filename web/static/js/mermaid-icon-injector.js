@@ -96,13 +96,63 @@ const MermaidIconInjector = (() => {
    * Mermaid uses <g> elements with specific classes for nodes
    */
   function findMermaidNodes(svgElement) {
-    // Look for: <g class="node ..." or class="...node..."
-    // Also include <g class="...cluster..."> which is how Mermaid renders subgraphs
+    // Strategy 1: Look for <g> with "node" or "cluster" in class (Mermaid v10 style)
     const seen = new Set();
-    const results = [];
+    let results = [];
     for (const el of svgElement.querySelectorAll('g[class*="node"], g[class*="cluster"]')) {
       if (!seen.has(el)) { seen.add(el); results.push(el); }
     }
+    
+    // Strategy 2: If no nodes found, try ANY <g> element with an icon class marker
+    if (results.length === 0) {
+      console.log(`[MermaidIconInjector] Strategy 1 found 0 nodes, trying fallback strategies...`);
+      
+      // Look for <g> containing icon class markers (:::icon_*)
+      const possibleNodes = svgElement.querySelectorAll('g[class*="icon_"]');
+      for (const el of possibleNodes) {
+        if (!seen.has(el)) { seen.add(el); results.push(el); }
+      }
+      console.log(`[MermaidIconInjector] Strategy 2 (g[class*="icon_"]): found ${results.length}`);
+    }
+    
+    // Strategy 3: If still nothing, look at ALL g elements and report structure
+    if (results.length === 0) {
+      console.log(`[MermaidIconInjector] Strategies 1-2 failed, analyzing SVG structure...`);
+      
+      const allGs = svgElement.querySelectorAll('g');
+      const allGsWithClass = svgElement.querySelectorAll('g[class]');
+      const allTexts = svgElement.querySelectorAll('text');
+      const allTextsWithClass = svgElement.querySelectorAll('text[class]');
+      
+      console.log(`[MermaidIconInjector DEBUG] SVG Structure:`);
+      console.log(`[MermaidIconInjector DEBUG]  Total <g> elements: ${allGs.length}`);
+      console.log(`[MermaidIconInjector DEBUG]  <g> with class attr: ${allGsWithClass.length}`);
+      console.log(`[MermaidIconInjector DEBUG]  Total <text> elements: ${allTexts.length}`);
+      console.log(`[MermaidIconInjector DEBUG]  <text> with class attr: ${allTextsWithClass.length}`);
+      
+      if (allGsWithClass.length > 0) {
+        const classes = [];
+        for (let i = 0; i < Math.min(5, allGsWithClass.length); i++) {
+          const cls = allGsWithClass[i].className.baseVal || allGsWithClass[i].className || 'no-class';
+          classes.push(cls.substring(0, 60));
+        }
+        console.log(`[MermaidIconInjector DEBUG]  Sample <g> classes: ${JSON.stringify(classes)}`);
+      }
+      
+      if (allTextsWithClass.length > 0) {
+        const classes = [];
+        for (let i = 0; i < Math.min(3, allTextsWithClass.length); i++) {
+          const cls = allTextsWithClass[i].className.baseVal || allTextsWithClass[i].className || 'no-class';
+          classes.push(cls.substring(0, 60));
+        }
+        console.log(`[MermaidIconInjector DEBUG]  Sample <text> classes: ${JSON.stringify(classes)}`);
+      }
+      
+      // Strategy 4: As last resort, try all g elements regardless of class
+      results = Array.from(svgElement.querySelectorAll('g')).filter((el, idx) => idx < 50); // Limit to first 50
+      console.log(`[MermaidIconInjector DEBUG]  Fallback to all <g> elements (first 50): ${results.length}`);
+    }
+    
     return results;
   }
 
@@ -112,14 +162,26 @@ const MermaidIconInjector = (() => {
    * We need to convert: "icon-azurerm-app-service" → "azurerm_app_service"
    */
   function extractResourceTypeFromClass(node) {
-    const classList = node.className.baseVal || node.className || '';
+    let classList = node.className.baseVal || node.className || '';
     
-    // Look for class starting with "icon-"
+    // Handle DOMTokenList or other non-string types
+    if (typeof classList !== 'string') {
+      classList = String(classList);
+    }
+    
+    // Look for classes starting with "icon-" (from node markers) or "icon_" (from classDef)
+    // Mermaid may apply either form depending on how classes are applied
     const classes = classList.split(/\s+/);
     for (const cls of classes) {
       if (cls.startsWith('icon-')) {
+        // From hyphenated class marker :::icon-azurerm-app-service
         // Remove "icon-" prefix and convert hyphens to underscores
         const resourceType = cls.substring(5).replace(/-/g, '_');
+        return resourceType;
+      } else if (cls.startsWith('icon_')) {
+        // From underscore classDef (Mermaid applies underscored names)
+        // Remove "icon_" prefix, already has underscores
+        const resourceType = cls.substring(5);
         return resourceType;
       }
     }
