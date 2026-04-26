@@ -5324,6 +5324,27 @@ class HierarchicalDiagramBuilder:
         return provider_map.get(primary_provider, primary_provider.title())
 
 
+def _embed_classdefs_in_diagram(diagram: str, builder: 'HierarchicalDiagramBuilder') -> str:
+    """Embed classDef statements into a diagram before the first node/subgraph definition."""
+    classdefs = builder.generate_icon_css()
+    
+    if not classdefs:
+        return diagram
+    
+    # Split diagram to find where to inject classDefs
+    lines = diagram.split('\n')
+    # Find first non-comment line after the flowchart declaration
+    insert_idx = 1
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() and not line.strip().startswith('%%'):
+            insert_idx = i
+            break
+    
+    # Insert classDefs before first diagram content
+    lines.insert(insert_idx, classdefs)
+    return '\n'.join(lines)
+
+
 def main():
     import argparse
     
@@ -5343,6 +5364,9 @@ def main():
     if not experiment_id:
         parser.error("the following arguments are required: experiment_id or --experiment-id")
 
+    # Set up sys.path for imports
+    repo_root = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(repo_root))
     
     # Get list of providers to generate diagrams for
     providers_to_process = []
@@ -5368,10 +5392,12 @@ def main():
             print(f"Warning: Could not detect providers: {e}", file=sys.stderr)
             providers_to_process = []
     
+    
     if not providers_to_process:
         # Fallback to single diagram
         builder = HierarchicalDiagramBuilder(experiment_id, repo_name=args.repo)
         diagram = builder.generate()
+        diagram = _embed_classdefs_in_diagram(diagram, builder)
         provider = builder.detect_cloud_provider()
         diagram_title = f"{provider} Architecture"
         diagrams = [(provider.lower(), diagram_title, diagram, args.repo)]
@@ -5390,6 +5416,7 @@ def main():
             
             if builder.resources:
                 diagram = builder.generate()
+                diagram = _embed_classdefs_in_diagram(diagram, builder)
                 # Capitalize provider for display
                 provider_map = {
                     'azure': 'Azure',
