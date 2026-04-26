@@ -1435,8 +1435,9 @@ class HierarchicalDiagramBuilder:
                      'ec2', 'compute_instance', 'ecs_cluster']
         if any(tok in rtype for tok in vm_tokens):
             return True
-        # Match 'instance' but not db_instance, rds_instance, elasticache, task_definition etc.
-        if 'instance' in rtype and not any(x in rtype for x in ['db_instance', 'rds_instance', 'cache_instance', 'task_']):
+        # Match 'instance' but not db_instance, rds_instance, elasticache, task_definition,
+        # or GCP Cloud SQL database instances (google_sql_database_instance)
+        if 'instance' in rtype and not any(x in rtype for x in ['db_instance', 'rds_instance', 'cache_instance', 'task_', 'sql_database_instance', 'database_instance']):
             return True
         return False
     
@@ -1879,10 +1880,26 @@ class HierarchicalDiagramBuilder:
         if node_id not in self._node_id_first_owner:
             self._node_id_first_owner[node_id] = str(resource_id)
 
+        # Determine if this parent is a storage resource — cloud functions must not be
+        # nested inside storage buckets (a function's zip file lives in a bucket, but the
+        # function itself is a compute resource and should render in the app tier).
+        _parent_rtype = (resource.get('resource_type') or '').lower()
+        _parent_is_storage = any(t in _parent_rtype for t in (
+            'storage_bucket', 'storage_object', 'gcs_bucket', 's3_bucket',
+            'blob_container', 'storage_container', 'storage_account',
+        ))
+        _FUNCTION_CHILD_TOKENS = ('cloudfunctions', 'cloud_function')
+
         for child in children:
             # Skip self-referential children (resource contains itself) to prevent cycles
             if child['id'] == resource_id:
                 continue
+
+            # Cloud functions are compute resources — don't nest them inside storage buckets
+            if _parent_is_storage:
+                _child_rtype = (child.get('resource_type') or '').lower()
+                if any(t in _child_rtype for t in _FUNCTION_CHILD_TOKENS):
+                    continue
             
             if self.children_by_parent.get(child['id']):
                 lines.extend(self._render_nested_resource(child, indent=indent + "  "))
@@ -1901,7 +1918,7 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph data_tier["Data Tier"]')
+        lines.append('  subgraph data_tier["💾 Data Tier"]')
 
         for res in sql_resources:
             lines.extend(self.render_sql_hierarchy([res], indent="    "))
@@ -1968,7 +1985,7 @@ class HierarchicalDiagramBuilder:
             return []
         
         lines: List[str] = []
-        lines.append('  subgraph network_tier["Network Tier"]')
+        lines.append('  subgraph network_tier["🌐 Network Tier"]')
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
@@ -3783,6 +3800,13 @@ class HierarchicalDiagramBuilder:
             'route_table', 'network_acl', 'flow_log',
             'security_group_rule', 'firewall_rule', 'firewall_policy',
             'subnet_route', 'network_interface',
+            # Security enforcement resources: they control access but are not internet endpoints.
+            # The internet connects to compute/LBs *through* these, not *to* them.
+            'security_group',       # aws_security_group, azurerm_network_security_group
+            'network_security_rule',# azurerm_network_security_rule
+            'compute_firewall',     # google_compute_firewall
+            # K8s identity/RBAC resources are not network endpoints
+            'serviceaccount', 'role_binding', 'clusterrole',
         )
 
         if self.exposed_resources:
@@ -3876,8 +3900,9 @@ class HierarchicalDiagramBuilder:
                     has_internet = True
                     src_id = 'internet'
                     
-                    # Build label from exposure detail — sanitize pipe chars (Mermaid delimiter)
-                    label = exposure_detail.reason.replace("|", "/").replace('"', "'")
+                    # Build label from exposure detail — just show "Public" without resource name
+                    # (the arrow itself shows which resource is public)
+                    label = "Public"
                     
                     # Create the connection line
                     lines.append(f'  {src_id} -.->|"{label}"| {tgt_id}')
@@ -3905,7 +3930,7 @@ class HierarchicalDiagramBuilder:
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
-            lines.insert(0, '  internet[/"Internet"/]')
+            lines.insert(0, '  internet[/"🌍 Internet"/]')
 
         return lines
     
@@ -4358,12 +4383,14 @@ class HierarchicalDiagramBuilder:
     def generate_icon_css(self) -> str:
         """Generate Mermaid classDef statements for icon styling.
         
-        Creates classDefstatements that map CSS classes to icon background images
-        using base64-encoded SVG data URIs. These are embedded in the diagram
-        and applied via Mermaid's class syntax (node:::class_name).
+        Creates classDef statements with color coding based on cloud provider.
+        Note: SVG limitations prevent embedding images in Mermaid classDef.
+        Client-side icon resolution in the web UI handles actual SVG icon display.
         """
         if not self.resources:
             return ""
+        
+        from Scripts.Generate.icon_resolver import get_icon_class  # type: ignore
         
         lines = []
         
@@ -4390,19 +4417,21 @@ class HierarchicalDiagramBuilder:
             providers_with_resources['kubernetes'].add('kubernetes_cluster')
             providers_with_resources['kubernetes'].add('kubernetes_namespace')
 
-        # Generate classDef for each resource type per provider
+        # Generate classDef for each resource type per provider with provider-based colors
         for provider in sorted(providers_with_resources.keys()):
             resource_types = providers_with_resources[provider]
+            color = self._get_provider_color(provider)
             
             for rtype in sorted(resource_types):
                 css_class = get_icon_class(rtype, provider)
-                
-                # NOTE: Data URI icons cause Mermaid CSS parser errors with special characters.
-                # Using simple placeholder styling instead of complex background-image URIs.
-                # Future: Consider external icon URLs instead of embedded data URIs.
-                lines.append(f"classDef {css_class} stroke:#666666,stroke-width:2px;")
+                lines.append(f"classDef {css_class} stroke:{color},stroke-width:2px;")
         
         return "\n".join(lines)
+    
+    def _get_provider_color(self, provider: str) -> str:
+        """Get a consistent color for a cloud provider."""
+        # Keep original grey color scheme
+        return '#666666'
     
     def generate(self) -> str:
         """Generate the complete hierarchical diagram."""
@@ -4853,8 +4882,14 @@ class HierarchicalDiagramBuilder:
 
         data_related_ids = {r['id'] for r in sql_resources}
         data_related_ids.update(r['id'] for r in storage_resources)
+        _FUNCTION_TOKENS = ('cloudfunctions', 'cloud_function')
         for res in sql_resources + storage_resources:
             for child in self.children_by_parent.get(res['id'], []):
+                child_rtype = (child.get('resource_type') or '').lower()
+                # Cloud functions stored in a bucket are compute resources — don't claim them
+                # as data tier children so they can render in the app tier instead.
+                if any(t in child_rtype for t in _FUNCTION_TOKENS):
+                    continue
                 data_related_ids.add(child['id'])
 
         data_lines = self.render_data_hierarchy(sql_resources, storage_resources)
@@ -5160,6 +5195,16 @@ class HierarchicalDiagramBuilder:
                 continue
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
+        
+        # Color-code tier subgraphs with thicker borders
+        tier_colors = {
+            'network_tier': '#7e57c2',  # Purple — Network
+            'app_tier':     '#0066cc',  # Blue — Application/Compute
+            'data_tier':    '#00aa00',  # Green — Data
+        }
+        for tier_id, color in tier_colors.items():
+            if tier_id in subgraph_ids:
+                lines.append(f"  style {tier_id} stroke:{color},stroke-width:3px")
         
         return lines
     

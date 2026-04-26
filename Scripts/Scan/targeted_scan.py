@@ -99,6 +99,28 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
 
     # GCP
     "context-gcp-cloud-sql-instance":          ["GCP/CloudSQL", "GCP/ComputeFirewall"],
+    "context-gcp-compute-firewall":            ["GCP/ComputeFirewall"],
+    "context-gcp-compute-instance":            ["GCP/Compute", "GCP/ComputeFirewall"],
+    "context-gcp-compute-instance-template":   ["GCP/Compute"],
+    "context-gcp-compute-instance-group":      ["GCP/Compute"],
+    "context-gcp-compute-network":             ["GCP/ComputeFirewall"],
+    "context-gcp-compute-subnetwork":          ["GCP/ComputeFirewall"],
+    "context-gcp-storage-bucket":              ["GCP/Storage"],
+    "context-gcp-storage-bucket-object":       ["GCP/Storage"],
+    "context-gcp-cloud-function":              ["GCP/CloudFunctions"],
+    "context-gcp-cloud-function-v2":           ["GCP/CloudFunctions"],
+    "context-gcp-service-account":             ["GCP/IAM"],
+    "context-gcp-service-account-iam-binding": ["GCP/IAM"],
+    "context-gcp-kms-key-ring":                ["GCP/IAM"],
+    "context-gcp-kms-crypto-key":              ["GCP/IAM"],
+    "context-gcp-secret-manager-secret":       ["GCP/IAM"],
+    "context-gcp-cloud-run-service":           ["GCP/CloudRun"],
+    "context-gcp-container-cluster":           ["GCP/GKE"],
+    "context-gcp-container-node-pool":         ["GCP/GKE"],
+    "context-gcp-pubsub-topic":                ["GCP/PubSub"],
+    "context-gcp-pubsub-subscription":         ["GCP/PubSub"],
+    "context-gcp-api-gateway-api":             ["GCP/APIGateway"],
+    "context-gcp-forwarding-rule-public":      ["GCP/Compute", "GCP/ComputeFirewall"],
 
     # Framework / language detections → always add Secrets scan
     "context-python-requirements":             ["Secrets"],
