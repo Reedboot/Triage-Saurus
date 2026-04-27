@@ -2888,13 +2888,16 @@ class HierarchicalDiagramBuilder:
         
         # Use embedded SVG icons if enabled, otherwise use CSS classes with emoji fallback
         if self.use_embedded_icons:
+            # Try to embed HTML img tag for icon
             icon_url = _get_icon_svg_url(resource_type, provider)
             if icon_url:
-                # Use tight wrapper to constrain image size and prevent stretching
-                safe_label = str(label or '').replace('\\', '\\\\').replace('"', '\\"')
-                node_def = f'{indent}{node_id}["<div><div style=\'max-width:40px;margin:0 auto 4px;\'><img src=\'{icon_url}\' style=\'width:100%;height:auto;object-fit:contain;\'/></div><div style=\'font-size:0.9em;\'>{safe_label}</div></div>"]'
+                # Escape label and use single quotes everywhere to avoid breaking Mermaid's double-quote parsing
+                safe_label = (label or '').replace("'", "\\'").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Use single quotes in style and HTML to avoid conflicts with Mermaid's outer double quotes
+                html = f"<div style='text-align:center;padding:2px'><img src='{icon_url}' style='width:36px;height:auto;margin-bottom:2px;border-radius:2px'/><div style='font-size:0.85em;word-wrap:break-word;white-space:normal'>{safe_label}</div></div>"
+                node_def = f"{indent}{node_id}[\"{html}\"]"
             else:
-                # Fallback to emoji if no icon
+                # Fallback to emoji if no icon found
                 emoji = self._get_emoji_for_resource(resource)
                 label = f"{emoji} {label}"
                 label = self._wrap_mermaid_label(label)
@@ -5671,33 +5674,28 @@ def generate_architecture_diagram_with_css(
     )
     diagram = builder.generate()
     
-    if use_embedded_icons:
-        # No CSS needed when using embedded icons
-        return diagram, ""
-    else:
-        # Legacy: embed CSS classes in diagram
-        classdefs = builder.generate_icon_css()
-        
+    # Always generate CSS for icon classes, whether embedded icons or CSS classes
+    classdefs = builder.generate_icon_css()
+    
+    if classdefs:
         # Embed classDef statements into the diagram
         # Insert them before the first node/subgraph definition
-        if classdefs:
-            # Split diagram to find where to inject classDefs
-            lines = diagram.split('\n')
-            # Find first non-comment line after the flowchart declaration
-            insert_idx = 1
-            for i, line in enumerate(lines[1:], 1):
-                if line.strip() and not line.strip().startswith('%%'):
-                    insert_idx = i
-                    break
-            
-            # Insert classDefs before first diagram content
-            lines.insert(insert_idx, classdefs)
-            diagram_with_css = '\n'.join(lines)
-        else:
-            diagram_with_css = diagram
+        lines = diagram.split('\n')
+        # Find first non-comment line after the flowchart declaration
+        insert_idx = 1
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() and not line.strip().startswith('%%'):
+                insert_idx = i
+                break
         
-        # Also return standalone CSS for backward compatibility
-        return diagram_with_css, classdefs
+        # Insert classDefs before first diagram content
+        lines.insert(insert_idx, classdefs)
+        diagram_with_css = '\n'.join(lines)
+    else:
+        diagram_with_css = diagram
+    
+    # Return diagram with embedded classDefs and also standalone CSS
+    return diagram_with_css, classdefs
 
 
 if __name__ == "__main__":

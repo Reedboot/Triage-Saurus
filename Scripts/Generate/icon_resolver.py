@@ -1337,6 +1337,9 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         icon_files_by_name[name].sort(key=lambda p: (p.suffix.lower() != '.png', str(p)))
     
     # Map each resource type to its best icon file
+    # Web root is the directory containing 'static' (i.e., /repo/web)
+    web_root = ICONS_ROOT.parent.parent.parent
+    
     for resource_type, (category, icon_name) in resource_mapping.items():
         icon_name_lower = icon_name.lower()
         
@@ -1344,7 +1347,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         if icon_name_lower in icon_files_by_name:
             icon_file = icon_files_by_name[icon_name_lower][0]
             try:
-                rel_path = icon_file.relative_to(provider_root.parent)
+                rel_path = icon_file.relative_to(web_root)
                 icon_url = f"/{rel_path.as_posix()}"
                 icon_map[resource_type] = icon_url
                 continue
@@ -1361,7 +1364,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         
         if best_match:
             try:
-                rel_path = best_match.relative_to(provider_root.parent)
+                rel_path = best_match.relative_to(web_root)
                 icon_url = f"/{rel_path.as_posix()}"
                 icon_map[resource_type] = icon_url
             except Exception:
