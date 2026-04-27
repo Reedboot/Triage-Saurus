@@ -2690,6 +2690,55 @@ class HierarchicalDiagramBuilder:
         lines.append('  end')
         return lines
 
+    def _get_emoji_for_resource(self, resource: dict) -> str:
+        """Get emoji for a resource type."""
+        resource_type = resource.get('resource_type', '').lower()
+        
+        # Map resource types to emoji
+        emoji_map = {
+            # Azure
+            'azurerm_network_security_group': '🔒',
+            'azurerm_virtual_machine': '💻',
+            'azurerm_app_service': '🌐',
+            'azurerm_app_service_plan': '📦',
+            'azurerm_storage_account': '💾',
+            'azurerm_storage_blob': '📄',
+            'azurerm_storage_container': '📁',
+            'azurerm_cosmosdb_account': '🗄️',
+            'azurerm_public_ip': '🌍',
+            'azurerm_network_interface': '🔌',
+            'azurerm_virtual_network': '🌐',
+            'azurerm_subnet': '🔲',
+            'azurerm_user_assigned_identity': '👤',
+            'azurerm_key_vault': '🔑',
+            'azurerm_automation_account': '⚙️',
+            'azurerm_automation_runbook': '📜',
+            'azurerm_network_interface_security_group_association': '🔗',
+            'azurerm_virtual_machine_extension': '🧩',
+            # AWS
+            'aws_security_group': '🔒',
+            'aws_instance': '💻',
+            'aws_internet_gateway': '🌍',
+            'aws_vpc': '🌐',
+            'aws_subnet': '🔲',
+            'aws_s3_bucket': '💾',
+            'aws_rds_instance': '🗄️',
+            'aws_iam_role': '👤',
+            'aws_iam_policy': '📋',
+            'aws_kms_key': '🔑',
+            'aws_network_interface': '🔌',
+            'aws_eip': '🌍',
+            # GCP
+            'google_compute_instance': '💻',
+            'google_storage_bucket': '💾',
+            'google_sql_database_instance': '🗄️',
+            'google_compute_network': '🌐',
+            'google_compute_subnetwork': '🔲',
+            'google_compute_security_policy': '🔒',
+        }
+        
+        return emoji_map.get(resource_type, '📦')  # Default package emoji
+
     def _get_node_id(self, resource: dict) -> str:
         """Get the Mermaid node ID for a resource using its UUID.
         
@@ -2796,7 +2845,7 @@ class HierarchicalDiagramBuilder:
         """Render a single node.
 
         Uses the resource's UUID (asset ID) as the Mermaid node ID for guaranteed uniqueness.
-        The display name is used as the label.
+        The display name is used as the label with emoji icon.
         """
         name = resource['resource_name']
         # Use _get_node_id to guarantee node_id is always a string (never a raw int DB pk)
@@ -2805,9 +2854,12 @@ class HierarchicalDiagramBuilder:
         # Truncate long labels to fit in box
         label = resource.get('_label') or resource.get('name') or name
         
-        # Strip emoji from label (emoji is replaced by icon in CSS class)
-        # Emoji patterns: common emoticons (e.g., 📬, 📥, 🐳, etc.)
+        # Remove existing emoji to avoid duplicates
         label = re.sub(r'[\U0001F300-\U0001F9FF]+\s*', '', label).strip()
+        
+        # Add emoji icon for resource type
+        emoji = self._get_emoji_for_resource(resource)
+        label = f"{emoji} {label}"
         
         label = self._wrap_mermaid_label(label)
 
@@ -2825,20 +2877,8 @@ class HierarchicalDiagramBuilder:
         resource_type = resource.get('resource_type', '').lower()
         provider = _detect_provider_from_resource(resource)
         
-        # Build node definition with CSS class for icon styling
-        css_class = None
-        if resource_type and provider not in ('unknown', 'terraform'):
-            css_class = get_icon_class(resource_type, provider)
-            # Store mapping for later reference in CSS generation
-            self.node_id_override[f"css_class_{node_id}"] = css_class
-        
-        # Add Mermaid class syntax: node_id[label]:::css_class
-        if css_class:
-            # Convert hyphens to underscores to match classDef naming
-            underscore_class = css_class.replace('-', '_')
-            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{underscore_class}"
-        else:
-            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
+        # Build node definition (emoji icon in label, no CSS class needed)
+        node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
         
         return node_def
     
