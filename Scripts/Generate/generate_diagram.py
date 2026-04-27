@@ -2075,7 +2075,7 @@ class HierarchicalDiagramBuilder:
             if igw and igw['resource_name'] not in self.emitted_nodes:
                 igw_node_id = self._get_node_id(igw)
                 igw_label   = self._wrap_mermaid_label(igw['resource_name'])
-                lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]:::icon_aws_internet_gateway')
+                lines.append(f'{i0}subgraph {igw_node_id}[{self._quote_mermaid_label(igw_label)}]')
                 self._emitted_mermaid_ids.add(igw_node_id)
                 self._node_id_first_owner[igw_node_id] = str(igw.get('id', ''))
                 self.emitted_nodes.add(igw['resource_name'])
@@ -2230,7 +2230,7 @@ class HierarchicalDiagramBuilder:
                                 _sg_icon = get_icon_class(_sg_rtype, _sg_provider) or 'icon_aws_security_group'
                                 # Convert hyphens to underscores to match classDef naming
                                 _sg_icon = _sg_icon.replace('-', '_')
-                                lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]:::{_sg_icon}')
+                                lines.append(f'{i2}subgraph {sg_node_id}[{self._quote_mermaid_label(sg_label)}]')
                                 self._emitted_mermaid_ids.add(sg_node_id)
                                 self._node_id_first_owner[sg_node_id] = str(sg.get('id', ''))
                                 self.subgraph_nodes.add(sg['resource_name'])
