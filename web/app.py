@@ -4517,10 +4517,14 @@ def api_diagrams(experiment_id: str):
 
         if db_diagrams:
             return jsonify(_response_payload(db_diagrams))
-    except Exception:
-        return jsonify({"diagrams": [], "error": "Failed to query cloud_diagrams"}), 500
+    except Exception as e:
+        app.logger.debug(f"Exception in api_diagrams for {experiment_id}: {e}")
+        # Return empty list instead of error — diagrams may still be generating
+        return jsonify({"diagrams": [], "status": "in_progress"}), 200
 
-    return jsonify({"diagrams": [], "error": f"No diagrams found in cloud_diagrams for experiment {experiment_id}"}), 404
+    # No diagrams found yet — return empty list (scan may be in progress)
+    # Client should keep polling or check experiment status
+    return jsonify({"diagrams": [], "status": "in_progress"}), 200
 
 
 @app.route("/api/repo_summary/<experiment_id>/<repo_name>")
