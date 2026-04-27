@@ -100,7 +100,6 @@ const MermaidIconInjector = (() => {
       return null;
     }
   }
-  }
 
   /**
    * Main entry point: inject icons into a rendered Mermaid diagram
