@@ -2890,9 +2890,9 @@ class HierarchicalDiagramBuilder:
         if self.use_embedded_icons:
             icon_url = _get_icon_svg_url(resource_type, provider)
             if icon_url:
-                # Use embedded <img> tag with aspect ratio preservation
+                # Use tight wrapper to constrain image size and prevent stretching
                 safe_label = str(label or '').replace('\\', '\\\\').replace('"', '\\"')
-                node_def = f'{indent}{node_id}["<img src=\'{icon_url}\' style=\'width:48px;height:48px;object-fit:contain;vertical-align:middle;\'/><br/>{safe_label}"]'
+                node_def = f'{indent}{node_id}["<div><div style=\'max-width:40px;margin:0 auto 4px;\'><img src=\'{icon_url}\' style=\'width:100%;height:auto;object-fit:contain;\'/></div><div style=\'font-size:0.9em;\'>{safe_label}</div></div>"]'
             else:
                 # Fallback to emoji if no icon
                 emoji = self._get_emoji_for_resource(resource)
