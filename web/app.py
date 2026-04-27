@@ -7280,6 +7280,33 @@ def api_view_overview(experiment_id: str, repo_name: str):
         except:
             pass
 
+    # Add technology stack section from database
+    try:
+        tech_stack_cursor = conn.execute('''
+            SELECT DISTINCT resource_type 
+            FROM resources 
+            WHERE experiment_id = ? 
+            AND repo_id = ?
+            AND resource_type IS NOT NULL
+            AND resource_type LIKE '%_%'
+            ORDER BY resource_type
+        ''', (resolved_exp_id, repo_id))
+        resource_types = [rt[0] for rt in tech_stack_cursor.fetchall()]
+        
+        if resource_types:
+            from Scripts.Generate.generate_diagram import get_friendly_type
+            
+            # Build technology stack HTML (text-only for performance)
+            tech_stack_html = ""
+            for rt in resource_types:
+                friendly = get_friendly_type(rt)
+                tech_stack_html += f'<span class="tech-badge">{html.escape(friendly)}</span>\n'
+            
+            overview_sections.append(f'<h2>🛠️ Technology Stack</h2><div class="tech-stack-items">{tech_stack_html}</div>')
+    except Exception as e:
+        # Silently fail if tech stack can't be built
+        pass
+
     final_html = '<div class="markdown-content">' + ''.join(overview_sections) + '</div>' if overview_sections else ''
     
     # Add footer with analysis metadata if available
@@ -10301,7 +10328,11 @@ def scan_001_diagram():
         # Add all nodes without subgraphs
         for res_id, res_name, res_type in resources:
             icon = icon_map.get(res_type, '')
-            node_def = f'{res_id}["<img src=\'/static/assets/icons/azure/{icon}\' style=\'width:48px;height:48px;object-fit:contain;vertical-align:middle;\'/><br/>{res_name}"]' if icon else f'{res_id}["{res_name}"]'
+            if icon:
+                # Use tight wrapper to constrain image size and prevent stretching
+                node_def = f'{res_id}["<div><div style=\'max-width:40px;margin:0 auto 4px;\'><img src=\'/static/assets/icons/azure/{icon}\' style=\'width:100%;height:auto;object-fit:contain;\'/></div><div style=\'font-size:0.9em;\'>{res_name}</div></div>"]'
+            else:
+                node_def = f'{res_id}["{res_name}"]'
             mermaid_code += f'    {node_def}\n'
             
             if res_type == 'azurerm_virtual_network':
@@ -10562,7 +10593,7 @@ def scan_001_diagram():
                     <strong>Scan 001</strong> discovered 28 Azure resources across networking, compute, storage, and management services. This diagram is automatically generated from the scan database.
                 </div>
                 
-                <div class="mermaid">
+                <div class="mermaid" id="mermaid-diagram">
 {mermaid_code}
                 </div>
                 
@@ -10592,9 +10623,75 @@ def scan_001_diagram():
             startOnLoad: true, 
             theme: 'dark',
             securityLevel: 'loose',
-            flowchart: {{ useMaxWidth: true }}
+            flowchart: {{ useMaxWidth: true }},
+            pan: true,
+            zoom: true
         }});
         mermaid.run();
+        
+        // Add pan/zoom support with mouse interactions
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let panOffsetX = 0;
+        let panOffsetY = 0;
+        let zoomLevel = 1;
+        
+        const diagram = document.getElementById('mermaid-diagram');
+        
+        if (diagram) {{
+            // Mouse wheel zoom
+            diagram.addEventListener('wheel', (e) => {{
+                if (e.ctrlKey || e.metaKey) {{
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    zoomLevel *= delta;
+                    zoomLevel = Math.max(0.1, Math.min(zoomLevel, 3));
+                    
+                    const svg = diagram.querySelector('svg');
+                    if (svg) {{
+                        svg.style.transform = `scale(${{zoomLevel}}) translate(${{panOffsetX}}px, ${{panOffsetY}}px)`;
+                        svg.style.transformOrigin = 'top left';
+                        svg.style.transition = 'none';
+                    }}
+                }}
+            }}, {{passive: false}});
+            
+            // Mouse drag pan
+            diagram.addEventListener('mousedown', (e) => {{
+                if (e.button === 0 || e.button === 2) {{ // Left or right click
+                    isPanning = true;
+                    panStartX = e.clientX;
+                    panStartY = e.clientY;
+                    diagram.style.cursor = 'grabbing';
+                }}
+            }});
+            
+            document.addEventListener('mousemove', (e) => {{
+                if (isPanning) {{
+                    const deltaX = e.clientX - panStartX;
+                    const deltaY = e.clientY - panStartY;
+                    panOffsetX += deltaX / zoomLevel;
+                    panOffsetY += deltaY / zoomLevel;
+                    panStartX = e.clientX;
+                    panStartY = e.clientY;
+                    
+                    const svg = diagram.querySelector('svg');
+                    if (svg) {{
+                        svg.style.transform = `scale(${{zoomLevel}}) translate(${{panOffsetX}}px, ${{panOffsetY}}px)`;
+                        svg.style.transformOrigin = 'top left';
+                        svg.style.transition = 'none';
+                    }}
+                }}
+            }});
+            
+            document.addEventListener('mouseup', () => {{
+                isPanning = false;
+                diagram.style.cursor = 'grab';
+            }});
+            
+            diagram.style.cursor = 'grab';
+        }}
     </script>
 </body>
 </html>"""
