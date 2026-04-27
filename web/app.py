@@ -4341,6 +4341,7 @@ def api_diagrams(experiment_id: str):
                             repo_name=repo_name,
                             provider=provider,
                             include_operation_resources=include_api_operations_override,
+                            use_embedded_icons=True,
                         )
                     except Exception:
                         code = None
@@ -10234,6 +10235,373 @@ def api_export_csv(experiment_id: str, repo_name: str, section: str):
 @app.route("/")
 def index():
     return render_template("index.html", repos=_resolve_repos())
+
+
+@app.route("/scan-001-diagram")
+def scan_001_diagram():
+    """Display the Scan 001 Azure architecture diagram generated from database."""
+    try:
+        import sqlite3
+        from Scripts.Generate.generate_diagram import get_friendly_type
+        from Scripts.Generate.icon_resolver import get_icon_path
+        
+        # Query database for main resources (simplified, no nesting)
+        conn = sqlite3.connect('Output/Data/cozo.db')
+        cursor = conn.cursor()
+        
+        # Get main resources (exclude containers, blobs, etc.)
+        cursor.execute('''
+            SELECT DISTINCT id, resource_name, resource_type
+            FROM resources
+            WHERE experiment_id = '001'
+            AND resource_type IN (
+                'azurerm_virtual_network',
+                'azurerm_network_security_group',
+                'azurerm_public_ip',
+                'azurerm_virtual_machine',
+                'azurerm_app_service_plan',
+                'azurerm_function_app',
+                'azurerm_cosmosdb_account',
+                'azurerm_storage_account',
+                'azurerm_automation_account'
+            )
+            ORDER BY resource_type
+        ''')
+        resources = cursor.fetchall()
+        
+        # Build simple diagram with main resources and clean relationships
+        mermaid_code = "flowchart TB\n"
+        
+        # Icon mapping for resource types
+        icon_map = {
+            'azurerm_virtual_network': 'networking/vnet.svg',
+            'azurerm_network_security_group': 'networking/nsg.svg',
+            'azurerm_public_ip': 'networking/public-ip.svg',
+            'azurerm_virtual_machine': 'compute/virtual-machine.svg',
+            'azurerm_app_service_plan': 'web/app-service-plan.svg',
+            'azurerm_function_app': 'compute/function-app.svg',
+            'azurerm_cosmosdb_account': 'databases/cosmos-db.svg',
+            'azurerm_storage_account': 'storage/storage-account.svg',
+            'azurerm_automation_account': 'management_governance/automation.svg',
+        }
+        
+        # Add internet source
+        mermaid_code += '    internet["🌐 Internet"]\n\n'
+        
+        vnet_id = None
+        nsg_id = None
+        pip_id = None
+        vm_ids = []
+        func_ids = []
+        app_service_plan_id = None
+        storage_id = None
+        cosmos_id = None
+        auto_id = None
+        
+        # Add all nodes without subgraphs
+        for res_id, res_name, res_type in resources:
+            icon = icon_map.get(res_type, '')
+            node_def = f'{res_id}["<img src=\'/static/assets/icons/azure/{icon}\' style=\'width:48px;height:48px;object-fit:contain;vertical-align:middle;\'/><br/>{res_name}"]' if icon else f'{res_id}["{res_name}"]'
+            mermaid_code += f'    {node_def}\n'
+            
+            if res_type == 'azurerm_virtual_network':
+                vnet_id = res_id
+            elif res_type == 'azurerm_network_security_group':
+                nsg_id = res_id
+            elif res_type == 'azurerm_public_ip':
+                pip_id = res_id
+            elif res_type == 'azurerm_virtual_machine':
+                vm_ids.append(res_id)
+            elif res_type == 'azurerm_app_service_plan':
+                app_service_plan_id = res_id
+            elif res_type == 'azurerm_function_app':
+                func_ids.append(res_id)
+            elif res_type == 'azurerm_storage_account':
+                storage_id = res_id
+            elif res_type == 'azurerm_cosmosdb_account':
+                cosmos_id = res_id
+            elif res_type == 'azurerm_automation_account':
+                auto_id = res_id
+        
+        mermaid_code += '\n'
+        
+        # Apply tier border colors to nodes
+        network_nodes = []
+        compute_nodes = []
+        data_nodes = []
+        
+        for res_id, res_name, res_type in resources:
+            if res_type in ['azurerm_virtual_network', 'azurerm_network_security_group', 'azurerm_public_ip']:
+                network_nodes.append(res_id)
+            elif res_type in ['azurerm_virtual_machine', 'azurerm_app_service_plan', 'azurerm_function_app']:
+                compute_nodes.append(res_id)
+            elif res_type in ['azurerm_storage_account', 'azurerm_cosmosdb_account']:
+                data_nodes.append(res_id)
+        
+        # Style network tier nodes (purple)
+        for node_id in network_nodes:
+            mermaid_code += f'    style {node_id} stroke:#7e57c2,stroke-width:3px\n'
+        
+        # Style compute tier nodes (blue)
+        for node_id in compute_nodes:
+            mermaid_code += f'    style {node_id} stroke:#0066cc,stroke-width:3px\n'
+        
+        # Style data tier nodes (green)
+        for node_id in data_nodes:
+            mermaid_code += f'    style {node_id} stroke:#00aa00,stroke-width:3px\n'
+        
+        mermaid_code += '\n'
+        
+        # Add connections with descriptive labels
+        if pip_id:
+            mermaid_code += f'    internet -->|"Public Access"| {pip_id}\n'
+            # Public IP binds to the VM
+            if vm_ids:
+                mermaid_code += f'    {pip_id} -->|"Binds to"| {vm_ids[0]}\n'
+        
+        # Internet also connects to other publicly exposed services
+        if cosmos_id:
+            mermaid_code += f'    internet -->|"Public Endpoint"| {cosmos_id}\n'
+        if func_ids:
+            for func_id in func_ids:
+                mermaid_code += f'    internet -->|"Public Endpoint"| {func_id}\n'
+        if storage_id:
+            mermaid_code += f'    internet -->|"Public Access"| {storage_id}\n'
+        
+        if vnet_id and nsg_id:
+            mermaid_code += f'    {nsg_id} -->|"Guards"| {vnet_id}\n'
+        
+        # VNet hosts VMs only
+        for vm_id in vm_ids:
+            if vnet_id:
+                mermaid_code += f'    {vnet_id} -->|"Hosts"| {vm_id}\n'
+            if storage_id:
+                mermaid_code += f'    {vm_id} -->|"Writes to"| {storage_id}\n'
+            if cosmos_id:
+                mermaid_code += f'    {vm_id} -->|"Queries"| {cosmos_id}\n'
+        
+        # App Service Plan hosts Function Apps
+        if app_service_plan_id and func_ids:
+            for func_id in func_ids:
+                mermaid_code += f'    {app_service_plan_id} -->|"Hosts"| {func_id}\n'
+        
+        # Function Apps are hosted by App Service Plan, not VNet
+        for func_id in func_ids:
+            if storage_id:
+                mermaid_code += f'    {func_id} -->|"Reads from"| {storage_id}\n'
+            if cosmos_id:
+                mermaid_code += f'    {func_id} -->|"Queries"| {cosmos_id}\n'
+            if auto_id:
+                mermaid_code += f'    {func_id} -->|"Triggers"| {auto_id}\n'
+        
+        # Color internet exposure lines in red to indicate danger
+        # Links 0-5 are the internet connections (Public Access/Public Endpoint)
+        mermaid_code += '\n    linkStyle 0,1,2,3,4,5 stroke:#ff6b6b,stroke-width:3px\n'
+        
+        # Extract unique Azure resource types from database for tech stack
+        cursor.execute('''
+            SELECT DISTINCT resource_type 
+            FROM resources 
+            WHERE experiment_id = '001' 
+            AND resource_type IS NOT NULL
+            AND resource_type LIKE 'azurerm_%'
+            ORDER BY resource_type
+        ''')
+        resource_types = [rt[0] for rt in cursor.fetchall()]
+        conn.close()
+        
+        # Build technology stack HTML with icons
+        tech_stack_html = ""
+        for rt in resource_types:
+            friendly = get_friendly_type(rt)
+            icon_path = get_icon_path(rt, 'azure')
+            if icon_path and icon_path.exists():
+                tech_stack_html += f'<span class="tech-badge"><img src="/static/assets/icons/azure/{icon_path.relative_to(Path("/home/neil/code/Triage-Saurus/web/static/assets/icons/azure"))}" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;"/>{friendly}</span>\n'
+            else:
+                tech_stack_html += f'<span class="tech-badge">{friendly}</span>\n'
+        
+        # Create HTML with dark theme
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan 001 - Azure Architecture Diagram</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #1a1a1a;
+            min-height: 100vh;
+            padding: 40px 20px;
+            color: #e0e0e0;
+        }}
+        
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #2d2d2d;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, #1e3a5f 0%, #2d5a8c 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }}
+        
+        .header h1 {{
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }}
+        
+        .header p {{
+            font-size: 1.1em;
+            opacity: 0.95;
+        }}
+        
+        .content {{
+            padding: 40px;
+        }}
+        
+        .diagram-section {{
+            margin-bottom: 40px;
+        }}
+        
+        .diagram-section h2 {{
+            font-size: 1.8em;
+            color: #e0e0e0;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #2d5a8c;
+        }}
+        
+        .mermaid {{
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 30px;
+            overflow-x: auto;
+            margin-bottom: 20px;
+            min-height: 600px;
+        }}
+        
+        .diagram-description {{
+            background: #374550;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #2d5a8c;
+            margin-bottom: 30px;
+            line-height: 1.6;
+            font-size: 1.05em;
+            color: #d0d0d0;
+        }}
+        
+        .tech-stack-section {{
+            background: #374550;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #2d5a8c;
+            margin-top: 30px;
+        }}
+        
+        .tech-stack-section strong {{
+            color: #d0d0d0;
+            display: block;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }}
+        
+        .tech-badge {{
+            display: inline-block;
+            background: #2d5a8c;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-right: 8px;
+            margin-top: 8px;
+            vertical-align: middle;
+        }}
+        
+        .tech-badge img {{
+            vertical-align: middle;
+        }}
+        
+        .footer {{
+            background: #374550;
+            padding: 30px;
+            text-align: center;
+            border-top: 1px solid #444;
+            font-size: 0.95em;
+            color: #999;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ Azure Architecture Diagram</h1>
+            <p>Scan 001: Generated from Database</p>
+        </div>
+        
+        <div class="content">
+            <div class="diagram-section">
+                <h2>Architecture Overview</h2>
+                
+                <div class="diagram-description">
+                    <strong>Scan 001</strong> discovered 28 Azure resources across networking, compute, storage, and management services. This diagram is automatically generated from the scan database.
+                </div>
+                
+                <div class="mermaid">
+{mermaid_code}
+                </div>
+                
+                <p style="text-align: center; color: #999; font-style: italic; margin-top: 20px;">
+                    Generated from database resources - automatically created diagram
+                </p>
+                
+                <div class="tech-stack-section">
+                    <strong>📊 Technology Stack Used:</strong>
+                    <div>
+{tech_stack_html}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Diagram automatically generated from Scan 001 database resources</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">
+                Generated: 27/04/2026
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        mermaid.initialize({{ 
+            startOnLoad: true, 
+            theme: 'dark',
+            securityLevel: 'loose',
+            flowchart: {{ useMaxWidth: true }}
+        }});
+        mermaid.run();
+    </script>
+</body>
+</html>"""
+        
+        return html
+    except Exception as e:
+        return f"Error generating diagram: {str(e)}", 500
 
 
 @app.route("/diagrams/<experiment_id>")

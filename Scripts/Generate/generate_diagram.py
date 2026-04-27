@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
 import resource_type_db as _rtdb
 from internet_exposure_detector import InternetExposureDetector, ExposureDetail
-from icon_resolver import get_icon_data_uri, get_icon_class, get_fallback_icon_data_uri
+from icon_resolver import get_icon_data_uri, get_icon_class, get_fallback_icon_data_uri, get_icon_path
 
 
 def load_architecture_diagram_exclusions() -> Set[str]:
@@ -47,6 +47,28 @@ _ARCHITECTURE_DIAGRAM_EXCLUSIONS = load_architecture_diagram_exclusions()
 
 _INVALID_NODE_ID_CHARS = re.compile(r'[^A-Za-z0-9_]')
 _MODULE_BLOCK_START_RE = re.compile(r'^\s*module\s+"[^"]+"\s*\{')
+
+
+def _get_icon_svg_url(resource_type: str, provider: str = 'azure') -> Optional[str]:
+    """Convert icon path to Flask-friendly URL for embedding in Mermaid.
+    
+    Returns the relative URL path (e.g., '/static/assets/icons/azure/compute/virtual-machine.svg')
+    suitable for embedding in <img> tags within Mermaid node definitions.
+    """
+    try:
+        icon_path = get_icon_path(resource_type, provider)
+        if icon_path and icon_path.exists():
+            # Convert filesystem path to Flask URL
+            # Path is like: /repo/web/static/assets/icons/azure/compute/virtual-machine.svg
+            # Need to extract: /static/assets/icons/azure/compute/virtual-machine.svg
+            parts = icon_path.parts
+            if 'web' in parts:
+                web_idx = parts.index('web')
+                relative_parts = parts[web_idx + 1:]  # Skip 'web'
+                return '/' + '/'.join(relative_parts)
+    except Exception:
+        pass
+    return None
 
 
 def sanitize_id(name: str) -> str:
@@ -158,7 +180,8 @@ class HierarchicalDiagramBuilder:
     def __init__(self, experiment_id: str, repo_name: Optional[str] = None,
                  include_api_operations: Optional[bool] = None,
                  repo_path: Optional[str] = None,
-                 provider_filter: Optional[str] = None):
+                 provider_filter: Optional[str] = None,
+                 use_embedded_icons: bool = False):
         self.experiment_id = experiment_id
         self.repo_name = repo_name
         # When True, parse OpenAPI specs and add operation nodes under APIM APIs.
@@ -168,6 +191,8 @@ class HierarchicalDiagramBuilder:
         self.repo_path = repo_path
         # Filter to a specific cloud provider (lowercase)
         self.provider_filter = provider_filter
+        # When True, embed SVG icons directly in node definitions instead of using CSS classes
+        self.use_embedded_icons = use_embedded_icons
         self.resources = []
         self.connections = []
         self.sql_hints: Dict[str, Optional[str]] = {}
@@ -2845,7 +2870,7 @@ class HierarchicalDiagramBuilder:
         """Render a single node.
 
         Uses the resource's UUID (asset ID) as the Mermaid node ID for guaranteed uniqueness.
-        The display name is used as the label with emoji icon.
+        The display name is used as the label with embedded SVG icon or CSS class for emoji.
         """
         name = resource['resource_name']
         # Use _get_node_id to guarantee node_id is always a string (never a raw int DB pk)
@@ -2857,37 +2882,49 @@ class HierarchicalDiagramBuilder:
         # Remove existing emoji to avoid duplicates
         label = re.sub(r'[\U0001F300-\U0001F9FF]+\s*', '', label).strip()
         
-        # Get resource type and provider for CSS class
+        # Get resource type and provider
         resource_type = resource.get('resource_type', '').lower()
         provider = _detect_provider_from_resource(resource)
         
-        # Build icon class name for PNG icon injection
-        # Convert resource_type (e.g., 'azurerm_app_service') to CSS class form (e.g., 'icon_azurerm_app_service')
-        icon_class = f"icon_{resource_type}" if resource_type else ""
-        
-        # Only add emoji if we're NOT using icon class
-        # (Mermaid doesn't allow emoji in labels when class suffix is applied)
-        if not icon_class:
-            emoji = self._get_emoji_for_resource(resource)
-            label = f"{emoji} {label}"
-        
-        label = self._wrap_mermaid_label(label)
+        # Use embedded SVG icons if enabled, otherwise use CSS classes with emoji fallback
+        if self.use_embedded_icons:
+            icon_url = _get_icon_svg_url(resource_type, provider)
+            if icon_url:
+                # Use embedded <img> tag with aspect ratio preservation
+                safe_label = str(label or '').replace('\\', '\\\\').replace('"', '\\"')
+                node_def = f'{indent}{node_id}["<img src=\'{icon_url}\' style=\'width:48px;height:48px;object-fit:contain;vertical-align:middle;\'/><br/>{safe_label}"]'
+            else:
+                # Fallback to emoji if no icon
+                emoji = self._get_emoji_for_resource(resource)
+                label = f"{emoji} {label}"
+                label = self._wrap_mermaid_label(label)
+                node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
+        else:
+            # Legacy: Use CSS classes with emoji fallback
+            icon_class = f"icon_{resource_type}" if resource_type else ""
+            
+            # Only add emoji if we're NOT using icon class
+            if not icon_class:
+                emoji = self._get_emoji_for_resource(resource)
+                label = f"{emoji} {label}"
+            
+            label = self._wrap_mermaid_label(label)
 
-        # Append test-variant badge if this node is the primary representative
-        badge = resource.get('_variant_badge')
-        if badge:
-            label = f"{label} [{badge}]"
+            # Append test-variant badge if this node is the primary representative
+            badge = resource.get('_variant_badge')
+            if badge:
+                label = f"{label} [{badge}]"
+
+            # Build node definition with icon class for PNG injection
+            if icon_class:
+                node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{icon_class}"
+            else:
+                node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
 
         self._emitted_mermaid_ids.add(node_id)
         self.emitted_nodes.add(name)
         # Store UUID mapping for this resource name so connections use the correct ID
         self.node_id_override[name] = node_id
-        
-        # Build node definition with icon class for PNG injection
-        if icon_class:
-            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{icon_class}"
-        else:
-            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
         
         return node_def
     
@@ -5609,6 +5646,7 @@ def generate_architecture_diagram_with_css(
     repo_name: Optional[str] = None,
     provider: Optional[str] = None,
     include_operation_resources: Optional[bool] = None,
+    use_embedded_icons: bool = False,
 ) -> tuple[str, str]:
     """Generate a Mermaid diagram with icon styling classDef statements.
     
@@ -5617,41 +5655,49 @@ def generate_architecture_diagram_with_css(
         repo_name: Optional repository name filter
         provider: Optional cloud provider filter
         include_operation_resources: Whether to include API operations
+        use_embedded_icons: If True, embed SVG icons directly in nodes; if False, use CSS classes
         
     Returns:
-        Tuple of (mermaid_code_with_classdef, css_code)
-        - mermaid_code_with_classdef: Full diagram with embedded classDef statements
-        - css_code: Standalone CSS (for backward compatibility / alternative rendering)
+        Tuple of (mermaid_code, css_code)
+        - mermaid_code: Full diagram (with embedded icons if use_embedded_icons=True, or with classDef if False)
+        - css_code: Standalone CSS (for backward compatibility / alternative rendering, empty if embedded icons)
     """
     builder = HierarchicalDiagramBuilder(
         experiment_id=experiment_id,
         repo_name=repo_name,
         include_api_operations=include_operation_resources,
         provider_filter=provider,
+        use_embedded_icons=use_embedded_icons,
     )
     diagram = builder.generate()
-    classdefs = builder.generate_icon_css()
     
-    # Embed classDef statements into the diagram
-    # Insert them before the first node/subgraph definition
-    if classdefs:
-        # Split diagram to find where to inject classDefs
-        lines = diagram.split('\n')
-        # Find first non-comment line after the flowchart declaration
-        insert_idx = 1
-        for i, line in enumerate(lines[1:], 1):
-            if line.strip() and not line.strip().startswith('%%'):
-                insert_idx = i
-                break
-        
-        # Insert classDefs before first diagram content
-        lines.insert(insert_idx, classdefs)
-        diagram_with_css = '\n'.join(lines)
+    if use_embedded_icons:
+        # No CSS needed when using embedded icons
+        return diagram, ""
     else:
-        diagram_with_css = diagram
-    
-    # Also return standalone CSS for backward compatibility
-    return diagram_with_css, classdefs
+        # Legacy: embed CSS classes in diagram
+        classdefs = builder.generate_icon_css()
+        
+        # Embed classDef statements into the diagram
+        # Insert them before the first node/subgraph definition
+        if classdefs:
+            # Split diagram to find where to inject classDefs
+            lines = diagram.split('\n')
+            # Find first non-comment line after the flowchart declaration
+            insert_idx = 1
+            for i, line in enumerate(lines[1:], 1):
+                if line.strip() and not line.strip().startswith('%%'):
+                    insert_idx = i
+                    break
+            
+            # Insert classDefs before first diagram content
+            lines.insert(insert_idx, classdefs)
+            diagram_with_css = '\n'.join(lines)
+        else:
+            diagram_with_css = diagram
+        
+        # Also return standalone CSS for backward compatibility
+        return diagram_with_css, classdefs
 
 
 if __name__ == "__main__":
