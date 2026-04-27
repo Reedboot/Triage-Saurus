@@ -10254,6 +10254,54 @@ def index():
     return render_template("index.html", repos=_resolve_repos())
 
 
+@app.route("/diagrams/<experiment_id>")
+def view_diagram(experiment_id: str):
+    """Display a Mermaid diagram in the web interface."""
+    try:
+        # Fetch the diagram from the API
+        diagram_data = None
+        
+        # Query the database directly for diagram data
+        db_path = REPO_ROOT / "Output" / "Data" / "cozo.db"
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT mermaid_code, diagram_title, provider 
+            FROM cloud_diagrams 
+            WHERE experiment_id = ?
+            LIMIT 1
+        """, (experiment_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return f"Diagram not found: {experiment_id}", 404
+        
+        mermaid_code, title, provider = row
+        
+        # Determine icon type from the code
+        if "data:image/svg+xml;base64" in mermaid_code:
+            icon_type = "SVG Icons (Base64 Data URIs)"
+            description = "Testing SVG icon embedding in Mermaid diagrams. Icons are embedded as base64-encoded data URIs."
+        else:
+            icon_type = "Emoji Icons"
+            description = "Architecture diagram with emoji icons for resource types."
+        
+        return render_template(
+            "diagram_viewer.html",
+            experiment_id=experiment_id,
+            diagram_title=title or "Architecture Diagram",
+            provider=provider or "Unknown",
+            icon_type=icon_type,
+            description=description,
+            mermaid_code=mermaid_code
+        )
+    except Exception as e:
+        return f"Error loading diagram: {str(e)}", 500
+
+
 @app.route("/scan", methods=["POST"])
 def scan():
     repo_path = request.form.get("repo_path", "").strip()
