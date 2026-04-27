@@ -2,19 +2,24 @@
  * Mermaid Icon Injector
  * 
  * Post-processes rendered Mermaid diagrams to inject cloud provider icons
- * by inlining SVG content directly into the diagram (bypasses <image> sandbox restrictions).
+ * by inlining SVG/PNG content directly into the diagram (bypasses <image> sandbox restrictions).
+ * 
+ * Supports:
+ * - SVG files: Inlined directly as SVG elements
+ * - PNG files: Wrapped in SVG <image> elements to reference the PNG
  * 
  * Usage:
  *   - After Mermaid renders a diagram, call: MermaidIconInjector.injectIcons(svgElement, iconMap)
- *   - iconMap format: { resource_type: '/path/to/icon.svg', ... }
+ *   - iconMap format: { resource_type: '/path/to/icon.svg' or '/path/to/icon.png', ... }
  * 
  * Architecture:
  *   1. Find all text elements in rendered Mermaid SVG (these are node labels)
  *   2. Extract resource type from CSS class (e.g., "icon-azurerm-app-service" → "azurerm_app_service")
  *   3. Look up icon path in iconMap
- *   4. Fetch SVG file as text and extract root SVG viewBox/dimensions
- *   5. Create <g> element with inlined SVG content, positioned left of text
- *   6. Insert into diagram using transform positioning
+ *   4. For SVG: Fetch file as text and extract root SVG viewBox/dimensions
+ *   5. For PNG: Create SVG <image> element pointing to PNG file
+ *   6. Create <g> element with icon content, positioned left of text
+ *   7. Insert into diagram using transform positioning
  */
 
 const MermaidIconInjector = (() => {
@@ -31,8 +36,10 @@ const MermaidIconInjector = (() => {
   let _svgCache = {};
 
   /**
-   * Fetch and parse SVG file, returning the SVG element
-   * @param {string} iconPath - Path to the SVG file
+   * Fetch and parse SVG or PNG file, returning an image element
+   * For SVG: returns parsed SVG element
+   * For PNG: returns an <image> element pointing to the PNG file
+   * @param {string} iconPath - Path to the SVG or PNG file
    * @returns {Promise<SVGElement|null>}
    */
   async function _fetchSvg(iconPath) {
@@ -44,6 +51,27 @@ const MermaidIconInjector = (() => {
       const response = await fetch(iconPath);
       if (!response.ok) return null;
 
+      // Check if this is a PNG file
+      if (iconPath.toLowerCase().endsWith('.png')) {
+        // For PNG files, create an SVG <image> element that references the PNG
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 18 18');
+        svg.setAttribute('width', '18');
+        svg.setAttribute('height', '18');
+        
+        const image = document.createElementNS('http://www.w3.org/1999/xlink', 'image');
+        image.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', iconPath);
+        image.setAttribute('x', '0');
+        image.setAttribute('y', '0');
+        image.setAttribute('width', '18');
+        image.setAttribute('height', '18');
+        
+        svg.appendChild(image);
+        _svgCache[iconPath] = svg;
+        return svg;
+      }
+
+      // Handle SVG files
       const svgText = await response.text();
       const parser = new DOMParser();
       const doc = parser.parseFromString(svgText, 'image/svg+xml');
@@ -57,7 +85,7 @@ const MermaidIconInjector = (() => {
       _svgCache[iconPath] = svgElement;
       return svgElement;
     } catch (err) {
-      console.warn(`[MermaidIconInjector] Failed to fetch SVG ${iconPath}: ${err.message}`);
+      console.warn(`[MermaidIconInjector] Failed to fetch icon ${iconPath}: ${err.message}`);
       return null;
     }
   }
