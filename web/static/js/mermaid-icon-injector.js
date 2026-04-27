@@ -36,9 +36,9 @@ const MermaidIconInjector = (() => {
   let _svgCache = {};
 
   /**
-   * Fetch and parse SVG or PNG file, returning an image element
+   * Fetch and parse SVG or PNG file, returning an SVG element
    * For SVG: returns parsed SVG element
-   * For PNG: returns an <image> element pointing to the PNG file
+   * For PNG: returns an SVG element with embedded <image> referencing the PNG
    * @param {string} iconPath - Path to the SVG or PNG file
    * @returns {Promise<SVGElement|null>}
    */
@@ -53,22 +53,33 @@ const MermaidIconInjector = (() => {
 
       // Check if this is a PNG file
       if (iconPath.toLowerCase().endsWith('.png')) {
-        // For PNG files, create an SVG <image> element that references the PNG
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 18 18');
-        svg.setAttribute('width', '18');
-        svg.setAttribute('height', '18');
+        // For PNG files, fetch as blob and convert to data URL
+        const blob = await response.blob();
+        const reader = new FileReader();
         
-        const image = document.createElementNS('http://www.w3.org/1999/xlink', 'image');
-        image.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', iconPath);
-        image.setAttribute('x', '0');
-        image.setAttribute('y', '0');
-        image.setAttribute('width', '18');
-        image.setAttribute('height', '18');
-        
-        svg.appendChild(image);
-        _svgCache[iconPath] = svg;
-        return svg;
+        return new Promise((resolve) => {
+          reader.onload = () => {
+            const dataUrl = reader.result;
+            
+            // Create SVG wrapper for PNG image
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 18 18');
+            svg.setAttribute('width', '18');
+            svg.setAttribute('height', '18');
+            
+            const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+            image.setAttribute('href', dataUrl);
+            image.setAttribute('x', '0');
+            image.setAttribute('y', '0');
+            image.setAttribute('width', '18');
+            image.setAttribute('height', '18');
+            
+            svg.appendChild(image);
+            _svgCache[iconPath] = svg;
+            resolve(svg);
+          };
+          reader.readAsDataURL(blob);
+        });
       }
 
       // Handle SVG files
@@ -88,6 +99,7 @@ const MermaidIconInjector = (() => {
       console.warn(`[MermaidIconInjector] Failed to fetch icon ${iconPath}: ${err.message}`);
       return null;
     }
+  }
   }
 
   /**
