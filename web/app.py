@@ -57,6 +57,10 @@ EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
+# Global icon map cache (pre-computed once at first request)
+_ICON_MAP_CACHE: dict = {}
+_ICON_MAP_LOCK = threading.Lock()
+
 # DB helpers are used to persist Copilot-generated overview metadata.
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS / "Utils"))
@@ -4142,70 +4146,82 @@ def api_icon_mappings():
     Supports query parameter ``provider`` (azure|aws|gcp|all).
     Defaults to ``all`` so a single fetch covers mixed-provider diagrams.
     
-    Results are cached in memory for 1 hour to avoid expensive filesystem searches.
+    Results are cached globally in memory for the lifetime of the server.
+    First request will take ~5 mins to build cache, subsequent requests return instantly.
     """
-    # Simple in-memory cache (reset on server restart)
-    cache_key = f"icon_mappings_{request.args.get('provider', 'all')}"
-    if hasattr(api_icon_mappings, '_cache') and cache_key in api_icon_mappings._cache:
-        cached_result, cached_time = api_icon_mappings._cache[cache_key]
-        if time.time() - cached_time < 3600:  # 1 hour cache
-            return jsonify(cached_result)
+    global _ICON_MAP_CACHE
+    
+    provider = (request.args.get("provider") or "all").strip().lower()
+    cache_key = f"icon_mappings_{provider}"
+    
+    # Fast path: return cached result if available
+    if cache_key in _ICON_MAP_CACHE:
+        app.logger.debug(f"Returning cached icon mappings for {provider}")
+        return jsonify(_ICON_MAP_CACHE[cache_key])
     
     try:
-        provider = (request.args.get("provider") or "all").strip().lower()
+        with _ICON_MAP_LOCK:
+            # Double-check cache after acquiring lock (another thread may have built it)
+            if cache_key in _ICON_MAP_CACHE:
+                return jsonify(_ICON_MAP_CACHE[cache_key])
+            
+            # Build icon map for this provider
+            sys.path.insert(0, str(REPO_ROOT))
+            from Scripts.Generate.icon_resolver import (  # type: ignore
+                AZURE_RESOURCE_TYPE_TO_ICON,
+                AWS_RESOURCE_TYPE_TO_ICON,
+                GCP_RESOURCE_TYPE_TO_ICON,
+                KUBERNETES_RESOURCE_TYPE_TO_ICON,
+                OTHER_RESOURCE_TYPE_TO_ICON,
+                get_icon_path,
+                ICONS_ROOT,
+            )
 
-        sys.path.insert(0, str(REPO_ROOT))
-        from Scripts.Generate.icon_resolver import (  # type: ignore
-            AZURE_RESOURCE_TYPE_TO_ICON,
-            AWS_RESOURCE_TYPE_TO_ICON,
-            GCP_RESOURCE_TYPE_TO_ICON,
-            KUBERNETES_RESOURCE_TYPE_TO_ICON,
-            OTHER_RESOURCE_TYPE_TO_ICON,
-            get_icon_path,
-            ICONS_ROOT,
-        )
+            provider_map = {
+                "azure":      ("azure",      AZURE_RESOURCE_TYPE_TO_ICON),
+                "aws":        ("aws",        AWS_RESOURCE_TYPE_TO_ICON),
+                "gcp":        ("gcp",        GCP_RESOURCE_TYPE_TO_ICON),
+                "kubernetes": ("kubernetes", KUBERNETES_RESOURCE_TYPE_TO_ICON),
+                "other":      ("other",      OTHER_RESOURCE_TYPE_TO_ICON),
+            }
 
-        provider_map = {
-            "azure":      ("azure",      AZURE_RESOURCE_TYPE_TO_ICON),
-            "aws":        ("aws",        AWS_RESOURCE_TYPE_TO_ICON),
-            "gcp":        ("gcp",        GCP_RESOURCE_TYPE_TO_ICON),
-            "kubernetes": ("kubernetes", KUBERNETES_RESOURCE_TYPE_TO_ICON),
-            "other":      ("other",      OTHER_RESOURCE_TYPE_TO_ICON),
-        }
+            icon_map: dict = {}
 
-        icon_map: dict = {}
+            if provider == "all":
+                providers_to_merge = list(provider_map.values())
+            else:
+                entry = provider_map.get(provider)
+                providers_to_merge = [entry] if entry else list(provider_map.values())
 
-        if provider == "all":
-            providers_to_merge = list(provider_map.values())
-        else:
-            entry = provider_map.get(provider)
-            providers_to_merge = [entry] if entry else list(provider_map.values())
+            app.logger.info(f"Building icon map for provider={provider}")
+            start_time = time.time()
+            
+            # Build icon map with native file URLs instead of base64 data URIs
+            for pname, mapping in providers_to_merge:
+                for resource_type in mapping:
+                    if resource_type in icon_map:
+                        continue  # earlier provider (Azure) stays canonical
+                    icon_file = get_icon_path(resource_type, pname)
+                    if icon_file and icon_file.exists():
+                        try:
+                            # Return relative path that works from web root
+                            # Convert absolute path to /static/assets/icons/... URL
+                            rel_path = icon_file.relative_to(REPO_ROOT / "web")
+                            icon_url = f"/{rel_path.as_posix()}"
+                            icon_map[resource_type] = icon_url
+                        except Exception as e:
+                            app.logger.warning(f"Failed to map icon URL for {resource_type}: {e}")
+                            pass
 
-        # Build icon map with native file URLs instead of base64 data URIs
-        for pname, mapping in providers_to_merge:
-            for resource_type in mapping:
-                if resource_type in icon_map:
-                    continue  # earlier provider (Azure) stays canonical
-                icon_file = get_icon_path(resource_type, pname)
-                if icon_file and icon_file.exists():
-                    try:
-                        # Return relative path that works from web root
-                        # Convert absolute path to /static/assets/icons/... URL
-                        rel_path = icon_file.relative_to(REPO_ROOT / "web")
-                        icon_url = f"/{rel_path.as_posix()}"
-                        icon_map[resource_type] = icon_url
-                    except Exception as e:
-                        app.logger.warning(f"Failed to map icon URL for {resource_type}: {e}")
-                        pass
-
-        # Cache the result
-        if not hasattr(api_icon_mappings, '_cache'):
-            api_icon_mappings._cache = {}
-        api_icon_mappings._cache[cache_key] = (icon_map, time.time())
-
-        return jsonify(icon_map)
+            elapsed = time.time() - start_time
+            app.logger.info(f"Built icon map for {provider}: {len(icon_map)} mappings in {elapsed:.1f}s")
+            
+            # Cache the result
+            _ICON_MAP_CACHE[cache_key] = icon_map
+            return jsonify(icon_map)
+            
     except Exception as exc:
-        app.logger.exception("icon_mappings error for provider %s", request.args.get("provider", "all"))
+        app.logger.exception("icon_mappings error for provider %s", provider)
         return jsonify({"error": f"Failed to get icon mappings: {str(exc)}"}), 500
 
 

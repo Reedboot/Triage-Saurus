@@ -237,7 +237,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Status bar ── */
 .status-bar { display: none; margin-top: 8px; align-items: center; gap: 8px; font-size: 0.8rem; flex-direction: row; }
 .status-bar.visible { display: flex; }
-.status-text { color: var(--text-muted); }
+.status-text { color: var(--text-muted); white-space: nowrap; }
 .status-text.success { color: var(--green); }
 .status-text.error   { color: var(--red); }
 
