@@ -4033,7 +4033,7 @@ class HierarchicalDiagramBuilder:
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
-            lines.insert(0, '  internet[/"Internet"/]')
+            lines.insert(0, '  internet[/"🌐 Internet"/]')
 
         return lines
     

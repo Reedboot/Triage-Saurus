@@ -1042,32 +1042,57 @@ def _find_icon_file(category: str, icon_name: str, provider: str = 'azure') -> O
             category_path = category_path / 'SVG'
         elif (category_path / 'PNG').exists():
             category_path = category_path / 'PNG'
+    elif provider.lower() == 'azure':
+        # Azure: prefer PNG files from 'png/' subdirectory if available
+        png_subdir = category_path / 'png'
+        if png_subdir.exists():
+            png_files_in_subdir = sorted(png_subdir.rglob("*.png"))
+            if png_files_in_subdir:
+                # Check for direct match in png subdirectory first
+                icon_name_lower = icon_name.lower()
+                for icon_file in png_files_in_subdir:
+                    if icon_file.stem.lower() == icon_name_lower:
+                        return icon_file
     
-    # Collect icon files
+    # Collect icon files - prioritize PNG over SVG
     icon_name_lower = icon_name.lower()
-    all_files = sorted(category_path.glob("*.svg")) + sorted(category_path.glob("*.png"))
+    png_files = sorted(category_path.glob("*.png"))
+    svg_files = sorted(category_path.glob("*.svg"))
+    all_files = png_files + svg_files
     
     if not all_files:
         return None
     
-    # First pass: exact match (case-insensitive)
-    for icon_file in all_files:
+    # First pass: exact match (case-insensitive) - PNG preferred
+    for icon_file in png_files:
+        if icon_file.stem.lower() == icon_name_lower:
+            return icon_file
+    for icon_file in svg_files:
         if icon_file.stem.lower() == icon_name_lower:
             return icon_file
     
-    # Second pass: find files containing all words from icon_name
-    word_matches = []
-    for icon_file in all_files:
+    # Second pass: find files containing all words from icon_name - PNG preferred
+    png_word_matches = []
+    svg_word_matches = []
+    for icon_file in png_files:
         filename_lower = icon_file.stem.lower()
         words = [w for w in icon_name_lower.split('-') if w]
         if all(word in filename_lower for word in words):
-            word_matches.append(icon_file)
+            png_word_matches.append(icon_file)
     
-    if word_matches:
-        return word_matches[0]
+    for icon_file in svg_files:
+        filename_lower = icon_file.stem.lower()
+        words = [w for w in icon_name_lower.split('-') if w]
+        if all(word in filename_lower for word in words):
+            svg_word_matches.append(icon_file)
     
-    # Fallback: return first file in category
-    return all_files[0] if all_files else None
+    if png_word_matches:
+        return png_word_matches[0]
+    if svg_word_matches:
+        return svg_word_matches[0]
+    
+    # Fallback: return first file in category (PNG preferred)
+    return png_files[0] if png_files else (svg_files[0] if svg_files else None)
 
 
 @lru_cache(maxsize=512)
@@ -1075,11 +1100,11 @@ def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     """Smart icon discovery: search across all categories for matching icon.
     
     Used as fallback when curated mapping doesn't exist.
-    Searches all categories for a matching icon file.
+    Searches all categories for a matching icon file (PNG preferred over SVG).
     
     Examples:
-        _discover_icon_by_name('dynamodb', 'aws') → finds aws/Arch_*/dynamodb.svg
-        _discover_icon_by_name('storage-account', 'azure') → finds azure/*/storage-account.svg
+        _discover_icon_by_name('dynamodb', 'aws') → finds aws/Arch_*/dynamodb.png or .svg
+        _discover_icon_by_name('storage-account', 'azure') → finds azure/*/storage-account.png or .svg
     """
     provider_path = ICONS_ROOT / provider
     if not provider_path.exists():
@@ -1087,12 +1112,21 @@ def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     
     icon_name_lower = icon_name.lower()
     
-    # Search all SVG files in provider directory
+    # Search PNG files first (preferred format)
+    for icon_file in sorted(provider_path.rglob('*.png')):
+        if icon_file.stem.lower() == icon_name_lower:
+            return icon_file
+    
+    # Search SVG files as fallback
     for icon_file in sorted(provider_path.rglob('*.svg')):
         if icon_file.stem.lower() == icon_name_lower:
             return icon_file
     
-    # Fallback: partial match (first file containing icon_name)
+    # Fallback: partial match (PNG files first)
+    for icon_file in sorted(provider_path.rglob('*.png')):
+        if icon_name_lower in icon_file.stem.lower():
+            return icon_file
+    
     for icon_file in sorted(provider_path.rglob('*.svg')):
         if icon_name_lower in icon_file.stem.lower():
             return icon_file
