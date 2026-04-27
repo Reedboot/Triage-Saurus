@@ -4136,12 +4136,21 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
 def api_icon_mappings():
     """Return icon mappings for Mermaid diagram nodes as file URLs.
 
-    Maps resource types (e.g. 'aws_security_group') to static file URLs (SVG).
+    Maps resource types (e.g. 'aws_security_group') to static file URLs (SVG/PNG).
     This allows the client-side icon injector to load icons directly into Mermaid SVGs
     using native file serving (cached by browsers, no base64 overhead).
     Supports query parameter ``provider`` (azure|aws|gcp|all).
     Defaults to ``all`` so a single fetch covers mixed-provider diagrams.
+    
+    Results are cached in memory for 1 hour to avoid expensive filesystem searches.
     """
+    # Simple in-memory cache (reset on server restart)
+    cache_key = f"icon_mappings_{request.args.get('provider', 'all')}"
+    if hasattr(api_icon_mappings, '_cache') and cache_key in api_icon_mappings._cache:
+        cached_result, cached_time = api_icon_mappings._cache[cache_key]
+        if time.time() - cached_time < 3600:  # 1 hour cache
+            return jsonify(cached_result)
+    
     try:
         provider = (request.args.get("provider") or "all").strip().lower()
 
@@ -4188,6 +4197,11 @@ def api_icon_mappings():
                     except Exception as e:
                         app.logger.warning(f"Failed to map icon URL for {resource_type}: {e}")
                         pass
+
+        # Cache the result
+        if not hasattr(api_icon_mappings, '_cache'):
+            api_icon_mappings._cache = {}
+        api_icon_mappings._cache[cache_key] = (icon_map, time.time())
 
         return jsonify(icon_map)
     except Exception as exc:
