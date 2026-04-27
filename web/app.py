@@ -4147,7 +4147,7 @@ def api_icon_mappings():
     Defaults to ``all`` so a single fetch covers mixed-provider diagrams.
     
     Results are cached globally in memory for the lifetime of the server.
-    First request will take ~5 mins to build cache, subsequent requests return instantly.
+    First request builds cache using bulk filesystem walk (fast), subsequent requests instant.
     """
     global _ICON_MAP_CACHE
     
@@ -4156,7 +4156,6 @@ def api_icon_mappings():
     
     # Fast path: return cached result if available
     if cache_key in _ICON_MAP_CACHE:
-        app.logger.debug(f"Returning cached icon mappings for {provider}")
         return jsonify(_ICON_MAP_CACHE[cache_key])
     
     try:
@@ -4165,56 +4164,25 @@ def api_icon_mappings():
             if cache_key in _ICON_MAP_CACHE:
                 return jsonify(_ICON_MAP_CACHE[cache_key])
             
-            # Build icon map for this provider
+            # Build icon map using fast bulk function
             sys.path.insert(0, str(REPO_ROOT))
-            from Scripts.Generate.icon_resolver import (  # type: ignore
-                AZURE_RESOURCE_TYPE_TO_ICON,
-                AWS_RESOURCE_TYPE_TO_ICON,
-                GCP_RESOURCE_TYPE_TO_ICON,
-                KUBERNETES_RESOURCE_TYPE_TO_ICON,
-                OTHER_RESOURCE_TYPE_TO_ICON,
-                get_icon_path,
-                ICONS_ROOT,
-            )
+            from Scripts.Generate.icon_resolver import build_icon_map_bulk  # type: ignore
 
-            provider_map = {
-                "azure":      ("azure",      AZURE_RESOURCE_TYPE_TO_ICON),
-                "aws":        ("aws",        AWS_RESOURCE_TYPE_TO_ICON),
-                "gcp":        ("gcp",        GCP_RESOURCE_TYPE_TO_ICON),
-                "kubernetes": ("kubernetes", KUBERNETES_RESOURCE_TYPE_TO_ICON),
-                "other":      ("other",      OTHER_RESOURCE_TYPE_TO_ICON),
-            }
-
-            icon_map: dict = {}
-
-            if provider == "all":
-                providers_to_merge = list(provider_map.values())
-            else:
-                entry = provider_map.get(provider)
-                providers_to_merge = [entry] if entry else list(provider_map.values())
-
-            app.logger.info(f"Building icon map for provider={provider}")
+            app.logger.info(f"Building icon map for provider={provider} using bulk walk")
             start_time = time.time()
             
-            # Build icon map with native file URLs instead of base64 data URIs
-            for pname, mapping in providers_to_merge:
-                for resource_type in mapping:
-                    if resource_type in icon_map:
-                        continue  # earlier provider (Azure) stays canonical
-                    icon_file = get_icon_path(resource_type, pname)
-                    if icon_file and icon_file.exists():
-                        try:
-                            # Return relative path that works from web root
-                            # Convert absolute path to /static/assets/icons/... URL
-                            rel_path = icon_file.relative_to(REPO_ROOT / "web")
-                            icon_url = f"/{rel_path.as_posix()}"
-                            icon_map[resource_type] = icon_url
-                        except Exception as e:
-                            app.logger.warning(f"Failed to map icon URL for {resource_type}: {e}")
-                            pass
+            icon_map: dict = {}
+            
+            if provider == "all":
+                # Merge all providers
+                for prov in ['azure', 'aws', 'gcp', 'kubernetes', 'other']:
+                    prov_map = build_icon_map_bulk(prov)
+                    icon_map.update(prov_map)
+            else:
+                icon_map = build_icon_map_bulk(provider)
 
             elapsed = time.time() - start_time
-            app.logger.info(f"Built icon map for {provider}: {len(icon_map)} mappings in {elapsed:.1f}s")
+            app.logger.info(f"Built icon map for {provider}: {len(icon_map)} mappings in {elapsed:.2f}s")
             
             # Cache the result
             _ICON_MAP_CACHE[cache_key] = icon_map

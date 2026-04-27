@@ -1291,6 +1291,85 @@ def get_fallback_icon_data_uri(provider: str = 'azure') -> Optional[str]:
     return None
 
 
+def build_icon_map_bulk(provider: str = 'azure') -> dict:
+    """Build a complete icon map for a provider by walking the filesystem once.
+    
+    This is much faster than calling get_icon_path() for each resource individually,
+    since it walks the directory tree once instead of repeatedly.
+    
+    Args:
+        provider: Cloud provider ('azure', 'aws', 'gcp', 'kubernetes', 'other')
+    
+    Returns:
+        Dict mapping resource_type -> icon_url (e.g., '/static/assets/icons/azure/web/png/app-service/app-service.png')
+    """
+    icon_map = {}
+    provider_root = ICONS_ROOT / provider
+    
+    if not provider_root.exists():
+        return icon_map
+    
+    # Get the mapping dict for this provider
+    if provider == 'azure':
+        resource_mapping = AZURE_RESOURCE_TYPE_TO_ICON
+    elif provider == 'aws':
+        resource_mapping = AWS_RESOURCE_TYPE_TO_ICON
+    elif provider == 'gcp':
+        resource_mapping = GCP_RESOURCE_TYPE_TO_ICON
+    elif provider == 'kubernetes':
+        resource_mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
+    else:
+        resource_mapping = OTHER_RESOURCE_TYPE_TO_ICON
+    
+    # Walk the provider's icon directory once
+    icon_files_by_name = {}  # {icon_name_lower: [list of Path objects]}
+    
+    for icon_file in provider_root.rglob("*"):
+        if icon_file.is_file() and icon_file.suffix.lower() in ('.png', '.svg'):
+            # Store by filename (without extension)
+            name_lower = icon_file.stem.lower()
+            if name_lower not in icon_files_by_name:
+                icon_files_by_name[name_lower] = []
+            icon_files_by_name[name_lower].append(icon_file)
+    
+    # Sort files so PNG is preferred over SVG
+    for name in icon_files_by_name:
+        icon_files_by_name[name].sort(key=lambda p: (p.suffix.lower() != '.png', str(p)))
+    
+    # Map each resource type to its best icon file
+    for resource_type, (category, icon_name) in resource_mapping.items():
+        icon_name_lower = icon_name.lower()
+        
+        # Try exact match first
+        if icon_name_lower in icon_files_by_name:
+            icon_file = icon_files_by_name[icon_name_lower][0]
+            try:
+                rel_path = icon_file.relative_to(provider_root.parent)
+                icon_url = f"/{rel_path.as_posix()}"
+                icon_map[resource_type] = icon_url
+                continue
+            except Exception:
+                pass
+        
+        # Try word-based match
+        words = [w for w in icon_name_lower.split('-') if w]
+        best_match = None
+        for name, files in icon_files_by_name.items():
+            if all(word in name for word in words):
+                best_match = files[0]  # Already sorted (PNG first)
+                break
+        
+        if best_match:
+            try:
+                rel_path = best_match.relative_to(provider_root.parent)
+                icon_url = f"/{rel_path.as_posix()}"
+                icon_map[resource_type] = icon_url
+            except Exception:
+                pass
+    
+    return icon_map
+
+
 # Kubernetes resource type to icon mappings
 # Icons are stored in web/static/assets/icons/kubernetes/
 KUBERNETES_RESOURCE_TYPE_TO_ICON = {
