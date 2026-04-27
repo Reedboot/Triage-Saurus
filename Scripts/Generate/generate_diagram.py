@@ -2857,9 +2857,19 @@ class HierarchicalDiagramBuilder:
         # Remove existing emoji to avoid duplicates
         label = re.sub(r'[\U0001F300-\U0001F9FF]+\s*', '', label).strip()
         
-        # Add emoji icon for resource type
-        emoji = self._get_emoji_for_resource(resource)
-        label = f"{emoji} {label}"
+        # Get resource type and provider for CSS class
+        resource_type = resource.get('resource_type', '').lower()
+        provider = _detect_provider_from_resource(resource)
+        
+        # Build icon class name for PNG icon injection
+        # Convert resource_type (e.g., 'azurerm_app_service') to CSS class form (e.g., 'icon_azurerm_app_service')
+        icon_class = f"icon_{resource_type}" if resource_type else ""
+        
+        # Only add emoji if we're NOT using icon class
+        # (Mermaid doesn't allow emoji in labels when class suffix is applied)
+        if not icon_class:
+            emoji = self._get_emoji_for_resource(resource)
+            label = f"{emoji} {label}"
         
         label = self._wrap_mermaid_label(label)
 
@@ -2872,14 +2882,6 @@ class HierarchicalDiagramBuilder:
         self.emitted_nodes.add(name)
         # Store UUID mapping for this resource name so connections use the correct ID
         self.node_id_override[name] = node_id
-        
-        # Get resource type and provider for CSS class
-        resource_type = resource.get('resource_type', '').lower()
-        provider = _detect_provider_from_resource(resource)
-        
-        # Build icon class name for PNG icon injection
-        # Convert resource_type (e.g., 'azurerm_app_service') to CSS class form (e.g., 'icon_azurerm_app_service')
-        icon_class = f"icon_{resource_type}" if resource_type else ""
         
         # Build node definition with icon class for PNG injection
         if icon_class:
