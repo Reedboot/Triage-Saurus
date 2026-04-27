@@ -1922,7 +1922,7 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph data_tier["💾 Data Tier"]')
+        lines.append('  subgraph data_tier["Data Tier"]')
 
         for res in sql_resources:
             lines.extend(self.render_sql_hierarchy([res], indent="    "))
@@ -1989,7 +1989,7 @@ class HierarchicalDiagramBuilder:
             return []
         
         lines: List[str] = []
-        lines.append('  subgraph network_tier["🌐 Network Tier"]')
+        lines.append('  subgraph network_tier["Network Tier"]')
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
@@ -2643,7 +2643,7 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph app_tier["⚙️ Application Tier"]')
+        lines.append('  subgraph app_tier["Application Tier"]')
 
         for app in app_resources:
             app_name = app['resource_name']
@@ -3993,7 +3993,7 @@ class HierarchicalDiagramBuilder:
 
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
-            lines.insert(0, '  internet[/"🌍 Internet"/]')
+            lines.insert(0, '  internet[/"Internet"/]')
 
         return lines
     
