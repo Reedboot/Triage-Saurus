@@ -140,8 +140,87 @@
 - Read the relevant provider file under `Knowledge/` (e.g., `Knowledge/Azure.md`).
 - Infer resource types from services listed under `Knowledge/`.
 - Draw diagrams **from the internet inwards** (request flow / access paths).
-- Prefer **top-down** layout for readability on reviews (`flowchart TB`).
+- **Prefer `architecture-beta` diagram type for cloud architecture** (see "Diagram Types" section below)
+- If using legacy `flowchart`, prefer **top-down** layout for readability on reviews (`flowchart TB`).
 - **Line breaks in node labels:** Use `<br/>` not `\n` for proper rendering.
+
+## Diagram Types
+
+### Primary: `architecture-beta` (RECOMMENDED)
+**The `architecture-beta` diagram type provides professional, logo-based rendering with native cloud provider icons.**
+
+**Syntax:**
+```mermaid
+architecture-beta
+    service api(logos:aws-api-gateway)[API Gateway]
+    service lambda(logos:aws-lambda)[Lambda Function]
+    service db(logos:aws-dynamodb)[Database]
+    
+    api:R --> L:lambda
+    lambda:R --> L:db
+```
+
+**Advantages:**
+- ✅ **Native cloud provider logos** - Each service displays with its official icon (AWS, Azure, GCP, Kubernetes, etc.)
+- ✅ **Professional appearance** - Clean, standardized visual representation
+- ✅ **Simpler syntax** - No manual icon/emoji management
+- ✅ **Automatic layout hints** - Directional anchors (`:R --> L:`, `:B --> T:`) control diagram flow
+
+**Logo Format:**
+- **Syntax:** `service id(logos:LOGO_NAME)[label]`
+- **Logo names follow SimpleIcons format** (hyphenated, lowercase): `aws-lambda`, `azure-app-service`, `kubernetes`, etc.
+- **Common logos:**
+  - **AWS:** `aws-lambda`, `aws-api-gateway`, `aws-dynamodb`, `aws-rds`, `aws-s3`, `aws-sns`, `aws-sqs`, `aws-kinesis`, `aws-ecs`, `aws-ec2`, `aws-iam`, `aws-cloudformation`, `aws-route53`, `aws-cloudfront`
+  - **Azure:** `azure-app-service`, `azure-storage`, `azure-sql-database`, `azure-app-service-plan`, `azure-key-vault`, `azure-api-management`, `azure-application-gateway`, `azure-container-registry`, `azure-kubernetes-service`, `microsoft-sql-server`
+  - **GCP:** `google-cloud-run`, `google-cloud-storage`, `google-cloud-sql`, `google-kubernetes-engine`, `google-cloud-functions`, `google-cloud-platform` (fallback)
+  - **Kubernetes:** `kubernetes`, `helm`
+  - **Other:** `nextjs`, `react`, `node-dot-js`, `python`, `docker`, `redis`, `mongodb`, `postgresql`, `elasticsearch`
+- **Fallback logic:** If exact logo not found, system falls back to provider prefix (e.g., `azure` for unknown Azure resources) then to generic `cloud` logo
+
+**Directional Anchors (Control Flow):**
+- `:R --> L:` - Right to Left (service flows left)
+- `:L --> R:` - Left to Right (service flows right)
+- `:T --> B:` - Top to Bottom (service flows down)
+- `:B --> T:` - Bottom to Top (service flows up)
+
+**Example with multiple services:**
+```mermaid
+architecture-beta
+    service internet(logos:globalsign)[Internet]
+    service lb(logos:aws-elb)[Load Balancer]
+    service api(logos:aws-api-gateway)[API Gateway]
+    service auth(logos:aws-lambda)[Auth Service]
+    service db(logos:aws-dynamodb)[Auth DB]
+    
+    internet:R --> L:lb
+    lb:B --> T:api
+    api:R --> L:auth
+    auth:R --> L:db
+```
+
+**Edge Labels (CAUTION):**
+- ⚠️ **Edge labels may have limited support in architecture-beta**
+- If labels don't render, flatten them into node names instead: `Auth Service<br/>(HTTPS)` instead of `|HTTPS|` on edge
+- Always test edge labels before committing diagrams
+
+### Fallback: `flowchart` (Legacy)
+Use `flowchart TB` if `architecture-beta` doesn't meet needs (e.g., complex custom layouts, specific label requirements).
+
+**Syntax:**
+```mermaid
+flowchart TB
+    API["🔗 API Gateway"]
+    Lambda["⚡ Lambda Function"]
+    DB["💾 Database"]
+    
+    API -->|request| Lambda
+    Lambda -->|query| DB
+```
+
+**When to use flowchart:**
+- Complex custom layouts not suited for architecture-beta
+- Diagrams requiring specific label control
+- Backward compatibility with existing documentation
 
 ## Key Accuracy Rules (from Experiment 001 feedback)
 
