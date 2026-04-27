@@ -2877,8 +2877,15 @@ class HierarchicalDiagramBuilder:
         resource_type = resource.get('resource_type', '').lower()
         provider = _detect_provider_from_resource(resource)
         
-        # Build node definition (emoji icon in label, no CSS class needed)
-        node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
+        # Build icon class name for PNG icon injection
+        # Convert resource_type (e.g., 'azurerm_app_service') to CSS class form (e.g., 'icon_azurerm_app_service')
+        icon_class = f"icon_{resource_type}" if resource_type else ""
+        
+        # Build node definition with icon class for PNG injection
+        if icon_class:
+            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]:::{icon_class}"
+        else:
+            node_def = f"{indent}{node_id}[{self._quote_mermaid_label(label)}]"
         
         return node_def
     
