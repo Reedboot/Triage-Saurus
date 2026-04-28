@@ -285,6 +285,7 @@ class HierarchicalDiagramBuilder:
         
         - For file paths (contains '/'), use just the last path component (filename).
         - Truncate anything over 35 characters to 35 + '…' so text fits in rendered boxes.
+        - Only replace underscores with spaces if truncating to save space.
         """
         text = re.sub(r'\s+', ' ', str(label or '').strip())
         if not text:
@@ -296,10 +297,16 @@ class HierarchicalDiagramBuilder:
             if parts:
                 text = parts[-1]
         
-        normalized = text.replace('_', ' ').replace('/', ' / ')
-        # Truncate at 35 chars to ensure text fits in rendered diagram boxes
-        if len(normalized) > 35:
-            normalized = normalized[:34] + '…'
+        # Only replace underscores if label is too long (to save space during truncation)
+        # Otherwise keep underscores for readability (e.g., app_files_dev stays as-is)
+        if len(text) > 35:
+            normalized = text.replace('_', ' ').replace('/', ' / ')
+            # Truncate at 35 chars to ensure text fits in rendered diagram boxes
+            if len(normalized) > 35:
+                normalized = normalized[:34] + '…'
+        else:
+            # Short labels: keep as-is for better readability
+            normalized = text
         return normalized
 
     def _quote_mermaid_label(self, label: str) -> str:
@@ -2957,8 +2964,10 @@ class HierarchicalDiagramBuilder:
             # Try to embed HTML img tag for icon
             icon_url = _get_icon_svg_url(resource_type, provider)
             if icon_url:
+                # Truncate label to fit in node
+                wrapped_label = self._wrap_mermaid_label(label)
                 # Escape label for HTML content
-                safe_label = (label or '').replace('\\', '\\\\').replace('"', '\\"').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                safe_label = (wrapped_label or '').replace('\\', '\\\\').replace('"', '\\"').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 # Use single quotes for style attributes to avoid escaping issues with double quotes
                 # aspect-ratio and object-fit ensure icons maintain square proportions
                 html = f"<div style='text-align:center;padding:2px'><img src='{icon_url}' style='width:36px;height:36px;aspect-ratio:1/1;object-fit:contain;margin-bottom:2px;border-radius:2px'/><div style='font-size:0.85em;word-wrap:break-word;white-space:normal'>{safe_label}</div></div>"

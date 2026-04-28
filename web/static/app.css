@@ -646,7 +646,6 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 }
 .mermaid foreignObject > div {
   overflow: visible;
- /* white-space: normal !important; /* override inline nowrap from Mermaid so labels can wrap */
   word-break: break-word !important;
 }
 
@@ -683,12 +682,30 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .mermaid svg text {
   word-break: break-word !important;
   overflow-wrap: break-word !important;
-  max-width: 200px;
+  max-width: 280px;
+}
+
+/* Constrain divs inside foreignObject (blob/file labels) */
+.mermaid foreignObject > div > div {
+  max-width: 250px !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
 }
 
 /* Increase width for edge labels (foreignObject) to prevent unnecessary wrapping */
 .mermaid svg foreignObject {
   min-width: 140px;
+}
+
+/* Increase width for subgraph labels */
+.mermaid svg .subgraphTitle {
+  max-width: 280px !important;
+}
+
+/* Ensure subgraph containers have proper padding for text */
+.mermaid svg .cluster {
+  padding: 12px !important;
 }
 
 /* Ensure the diagram zoom inner and views fill available space so Mermaid doesn't leave gaps */

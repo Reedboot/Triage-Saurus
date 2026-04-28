@@ -10627,7 +10627,12 @@ def scan_001_diagram():
             startOnLoad: true, 
             theme: 'dark',
             securityLevel: 'loose',
-            flowchart: {{ useMaxWidth: false, htmlLabels: true }},
+            flowchart: {{ 
+                useMaxWidth: false, 
+                htmlLabels: true,
+                nodeSpacing: 60,
+                rankSpacing: 100
+            }},
             pan: true,
             zoom: true
         }});
