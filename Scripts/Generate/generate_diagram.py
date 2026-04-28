@@ -228,6 +228,8 @@ class HierarchicalDiagramBuilder:
         # Azure PublicIP → NIC binding edges: collected during compute node rendering,
         # emitted in the edges section so they appear outside subgraph definitions.
         self._azure_ip_nic_edges: List[tuple] = []  # list of (pip_resource, nic_resource)
+        # Track which nodes belong to which tier for styling (without tier subgraph wrappers)
+        self._tier_nodes: Dict[str, List[str]] = {}
 
     def _assign_resource_by_name(self, name: str, resource: dict) -> None:
         """Assign a resource into resource_by_name; preserve duplicates as lists."""
@@ -1878,7 +1880,7 @@ class HierarchicalDiagramBuilder:
 
         return lines
 
-    def _render_nested_resource(self, resource: dict, indent: str = "  ") -> List[str]:
+    def _render_nested_resource(self, resource: dict, indent: str = "  ", tier_id: str = None) -> List[str]:
         """Render a resource as a nested subgraph when it has children."""
         name = resource['resource_name']
         node_id = sanitize_id(name)
@@ -1890,13 +1892,25 @@ class HierarchicalDiagramBuilder:
             return []
 
         if not children:
-            return [self.render_node(resource, indent=indent)]
+            result = [self.render_node(resource, indent=indent)]
+            # Track this leaf node in tier if tier_id specified
+            if tier_id and hasattr(self, '_tier_nodes'):
+                if tier_id not in self._tier_nodes:
+                    self._tier_nodes[tier_id] = []
+                self._tier_nodes[tier_id].append(name)
+            return result
 
         # Check if we're about to create a duplicate subgraph ID  
         # (e.g., parent named "X" and child also named "X" = node_id collision)
         if node_id in self._emitted_mermaid_ids:
             # Can't render as subgraph, render as simple node instead
-            return [self.render_node(resource, indent=indent)]
+            result = [self.render_node(resource, indent=indent)]
+            # Track this node in tier if tier_id specified
+            if tier_id and hasattr(self, '_tier_nodes'):
+                if tier_id not in self._tier_nodes:
+                    self._tier_nodes[tier_id] = []
+                self._tier_nodes[tier_id].append(name)
+            return result
 
         lines: List[str] = []
         # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
@@ -1908,6 +1922,12 @@ class HierarchicalDiagramBuilder:
         self.subgraph_nodes.add(name)
         if node_id not in self._node_id_first_owner:
             self._node_id_first_owner[node_id] = str(resource_id)
+        
+        # Track this parent node in tier if tier_id specified
+        if tier_id and hasattr(self, '_tier_nodes'):
+            if tier_id not in self._tier_nodes:
+                self._tier_nodes[tier_id] = []
+            self._tier_nodes[tier_id].append(name)
 
         # Determine if this parent is a storage resource — cloud functions must not be
         # nested inside storage buckets (a function's zip file lives in a bucket, but the
@@ -1931,14 +1951,18 @@ class HierarchicalDiagramBuilder:
                     continue
             
             if self.children_by_parent.get(child['id']):
-                lines.extend(self._render_nested_resource(child, indent=indent + "  "))
+                lines.extend(self._render_nested_resource(child, indent=indent + "  ", tier_id=tier_id))
             else:
                 lines.append(self.render_node(child, indent=indent + "  "))
                 self.emitted_nodes.add(child['resource_name'])
+                # Track leaf child in tier if tier_id specified
+                if tier_id and hasattr(self, '_tier_nodes'):
+                    if tier_id not in self._tier_nodes:
+                        self._tier_nodes[tier_id] = []
+                    self._tier_nodes[tier_id].append(child['resource_name'])
 
         lines.append(f'{indent}end')
         self.emitted_nodes.add(name)
-        return lines
         return lines
 
     def render_data_hierarchy(self, sql_resources: List[dict], storage_resources: List[dict]) -> List[str]:
@@ -1947,15 +1971,22 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph data_tier["Data Tier"]')
+        # Track data tier nodes for styling (initialize only this tier, don't clear others)
+        if not hasattr(self, '_tier_nodes'):
+            self._tier_nodes = {}
+        if 'data_tier' not in self._tier_nodes:
+            self._tier_nodes['data_tier'] = []
 
         for res in sql_resources:
-            lines.extend(self.render_sql_hierarchy([res], indent="    "))
+            lines.extend(self.render_sql_hierarchy([res], indent="  "))
+            # Track the resource name (will resolve to actual node ID in render_styles)
+            self._tier_nodes['data_tier'].append(res['resource_name'])
 
         for res in storage_resources:
-            lines.extend(self._render_nested_resource(res, indent="    "))
+            lines.extend(self._render_nested_resource(res, indent="  ", tier_id='data_tier'))
+            # Track the resource name (will resolve to actual node ID in render_styles)
+            self._tier_nodes['data_tier'].append(res['resource_name'])
 
-        lines.append('  end')
         return lines
 
     def is_paas_identity_resource(self, resource: dict) -> bool:
@@ -2014,7 +2045,11 @@ class HierarchicalDiagramBuilder:
             return []
         
         lines: List[str] = []
-        lines.append('  subgraph network_tier["Network Tier"]')
+        # Track network tier nodes for styling (initialize only this tier, don't clear others)
+        if not hasattr(self, '_tier_nodes'):
+            self._tier_nodes = {}
+        if 'network_tier' not in self._tier_nodes:
+            self._tier_nodes['network_tier'] = []
         
         # Group resources by type
         # Match VPC-like resources across providers: vpc, vnet, virtual_network, compute_network (GCP)
@@ -2118,6 +2153,8 @@ class HierarchicalDiagramBuilder:
             self._emitted_mermaid_ids.add(vpc_node_id)
             self._node_id_first_owner[vpc_node_id] = str(vpc_db_id or '')
             self.subgraph_nodes.add(vpc['resource_name'])
+            # Track VPC/vnet in network tier
+            self._tier_nodes['network_tier'].append(vpc['resource_name'])
 
             # Route Tables — shown as nodes inside VPC (the routing decision layer)
             for rt in vpc_rts:
@@ -2216,6 +2253,8 @@ class HierarchicalDiagramBuilder:
                     self._emitted_mermaid_ids.add(subnet_node_id)
                     self._node_id_first_owner[subnet_node_id] = str(subnet_db_id or '')
                     self.subgraph_nodes.add(subnet['resource_name'])
+                    # Track subnet in network tier
+                    self._tier_nodes['network_tier'].append(subnet['resource_name'])
 
                     if sgs_for_subnet:
                         # Render SG as subgraph containing the compute resources it protects.
@@ -2544,7 +2583,6 @@ class HierarchicalDiagramBuilder:
                     self.node_id_override[compute_name] = compute_id
                     self.emitted_nodes.add(compute_name)
         
-        lines.append('  end')
         return lines
     
     def render_compute_hierarchy(self, compute_resources: List[dict], k8s_resources: List[dict] = None) -> List[str]:
@@ -2561,6 +2599,11 @@ class HierarchicalDiagramBuilder:
             k8s_resources = []
         
         lines: List[str] = []
+        # Track application tier nodes for styling (initialize only this tier, don't clear others)
+        if not hasattr(self, '_tier_nodes'):
+            self._tier_nodes = {}
+        if 'app_tier' not in self._tier_nodes:
+            self._tier_nodes['app_tier'] = []
         
         for vm in compute_resources:
             vm_name = vm['resource_name']
@@ -2570,6 +2613,8 @@ class HierarchicalDiagramBuilder:
                 continue
             
             vm_id = sanitize_id(vm_name)
+            # Track VM in app tier
+            self._tier_nodes['app_tier'].append(vm_name)
             
             # Get child resources (NICs, disks, etc.)
             children = self.children_by_parent.get(vm['id'], [])
@@ -2613,6 +2658,8 @@ class HierarchicalDiagramBuilder:
                     if child['resource_name'] not in self.emitted_nodes:
                         lines.append(self.render_node(child, indent="    "))
                         self.emitted_nodes.add(child['resource_name'])
+                        # Track child in app tier
+                        self._tier_nodes['app_tier'].append(child['resource_name'])
                 
                 # Render Docker containers as subgraph
                 if has_containers:
@@ -2638,6 +2685,8 @@ class HierarchicalDiagramBuilder:
                                 self._emitted_mermaid_ids.add(container_id)
                                 self._node_id_first_owner[container_id] = str(container.get('id', ''))
                             self.emitted_nodes.add(container['resource_name'])
+                            # Track container in app tier
+                            self._tier_nodes['app_tier'].append(container['resource_name'])
                     lines.append('    end')
                 
                 # Render Kubernetes workloads inside the compute resource (K8s runs on EC2 worker node)
@@ -2668,7 +2717,11 @@ class HierarchicalDiagramBuilder:
             return []
 
         lines: List[str] = []
-        lines.append('  subgraph app_tier["Application Tier"]')
+        # Track application tier nodes for styling (initialize only this tier, don't clear others)
+        if not hasattr(self, '_tier_nodes'):
+            self._tier_nodes = {}
+        if 'app_tier' not in self._tier_nodes:
+            self._tier_nodes['app_tier'] = []
 
         for app in app_resources:
             app_name = app['resource_name']
@@ -2678,6 +2731,8 @@ class HierarchicalDiagramBuilder:
                 continue
             
             app_id = sanitize_id(app_name)
+            # Track the resource name (will resolve to actual node ID in render_styles)
+            self._tier_nodes['app_tier'].append(app_name)
             children = self.children_by_parent.get(app['id'], [])
 
             # Filter out circular references: if child has parent pointing back to app, skip it
@@ -2695,7 +2750,7 @@ class HierarchicalDiagramBuilder:
 
             if non_circular_children:
                 # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
-                lines.append(f'    subgraph {app_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(app_name))}]')
+                lines.append(f'  subgraph {app_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(app_name))}]')
                 self._emitted_mermaid_ids.add(app_id)
                 self.node_id_override[app_name] = app_id
                 self.subgraph_nodes.add(app_name)
@@ -2704,15 +2759,16 @@ class HierarchicalDiagramBuilder:
                 for child in non_circular_children:
                     # Deduplicate: skip if child already emitted
                     if child['resource_name'] not in self.emitted_nodes:
-                        lines.append(self.render_node(child, indent="      "))
+                        lines.append(self.render_node(child, indent="    "))
                         self.emitted_nodes.add(child['resource_name'])
-                lines.append('    end')
+                        # Track child in app tier
+                        self._tier_nodes['app_tier'].append(child['resource_name'])
+                lines.append('  end')
             else:
-                lines.append(self.render_node(app, indent="    "))
+                lines.append(self.render_node(app, indent="  "))
 
             self.emitted_nodes.add(app_name)
 
-        lines.append('  end')
         return lines
 
     def _get_emoji_for_resource(self, resource: dict) -> str:
@@ -2857,6 +2913,10 @@ class HierarchicalDiagramBuilder:
                 if child_id not in self._emitted_mermaid_ids:
                     self._emitted_mermaid_ids.add(child_id)
                     self._node_id_first_owner[child_id] = str(child.get('id', ''))
+                # Track child in app tier
+                if 'app_tier' not in self._tier_nodes:
+                    self._tier_nodes['app_tier'] = []
+                self._tier_nodes['app_tier'].append(child['resource_name'])
             lines.append(f'{indent}end')
         else:
             if c_id not in self._emitted_mermaid_ids:
@@ -2865,6 +2925,12 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"{indent}{c_id}[{self._quote_mermaid_label(c_label)}]{css_suffix}")
         self.node_id_override[compute['resource_name']] = c_id
         self.emitted_nodes.add(compute['resource_name'])
+        # Track compute node in app tier for styling (don't overwrite existing tiers)
+        if not hasattr(self, '_tier_nodes'):
+            self._tier_nodes = {}
+        if 'app_tier' not in self._tier_nodes:
+            self._tier_nodes['app_tier'] = []
+        self._tier_nodes['app_tier'].append(compute['resource_name'])
 
     def render_node(self, resource: dict, indent: str = "  ") -> str:
         """Render a single node.
@@ -2891,10 +2957,11 @@ class HierarchicalDiagramBuilder:
             # Try to embed HTML img tag for icon
             icon_url = _get_icon_svg_url(resource_type, provider)
             if icon_url:
-                # Escape label and use escaped double quotes for Mermaid 11.14.0 compatibility
+                # Escape label for HTML content
                 safe_label = (label or '').replace('\\', '\\\\').replace('"', '\\"').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                # Use escaped double quotes in style and HTML for Mermaid 11.14.0 compatibility
-                html = f"<div style=\\\"text-align:center;padding:2px\\\"><img src=\\\"{icon_url}\\\" style=\\\"width:36px;height:auto;margin-bottom:2px;border-radius:2px\\\"/><div style=\\\"font-size:0.85em;word-wrap:break-word;white-space:normal\\\">{safe_label}</div></div>"
+                # Use single quotes for style attributes to avoid escaping issues with double quotes
+                # aspect-ratio and object-fit ensure icons maintain square proportions
+                html = f"<div style='text-align:center;padding:2px'><img src='{icon_url}' style='width:36px;height:36px;aspect-ratio:1/1;object-fit:contain;margin-bottom:2px;border-radius:2px'/><div style='font-size:0.85em;word-wrap:break-word;white-space:normal'>{safe_label}</div></div>"
                 node_def = f"{indent}{node_id}[\"{html}\"]"
             else:
                 # Fallback to emoji if no icon found
@@ -5300,11 +5367,9 @@ class HierarchicalDiagramBuilder:
             if not resource:
                 continue
             
-            # Check if resource is publicly exposed (HIGHEST priority)
+            # Check if resource is publicly exposed
+            # Note: Exposure risk is conveyed by yellow dotted arrows from internet node, not by node borders
             if resource_name in self.exposed_resources:
-                # RED: Public internet exposure (CRITICAL) — thick border
-                node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
-                style_by_node_id[node_id] = (999, '#ff6b6b', 3)  # Red, highest priority, thicker border
                 continue
             
             # Get category
@@ -5341,15 +5406,20 @@ class HierarchicalDiagramBuilder:
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
         
-        # Color-code tier subgraphs with thicker borders
+        # Apply tier colors to individual tier nodes (instead of subgraph wrappers)
+        # NOTE: Unlike category styling, tier colors are applied to both nodes AND subgraphs
         tier_colors = {
             'network_tier': '#7e57c2',  # Purple — Network
             'app_tier':     '#0066cc',  # Blue — Application/Compute
             'data_tier':    '#00aa00',  # Green — Data
         }
-        for tier_id, color in tier_colors.items():
-            if tier_id in subgraph_ids:
-                lines.append(f"  style {tier_id} stroke:{color},stroke-width:3px")
+        if hasattr(self, '_tier_nodes'):
+            for tier_id, color in tier_colors.items():
+                if tier_id in self._tier_nodes:
+                    for resource_name in self._tier_nodes[tier_id]:
+                        # Use actual node ID from override, or fallback to resource name
+                        actual_node_id = self.node_id_override.get(resource_name, resource_name)
+                        lines.append(f"  style {actual_node_id} stroke:{color},stroke-width:3px")
         
         return lines
     
@@ -5484,9 +5554,15 @@ def main():
     
     if not providers_to_process:
         # Fallback to single diagram
-        builder = HierarchicalDiagramBuilder(experiment_id, repo_name=args.repo)
+        builder = HierarchicalDiagramBuilder(
+            experiment_id, 
+            repo_name=args.repo,
+            use_embedded_icons=args.persist_db
+        )
         diagram = builder.generate()
-        diagram = _embed_classdefs_in_diagram(diagram, builder)
+        # Only embed classDefs if not using embedded icons
+        if not args.persist_db:
+            diagram = _embed_classdefs_in_diagram(diagram, builder)
         provider = builder.detect_cloud_provider()
         diagram_title = f"{provider} Architecture"
         diagrams = [(provider.lower(), diagram_title, diagram, args.repo)]
@@ -5497,7 +5573,8 @@ def main():
             builder = HierarchicalDiagramBuilder(
                 experiment_id,
                 repo_name=args.repo,
-                provider_filter=provider
+                provider_filter=provider,
+                use_embedded_icons=args.persist_db
             )
             
             # Load data with provider filtering
@@ -5505,7 +5582,9 @@ def main():
             
             if builder.resources:
                 diagram = builder.generate()
-                diagram = _embed_classdefs_in_diagram(diagram, builder)
+                # Only embed classDefs if not using embedded icons
+                if not args.persist_db:
+                    diagram = _embed_classdefs_in_diagram(diagram, builder)
                 # Capitalize provider for display
                 provider_map = {
                     'azure': 'Azure',
@@ -5674,7 +5753,12 @@ def generate_architecture_diagram_with_css(
     )
     diagram = builder.generate()
     
-    # Always generate CSS for icon classes, whether embedded icons or CSS classes
+    # Only generate and embed CSS if NOT using embedded icons
+    if use_embedded_icons:
+        # When using embedded icons, return diagram as-is with no classDefs
+        return diagram, ""
+    
+    # Always generate CSS for icon classes when using CSS classes
     classdefs = builder.generate_icon_css()
     
     if classdefs:

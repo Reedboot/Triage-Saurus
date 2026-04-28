@@ -4165,9 +4165,11 @@ def api_icon_mappings():
         return jsonify({"error": f"Icon cache not found. Run: python3 Scripts/Generate/build_icon_cache.py {provider}"}), 503
     
     try:
-        # Serve the pre-cached JSON
+        # Serve the pre-cached JSON with full paths for fetching
         icon_map = json.loads(cache_file.read_text())
-        return jsonify(icon_map)
+        # Prepend /static/assets/icons to all paths so the icon injector can fetch them
+        full_path_map = {k: f"/static/assets/icons{v}" for k, v in icon_map.items()}
+        return jsonify(full_path_map)
     except Exception as exc:
         app.logger.exception("Failed to serve icon cache for %s", provider)
         return jsonify({"error": f"Failed to read icon cache: {str(exc)}"}), 500
@@ -10330,8 +10332,9 @@ def scan_001_diagram():
             icon = icon_map.get(res_type, '')
             if icon:
                 # Use tight wrapper to constrain image size and prevent stretching
-                # Use double quotes for HTML attributes to avoid Mermaid 11.14.0 parsing issues
-                node_def = f'{res_id}["<div><div style=\\"max-width:40px;margin:0 auto 4px;\\"><img src=\\"/static/assets/icons/azure/{icon}\\" style=\\"width:100%;height:auto;object-fit:contain;\\"/></div><div style=\\"font-size:0.9em;\\\">{res_name}</div></div>"]'
+                # Use single quotes for Mermaid node label, double quotes for HTML attributes
+                html_content = f'<div><div style="max-width:40px;margin:0 auto 4px;"><img src="/static/assets/icons/azure/{icon}" style="width:100%;height:auto;object-fit:contain;"/></div><div style="font-size:0.9em;">{res_name}</div></div>'
+                node_def = f"{res_id}['{html_content}']"
             else:
                 node_def = f'{res_id}["{res_name}"]'
             mermaid_code += f'    {node_def}\n'
@@ -10624,7 +10627,7 @@ def scan_001_diagram():
             startOnLoad: true, 
             theme: 'dark',
             securityLevel: 'loose',
-            flowchart: {{ useMaxWidth: true }},
+            flowchart: {{ useMaxWidth: false, htmlLabels: true }},
             pan: true,
             zoom: true
         }});

@@ -253,7 +253,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Workspace ── */
 .workspace {
   display: grid;
-  grid-template-columns: 1fr 1.4fr;
+  grid-template-columns: 1fr 2fr;
   gap: 10px;
   flex: 1;
 }
@@ -582,12 +582,13 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 
 .diagram-view {
   display: none;
-  padding: 8px;
+  padding: 30px;
   overflow: auto;
   height: 100%;
   width: 100%;
   min-width: 0;
   min-height: 0;
+  background: #1a1a1a;
 }
 .diagram-view.active {
   display: flex;
@@ -595,6 +596,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   align-items: stretch;
   justify-content: stretch;
   overflow: auto;
+  background: #1a1a1a;
 }
 .diagram-view.active .mermaid {
   display: flex;
@@ -604,6 +606,10 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   width: 100%;
   min-width: 0;
   min-height: 100%;
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 0;
+  margin: 0;
 }
 .diagram-view.active .mermaid svg {
   display: block;
@@ -614,20 +620,26 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   margin: 0;
 }
 .diagram-views {
-  min-height: 360px;
-  overflow: auto;
-  height: 100%;
-  width: 100%;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── Mermaid container ── */
-.mermaid { overflow: auto; }
-.mermaid svg { background: transparent !important; max-width: calc(100% - 10px); max-height: calc(100% - 10px); }
+.mermaid { 
+  overflow: auto; 
+  background: #1a1a1a;
+}
+.mermaid svg { 
+  background: #1a1a1a !important; 
+  max-width: 100% !important; 
+  max-height: 100% !important; 
+}
 /* Allow Mermaid to control foreignObject dimensions for proper text rendering */
 .mermaid foreignObject { 
   overflow: visible;
@@ -641,9 +653,9 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .mermaid-container {
   position: relative;
   overflow: hidden;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: #1a1a1a;
+  border: 1px solid #374550;
+  border-radius: 8px;
   min-height: 300px;
 }
 
@@ -653,6 +665,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   cursor: grab;
   width: 100%;
   height: 100%;
+  background: #1a1a1a;
 }
 .mermaid-container .mermaid:active { cursor: grabbing; }
 .mermaid-container .mermaid svg {
@@ -706,8 +719,8 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 /* ── Split layout (post-scan results) ── */
 .split-layout {
   display: grid;
-  /* Give the right (architecture) panel more room: left is flexible, right gets 1.4x space */
-  grid-template-columns: 1fr 1.4fr;
+  /* Give the right (architecture) panel much more room for large diagrams */
+  grid-template-columns: 1fr 2fr;
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -761,7 +774,10 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .split-right .diagram-zoom-wrap {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   width: 100%;
+  height: 100%;
+  position: relative;
 }
 
 .split-left { min-width: 0; }
@@ -1638,7 +1654,6 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   position: relative;
   flex: 1 1 auto;
   overflow: auto;
-  padding: 8px 12px; /* mirror log-panel padding */
   background: var(--bg-base);
   cursor: grab;
   touch-action: none;
@@ -1658,9 +1673,6 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   will-change: transform;
   width: 100%;
   height: 100%;
-  display: grid;
-  place-items: center;
-  transition: transform 0.15s ease-out;
 }
 
 .diagram-zoom-wrap .mermaid svg {
@@ -2242,10 +2254,6 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 }
 
 /* ── Summary tab strip (index.html) ─────────────────────────────── */
-.diagram-views {
-  min-height: 360px;
-  overflow: auto;
-}
 
 .summary-tabs {
   display: none;

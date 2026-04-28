@@ -1102,6 +1102,10 @@
           startOnLoad: false, 
           theme: 'dark',
           securityLevel: 'loose',
+          flowchart: {
+            useMaxWidth: false,
+            htmlLabels: true
+          },
           onError: (err) => {
             console.error('[Mermaid] Rendering error:', err.message);
           }
@@ -1137,6 +1141,10 @@
               startOnLoad: false, 
               theme: 'dark',
               securityLevel: 'loose',
+              flowchart: {
+                useMaxWidth: false,
+                htmlLabels: true
+              },
               onError: (err) => {
                 console.error('[Mermaid] Rendering error:', err.message);
               }

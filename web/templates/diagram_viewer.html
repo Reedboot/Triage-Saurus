@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ diagram_title }} - Mermaid Diagram Viewer</title>
+    <title>{{ diagram_title }} - Architecture Diagram</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <style>
         * {
@@ -13,169 +13,232 @@
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #1a1a1a;
             min-height: 100vh;
-            padding: 20px;
+            padding: 0;
+            margin: 0;
+            color: #e0e0e0;
         }
         
         .container {
-            max-width: 1400px;
-            margin: 0 auto;
+            max-width: none;
+            width: 100%;
+            height: 100vh;
+            margin: 0;
+            background: #2d2d2d;
+            border-radius: 0;
+            box-shadow: none;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
         
         .header {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            background: linear-gradient(135deg, #1e3a5f 0%, #2d5a8c 100%);
+            color: white;
+            padding: 20px 40px;
+            text-align: center;
+            flex-shrink: 0;
         }
         
         .header h1 {
-            color: #333;
+            font-size: 2.5em;
             margin-bottom: 10px;
-            font-size: 28px;
+            font-weight: 700;
         }
         
         .header p {
-            color: #666;
-            font-size: 14px;
+            font-size: 1.1em;
+            opacity: 0.95;
+        }
+        
+        .content {
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+        }
+        
+        .diagram-section {
+            margin-bottom: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            flex: 1;
+        }
+        
+        .diagram-section h2 {
+            font-size: 1.8em;
+            color: #e0e0e0;
+            margin-bottom: 0;
+            padding: 15px 40px;
+            border-bottom: 3px solid #2d5a8c;
+            flex-shrink: 0;
+        }
+        
+        .mermaid {
+            background: #1a1a1a;
+            border-radius: 0;
+            padding: 0;
+            margin: 0;
+            overflow: auto;
+            width: 100%;
+            flex: 1;
+            min-height: auto;
+        }
+        
+        .mermaid svg {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: none !important;
+            max-height: none !important;
+            background: transparent !important;
+        }
+        
+        .mermaid svg foreignObject {
+            overflow: visible !important;
+        }
+        
+        .diagram-description {
+            background: #374550;
+            padding: 20px 40px;
+            border-radius: 0;
+            border-left: 4px solid #2d5a8c;
+            margin-bottom: 20px;
+            margin: 0;
             line-height: 1.6;
+            font-size: 1.05em;
+            color: #d0d0d0;
         }
         
         .info-box {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
-            margin-top: 15px;
+            margin-top: 20px;
         }
         
         .info-item {
-            background: #f5f5f5;
-            padding: 12px;
-            border-radius: 6px;
-            border-left: 4px solid #667eea;
+            background: #374550;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #2d5a8c;
         }
         
         .info-label {
-            font-size: 12px;
+            font-size: 0.85em;
             color: #999;
             text-transform: uppercase;
             font-weight: 600;
+            letter-spacing: 0.5px;
         }
         
         .info-value {
-            font-size: 14px;
-            color: #333;
+            font-size: 1.05em;
+            color: #e0e0e0;
             font-weight: 500;
-            margin-top: 4px;
+            margin-top: 6px;
         }
         
-        .diagram-container {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            overflow-x: auto;
-        }
-        
-        .mermaid {
-            display: flex;
-            justify-content: center;
-            min-height: 600px;
-        }
-        
-        .instructions {
-            background: white;
+        .tech-stack-section {
+            background: #374550;
             padding: 20px;
-            border-radius: 10px;
-            margin-top: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            font-size: 13px;
-            line-height: 1.6;
-            color: #666;
+            border-radius: 8px;
+            border-left: 4px solid #2d5a8c;
+            margin-top: 30px;
         }
         
-        .instructions h3 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 16px;
+        .tech-stack-section strong {
+            color: #d0d0d0;
+            display: block;
+            margin-bottom: 15px;
+            font-size: 1.1em;
         }
         
-        .instructions ul {
-            list-style: none;
-            padding: 0;
+        .tech-badge {
+            display: inline-block;
+            background: #2d5a8c;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-right: 8px;
+            margin-top: 8px;
+            vertical-align: middle;
         }
         
-        .instructions li {
-            padding: 6px 0;
-            padding-left: 24px;
-            position: relative;
+        .tech-badge img {
+            vertical-align: middle;
+            margin-right: 4px;
         }
         
-        .instructions li:before {
-            content: "✓";
-            position: absolute;
-            left: 0;
-            color: #667eea;
-            font-weight: bold;
-        }
-        
-        .comparison {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 6px;
-            margin-top: 10px;
-            border: 1px solid #e0e0e0;
-        }
-        
-        .comparison strong {
-            color: #333;
+        .footer {
+            background: #374550;
+            padding: 30px;
+            text-align: center;
+            border-top: 1px solid #444;
+            font-size: 0.95em;
+            color: #999;
         }
         
         .button-group {
-            margin-top: 15px;
+            margin-top: 20px;
         }
         
         .btn {
             display: inline-block;
-            padding: 10px 20px;
+            padding: 12px 24px;
             margin-right: 10px;
-            background: #667eea;
+            background: #2d5a8c;
             color: white;
             text-decoration: none;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 0.95em;
             border: none;
             cursor: pointer;
             transition: background 0.3s ease;
         }
         
         .btn:hover {
-            background: #764ba2;
+            background: #1e3a5f;
         }
         
         .btn-secondary {
-            background: #e0e0e0;
-            color: #333;
+            background: #555;
+            color: #e0e0e0;
         }
         
         .btn-secondary:hover {
-            background: #d0d0d0;
+            background: #666;
         }
         
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 20px;
+            body {
+                padding: 20px 10px;
             }
             
-            .diagram-container {
-                padding: 15px;
+            .header {
+                padding: 30px 20px;
+            }
+            
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .content {
+                padding: 20px;
             }
             
             .mermaid {
+                padding: 15px;
                 min-height: 400px;
+            }
+            
+            .diagram-section h2 {
+                font-size: 1.4em;
             }
         }
     </style>
@@ -183,54 +246,42 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎨 {{ diagram_title }}</h1>
+            <h1>🗺️ {{ diagram_title }}</h1>
             <p>{{ description }}</p>
-            
-            <div class="info-box">
-                <div class="info-item">
-                    <div class="info-label">Experiment ID</div>
-                    <div class="info-value">{{ experiment_id }}</div>
+        </div>
+        
+        <div class="content">
+            <div class="diagram-section">
+                <h2>Architecture Overview</h2>
+                
+                <div class="diagram-description">
+                    <strong>Experiment ID:</strong> {{ experiment_id }}<br>
+                    <strong>Cloud Provider:</strong> {{ provider }}<br>
+                    <strong>Icon Format:</strong> {{ icon_type }}
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Cloud Provider</div>
-                    <div class="info-value">{{ provider }}</div>
+                
+                <div class="mermaid" id="diagram">
+{{ mermaid_code | safe }}
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Icon Format</div>
-                    <div class="info-value">{{ icon_type }}</div>
+                
+                <div class="button-group">
+                    <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
                 </div>
-            </div>
-            
-            <div class="button-group">
-                <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
             </div>
         </div>
         
-        <div class="diagram-container">
-            <div class="mermaid" id="diagram">
-{{ mermaid_code }}
-            </div>
-        </div>
-        
-        <div class="instructions">
-            <h3>📋 Diagram Information</h3>
-            <ul>
-                <li><strong>Icon Visibility:</strong> Look for SVG icons next to each resource name</li>
-                <li><strong>Icon Quality:</strong> Icons should appear crisp and clear</li>
-                <li><strong>Connections:</strong> Arrows show logical relationships between resources</li>
-                <li><strong>Nesting:</strong> Resource hierarchy represented by subgraph nesting</li>
-                <li><strong>Performance:</strong> Diagram should render quickly and be responsive</li>
-            </ul>
+        <div class="footer">
+            <p>Architecture diagram generated from cloud resource analysis</p>
         </div>
     </div>
     
     <script>
         mermaid.initialize({ 
             startOnLoad: true,
-            theme: 'default',
+            theme: 'dark',
             securityLevel: 'loose',
             flowchart: {
-                useMaxWidth: true,
+                useMaxWidth: false,
                 htmlLabels: true
             }
         });

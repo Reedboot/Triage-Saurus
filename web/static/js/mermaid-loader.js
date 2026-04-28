@@ -7,17 +7,15 @@
     s.onerror = function () { if (onerror) onerror(); };
     document.head.appendChild(s);
   }
-  // Try local vendor first (works offline/intranet), then fall back to CDN
-  loadScript('/static/vendor/mermaid.min.js', function () { console.info('mermaid loaded from /static/vendor'); }, function () {
-    loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () { console.info('mermaid loaded from CDN'); }, function () {
-      console.warn('Mermaid library failed to load from vendor and CDN. Diagrams will not render.');
-      try {
-        var b = document.createElement('div');
-        b.className = 'mermaid-error';
-        b.textContent = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access or place mermaid.min.js at /static/vendor/mermaid.min.js';
-        b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px;max-width:400px';
-        document.body.appendChild(b);
-      } catch (e) { }
-    });
+  // Load from CDN
+  loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () { console.info('mermaid loaded from CDN'); }, function () {
+    console.warn('Mermaid library failed to load from CDN. Diagrams will not render.');
+    try {
+      var b = document.createElement('div');
+      b.className = 'mermaid-error';
+      b.textContent = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access.';
+      b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px;max-width:400px';
+      document.body.appendChild(b);
+    } catch (e) { }
   });
 })();
