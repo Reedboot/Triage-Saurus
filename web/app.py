@@ -10330,7 +10330,8 @@ def scan_001_diagram():
             icon = icon_map.get(res_type, '')
             if icon:
                 # Use tight wrapper to constrain image size and prevent stretching
-                node_def = f'{res_id}["<div><div style=\'max-width:40px;margin:0 auto 4px;\'><img src=\'/static/assets/icons/azure/{icon}\' style=\'width:100%;height:auto;object-fit:contain;\'/></div><div style=\'font-size:0.9em;\'>{res_name}</div></div>"]'
+                # Use double quotes for HTML attributes to avoid Mermaid 11.14.0 parsing issues
+                node_def = f'{res_id}["<div><div style=\\"max-width:40px;margin:0 auto 4px;\\"><img src=\\"/static/assets/icons/azure/{icon}\\" style=\\"width:100%;height:auto;object-fit:contain;\\"/></div><div style=\\"font-size:0.9em;\\\">{res_name}</div></div>"]'
             else:
                 node_def = f'{res_id}["{res_name}"]'
             mermaid_code += f'    {node_def}\n'

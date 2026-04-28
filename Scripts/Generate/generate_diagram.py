@@ -2891,10 +2891,10 @@ class HierarchicalDiagramBuilder:
             # Try to embed HTML img tag for icon
             icon_url = _get_icon_svg_url(resource_type, provider)
             if icon_url:
-                # Escape label and use single quotes everywhere to avoid breaking Mermaid's double-quote parsing
-                safe_label = (label or '').replace("'", "\\'").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                # Use single quotes in style and HTML to avoid conflicts with Mermaid's outer double quotes
-                html = f"<div style='text-align:center;padding:2px'><img src='{icon_url}' style='width:36px;height:auto;margin-bottom:2px;border-radius:2px'/><div style='font-size:0.85em;word-wrap:break-word;white-space:normal'>{safe_label}</div></div>"
+                # Escape label and use escaped double quotes for Mermaid 11.14.0 compatibility
+                safe_label = (label or '').replace('\\', '\\\\').replace('"', '\\"').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Use escaped double quotes in style and HTML for Mermaid 11.14.0 compatibility
+                html = f"<div style=\\\"text-align:center;padding:2px\\\"><img src=\\\"{icon_url}\\\" style=\\\"width:36px;height:auto;margin-bottom:2px;border-radius:2px\\\"/><div style=\\\"font-size:0.85em;word-wrap:break-word;white-space:normal\\\">{safe_label}</div></div>"
                 node_def = f"{indent}{node_id}[\"{html}\"]"
             else:
                 # Fallback to emoji if no icon found
