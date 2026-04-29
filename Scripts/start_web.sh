@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Simple helper to create/activate a virtualenv, install requirements, and start the web server.
 # Usage:
-#   ./Scripts/start_web.sh        # create venv, install deps, start server
-#   ./Scripts/start_web.sh --no-install  # activate existing venv and start server
+#   ./Scripts/start_web.sh                 # create venv, install deps, start server
+#   ./Scripts/start_web.sh --no-install    # activate existing venv and start server (no pip operations)
+#   ./Scripts/start_web.sh --skip-install  # activate venv, skip pip but still check db, start server
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_DIR="$ROOT/.venv"
@@ -49,6 +50,19 @@ if [ "${1-}" = "--no-install" ]; then
     _setup_box
     exit 1
   fi
+elif [ "${1-}" = "--skip-install" ]; then
+  # Activate venv but skip pip operations entirely
+  if [ ! -d "$VENV_DIR" ]; then
+    _setup_box
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
+    echo -e "${RED}Failed to activate .venv — it may be corrupt.${RESET}"
+    _setup_box
+    exit 1
+  fi
+  echo -e "${CYAN}Skipping pip operations (--skip-install flag used).${RESET}"
 else
   if [ -d "$VENV_DIR" ]; then
     echo -e "${CYAN}Using existing virtualenv at $VENV_DIR${RESET}"
@@ -83,30 +97,34 @@ else
       exit 1
     fi
   fi
+  
+  if [ "${1-}" != "--skip-install" ]; then
+    echo -e "${CYAN}Upgrading pip and installing requirements...${RESET}"
+    # Prefer using the venv python executable directly to avoid system python ambiguity
+    if [ -x "$VENV_DIR/bin/python" ]; then
+      PIP_PY="$VENV_DIR/bin/python"
+    else
+      PIP_PY=$(command -v python3 || command -v python)
+    fi
+    "$PIP_PY" -m pip install --upgrade pip -q --disable-pip-version-check
+    if [ -f "$REQ_FILE" ]; then
+      # Use --no-deps to skip dependency resolution if all packages are already installed
+      # This is much faster for subsequent runs
+      "$PIP_PY" -m pip install -r "$REQ_FILE" -q --disable-pip-version-check
+      echo -e "${GREEN}✅ Dependencies installed.${RESET}"
+    else
+      echo -e "${YELLOW}⚠ requirements.txt not found at $REQ_FILE — skipping pip install.${RESET}"
+    fi
 
-  echo -e "${CYAN}Upgrading pip and installing requirements...${RESET}"
-  # Prefer using the venv python executable directly to avoid system python ambiguity
-  if [ -x "$VENV_DIR/bin/python" ]; then
-    PIP_PY="$VENV_DIR/bin/python"
-  else
-    PIP_PY=$(command -v python3 || command -v python)
-  fi
-  "$PIP_PY" -m pip install --upgrade pip -q
-  if [ -f "$REQ_FILE" ]; then
-    "$PIP_PY" -m pip install -r "$REQ_FILE" -q
-    echo -e "${GREEN}✅ Dependencies installed.${RESET}"
-  else
-    echo -e "${YELLOW}⚠ requirements.txt not found at $REQ_FILE — skipping pip install.${RESET}"
-  fi
-
-  # Install project in editable mode if it appears to be a Python package
-  if [ -f "$ROOT/pyproject.toml" ] || [ -f "$ROOT/setup.py" ]; then
-    echo -e "${CYAN}Installing repository into venv (editable mode)...${RESET}"
-    # Use -q to keep output quiet; don't fail startup if install errors
-    "$PIP_PY" -m pip install -e "$ROOT" -q || \
-      echo -e "${YELLOW}⚠ Editable install failed; continuing without it.${RESET}"
-  else
-    echo -e "${YELLOW}ℹ No pyproject.toml or setup.py found — skipping editable install.${RESET}"
+    # Install project in editable mode if it appears to be a Python package
+    if [ -f "$ROOT/pyproject.toml" ] || [ -f "$ROOT/setup.py" ]; then
+      echo -e "${CYAN}Installing repository into venv (editable mode)...${RESET}"
+      # Use -q to keep output quiet; don't fail startup if install errors
+      "$PIP_PY" -m pip install -e "$ROOT" -q || \
+        echo -e "${YELLOW}⚠ Editable install failed; continuing without it.${RESET}"
+    else
+      echo -e "${YELLOW}ℹ No pyproject.toml or setup.py found — skipping editable install.${RESET}"
+    fi
   fi
 fi
 

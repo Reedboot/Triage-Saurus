@@ -28,5 +28,7 @@ __pycache__/
 TestsCorpus/
 opengrep_output.json
 
+icon-cache
+
 # Added by ggshield
 .cache_ggshield

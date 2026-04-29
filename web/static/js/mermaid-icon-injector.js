@@ -25,13 +25,14 @@
 const MermaidIconInjector = (() => {
   // Configuration for icon sizing and positioning
   const CONFIG = {
-    ICON_SIZE: 20,           // 20x20px icons
+    ICON_SIZE: 24,           // 24x24px (optimal size - scales well as vectors, never pixelates)
     ICON_MARGIN_RIGHT: 4,    // Gap between icon and text
     PADDING_LEFT: 4,         // Left padding inside node
   };
 
   /**
    * Cache for fetched SVG content
+   * Note: We DON'T persist this across page loads to ensure fresh icons on new scans
    */
   let _svgCache = {};
 
@@ -47,12 +48,28 @@ const MermaidIconInjector = (() => {
       return _svgCache[iconPath];
     }
 
+    // If this is a PNG path, try to use SVG version instead (better rendering)
+    let pathToTry = iconPath;
+    if (iconPath.toLowerCase().endsWith('.png')) {
+      const svgPath = iconPath.replace(/\.png$/i, '.svg');
+      try {
+        const response = await fetch(svgPath);
+        if (response.ok) {
+          // SVG version exists, use it instead
+          pathToTry = svgPath;
+          iconPath = svgPath; // Update iconPath for cache key
+        }
+      } catch (e) {
+        // SVG version doesn't exist, fall through to PNG
+      }
+    }
+
     try {
-      const response = await fetch(iconPath);
+      const response = await fetch(pathToTry);
       if (!response.ok) return null;
 
       // Check if this is a PNG file
-      if (iconPath.toLowerCase().endsWith('.png')) {
+      if (pathToTry.toLowerCase().endsWith('.png')) {
         // For PNG files, fetch as blob and convert to data URL
         const blob = await response.blob();
         const reader = new FileReader();
@@ -61,18 +78,22 @@ const MermaidIconInjector = (() => {
           reader.onload = () => {
             const dataUrl = reader.result;
             
-            // Create SVG wrapper for PNG image
+            // Create SVG wrapper for PNG image with high-quality rendering
+            // Use larger viewBox to minimize pixelation when scaled
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 18 18');
-            svg.setAttribute('width', '18');
-            svg.setAttribute('height', '18');
+            svg.setAttribute('viewBox', '0 0 64 64');
+            svg.setAttribute('width', '64');
+            svg.setAttribute('height', '64');
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             
             const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
             image.setAttribute('href', dataUrl);
             image.setAttribute('x', '0');
             image.setAttribute('y', '0');
-            image.setAttribute('width', '18');
-            image.setAttribute('height', '18');
+            image.setAttribute('width', '64');
+            image.setAttribute('height', '64');
+            // Let browser choose best interpolation
+            image.setAttribute('preserveAspectRatio', 'xMidYMid meet');
             
             svg.appendChild(image);
             _svgCache[iconPath] = svg;
@@ -89,14 +110,14 @@ const MermaidIconInjector = (() => {
       const svgElement = doc.documentElement;
 
       if (svgElement.tagName !== 'svg') {
-        console.warn(`[MermaidIconInjector] Invalid SVG from ${iconPath}`);
+        console.warn(`[MermaidIconInjector] Invalid SVG from ${pathToTry}`);
         return null;
       }
 
       _svgCache[iconPath] = svgElement;
       return svgElement;
     } catch (err) {
-      console.warn(`[MermaidIconInjector] Failed to fetch icon ${iconPath}: ${err.message}`);
+      console.warn(`[MermaidIconInjector] Failed to fetch icon ${pathToTry}: ${err.message}`);
       return null;
     }
   }
@@ -276,12 +297,14 @@ const MermaidIconInjector = (() => {
     // Create a <g> wrapper for the icon
     const groupElement = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     groupElement.setAttribute('class', 'mermaid-icon');
+    groupElement.setAttribute('vector-effect', 'non-scaling-stroke');
     // Calculate scale based on actual viewBox dimensions so icons render at CONFIG.ICON_SIZE
     // regardless of whether the source SVG is 16×16, 32×32, 40×40, 80×80, etc.
     const viewBoxParts = (sourceSvg.getAttribute('viewBox') || '0 0 100 100').trim().split(/[\s,]+/).map(Number);
     const vbW = viewBoxParts[2] || 100;
     const vbH = viewBoxParts[3] || 100;
     const scale = CONFIG.ICON_SIZE / Math.max(vbW, vbH);
+    // Position icon and scale to exact size
     groupElement.setAttribute('transform', `translate(${iconX},${iconY}) scale(${scale})`);
 
     // Clone the source SVG content into the group
@@ -310,7 +333,9 @@ const MermaidIconInjector = (() => {
   async function _getIconMap(iconDataUrl = '/api/icon-mappings') {
     if (_iconMapCache) return _iconMapCache;
     try {
-      const response = await fetch(iconDataUrl);
+      // Add cache-buster to force fresh icon mappings on page load
+      const url = `${iconDataUrl}?v=${Date.now()}`;
+      const response = await fetch(url);
       if (!response.ok) {
         console.warn(`[MermaidIconInjector] Failed to fetch icon mappings: ${response.status}`);
         return {};
@@ -417,7 +442,12 @@ const MermaidIconInjector = (() => {
     injectIcons,
     processAllDiagrams,
     autoInitialize,
-    CONFIG // Expose for customization if needed
+    CONFIG, // Expose for customization if needed
+    _clearCache: () => {
+      _svgCache = {};
+      _iconMapCache = null;
+      console.log('[MermaidIconInjector] Caches cleared');
+    }
   };
 })();
 

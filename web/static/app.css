@@ -1671,7 +1671,7 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   position: relative;
   flex: 1 1 auto;
   overflow: auto;
-  background: var(--bg-base);
+  background: #1a1a1a;
   cursor: grab;
   touch-action: none;
   min-width: 0; /* ensure it can shrink/fill inside split layout */
@@ -1694,12 +1694,13 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 
 .diagram-zoom-wrap .mermaid svg {
   display: block;
-  width: 100% !important;
-  height: 100% !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
+  /* Don't force 100% - let the SVG be its natural size so getBBox() works correctly */
+  /* The pan/zoom transform will handle scaling to fit the viewport */
+  max-width: 100%;
+  max-height: 100%;
   margin: 0;
   transform-origin: 0 0;
+  image-rendering: crisp-edges;
 }
 
 .right-panel-header {

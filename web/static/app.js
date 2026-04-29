@@ -148,23 +148,35 @@
   function getDiagramContentBounds(svg) {
     if (!svg) return null;
 
-    try {
-      const box = svg.getBBox();
-      if (box && box.width > 0 && box.height > 0) {
-        return { x: box.x, y: box.y, width: box.width, height: box.height };
-      }
-    } catch (e) {}
-
+    // Priority 1: Use viewBox (diagram's intrinsic coordinate space)
+    // This is the most reliable and unaffected by CSS stretching
     const vb = svg.viewBox && svg.viewBox.baseVal;
     if (vb && vb.width > 0 && vb.height > 0) {
+      console.log(`[getDiagramContentBounds] Using viewBox: ${vb.width}x${vb.height}`);
       return { x: vb.x || 0, y: vb.y || 0, width: vb.width, height: vb.height };
     }
 
-    const rect = svg.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      return { x: rect.x || 0, y: rect.y || 0, width: rect.width, height: rect.height };
+    // Priority 2: Measure actual rendered content (getBBox)
+    // This measures the bounding box of all rendered elements
+    try {
+      const box = svg.getBBox();
+      if (box && box.width > 0 && box.height > 0) {
+        console.log(`[getDiagramContentBounds] Using getBBox: ${box.width}x${box.height}`);
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      }
+    } catch (e) {
+      console.warn(`[getDiagramContentBounds] getBBox failed: ${e.message}`);
     }
 
+    // Priority 3: Use explicit width/height attributes if set
+    const width = parseFloat(svg.getAttribute('width'));
+    const height = parseFloat(svg.getAttribute('height'));
+    if (!isNaN(width) && !isNaN(height) && width > 0 && height > 0) {
+      console.log(`[getDiagramContentBounds] Using width/height attrs: ${width}x${height}`);
+      return { x: 0, y: 0, width, height };
+    }
+
+    console.warn('[getDiagramContentBounds] No suitable bounds found');
     return null;
   }
 
@@ -186,6 +198,7 @@
     const wrapHeight = zoomWrap.clientHeight || zoomWrap.offsetHeight || 0;
 
     if (!bounds || !wrapWidth || !wrapHeight) {
+      console.warn('[fitActiveDiagram] Missing bounds or wrap dimensions, resetting');
       zoomState.scale = 1.0;
       zoomState.panX = 0;
       zoomState.panY = 0;
@@ -205,6 +218,8 @@
       zoomState.maxScale,
       mode === 'width' ? widthScale : containScale
     );
+
+    console.log(`[fitActiveDiagram] bounds: ${bounds.width}x${bounds.height}, wrap: ${wrapWidth}x${wrapHeight}, mode: ${mode}, fitScale: ${fitScale.toFixed(3)}`);
 
     zoomState.scale = fitScale;
     zoomState.panX = (wrapWidth * (1 - fitScale)) / (2 * fitScale);
@@ -1002,6 +1017,13 @@
     if (!Array.isArray(diagrams) || !diagrams.length) {
       console.log('[renderDiagrams] No diagrams or not an array');
       return;
+    }
+
+    // Clear icon cache to ensure fresh SVG icons are loaded
+    // This forces the icon injector to re-fetch mappings and icons on each new scan
+    if (window.MermaidIconInjector && window.MermaidIconInjector._clearCache) {
+      window.MermaidIconInjector._clearCache();
+      console.log('[renderDiagrams] Cleared icon cache for fresh icons');
     }
 
     const diagramViews = document.getElementById('diagram-views');
