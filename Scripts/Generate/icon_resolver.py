@@ -1013,6 +1013,7 @@ GCP_RESOURCE_TYPE_TO_ICON = {
     'google_firestore_document':         ('Cloud_Storage', 'cloud-storage'),
     'google_kms_key_ring':               ('Cloud_SQL', 'cloud-sql'),
     'google_kms_crypto_key':             ('Cloud_SQL', 'cloud-sql'),
+    'google_compute_developer_vm':       ('Compute_Engine', 'compute-engine'),
 }
 
 @lru_cache(maxsize=512)
@@ -1043,68 +1044,45 @@ def _find_icon_file(category: str, icon_name: str, provider: str = 'azure') -> O
         elif (category_path / 'PNG').exists():
             category_path = category_path / 'PNG'
     elif provider.lower() == 'azure':
-        # Azure: prefer SVG files from main category, but check 'png/' subdirectory for legacy fallback
-        svg_files_in_subdir = []
-        png_subdir = category_path / 'png'
-        if png_subdir.exists():
-            svg_files_in_subdir = sorted(png_subdir.rglob("*.svg"))
-            if svg_files_in_subdir:
-                icon_name_lower = icon_name.lower()
-                for icon_file in svg_files_in_subdir:
-                    if icon_file.stem.lower() == icon_name_lower:
-                        return icon_file
+        # Azure: use SVG files from main category
+        pass
     
-    # Collect icon files - prioritize SVG over PNG
+    # Collect SVG icon files only
     icon_name_lower = icon_name.lower()
     svg_files = sorted(category_path.glob("*.svg"))
-    png_files = sorted(category_path.glob("*.png"))
-    all_files = svg_files + png_files
     
-    if not all_files:
+    if not svg_files:
         return None
     
-    # First pass: exact match (case-insensitive) - SVG preferred
+    # First pass: exact match (case-insensitive)
     for icon_file in svg_files:
         if icon_file.stem.lower() == icon_name_lower:
             return icon_file
-    for icon_file in png_files:
-        if icon_file.stem.lower() == icon_name_lower:
-            return icon_file
     
-    # Second pass: find files containing all words from icon_name - SVG preferred
+    # Second pass: find files containing all words from icon_name
     svg_word_matches = []
-    png_word_matches = []
     for icon_file in svg_files:
         filename_lower = icon_file.stem.lower()
         words = [w for w in icon_name_lower.split('-') if w]
         if all(word in filename_lower for word in words):
             svg_word_matches.append(icon_file)
     
-    for icon_file in png_files:
-        filename_lower = icon_file.stem.lower()
-        words = [w for w in icon_name_lower.split('-') if w]
-        if all(word in filename_lower for word in words):
-            png_word_matches.append(icon_file)
-    
     if svg_word_matches:
         return svg_word_matches[0]
-    if png_word_matches:
-        return png_word_matches[0]
     
-    # Fallback: return first file in category (SVG preferred)
-    return svg_files[0] if svg_files else (png_files[0] if png_files else None)
+    # Fallback: return first SVG file in category
+    return svg_files[0] if svg_files else None
 
 
-@lru_cache(maxsize=512)
 def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     """Smart icon discovery: search across all categories for matching icon.
     
     Used as fallback when curated mapping doesn't exist.
-    Searches all categories for a matching icon file (PNG preferred over SVG).
+    Searches all categories for a matching SVG icon file.
     
     Examples:
-        _discover_icon_by_name('dynamodb', 'aws') → finds aws/Arch_*/dynamodb.png or .svg
-        _discover_icon_by_name('storage-account', 'azure') → finds azure/*/storage-account.png or .svg
+        _discover_icon_by_name('dynamodb', 'aws') → finds aws/Arch_*/dynamodb.svg
+        _discover_icon_by_name('storage-account', 'azure') → finds azure/*/storage-account.svg
     """
     provider_path = ICONS_ROOT / provider
     if not provider_path.exists():
@@ -1112,22 +1090,13 @@ def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     
     icon_name_lower = icon_name.lower()
     
-    # Search SVG files first (preferred format)
+    # Search SVG files (exact match first)
     for icon_file in sorted(provider_path.rglob('*.svg')):
         if icon_file.stem.lower() == icon_name_lower:
             return icon_file
     
-    # Search PNG files as fallback
-    for icon_file in sorted(provider_path.rglob('*.png')):
-        if icon_file.stem.lower() == icon_name_lower:
-            return icon_file
-    
-    # Fallback: partial match (SVG files first)
+    # Fallback: partial match in SVG files
     for icon_file in sorted(provider_path.rglob('*.svg')):
-        if icon_name_lower in icon_file.stem.lower():
-            return icon_file
-    
-    for icon_file in sorted(provider_path.rglob('*.png')):
         if icon_name_lower in icon_file.stem.lower():
             return icon_file
     
@@ -1255,10 +1224,6 @@ def get_icon_data_uri(resource_type: str, provider: str = 'azure') -> Optional[s
         suffix = icon_path.suffix.lower()
         if suffix == '.svg':
             mime_type = 'image/svg+xml'
-        elif suffix == '.png':
-            mime_type = 'image/png'
-        elif suffix == '.jpg' or suffix == '.jpeg':
-            mime_type = 'image/jpeg'
         else:
             mime_type = 'image/svg+xml'  # Default to SVG
         
@@ -1301,7 +1266,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         provider: Cloud provider ('azure', 'aws', 'gcp', 'kubernetes', 'other')
     
     Returns:
-        Dict mapping resource_type -> icon_url (e.g., '/static/assets/icons/azure/web/png/app-service/app-service.png')
+        Dict mapping resource_type -> icon_url (e.g., '/static/assets/icons/azure/web/app-service/app-service.svg')
     """
     icon_map = {}
     provider_root = ICONS_ROOT / provider
@@ -1325,16 +1290,16 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
     icon_files_by_name = {}  # {icon_name_lower: [list of Path objects]}
     
     for icon_file in provider_root.rglob("*"):
-        if icon_file.is_file() and icon_file.suffix.lower() in ('.png', '.svg'):
+        if icon_file.is_file() and icon_file.suffix.lower() == '.svg':
             # Store by filename (without extension)
             name_lower = icon_file.stem.lower()
             if name_lower not in icon_files_by_name:
                 icon_files_by_name[name_lower] = []
             icon_files_by_name[name_lower].append(icon_file)
     
-    # Sort files so PNG is preferred over SVG
+    # Sort files by path
     for name in icon_files_by_name:
-        icon_files_by_name[name].sort(key=lambda p: (p.suffix.lower() != '.png', str(p)))
+        icon_files_by_name[name].sort(key=lambda p: str(p))
     
     # Map each resource type to its best icon file
     # Web root is the directory containing 'static' (i.e., /repo/web)

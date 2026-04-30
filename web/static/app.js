@@ -632,8 +632,18 @@
     closeEventSource();
     clearLog();
 
+    // Switch to log view
+    const tabBar = document.getElementById('section-tab-bar');
+    const panelContent = document.getElementById('section-panel-content');
+    const logOut = document.getElementById('log-output');
+    if (tabBar && panelContent && logOut) {
+      tabBar.style.display = 'none';
+      panelContent.style.display = 'none';
+      logOut.style.display = '';
+    }
+
     // Show status
-    if (statusBar) statusBar.style.display = 'block';
+    if (statusBar) statusBar.style.display = 'flex';
     if (spinner) spinner.style.display = 'block';
     window._triage.setStatus('Connecting to scan stream…', '');
 
@@ -833,7 +843,7 @@
             sectionPlaceholder.style.display = 'none';
           }
           addLogLine(`[Info] 🔄 Reconnecting to running experiment ${data.running_experiment}...`, 'info');
-          if (statusBar) statusBar.style.display = 'block';
+          if (statusBar) statusBar.style.display = 'flex';
           if (spinner) spinner.style.display = 'block';
           window._triage.setStatus(`Reconnecting to experiment ${data.running_experiment}...`, '');
           
@@ -883,7 +893,7 @@
       });
 
     window._triage.setStatus('Scan in progress…', '');
-    if (statusBar) statusBar.style.display = 'block';
+    if (statusBar) statusBar.style.display = 'flex';
   }
 
   function _startReconnectPoll(repoName, experimentId, createdAt) {

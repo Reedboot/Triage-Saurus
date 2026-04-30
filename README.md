@@ -306,3 +306,4 @@ Icons from:
 Azure - https://learn.microsoft.com/en-us/azure/architecture/icons/
 AWS - https://aws.amazon.com/architecture/icons/
 GCP - https://cloud.google.com/icons
+Kubernetes - Custom SVG icons designed for this project (simplified representations of core K8s resource types)

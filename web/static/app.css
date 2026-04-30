@@ -655,7 +655,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   background: #1a1a1a;
   border: 1px solid #374550;
   border-radius: 8px;
-  min-height: 300px;
+  min-height: 0;
 }
 
 .mermaid-container .mermaid {
@@ -669,7 +669,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .mermaid-container .mermaid:active { cursor: grabbing; }
 .mermaid-container .mermaid svg {
   display: block;
-  width: 100% !important;
+  width: auto !important;
   height: auto !important;
   max-width: 100% !important;
   max-height: 100% !important;

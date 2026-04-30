@@ -10522,7 +10522,7 @@ def scan_001_diagram():
         }}
         
         .mermaid {{
-            background: #1a1a1a;
+            background: #161b22;
             border-radius: 8px;
             padding: 30px;
             overflow-x: auto;

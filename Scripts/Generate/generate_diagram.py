@@ -2970,7 +2970,7 @@ class HierarchicalDiagramBuilder:
                 safe_label = (wrapped_label or '').replace('\\', '\\\\').replace('"', '\\"').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 # Use single quotes for style attributes to avoid escaping issues with double quotes
                 # aspect-ratio and object-fit ensure icons maintain square proportions
-                html = f"<div style='text-align:center;padding:2px'><img src='{icon_url}' style='width:36px;height:36px;aspect-ratio:1/1;object-fit:contain;margin-bottom:2px;border-radius:2px'/><div style='font-size:0.85em;word-wrap:break-word;white-space:normal'>{safe_label}</div></div>"
+                html = f"<div style='text-align:center;padding:0'><img src='{icon_url}' style='width:24px;height:24px;aspect-ratio:1/1;object-fit:contain;margin-bottom:0;border-radius:2px'/><div style='font-size:0.75em;word-wrap:break-word;white-space:normal;line-height:1.1'>{safe_label}</div></div>"
                 node_def = f"{indent}{node_id}[\"{html}\"]"
             else:
                 # Fallback to emoji if no icon found
