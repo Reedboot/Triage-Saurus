@@ -84,10 +84,21 @@
             border-radius: 0;
             padding: 0;
             margin: 0;
-            overflow: auto;
+            overflow: visible;
             width: 100%;
             flex: 1;
             min-height: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .mermaid svg {
+            cursor: grab;
+        }
+        
+        .mermaid svg:active {
+            cursor: grabbing;
         }
         
         .mermaid svg {
@@ -100,6 +111,12 @@
         
         .mermaid svg foreignObject {
             overflow: visible !important;
+            height: auto !important;
+            min-height: 120px !important;
+        }
+        
+        .mermaid text {
+            dominant-baseline: middle !important;
         }
         
         .diagram-description {
@@ -282,7 +299,20 @@
             securityLevel: 'loose',
             flowchart: {
                 useMaxWidth: false,
-                htmlLabels: true
+                htmlLabels: true,
+                padding: 20,
+                nodeSpacing: 100,
+                rankSpacing: 100,
+                curve: 'linear'
+            },
+            viewer: {
+                pan: true,
+                pan_mode: 'drag',
+                zoom: true,
+                zoom_mode: 'mouseWheel',
+                zoom_level: 1,
+                zoom_max: 5,
+                zoom_min: 0.1
             }
         });
         mermaid.contentLoaded();
