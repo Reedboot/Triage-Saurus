@@ -36,6 +36,20 @@ const MermaidIconInjector = (() => {
    */
   let _svgCache = {};
 
+  function _sanitizeIconPath(iconPath) {
+    let cleaned = String(iconPath || '')
+      // Strip control chars + common zero-width chars that break static paths.
+      .replace(/[\u0000-\u001f\u007f\u200b\u200c\u200d\ufeff]/g, '');
+
+    // Normalize accidental duplicate static prefix.
+    const dupPrefix = '/static/assets/icons/static/assets/icons/';
+    if (cleaned.startsWith(dupPrefix)) {
+      cleaned = '/static/assets/icons/' + cleaned.slice(dupPrefix.length);
+    }
+
+    return cleaned;
+  }
+
   /**
    * Fetch and parse SVG or PNG file, returning an SVG element
    * For SVG: returns parsed SVG element
@@ -44,6 +58,7 @@ const MermaidIconInjector = (() => {
    * @returns {Promise<SVGElement|null>}
    */
   async function _fetchSvg(iconPath) {
+    iconPath = _sanitizeIconPath(iconPath);
     if (_svgCache[iconPath]) {
       return _svgCache[iconPath];
     }
@@ -341,6 +356,11 @@ const MermaidIconInjector = (() => {
         return {};
       }
       _iconMapCache = await response.json();
+      // Sanitize all icon paths defensively so stale/bad cache entries
+      // cannot produce broken static URLs.
+      Object.keys(_iconMapCache).forEach((k) => {
+        _iconMapCache[k] = _sanitizeIconPath(_iconMapCache[k]);
+      });
       console.log(`[MermaidIconInjector] Loaded ${Object.keys(_iconMapCache).length} icon mappings`);
       return _iconMapCache;
     } catch (err) {

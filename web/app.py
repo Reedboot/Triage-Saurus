@@ -1474,8 +1474,10 @@ def _sanitize_mermaid(code: str) -> str:
     for bad, good in replacements:
         code = code.replace(bad, good)
 
-    # 2. Strip U+FE0F emoji variation selectors — invisible chars that break Mermaid's lexer
-    code = code.replace("\ufe0f", "")
+    # 2. Strip invisible Unicode format chars (category Cf) that can corrupt
+    # icon URLs/CSS numeric values in Mermaid labels.
+    import unicodedata
+    code = "".join(ch for ch in code if unicodedata.category(ch) != "Cf")
 
     # 3. Replace bare & in quoted Mermaid labels with "and"
     code = re.sub(r'("(?:[^"\\]|\\.)*")', lambda m: m.group(0).replace("&", "and"), code)
@@ -1573,26 +1575,12 @@ def _sanitize_mermaid(code: str) -> str:
 
     code = "\n".join(out_lines)
 
-    # 9. Replace underscores inside bracketed/parenthesized labels (visible text) with spaces so long identifiers can wrap
-    code = re.sub(r'([\[\(\{])([^\]\)\}]*?)([\]\)\}])', lambda m: m.group(1) + m.group(2).replace('_', ' ') + m.group(3), code, flags=re.M|re.S)
+    # 9. Do not rewrite underscores inside labels; HTML labels contain icon URLs
+    # (e.g. /static/assets/icons/aws/Arch_Security-Identity/...), and replacing
+    # underscores with spaces corrupts those paths and causes 404s.
 
-    # 10. Insert soft break opportunities after '.' and '_' inside visible labels longer than 8 characters
-    def _insert_soft_breaks(m):
-        s = m.group(0)
-        if len(s) <= 2:
-            return s
-        opening = s[0]
-        closing = s[-1]
-        inner = s[1:-1]
-        # Strip surrounding quotes for length check when quoted
-        check_len = len(inner)
-        if check_len <= 8:
-            return s
-        # Insert zero-width space after dots and underscores to allow line breaks there
-        inner2 = inner.replace('.', '.' + '\u200B').replace('_', '_' + '\u200B')
-        return opening + inner2 + closing
-
-    code = re.sub(r'("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\([^\)]*\))', _insert_soft_breaks, code)
+    # 10. Do not inject zero-width spaces for wrapping; they can corrupt URLs/CSS
+    # inside HTML labels and break icon/static asset fetches.
 
     # 11. Normalize invalid Mermaid IDs (e.g. Terraform interpolations like ${var.environment})
     # Mermaid node/style identifiers must be simple tokens; normalize anything outside [A-Za-z0-9_].
@@ -4161,14 +4149,67 @@ def api_icon_mappings():
     if not cache_file:
         return jsonify({"error": f"Unknown provider: {provider}"}), 400
     
-    if not cache_file.exists():
-        return jsonify({"error": f"Icon cache not found. Run: python3 Scripts/Generate/build_icon_cache.py {provider}"}), 503
+    providers_for_all = ["azure", "aws", "gcp", "kubernetes", "other"]
+
+    def _build_icon_map_runtime(selected_provider: str) -> dict[str, str]:
+        """Build icon mappings dynamically when cache files are missing."""
+        from Scripts.Generate.icon_resolver import build_icon_map_bulk  # type: ignore
+
+        if selected_provider == "all":
+            merged: dict[str, str] = {}
+            for p in providers_for_all:
+                merged.update(build_icon_map_bulk(p) or {})
+            return merged
+        return build_icon_map_bulk(selected_provider) or {}
+
+    def _load_or_build_icon_map(selected_provider: str, path_obj: Path) -> dict[str, str]:
+        if path_obj.exists():
+            return json.loads(path_obj.read_text())
+
+        icon_map = _build_icon_map_runtime(selected_provider)
+        if not icon_map:
+            return {}
+
+        # Best-effort: recreate the missing cache file(s) for faster subsequent responses.
+        try:
+            path_obj.parent.mkdir(parents=True, exist_ok=True)
+            path_obj.write_text(json.dumps(icon_map, indent=2))
+            if selected_provider == "all":
+                for p in providers_for_all:
+                    p_path = cache_file_map[p]
+                    if not p_path.exists():
+                        p_map = _build_icon_map_runtime(p)
+                        p_path.write_text(json.dumps(p_map, indent=2))
+        except Exception:
+            pass
+
+        return icon_map
     
     try:
-        # Serve the pre-cached JSON with full paths for fetching
-        icon_map = json.loads(cache_file.read_text())
-        # Prepend /static/assets/icons to all paths so the icon injector can fetch them
-        full_path_map = {k: f"/static/assets/icons{v}" for k, v in icon_map.items()}
+        icon_map = _load_or_build_icon_map(provider, cache_file)
+        if not icon_map:
+            return jsonify(
+                {"error": f"Icon mappings unavailable for provider '{provider}'"}
+            ), 503
+
+        def _normalize_icon_path(icon_path: str) -> str:
+            # Remove hidden/control characters that can break static file resolution.
+            cleaned = "".join(ch for ch in str(icon_path or "") if ord(ch) >= 32 and ch not in ("\u200b", "\u200c", "\u200d", "\ufeff"))
+
+            # Cache data may already contain full /static/assets/icons paths.
+            if cleaned.startswith("/static/assets/icons/"):
+                return cleaned
+
+            # Collapse accidentally duplicated static prefix.
+            dup = "/static/assets/icons/static/assets/icons/"
+            if cleaned.startswith(dup):
+                return "/static/assets/icons/" + cleaned[len(dup):]
+
+            if cleaned.startswith("/"):
+                return f"/static/assets/icons{cleaned}"
+            return f"/static/assets/icons/{cleaned.lstrip('/')}"
+
+        full_path_map = {k: _normalize_icon_path(v) for k, v in icon_map.items()}
         return jsonify(full_path_map)
     except Exception as exc:
         app.logger.exception("Failed to serve icon cache for %s", provider)
@@ -4261,16 +4302,24 @@ def api_diagrams(experiment_id: str):
 
     def _response_payload(diagrams: list[dict]) -> dict:
         diagrams = _normalize_diagram_payload(diagrams)
-        return {
-            "diagrams": [
+        response_diagrams: list[dict] = []
+        for d in diagrams:
+            raw_code = d.get("mermaid_code") or ""
+            try:
+                sanitized_code = _sanitize_mermaid(raw_code) if raw_code else raw_code
+            except Exception:
+                sanitized_code = raw_code
+
+            response_diagrams.append(
                 {
                     "title": d.get("diagram_title"),
-                    "code": d.get("mermaid_code"),
+                    "code": sanitized_code,
                     "css_code": d.get("css_code", ""),
                 }
-                for d in diagrams
-                if d.get("mermaid_code")
-            ]
+            )
+
+        return {
+            "diagrams": [d for d in response_diagrams if d.get("code")]
         }
 
     try:

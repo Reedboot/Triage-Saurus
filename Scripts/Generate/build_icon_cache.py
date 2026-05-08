@@ -22,6 +22,18 @@ from icon_resolver import build_icon_map_bulk, AZURE_RESOURCE_TYPE_TO_ICON, AWS_
 CACHE_DIR = REPO_ROOT / "web" / "static" / "assets" / "icon-cache"
 
 
+def _normalize_cache_icon_path(path: str) -> str:
+    """Store icon paths cache-relative (e.g. /azure/storage/x.svg)."""
+    cleaned = "".join(
+        ch for ch in str(path or "")
+        if ord(ch) >= 32 and ch not in ("\u200b", "\u200c", "\u200d", "\ufeff")
+    )
+    prefix = "/static/assets/icons/"
+    if cleaned.startswith(prefix):
+        cleaned = cleaned[len(prefix):]
+    return "/" + cleaned.lstrip("/")
+
+
 def build_and_save_icon_caches(providers=None):
     """Build icon maps for specified providers and save as JSON files.
     
@@ -40,7 +52,10 @@ def build_and_save_icon_caches(providers=None):
         print(f"Building icon cache for {provider}...", end=" ", flush=True)
         start = time.time()
         
-        icon_map = build_icon_map_bulk(provider)
+        icon_map = {
+            k: _normalize_cache_icon_path(v)
+            for k, v in (build_icon_map_bulk(provider) or {}).items()
+        }
         elapsed = time.time() - start
         
         # Save to file

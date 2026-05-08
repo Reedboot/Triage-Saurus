@@ -15,6 +15,11 @@ REQ_FILE="$ROOT/requirements.txt"
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
+_print_no_install_hint() {
+  echo -e "   ${YELLOW}Tip:${RESET} Start without running pip installs:"
+  echo -e "   ${BOLD}./Scripts/start_web.sh --no-install${RESET}"
+}
+
 _setup_box() {
   echo ""
   echo -e "${RED}╔══════════════════════════════════════════════════════╗${RESET}"
@@ -131,6 +136,7 @@ fi
 echo ""
 echo -e "${GREEN}🦕 Starting Triage-Saurus web server${RESET}"
 echo -e "   ${CYAN}URL: http://localhost:9000${RESET}"
+_print_no_install_hint
 echo -e "   ${CYAN}Press Ctrl-C to stop.${RESET}"
 echo ""
 

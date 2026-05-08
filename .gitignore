@@ -15,7 +15,6 @@ Output/Summary/*
 !README.md
 !/.gitkeep
 
-__pycache__
 
 # Per-session outputs live here (preferred)
 Output/*
@@ -28,7 +27,9 @@ __pycache__/
 TestsCorpus/
 opengrep_output.json
 
-icon-cache
+icon-cache/*
 
 # Added by ggshield
 .cache_ggshield
+
+node_modules/*

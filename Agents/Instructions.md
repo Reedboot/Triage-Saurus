@@ -876,6 +876,12 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - Output: a Markdown table to stdout (Finding link + **Overall Score** + description).
 
 ## Mermaid diagram validation (MANDATORY)
+- **Web UI end-to-end validation is REQUIRED for diagram/icon changes** (not syntax-only checks):
+  1. Render diagrams in a real browser flow (headless is acceptable) using the same UI path users take (`/api/diagrams/...` + `window._triage.renderDiagrams(...)`).
+  2. Verify **each architecture tab/provider individually** (e.g., Alicloud, AWS, Azure, GCP, Oracle), not just the first tab.
+  3. Capture screenshots of the loaded page/diagram panel for evidence (store in `/tmp` or session artifacts, not committed output).
+  4. Check browser/runtime signals: Mermaid `error-text` nodes, console errors, and icon/static asset 4xx failures.
+  5. Do not declare complete until browser-level checks show no render errors and no icon fetch failures for the tested scan.
 - **After creating or updating any file with Mermaid diagrams** (findings, summaries, architecture diagrams, repo summaries), **ALWAYS run:**
   - `python3 Scripts/Validate/validate_markdown.py --path <path-to-file-or-directory>`
   - This validates Mermaid syntax and ensures **no `fill:` attributes** (which break dark themes)

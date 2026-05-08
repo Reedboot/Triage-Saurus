@@ -1022,6 +1022,12 @@
 
   // ── Diagram rendering ────────────────────────────────────────────────────
 
+  function sanitizeMermaidSource(code) {
+    return String(code || '')
+      // Strip invisible Unicode format characters that can break URLs/CSS values.
+      .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '');
+  }
+
   function renderDiagrams(diagrams) {
     console.log('[renderDiagrams] Called with:', diagrams);
     if (!Array.isArray(diagrams) || !diagrams.length) {
@@ -1075,7 +1081,7 @@
     let addedCount = 0;
     diagrams.forEach((diag, idx) => {
       const title = diag.title || `Diagram ${idx + 1}`;
-      const code = (diag.code || '').trim();
+      const code = sanitizeMermaidSource(diag.code).trim();
       if (!code) {
         console.warn('[renderDiagrams] Skipping diagram', idx, 'no code');
         return;
@@ -1127,6 +1133,22 @@
 
     console.log('[renderDiagrams] Added', addedCount, 'diagrams to UI');
 
+    async function renderMermaidInContainer(container) {
+      const mermaidBlocks = Array.from(container.querySelectorAll('.mermaid'));
+      for (let idx = 0; idx < mermaidBlocks.length; idx++) {
+        const block = mermaidBlocks[idx];
+        const source = block.dataset.source || block.textContent || '';
+        if (!source.trim()) continue;
+        try {
+          const renderId = `diag_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
+          const rendered = await window.mermaid.render(renderId, source);
+          block.innerHTML = rendered.svg || '';
+        } catch (err) {
+          console.error('[Mermaid] Rendering error:', err.message || err);
+        }
+      }
+    }
+
     // Render mermaid
     if (window.mermaid) {
       try {
@@ -1150,15 +1172,16 @@
           console.log(`[renderDiagrams] Diagram ${idx}: ${codeLen} bytes, starts with: "${first50}..."`);
         });
         
-        window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
-        // Initialize pan/zoom after rendering, then inject icons
-        setTimeout(() => {
-          initPanZoom();
-          // Reset zoom and center for first diagram once layout has settled
-          currentDiagramIndex = 0;
-          scheduleDiagramFit();
-        }, 150);
-        setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
+        renderMermaidInContainer(diagramViews).then(() => {
+          // Initialize pan/zoom after rendering, then inject icons
+          setTimeout(() => {
+            initPanZoom();
+            // Reset zoom and center for first diagram once layout has settled
+            currentDiagramIndex = 0;
+            scheduleDiagramFit();
+          }, 150);
+          setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
+        });
       } catch (e) {
         console.warn('[Diagrams] Mermaid render error:', e);
         console.error('[Diagrams] Full error stack:', e.stack);
@@ -1181,15 +1204,16 @@
                 console.error('[Mermaid] Rendering error:', err.message);
               }
             });
-            window.mermaid.init(undefined, diagramViews.querySelectorAll('.mermaid'));
-            // Initialize pan/zoom after rendering, then inject icons
-            setTimeout(() => {
-              initPanZoom();
-              // Reset zoom and center for first diagram once layout has settled
-              currentDiagramIndex = 0;
-              scheduleDiagramFit();
-            }, 150);
-            setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
+            renderMermaidInContainer(diagramViews).then(() => {
+              // Initialize pan/zoom after rendering, then inject icons
+              setTimeout(() => {
+                initPanZoom();
+                // Reset zoom and center for first diagram once layout has settled
+                currentDiagramIndex = 0;
+                scheduleDiagramFit();
+              }, 150);
+              setTimeout(() => { if (window.MermaidIconInjector) MermaidIconInjector.processAllDiagrams(); }, 400);
+            });
           } catch (e) {
             console.error('[Diagrams] Mermaid render error:', e);
           }
@@ -1252,7 +1276,7 @@
     if (!diagramView) return null;
     const preEl = diagramView.querySelector('pre.mermaid');
     if (!preEl) return null;
-    return preEl.dataset.source || preEl.textContent || '';
+    return sanitizeMermaidSource(preEl.dataset.source || preEl.textContent || '');
   }
 
   function refreshDiagram() {

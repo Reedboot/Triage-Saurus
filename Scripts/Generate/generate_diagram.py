@@ -2327,14 +2327,9 @@ class HierarchicalDiagramBuilder:
                             continue
                         cluster_node_id = sanitize_id(cluster['resource_name'])
                         cluster_label   = self._wrap_mermaid_label(cluster['resource_name'])
-                        rtype = (cluster.get('resource_type') or '').lower()
-                        provider = (cluster.get('provider') or 'aws').lower()
-                        css_class = get_icon_class(rtype, provider) if rtype else None
-                        # Convert hyphens to underscores to match classDef naming
-                        css_suffix = f':::{css_class.replace("-", "_")}' if css_class else ''
                         if k8s_for_compute:
                             # Open cluster subgraph and nest K8s inside it
-                            lines.append(f'{i2}subgraph {cluster_node_id}[{self._quote_mermaid_label(cluster_label)}]{css_suffix}')
+                            lines.append(f'{i2}subgraph {cluster_node_id}[{self._quote_mermaid_label(cluster_label)}]')
                             self._emitted_mermaid_ids.add(cluster_node_id)
                             self._node_id_first_owner[cluster_node_id] = str(cluster.get('id', ''))
                             self.subgraph_nodes.add(cluster['resource_name'])
@@ -5302,6 +5297,17 @@ class HierarchicalDiagramBuilder:
                     "\n".join(error_messages) +
                     "\n\nPlease fix the diagram generation code and try again."
                 )
+
+            # Mermaid v11 does not reliably support class suffix markers on subgraph lines.
+            # Keep class markers on node lines only.
+            for idx, line in enumerate(diagram_text.splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("subgraph ") and ":::" in stripped:
+                    raise ValueError(
+                        "Mermaid diagram syntax errors detected:\n"
+                        f"  • Subgraph class suffix is not supported on Mermaid v11 (line {idx})\n\n"
+                        "Please fix the diagram generation code and try again."
+                    )
         except ImportError:
             # If validator is not available, skip validation (development fallback)
             pass

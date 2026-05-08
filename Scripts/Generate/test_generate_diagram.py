@@ -678,8 +678,8 @@ def test_distinct_resources_with_same_sanitized_name_get_unique_ids(monkeypatch)
     assert diagram.startswith("flowchart TB")
 
 
-def test_validate_diagram_syntax_detects_emoji_class_errors():
-    """Test that _validate_diagram_syntax detects emoji+class suffix errors."""
+def test_validate_diagram_syntax_detects_subgraph_class_suffix_errors():
+    """Test that _validate_diagram_syntax detects unsupported subgraph class suffixes."""
     builder = HierarchicalDiagramBuilder("exp-1")
     
     bad_diagram = '''flowchart TB
@@ -687,13 +687,14 @@ def test_validate_diagram_syntax_detects_emoji_class_errors():
     n20["VM PublicIP"]
   end'''
     
-    # Should raise ValueError for emoji+class syntax error
+    # Should raise ValueError for unsupported subgraph class suffix
     try:
         builder._validate_diagram_syntax(bad_diagram)
-        assert False, "Expected ValueError for emoji+class syntax error"
+        assert False, "Expected ValueError for subgraph class suffix"
     except ValueError as e:
-        assert "emoji" in str(e).lower()
-        assert "class suffix" in str(e).lower()
+        msg = str(e).lower()
+        assert "subgraph" in msg
+        assert "class suffix" in msg
 
 
 def test_validate_diagram_syntax_allows_valid():
@@ -701,7 +702,7 @@ def test_validate_diagram_syntax_allows_valid():
     builder = HierarchicalDiagramBuilder("exp-1")
     
     good_diagram = '''flowchart TB
-  subgraph n23["dev-vm"]:::icon-azurerm-virtual-machine
+  subgraph n23["dev-vm"]
     n20["VM PublicIP"]
   end'''
     
