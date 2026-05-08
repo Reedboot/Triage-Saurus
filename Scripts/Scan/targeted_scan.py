@@ -13,11 +13,15 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Utils"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Persist"))
 from log_formatter import format_scan_complete, Color, Header
+import db_helpers
 
 # ── Root paths ────────────────────────────────────────────────────────────────
 
@@ -283,6 +287,192 @@ ALWAYS_INCLUDE: list[str] = [
 FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = []
 
 
+def _git_ls_files(target: Path, rel_path: str | None = None) -> list[str]:
+    cmd = ["git", "-C", str(target), "ls-files"]
+    if rel_path:
+        cmd.append(rel_path)
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        return []
+    return [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+
+
+_BINARY_EXTENSIONS = {
+    ".7z", ".avi", ".bmp", ".class", ".dll", ".eot", ".exe", ".gif", ".gz", ".ico",
+    ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".otf", ".pdf", ".png", ".svg",
+    ".tar", ".ttf", ".wav", ".webm", ".woff", ".woff2", ".zip",
+}
+
+_NON_CODE_EXTENSIONS = {
+    ".adoc", ".markdown", ".md", ".rst", ".txt",
+}
+
+_EXCLUDED_DIR_PARTS = {
+    ".git",
+    ".python_packages",
+    ".terraform",
+    ".venv",
+    "__pycache__",
+    "bin",
+    "dist",
+    "node_modules",
+    "obj",
+    "site-packages",
+    "vendor",
+}
+
+
+def _filter_scannable_paths(paths: Iterable[str]) -> list[str]:
+    """Drop obvious non-code assets that slow opengrep and rarely match rules."""
+    filtered: list[str] = []
+    for rel in paths:
+        parts = set(Path(rel).parts)
+        if parts & _EXCLUDED_DIR_PARTS:
+            continue
+        ext = Path(rel).suffix.lower()
+        if ext in _BINARY_EXTENSIONS or ext in _NON_CODE_EXTENSIONS:
+            continue
+        filtered.append(rel)
+    return filtered
+
+
+def _tracked_file_count(target: Path) -> int:
+    return len(_git_ls_files(target))
+
+
+def _build_scan_chunks(target: Path, max_files: int = 800, max_paths: int = 8) -> list[list[str]]:
+    """Chunk scannable tracked files to keep each opengrep invocation bounded."""
+    del max_paths  # Kept for call-site compatibility.
+    files = sorted(_filter_scannable_paths(_git_ls_files(target)))
+    if not files:
+        return [["."]]
+    size = max(1, max_files)
+    return [files[idx : idx + size] for idx in range(0, len(files), size)]
+
+
+def _parse_opengrep_json(result: subprocess.CompletedProcess[str]) -> dict:
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return {"results": [], "errors": [], "paths": {"scanned": []}}
+    return json.loads(stdout)
+
+
+def _merge_scan_outputs(parts: list[dict]) -> dict:
+    merged = {"results": [], "errors": [], "paths": {"scanned": []}}
+    seen_paths = set()
+    for part in parts:
+        merged["results"].extend(part.get("results", []))
+        merged["errors"].extend(part.get("errors", []))
+        for scanned in (part.get("paths", {}) or {}).get("scanned", []) or []:
+            if scanned not in seen_paths:
+                seen_paths.add(scanned)
+                merged["paths"]["scanned"].append(scanned)
+    return merged
+
+
+def _infer_provider(check_id: str, metadata: dict) -> str:
+    provider = str(metadata.get("asset_provider") or "").strip().lower()
+    if provider:
+        return provider
+    lower = (check_id or "").lower()
+    if "azure" in lower:
+        return "azure"
+    if "aws" in lower:
+        return "aws"
+    if "gcp" in lower or "google" in lower:
+        return "gcp"
+    if "alicloud" in lower:
+        return "alicloud"
+    if "oci" in lower or "oracle" in lower:
+        return "oci"
+    if "tencent" in lower:
+        return "tencentcloud"
+    if "huawei" in lower:
+        return "huaweicloud"
+    return "unknown"
+
+
+def _extract_metavar_text(extra: dict, token: str) -> str:
+    metavars = extra.get("metavars") or {}
+    value = metavars.get(token)
+    if not isinstance(value, dict):
+        return ""
+    for key in ("abstract_content", "value", "content"):
+        if value.get(key):
+            return str(value[key]).strip().strip('"')
+    return ""
+
+
+def persist_detection_assets(scan_data: dict, experiment_id: str, repo_name: str, target: Path) -> int:
+    """Persist Detection/Asset hits as resources so diagrams can render."""
+    repo_id = db_helpers.ensure_repository_entry(experiment_id, repo_name)
+    inserted = 0
+    with db_helpers.get_db_connection() as conn:
+        for result in scan_data.get("results", []):
+            extra = result.get("extra") or {}
+            metadata = extra.get("metadata") or {}
+            if metadata.get("rule_type") != "context_discovery":
+                continue
+            if metadata.get("finding_kind") != "Asset":
+                continue
+
+            extracts = metadata.get("extracts") or {}
+            if not isinstance(extracts, dict):
+                continue
+            resource_type = str(extracts.get("resource_type") or "").strip()
+            name_expr = str(extracts.get("resource_name") or "").strip()
+            if not resource_type or not name_expr:
+                continue
+
+            resource_name = (
+                _extract_metavar_text(extra, name_expr)
+                if name_expr.startswith("$")
+                else name_expr.strip('"')
+            )
+            if not resource_name:
+                for fallback in ("$NAME", "$RESOURCE_NAME"):
+                    resource_name = _extract_metavar_text(extra, fallback)
+                    if resource_name:
+                        break
+            if not resource_name:
+                continue
+
+            raw_path = str(result.get("path") or "")
+            source_file = raw_path
+            if raw_path:
+                try:
+                    source_file = str(Path(raw_path).resolve().relative_to(target))
+                except Exception:
+                    source_file = raw_path
+            source_start = (result.get("start") or {}).get("line")
+            source_end = (result.get("end") or {}).get("line")
+            provider = _infer_provider(str(result.get("check_id") or ""), metadata)
+
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO resources
+                  (experiment_id, repo_id, resource_name, resource_type, provider,
+                   discovered_by, discovery_method, source_file, source_line_start, source_line_end, status)
+                VALUES
+                  (?, ?, ?, ?, ?, 'Detection', 'opengrep', ?, ?, ?, 'active')
+                """,
+                (
+                    experiment_id,
+                    repo_id,
+                    resource_name,
+                    resource_type,
+                    provider,
+                    source_file or "",
+                    source_start,
+                    source_end,
+                ),
+            )
+            if cursor.rowcount:
+                inserted += 1
+
+    return inserted
+
+
 def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     """Run opengrep scan and return parsed JSON results from stdout."""
     cmd = ["opengrep", "scan"]
@@ -307,19 +497,56 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     
     print(f"\n{header} Running: {cmd_display}")
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    # opengrep exits non-zero when findings exist — that's expected
-    stdout = (result.stdout or "").strip()
-    if stdout:
+    # WSL/opengrep can hang on large repositories. Chunk scanning for large tracked sets.
+    tracked_files = _tracked_file_count(target)
+    # Be conservative on WSL/network filesystems: chunk once repos are moderately sized.
+    use_chunked = tracked_files >= 250
+
+    if not use_chunked:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        # opengrep exits non-zero when findings exist — that's expected
         try:
-            return json.loads(stdout)
+            return _parse_opengrep_json(result)
         except json.JSONDecodeError as exc:
             print(f"{Header.ERROR} Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
             sys.exit(1)
-    # If no stdout (e.g. zero findings), return empty structure
-    return {"results": [], "errors": [], "paths": {"scanned": []}}
+
+    print(f"{Header.INFO} Large repo detected ({tracked_files} tracked files); using chunked opengrep.")
+    chunk_size = 40
+    chunks = _build_scan_chunks(target, max_files=chunk_size, max_paths=3)
+    chunk_results: list[dict] = []
+    chunk_timeout_seconds = 180
+    for idx, chunk in enumerate(chunks, start=1):
+        chunk_cmd = ["opengrep", "scan"]
+        for config_path in config_paths:
+            chunk_cmd += ["--config", str(config_path)]
+        chunk_cmd += [*chunk, "--json", "--quiet"]
+        print(f"  [chunk {idx}/{len(chunks)}] {' '.join(chunk_cmd)}")
+        try:
+            res = subprocess.run(
+                chunk_cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(target),
+                timeout=chunk_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"  {Header.WARN} chunk {idx}/{len(chunks)} timed out after {chunk_timeout_seconds}s; skipping.",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            chunk_results.append(_parse_opengrep_json(res))
+        except json.JSONDecodeError as exc:
+            print(f"{Header.ERROR} Failed to parse chunk JSON output: {exc}", file=sys.stderr)
+            if res.stderr:
+                print(res.stderr, file=sys.stderr)
+            sys.exit(1)
+
+    return _merge_scan_outputs(chunk_results)
 
 
 def extract_fired_rule_ids(scan_data: dict) -> set[str]:
@@ -396,6 +623,9 @@ def main() -> None:
     print("=" * 60)
 
     detection_data = run_opengrep([DETECTION], target, "Detection")
+    resources_added = persist_detection_assets(detection_data, args.experiment, args.repo, target)
+    if resources_added:
+        print(f"{Header.INFO} Persisted {resources_added} detected assets as resources.")
     fired_ids = extract_fired_rule_ids(detection_data)
 
     misconfig_paths = resolve_misconfig_paths(fired_ids, target)

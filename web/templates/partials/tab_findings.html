@@ -127,7 +127,7 @@
            data-discovery-toggle="{{ discovery_type }}">
         <span data-toggle-icon style="font-size: 1.5rem;">▼</span>
         <span style="font-size: 1.3rem; font-weight: 700; flex: 1;">{{ discovery_names.get(discovery_type, discovery_type) }}</span>
-        {% set total_for_type = discovery_groups[discovery_type].values() | sum(attribute='__len__') %}
+        {% set total_for_type = discovery_groups[discovery_type].values() | map('length') | sum %}
         <span style="font-size: 0.95rem; color: var(--text-muted);">
           {{ total_for_type }} finding{{ 's' if total_for_type != 1 }}
         </span>

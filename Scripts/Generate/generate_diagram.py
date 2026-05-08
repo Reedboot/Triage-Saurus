@@ -1861,8 +1861,15 @@ class HierarchicalDiagramBuilder:
             props = res.get('properties') or {}
             database_name = str(props.get('database') or preferred_database or '').strip()
             children = self.children_by_parent.get(res['id'], [])
+            rendered_children: List[str] = []
+            for child in children:
+                if self.children_by_parent.get(child['id']):
+                    rendered_children.extend(self._render_nested_resource(child, indent=child_indent))
+                else:
+                    rendered_children.append(self.render_node(child, indent=child_indent))
+                    self.emitted_nodes.add(child['resource_name'])
 
-            if database_name or children:
+            if database_name or rendered_children:
                 db_node_id = sanitize_id(f"{server_name}_{database_name}")
                 # Use server_id as the subgraph ID so that existing connection edges
                 # (which reference the server by name/id) correctly target the subgraph.
@@ -1873,12 +1880,7 @@ class HierarchicalDiagramBuilder:
                 lines.append(f"{indent}subgraph {server_id}[{self._quote_mermaid_label(label)}]")
                 if database_name:
                     lines.append(f"{child_indent}{db_node_id}[\"{database_name}\"]")
-                for child in children:
-                    if self.children_by_parent.get(child['id']):
-                        lines.extend(self._render_nested_resource(child, indent=child_indent))
-                    else:
-                        lines.append(self.render_node(child, indent=child_indent))
-                        self.emitted_nodes.add(child['resource_name'])
+                lines.extend(rendered_children)
                 lines.append(f"{indent}end")
                 self.emitted_nodes.add(server_name)
                 self.emitted_nodes.add(database_name)
@@ -1925,22 +1927,7 @@ class HierarchicalDiagramBuilder:
                 self._tier_nodes[tier_id].append(name)
             return result
 
-        lines: List[str] = []
-        # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
-        # Use 'style' commands instead if styling is needed
-        lines.append(f'{indent}subgraph {node_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(name))}]')
-        self._emitted_mermaid_ids.add(node_id)
-        self._rendered_subgraph_resource_ids.add(resource_id)  # Track this resource ID
-        self.node_id_override[name] = node_id
-        self.subgraph_nodes.add(name)
-        if node_id not in self._node_id_first_owner:
-            self._node_id_first_owner[node_id] = str(resource_id)
-        
-        # Track this parent node in tier if tier_id specified
-        if tier_id and hasattr(self, '_tier_nodes'):
-            if tier_id not in self._tier_nodes:
-                self._tier_nodes[tier_id] = []
-            self._tier_nodes[tier_id].append(name)
+        rendered_children: List[str] = []
 
         # Determine if this parent is a storage resource — cloud functions must not be
         # nested inside storage buckets (a function's zip file lives in a bucket, but the
@@ -1964,9 +1951,9 @@ class HierarchicalDiagramBuilder:
                     continue
             
             if self.children_by_parent.get(child['id']):
-                lines.extend(self._render_nested_resource(child, indent=indent + "  ", tier_id=tier_id))
+                rendered_children.extend(self._render_nested_resource(child, indent=indent + "  ", tier_id=tier_id))
             else:
-                lines.append(self.render_node(child, indent=indent + "  "))
+                rendered_children.append(self.render_node(child, indent=indent + "  "))
                 self.emitted_nodes.add(child['resource_name'])
                 # Track leaf child in tier if tier_id specified
                 if tier_id and hasattr(self, '_tier_nodes'):
@@ -1974,6 +1961,32 @@ class HierarchicalDiagramBuilder:
                         self._tier_nodes[tier_id] = []
                     self._tier_nodes[tier_id].append(child['resource_name'])
 
+        if not rendered_children:
+            result = [self.render_node(resource, indent=indent)]
+            if tier_id and hasattr(self, '_tier_nodes'):
+                if tier_id not in self._tier_nodes:
+                    self._tier_nodes[tier_id] = []
+                self._tier_nodes[tier_id].append(name)
+            return result
+
+        lines: List[str] = []
+        # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
+        # Use 'style' commands instead if styling is needed
+        lines.append(f'{indent}subgraph {node_id}[{self._quote_mermaid_label(self._wrap_mermaid_label(name))}]')
+        self._emitted_mermaid_ids.add(node_id)
+        self._rendered_subgraph_resource_ids.add(resource_id)  # Track this resource ID
+        self.node_id_override[name] = node_id
+        self.subgraph_nodes.add(name)
+        if node_id not in self._node_id_first_owner:
+            self._node_id_first_owner[node_id] = str(resource_id)
+
+        # Track this parent node in tier if tier_id specified
+        if tier_id and hasattr(self, '_tier_nodes'):
+            if tier_id not in self._tier_nodes:
+                self._tier_nodes[tier_id] = []
+            self._tier_nodes[tier_id].append(name)
+
+        lines.extend(rendered_children)
         lines.append(f'{indent}end')
         self.emitted_nodes.add(name)
         return lines
@@ -2700,12 +2713,15 @@ class HierarchicalDiagramBuilder:
                 # Render Kubernetes workloads inside the compute resource (K8s runs on EC2 worker node)
                 if has_k8s:
                     k8s_lines = self.render_kubernetes_cluster(k8s_resources, parent_context=vm_id)
-                    for line in k8s_lines:
-                        # Indent K8s lines to be inside the compute subgraph
-                        if line.startswith("  "):
-                            lines.append("  " + line)
-                        else:
-                            lines.append(line)
+                    if k8s_lines:
+                        for line in k8s_lines:
+                            # Indent K8s lines to be inside the compute subgraph
+                            if line.startswith("  "):
+                                lines.append("  " + line)
+                            else:
+                                lines.append(line)
+                    else:
+                        has_k8s = False
                 
                 lines.append("  end")
             else:
@@ -5257,12 +5273,54 @@ class HierarchicalDiagramBuilder:
         lines.append("")
       #  lines.append("%%{init: {'theme':'dark'} }%%")
         
+        lines = self._strip_empty_subgraphs(lines)
         diagram_text = "\n".join(lines)
         
         # Validate diagram syntax before returning
         self._validate_diagram_syntax(diagram_text)
         
         return diagram_text
+
+    def _strip_empty_subgraphs(self, lines: List[str]) -> List[str]:
+        """Remove subgraph blocks that only contain direction directives or blanks."""
+        def _is_meaningful(line: str) -> bool:
+            stripped = line.strip()
+            if not stripped:
+                return False
+            if stripped.startswith(("direction ", "style ", "class ", "linkStyle ", "click ", "%%")):
+                return False
+            return True
+
+        frames = [{"header": None, "lines": [], "meaningful": False}]
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("subgraph "):
+                frames.append({"header": line, "lines": [], "meaningful": False})
+                continue
+            if stripped == "end" and len(frames) > 1:
+                frame = frames.pop()
+                if frame["meaningful"]:
+                    frames[-1]["meaningful"] = True
+                    frames[-1]["lines"].append(frame["header"])
+                    frames[-1]["lines"].extend(frame["lines"])
+                    frames[-1]["lines"].append(line)
+                continue
+            if len(frames) > 1:
+                if _is_meaningful(line):
+                    frames[-1]["meaningful"] = True
+                frames[-1]["lines"].append(line)
+            else:
+                frames[0]["lines"].append(line)
+
+        while len(frames) > 1:
+            frame = frames.pop()
+            if frame["meaningful"]:
+                frames[-1]["meaningful"] = True
+                frames[-1]["lines"].append(frame["header"])
+                frames[-1]["lines"].extend(frame["lines"])
+                frames[-1]["lines"].append("end")
+
+        return frames[0]["lines"]
 
     
     def _validate_diagram_syntax(self, diagram_text: str) -> None:
