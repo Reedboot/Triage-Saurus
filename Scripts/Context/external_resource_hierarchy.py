@@ -339,6 +339,7 @@ HIERARCHY_CONFIG: Dict[str, Dict[str, str]] = {
     "aws_kms_grant": {"parent_type": "aws_kms_key", "parent_field": "key_id"},
     "aws_kms_key_policy": {"parent_type": "aws_kms_key", "parent_field": "key_id"},
     # AWS – Secrets / SSM
+    "aws_secretsmanager_secret": {"parent_type": "aws_kms_key", "parent_field": "kms_key_id"},
     "aws_secretsmanager_secret_version": {"parent_type": "aws_secretsmanager_secret", "parent_field": "secret_id"},
     "aws_secretsmanager_secret_policy": {"parent_type": "aws_secretsmanager_secret", "parent_field": "secret_id"},
     "aws_secretsmanager_secret_rotation": {"parent_type": "aws_secretsmanager_secret", "parent_field": "secret_id"},

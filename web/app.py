@@ -4331,7 +4331,17 @@ def api_diagrams(experiment_id: str):
             try:
                 # First, check for persisted per-provider diagrams for this repo/experiment.
                 db_diagrams = get_cloud_diagrams(experiment_id, repo_name=repo_name)
-                if db_diagrams and not force_regenerate:
+                has_sparse_alicloud_or_oci = any(
+                    _canonical_provider_key((d.get("provider") or d.get("diagram_title") or "").lower()) in {"alicloud", "oci"}
+                    and _edge_count(d.get("mermaid_code") or "") == 0
+                    for d in (db_diagrams or [])
+                )
+                if (
+                    db_diagrams
+                    and not force_regenerate
+                    and not has_sparse_alicloud_or_oci
+                    and max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) > 0
+                ):
                     return jsonify(_response_payload(db_diagrams))
 
                 # No persisted diagrams — regenerate per-provider from DB topology.

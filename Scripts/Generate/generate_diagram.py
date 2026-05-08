@@ -277,6 +277,10 @@ class HierarchicalDiagramBuilder:
             'managed_identity', 'user_assigned_identity', 'automation_account',
             'ecs_cluster', 'lambda_function', 'ecs_service', 'ecs_task',
             'secretsmanager', 'secrets_manager',
+            # Multi-cloud resource types that are often important even when
+            # connection inference is sparse.
+            'oss_bucket', 'objectstorage_bucket', 'compartment',
+            'actiontrail',
         )
         return any(tok in rtype for tok in significant_tokens)
 
@@ -1360,7 +1364,9 @@ class HierarchicalDiagramBuilder:
             'load_balancer', 'lb', 'alb', 'elb',
             'ingress', 'gateway',
             'api_gateway', 'apigateway',
-            'web_app', 'app_service'
+            'web_app', 'app_service',
+            # Buckets/object stores can be public endpoints depending on ACL/policy.
+            'oss_bucket', 'objectstorage_bucket',
         ]
         if any(tok in rtype for tok in edge_type_tokens):
             return True
@@ -5206,6 +5212,7 @@ class HierarchicalDiagramBuilder:
             and not (
                 self.is_identity_principal_like(r)
                 and r.get('resource_name') not in connected_resource_names
+                and not self.children_by_parent.get(r.get('id'))
             )
             and (
                 self._is_connected_name(r.get('resource_name', ''))
