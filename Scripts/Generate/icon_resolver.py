@@ -1358,29 +1358,50 @@ KUBERNETES_RESOURCE_TYPE_TO_ICON = {
     'kubernetes_serviceaccount': ('kubernetes', 'service'),
 }
 
-# Alicloud, OCI, and synthetic resource types — use provider-agnostic fallback icons
-# These live in the Azure/GCP icon directories which are already served under /static
+# Alicloud, OCI, and synthetic resource types — mapped to semantically equivalent
+# AWS/GCP icons (no dedicated Alicloud/OCI icon sets available).
+# Format: (provider_dir, 'Category/icon-name') — _find_icon_file appends /64 for aws, /SVG for gcp.
 OTHER_RESOURCE_TYPE_TO_ICON: dict = {
-    # Alicloud
-    'alicloud_db_instance':       ('azure', 'databases/sql-database'),
-    'alicloud_oss_bucket':        ('azure', 'storage/storage-account'),
-    'alicloud_instance':          ('azure', 'compute/virtual-machine'),
-    'alicloud_vpc':               ('azure', 'networking/virtual-networks'),
-    'alicloud_vswitch':           ('azure', 'networking/virtual-networks'),
-    'alicloud_security_group':    ('azure', 'networking/nsg'),
-    'alicloud_ram_role':          ('azure', 'identity/managed-identities'),
-    'alicloud_ram_policy':        ('azure', 'security/microsoft-defender-for-cloud'),
-    # Oracle Cloud Infrastructure
-    'oci_objectstorage_bucket':   ('azure', 'storage/storage-account'),
-    'oci_core_instance':          ('azure', 'compute/virtual-machine'),
-    'oci_core_vcn':               ('azure', 'networking/virtual-networks'),
-    'oci_core_subnet':            ('azure', 'networking/virtual-networks'),
-    'oci_database_db_system':     ('azure', 'databases/sql-database'),
-    # Synthetic/inferred nodes (created by diagram generator)
-    'synthetic_sql_server':       ('azure', 'databases/sql-database'),
-    'synthetic_database':         ('azure', 'databases/sql-database'),
-    'synthetic_storage':          ('azure', 'storage/storage-accounts'),
-    'synthetic_server':           ('azure', 'compute/virtual-machine'),
+    # ── Alicloud ─────────────────────────────────────────────────────────────
+    'alicloud_db_instance':           ('aws', 'Arch_Databases/rds'),
+    'alicloud_polardb_cluster':       ('aws', 'Arch_Databases/aurora'),
+    'alicloud_mongodb_instance':      ('aws', 'Arch_Databases/documentdb'),
+    'alicloud_redis_instance':        ('aws', 'Arch_Databases/elasticache'),
+    'alicloud_oss_bucket':            ('gcp', 'Cloud_Storage/cloud-storage'),
+    'alicloud_nas_file_system':       ('aws', 'Arch_Storage/efs'),
+    'alicloud_instance':              ('aws', 'Arch_Compute/ec2'),
+    'alicloud_ecs_instance':          ('aws', 'Arch_Compute/ec2'),
+    'alicloud_vpc':                   ('aws', 'Arch_Networking-Content-Delivery/virtual-private-cloud'),
+    'alicloud_vswitch':               ('aws', 'Arch_Networking-Content-Delivery/vpc'),
+    'alicloud_security_group':        ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'alicloud_security_group_rule':   ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'alicloud_ram_role':              ('aws', 'Arch_Security-Identity/iam'),
+    'alicloud_ram_policy':            ('aws', 'Arch_Security-Identity/shield'),
+    'alicloud_slb':                   ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'alicloud_eip':                   ('aws', 'Arch_Networking-Content-Delivery/elastic-ip-address'),
+    'alicloud_cs_kubernetes':         ('aws', 'Arch_Containers/elastic-kubernetes-service'),
+    'alicloud_fc_function':           ('aws', 'Arch_Compute/lambda'),
+    'alicloud_log_store':             ('gcp', 'Cloud_Storage/cloud-storage'),
+    # ── Oracle Cloud Infrastructure ──────────────────────────────────────────
+    'oci_objectstorage_bucket':       ('gcp', 'Cloud_Storage/cloud-storage'),
+    'oci_core_instance':              ('aws', 'Arch_Compute/ec2'),
+    'oci_core_vcn':                   ('aws', 'Arch_Networking-Content-Delivery/virtual-private-cloud'),
+    'oci_core_subnet':                ('aws', 'Arch_Networking-Content-Delivery/vpc'),
+    'oci_core_security_list':         ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'oci_core_network_security_group':('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'oci_database_db_system':         ('aws', 'Arch_Databases/rds'),
+    'oci_database_autonomous_database':('aws', 'Arch_Databases/aurora'),
+    'oci_load_balancer':              ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
+    'oci_identity_policy':            ('aws', 'Arch_Security-Identity/shield'),
+    'oci_vault_secret':               ('aws', 'Arch_Security-Identity/shield'),
+    'oci_kms_key':                    ('aws', 'Arch_Security-Identity/shield'),
+    'oci_functions_function':         ('aws', 'Arch_Compute/lambda'),
+    'oci_oke_cluster':                ('aws', 'Arch_Containers/elastic-kubernetes-service'),
+    # ── Synthetic/inferred nodes (created by diagram generator) ──────────────
+    'synthetic_sql_server':           ('gcp', 'Cloud_SQL/cloud-sql'),
+    'synthetic_database':             ('gcp', 'Cloud_SQL/cloud-sql'),
+    'synthetic_storage':              ('gcp', 'Cloud_Storage/cloud-storage'),
+    'synthetic_server':               ('aws', 'Arch_Compute/ec2'),
 }
 
 

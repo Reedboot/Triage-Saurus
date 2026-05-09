@@ -1256,17 +1256,28 @@ def _terraform_resource_blocks(repo_path: Path, prefix: str | None = None) -> li
 
 
 def _terraform_actual_names(repo_path: Path | None) -> dict[tuple[str, str], str]:
-    """Return {(resource_type, terraform_label): actual_name} from Terraform name attributes."""
+    """Return {(resource_type, terraform_label): actual_name} from Terraform name attributes.
+
+    Only considers ``name = "..."`` lines at the top level of the resource block
+    (brace depth 0). Nested blocks such as ``parameters { name = "..." }`` are
+    skipped so that DB-engine config keys like ``innodb_large_prefix`` are never
+    mistaken for the resource's display name.
+    """
     if not repo_path:
         return {}
     name_re = re.compile(r'^\s*name\s*=\s*"([^"]+)"')
     result: dict[tuple[str, str], str] = {}
     for rtype, rlabel, body in _terraform_resource_blocks(repo_path):
+        depth = 0
         for line in body.splitlines():
-            m = name_re.match(line)
-            if m:
-                result[(rtype, rlabel)] = m.group(1)
-                break
+            depth += line.count("{") - line.count("}")
+            # At depth 0 we are still inside the outermost resource block
+            # (the opening brace was consumed by _terraform_resource_blocks).
+            if depth == 0:
+                m = name_re.match(line)
+                if m:
+                    result[(rtype, rlabel)] = m.group(1)
+                    break
     return result
 
 

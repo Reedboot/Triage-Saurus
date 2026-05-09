@@ -10771,47 +10771,62 @@ def scan_001_diagram():
 
 @app.route("/diagrams/<experiment_id>")
 def view_diagram(experiment_id: str):
-    """Display a Mermaid diagram in the web interface."""
+    """Display architecture diagrams with multi-provider tab navigation."""
     try:
-        # Fetch the diagram from the API
-        diagram_data = None
-        
-        # Query the database directly for diagram data
         db_path = REPO_ROOT / "Output" / "Data" / "cozo.db"
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
-        
+
         cursor.execute("""
-            SELECT mermaid_code, diagram_title, provider 
-            FROM cloud_diagrams 
+            SELECT mermaid_code, diagram_title, provider, display_order
+            FROM cloud_diagrams
             WHERE experiment_id = ?
-            LIMIT 1
+            ORDER BY display_order ASC, provider ASC
         """, (experiment_id,))
-        
-        row = cursor.fetchone()
+
+        rows = cursor.fetchall()
         conn.close()
-        
-        if not row:
+
+        if not rows:
             return f"Diagram not found: {experiment_id}", 404
-        
-        mermaid_code, title, provider = row
-        
-        # Determine icon type from the code
-        if "data:image/svg+xml;base64" in mermaid_code:
-            icon_type = "SVG Icons (Base64 Data URIs)"
-            description = "Testing SVG icon embedding in Mermaid diagrams. Icons are embedded as base64-encoded data URIs."
-        else:
-            icon_type = "Emoji Icons"
-            description = "Architecture diagram with emoji icons for resource types."
-        
+
+        # Active provider from query string; default to first
+        active_provider = request.args.get("provider", rows[0][2])
+        # Ensure requested provider exists in this experiment
+        providers_in_experiment = [r[2] for r in rows]
+        if active_provider not in providers_in_experiment:
+            active_provider = rows[0][2]
+
+        # Build list of all diagrams for tab rendering
+        diagrams = [
+            {"code": r[0], "title": r[1], "provider": r[2]}
+            for r in rows
+        ]
+
+        # Active diagram
+        active_diagram = next(
+            (d for d in diagrams if d["provider"] == active_provider),
+            diagrams[0]
+        )
+
+        mermaid_code = active_diagram["code"]
+        title = active_diagram["title"]
+
+        icon_type = (
+            "SVG Icons (Base64 Data URIs)"
+            if "data:image/svg+xml;base64" in mermaid_code
+            else "Inline SVG Icons"
+        )
+
         return render_template(
             "diagram_viewer.html",
             experiment_id=experiment_id,
             diagram_title=title or "Architecture Diagram",
-            provider=provider or "Unknown",
+            provider=active_provider,
             icon_type=icon_type,
-            description=description,
-            mermaid_code=mermaid_code
+            mermaid_code=mermaid_code,
+            diagrams=diagrams,
+            active_provider=active_provider,
         )
     except Exception as e:
         return f"Error loading diagram: {str(e)}", 500

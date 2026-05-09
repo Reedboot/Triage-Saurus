@@ -123,8 +123,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--name",
-        default="offline_scan",
-        help="Experiment name suffix (default: offline_scan).",
+        default=None,
+        help="Experiment name suffix (default: derived from repo directory name).",
     )
     parser.add_argument(
         "--experiment",
@@ -154,6 +154,8 @@ def main() -> int:
         return 1
 
     repo_name = repo_path.name
+    # Default experiment name to repo directory name (avoids collision when running parallel scans)
+    exp_name = args.name or f"{repo_name.lower().replace('-', '_')}_scan"
 
     # ── Create or reuse experiment ────────────────────────────────────────────
     if args.experiment:
@@ -164,9 +166,9 @@ def main() -> int:
             return 1
         print(f"\n[Pipeline] Reusing experiment {experiment_id} at {exp_dir}")
     else:
-        print(f"\n[Pipeline] Creating new experiment: {args.name}")
+        print(f"\n[Pipeline] Creating new experiment: {exp_name}")
         result = subprocess.run(
-            [sys.executable, str(_EXPERIMENTS), "new", args.name,
+            [sys.executable, str(_EXPERIMENTS), "new", exp_name,
              "--repos", str(repo_path)],
             cwd=str(REPO_ROOT),
             capture_output=True,

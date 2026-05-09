@@ -2167,7 +2167,15 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         attrs = _parse_simple_block_attributes(block_text)
         resource_type = resource.resource_type
 
-        top_level_name_match = re.search(r'^\s*name\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
+        top_level_name_match = None
+        depth = 0
+        for line in block_text.splitlines():
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                m = re.match(r'^\s*name\s*=\s*"([^"]+)"', line)
+                if m:
+                    top_level_name_match = m
+                    break
         if top_level_name_match:
             name_value = top_level_name_match.group(1)
             # Only use resolved names, never local/var/module expressions.

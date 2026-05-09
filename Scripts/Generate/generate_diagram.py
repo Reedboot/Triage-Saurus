@@ -5486,6 +5486,13 @@ class HierarchicalDiagramBuilder:
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
         
+        # Track node IDs that already have a style line to prevent duplicates from tier coloring
+        already_styled: set = {
+            re.match(r'\s*style\s+(\S+)', ln).group(1)
+            for ln in lines
+            if re.match(r'\s*style\s+(\S+)', ln)
+        }
+
         # Apply tier colors to individual tier nodes (instead of subgraph wrappers)
         # NOTE: Unlike category styling, tier colors are applied to both nodes AND subgraphs
         tier_colors = {
@@ -5499,7 +5506,9 @@ class HierarchicalDiagramBuilder:
                     for resource_name in self._tier_nodes[tier_id]:
                         # Use actual node ID from override, or fallback to resource name
                         actual_node_id = self.node_id_override.get(resource_name, resource_name)
-                        lines.append(f"  style {actual_node_id} stroke:{color},stroke-width:3px")
+                        if actual_node_id not in already_styled:
+                            lines.append(f"  style {actual_node_id} stroke:{color},stroke-width:3px")
+                            already_styled.add(actual_node_id)
         
         return lines
     
