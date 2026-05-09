@@ -1,0 +1,39 @@
+rules:
+  - id: gcp-cloud-function-public-invoker
+    message: |
+      GCP Cloud Function IAM member grants the 'roles/cloudfunctions.invoker' role to
+      'allUsers' or 'allAuthenticatedUsers', making the function publicly invocable over
+      the internet without any authentication.
+
+      Any caller on the internet can trigger this function. This bypasses all identity
+      controls and may expose sensitive logic or data to unauthenticated actors.
+
+      Remediation: Remove the allUsers/allAuthenticatedUsers binding and restrict
+      invocation to specific service accounts or authenticated identities. If public
+      access is required, place an authenticated API Gateway or Cloud Endpoints in front.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_cloudfunctions_function_iam_member" $NAME {
+            ...
+            member = $MEMBER
+            ...
+          }
+      - pattern-regex: 'member\s*=\s*"all(Users|AuthenticatedUsers)"'
+    metadata:
+      finding_kind: Finding
+      asset_provider: gcp
+      rule_type: security_finding
+      category: misconfiguration
+      subcategory: [serverless, exposure, iam]
+      cwe: CWE-284
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [terraform, gcp, cloud-functions, iam]
+      internet_exposure: true
+      target_files: ["**/*.tf"]
+    description: |
+      Detects Cloud Function IAM members that allow unauthenticated or all-authenticated
+      users to invoke the function, exposing it to the public internet.

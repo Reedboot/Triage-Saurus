@@ -235,6 +235,24 @@ class InternetExposureDetector:
             elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
                 exposed[resource_name] = detail
 
+        # Method 5: GCP — propagate open firewall rules to compute instances in the same network
+        if self.provider == 'gcp' and properties:
+            gcp_fw_results = self._detect_gcp_firewall_to_instances(resources, properties)
+            for resource_name, detail in gcp_fw_results.items():
+                if resource_name not in exposed:
+                    exposed[resource_name] = detail
+                elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
+                    exposed[resource_name] = detail
+
+        # Method 6: GCP — Cloud Functions with allUsers IAM invoker binding
+        if self.provider == 'gcp' and properties:
+            gcp_cf_results = self._detect_gcp_public_cloud_functions(resources, properties)
+            for resource_name, detail in gcp_cf_results.items():
+                if resource_name not in exposed:
+                    exposed[resource_name] = detail
+                elif confidence_rank.get(detail.confidence, 0) > confidence_rank.get(exposed[resource_name].confidence, 0):
+                    exposed[resource_name] = detail
+
         return exposed
 
     def _detect_by_findings(
@@ -405,6 +423,138 @@ class InternetExposureDetector:
                     reason=' | '.join(reason_parts),
                     color=self.COLORS['property'],
                     detection_methods=['Property'],
+                )
+
+        return exposed
+
+    def _detect_gcp_firewall_to_instances(
+        self,
+        resources: List[Dict],
+        properties: Dict[int, Dict[str, str]],
+    ) -> Dict[str, ExposureDetail]:
+        """
+        GCP-specific: if a google_compute_firewall rule allows 0.0.0.0/0 ingress on a
+        given network, all google_compute_instance resources in that network are
+        internet-reachable via that firewall. Emit them as exposed.
+        """
+        exposed = {}
+
+        # Collect open firewall rules: map network_name → list of port descriptions
+        open_firewall_networks: Dict[str, List[str]] = {}
+        for resource in resources:
+            if resource.get('resource_type', '').lower() != 'google_compute_firewall':
+                continue
+            rid = resource.get('id')
+            if rid not in properties:
+                continue
+            props = properties[rid]
+            if props.get('internet_ingress_open') == 'true':
+                network_ref = props.get('network_ref_sym') or props.get('network_ref') or ''
+                ports = props.get('ports', '')
+                port_desc = f'port(s): {ports}' if ports else 'all ports'
+                # Use generic marker if no network reference is resolved
+                key = network_ref if network_ref else '__any_network__'
+                open_firewall_networks.setdefault(key, []).append(port_desc)
+
+        if not open_firewall_networks:
+            return exposed
+
+        # Find compute instances and check if they share the firewall network
+        for resource in resources:
+            if resource.get('resource_type', '').lower() != 'google_compute_instance':
+                continue
+            resource_name = resource.get('resource_name')
+            if not resource_name:
+                continue
+            rid = resource.get('id')
+            props = properties.get(rid, {})
+            instance_vpc = props.get('vpc_ref_sym') or props.get('subnet_ref_sym') or ''
+
+            # Match: exact VPC match, OR a catch-all open firewall exists
+            matched_ports: List[str] = []
+            if instance_vpc and instance_vpc in open_firewall_networks:
+                matched_ports = open_firewall_networks[instance_vpc]
+            elif '__any_network__' in open_firewall_networks:
+                matched_ports = open_firewall_networks['__any_network__']
+
+            if matched_ports:
+                port_summary = ', '.join(matched_ports[:3])
+                exposed[resource_name] = ExposureDetail(
+                    resource_name=resource_name,
+                    resource_id=rid,
+                    exposure_type='firewall_rule',
+                    confidence='high',
+                    reason=f'GCP firewall allows 0.0.0.0/0 ingress on network ({port_summary})',
+                    color=self.COLORS['firewall_rule'],
+                    detection_methods=['GCP Firewall Network Propagation'],
+                )
+
+        return exposed
+
+    def _detect_gcp_public_cloud_functions(
+        self,
+        resources: List[Dict],
+        properties: Dict[int, Dict[str, str]],
+    ) -> Dict[str, ExposureDetail]:
+        """
+        GCP-specific: detect Cloud Functions with trigger_http=true OR that have an
+        allUsers/allAuthenticatedUsers IAM invoker binding, making them publicly callable.
+        """
+        exposed = {}
+
+        # Collect functions with trigger_http
+        trigger_http_functions: set = set()
+        for resource in resources:
+            if resource.get('resource_type', '').lower() not in (
+                'google_cloudfunctions_function', 'google_cloudfunctions2_function'
+            ):
+                continue
+            rid = resource.get('id')
+            resource_name = resource.get('resource_name')
+            if not resource_name:
+                continue
+            props = properties.get(rid, {})
+            if props.get('internet_access') == 'true':
+                trigger_http_functions.add(resource_name)
+                exposed[resource_name] = ExposureDetail(
+                    resource_name=resource_name,
+                    resource_id=rid,
+                    exposure_type='property',
+                    confidence='high',
+                    reason='Cloud Function: trigger_http=true (HTTPS endpoint publicly reachable)',
+                    color=self.COLORS['property'],
+                    detection_methods=['Cloud Function HTTP Trigger'],
+                )
+
+        # Collect allUsers IAM members linked to a parent function
+        # The IAM member resource is excluded from diagram but its parent_resource_id
+        # points to the function. Check via parent_id stored in properties.
+        for resource in resources:
+            if resource.get('resource_type', '').lower() != 'google_cloudfunctions_function_iam_member':
+                continue
+            rid = resource.get('id')
+            props = properties.get(rid, {})
+            member_val = str(props.get('member', '')).strip().lower()
+            if member_val not in ('allusers', 'allauthenticatedusers'):
+                continue
+            # Find the parent function name
+            parent_fn_name = props.get('cloud_function_name') or props.get('function_name') or ''
+            if not parent_fn_name:
+                # Try to match via parent resource name in resource list
+                parent_id = resource.get('parent_resource_id')
+                for fn_res in resources:
+                    if fn_res.get('id') == parent_id:
+                        parent_fn_name = fn_res.get('resource_name', '')
+                        break
+            if parent_fn_name and parent_fn_name not in exposed:
+                exposed[parent_fn_name] = ExposureDetail(
+                    resource_name=parent_fn_name,
+                    resource_id=rid,
+                    exposure_type='finding',
+                    confidence='high',
+                    reason='Cloud Function: allUsers IAM invoker — unauthenticated public access',
+                    color=self.COLORS['finding'],
+                    detection_methods=['GCP allUsers IAM Invoker'],
                 )
 
         return exposed

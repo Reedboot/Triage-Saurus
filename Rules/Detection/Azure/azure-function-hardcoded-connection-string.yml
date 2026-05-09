@@ -1,0 +1,92 @@
+rules:
+  - id: azure-function-app-hardcoded-connection-string
+    message: |
+      Azure Function App 'app_settings' block contains what appears to be a hardcoded
+      database connection string or access key literal. Storing secrets in plain text
+      environment variables exposes credentials to anyone with read access to the
+      Terraform state file, CI/CD logs, or the Azure portal app settings view.
+
+      This violates the principle of secret externalisation. If the Terraform state is
+      stored in an unencrypted backend or committed to source control, the credentials
+      are effectively public.
+
+      Remediation: Store the connection string in Azure Key Vault, reference it via a
+      Key Vault secret reference in app_settings
+      (e.g. @Microsoft.KeyVault(SecretUri=...)), and grant the Function App's managed
+      identity the Key Vault Secrets User role.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              resource "azurerm_function_app" $NAME {
+                ...
+                app_settings = {
+                  ...
+                  $KEY = $VALUE
+                  ...
+                }
+                ...
+              }
+          - pattern: |
+              resource "azurerm_linux_function_app" $NAME {
+                ...
+                app_settings = {
+                  ...
+                  $KEY = $VALUE
+                  ...
+                }
+                ...
+              }
+          - pattern: |
+              resource "azurerm_windows_function_app" $NAME {
+                ...
+                app_settings = {
+                  ...
+                  $KEY = $VALUE
+                  ...
+                }
+                ...
+              }
+      - pattern-regex: '(?i)(PRIMARYKEY|PRIMARY_KEY|ACCOUNTKEY|ACCOUNT_KEY|CONNECTIONSTRING|CONNECTION_STRING|DB_PASSWORD|DATABASE_PASSWORD|SECRET_KEY|API_KEY|ACCESS_KEY)\s*=\s*"[^$"]{8,}"'
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security_finding
+      category: secrets
+      subcategory: [hardcoded-credentials, app-settings]
+      cwe: CWE-798
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, app_service, function_app]
+      target_files: ["**/*.tf"]
+    description: |
+      Detects Azure Function App resources where app_settings contains what appears to be
+      a hardcoded secret, connection string, or access key value, rather than a Key Vault
+      reference or Terraform variable.
+
+  - id: azure-function-app-app-settings-secret-pattern
+    message: |
+      Azure Function App app_settings contains a key name that strongly suggests a secret
+      or credential is being passed as a plain-text environment variable.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-regex: |
+      (?s)resource\s+"azurerm_(?:linux_|windows_)?function_app"\s+"[^"]+"\s*\{.{0,3000}app_settings\s*=\s*\{[^}]*(?:PRIMARYKEY|ACCOUNTKEY|DB_PASS|DATABASE_PASS|SECRET|API_KEY|ACCESS_KEY|CONN_STR|CONNECTION_STRING)\s*=\s*"(?!\$\{)[^"]{6,}"
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security_finding
+      category: secrets
+      subcategory: [hardcoded-credentials, app-settings]
+      cwe: CWE-798
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, azure, function_app]
+      target_files: ["**/*.tf"]
+    description: |
+      Broad regex-based detection for hardcoded secrets in Azure Function App app_settings.
+      Complements the pattern-based rule above for cases where opengrep structural matching
+      is unavailable.

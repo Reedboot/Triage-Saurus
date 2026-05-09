@@ -428,6 +428,11 @@ class HierarchicalDiagramBuilder:
         # For diagram purposes (NOT database semantics), nest resources that use a SG
         # under that SG's rules. This visualizes the control flow and security boundaries.
         self._apply_security_group_rule_nesting()
+
+        # Apply member_of connections from resource_connections: nest resources that belong
+        # to an aws_security_group under that SG's children_by_parent entry. This allows
+        # AWS SGs to appear as subgraphs wrapping their member resources.
+        self._apply_sg_member_nesting()
         
         # Apply rendering transformation: nest Azure NICs under their VMs
         # For diagram purposes (NOT database semantics), this remaps NIC parents
@@ -550,7 +555,41 @@ class HierarchicalDiagramBuilder:
             import sys
             print(f"[WARN] Security group rule nesting (diagram rendering) failed: {e}", file=sys.stderr)
 
-    
+    def _apply_sg_member_nesting(self) -> None:
+        """Apply rendering transformation: nest AWS resources under their security groups.
+
+        Reads member_of connections from resource_connections (added by context_extraction
+        when vpc_security_group_ids / security_groups attrs are parsed). For each SG that
+        has member resources, adds those resources to children_by_parent so the SG is
+        rendered as a subgraph containing its members.
+
+        This is a diagram-only transformation — it does NOT mutate parent_resource_id in DB.
+        """
+        try:
+            with get_db_connection() as conn:
+                rows = conn.execute("""
+                    SELECT rc.source_resource_id, rc.target_resource_id
+                    FROM resource_connections rc
+                    WHERE rc.experiment_id = ?
+                      AND rc.connection_type = 'member_of'
+                """, [self.experiment_id]).fetchall()
+
+            if not rows:
+                return
+
+            for row in rows:
+                member_id = row['source_resource_id']
+                sg_id = row['target_resource_id']
+                if member_id in self.resource_by_id and sg_id in self.resource_by_id:
+                    member_resource = self.resource_by_id[member_id]
+                    # Only add if not already a child of this SG
+                    existing = {r.get('id') for r in self.children_by_parent.get(sg_id, [])}
+                    if member_id not in existing:
+                        self.children_by_parent[sg_id].append(member_resource)
+        except Exception as e:
+            import sys
+            print(f"[WARN] SG member nesting (diagram rendering) failed: {e}", file=sys.stderr)
+
     def _apply_azure_nic_nesting(self) -> None:
         """Apply rendering transformation: nest Azure NICs under their VMs.
         
@@ -1456,7 +1495,7 @@ class HierarchicalDiagramBuilder:
         rtype = (resource.get('resource_type') or '').lower()
         name = (resource.get('resource_name') or '').lower()
         type_tokens = ['sql', 'database', 'mssql', 'postgres', 'mysql', 'cosmos', 'rds',
-                       'dynamodb', 'db_instance', 'rds_cluster', 'rds_instance']
+                       'dynamodb', 'db_instance', 'rds_cluster', 'rds_instance', 'firestore']
         # Type-based match is authoritative; name-based match requires the type to not be a non-DB resource
         if any(tok in rtype for tok in type_tokens):
             # Exclude APIM subscriptions/revisions that happen to have 'sql' in their name
@@ -2870,8 +2909,15 @@ class HierarchicalDiagramBuilder:
         """Get the display label for a resource.
         
         Uses 'name' field if available, otherwise falls back to 'resource_name'.
+        For SQL servers with VNet-restricted firewall rules, appends a lock annotation.
         """
-        return resource.get('name') or resource.get('resource_name', 'Unknown')
+        base = resource.get('name') or resource.get('resource_name', 'Unknown')
+        rtype = (resource.get('resource_type') or '').lower()
+        if 'sql_server' in rtype or 'mssql_server' in rtype or 'postgresql_server' in rtype or 'mysql_server' in rtype:
+            props = resource.get('properties') or {}
+            if str(props.get('vnet_restricted', '')).lower() == 'true':
+                base = f"{base} 🔒VNet"
+        return base
 
     def _emit_compute_node(self, compute: dict, lines: list, indent: str) -> None:
         """Emit a compute node (leaf or subgraph); marks it emitted. Used by render_network_hierarchy.
@@ -4983,6 +5029,42 @@ class HierarchicalDiagramBuilder:
                     'confirmed': False,
                     'notes': 'Visibility unknown — APIM may be internal or public',
                 })
+
+        # ── GCP: Synthetic Firestore Collection node ───────────────────────────────
+        # google_firestore_document resources are excluded as individual leaf nodes
+        # (they are seed data, not architecture). Instead, emit a single
+        # "Firestore Collection" synthetic node connected to App Engine when at least
+        # one google_firestore_document exists for this experiment.
+        _app_engine_resources = [r for r in self.resources
+                                 if 'app_engine' in (r.get('resource_type') or '').lower()]
+        if _app_engine_resources:
+            with get_db_connection() as _fs_conn:
+                _fs_count = _fs_conn.execute(
+                    "SELECT COUNT(*) FROM resources WHERE experiment_id=? AND resource_type='google_firestore_document'",
+                    [self.experiment_id]
+                ).fetchone()[0]
+            if _fs_count > 0:
+                _FIRESTORE_SYNTH_ID = '__firestore_collection__'
+                if _FIRESTORE_SYNTH_ID not in self.resource_by_name:
+                    _fs_synth = {
+                        'id': _FIRESTORE_SYNTH_ID,
+                        'resource_name': _FIRESTORE_SYNTH_ID,
+                        'resource_type': 'google_firestore_collection',
+                        'provider': 'google',
+                        'properties': {},
+                        '_synthetic': True,
+                        '_label': f'📦 Firestore Collection ({_fs_count} docs)',
+                    }
+                    self.resources.append(_fs_synth)
+                    self.resource_by_name[_FIRESTORE_SYNTH_ID] = _fs_synth
+                for _ae in _app_engine_resources:
+                    self.connections.append({
+                        'source': _ae['resource_name'],
+                        'target': _FIRESTORE_SYNTH_ID,
+                        'connection_type': 'data_access',
+                        'confirmed': True,
+                        'notes': f'Firestore: {_fs_count} seed documents excluded as individual nodes',
+                    })
         
         # Extract and render network resources (VPC, subnets, security groups, etc.)
         # NOTE: Do NOT filter by all_children - render_network_hierarchy handles hierarchy internally

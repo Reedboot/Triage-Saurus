@@ -2346,6 +2346,11 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             elif start_ip == "0.0.0.0" and end_ip in {"255.255.255.255", "0.0.0.0/0"}:
                 props["sql_firewall_public"] = "true"
                 _append_signal(props, "sql firewall allows world range")
+            else:
+                # Private-IP-only rule — marks the SQL server as VNet-restricted
+                props["sql_firewall_private_only"] = "true"
+                props["sql_firewall_allowed_ip"] = f"{start_ip}-{end_ip}" if start_ip != end_ip else start_ip
+                _append_signal(props, f"sql firewall restricted to private IP {start_ip}")
 
         if resource_type == "azurerm_kubernetes_cluster":
             private_cluster_enabled = _normalize_bool(attrs.get("private_cluster_enabled"))
@@ -2929,6 +2934,11 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         if _is_prop_true(props, "sql_firewall_public"):
             _mark_internet_access(parent_props, "sql firewall rule enables public endpoint")
 
+        if _is_prop_true(props, "sql_firewall_private_only") and not _is_prop_true(parent_props, "sql_firewall_public"):
+            parent_props["vnet_restricted"] = "true"
+            allowed_ip = props.get("sql_firewall_allowed_ip", "private")
+            _append_signal(parent_props, f"sql firewall restricts access to {allowed_ip} (private only)")
+
         if _is_prop_true(props, "s3_public_policy") or _is_prop_true(props, "s3_public_acl"):
             _mark_internet_access(parent_props, "s3 bucket child policy/acl is public")
 
@@ -3160,7 +3170,49 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                     confidence="extracted",
                 ))
 
-        # --- attribute-pattern relationships ---
+        # --- member_of: security group membership ---
+        # Resources that reference SGs via security_group_refs get a member_of edge to
+        # each SG they belong to. This enables SGs to be rendered as subgraphs in the diagram.
+        _SG_MEMBER_TYPES = {
+            "aws_instance", "aws_db_instance", "aws_rds_cluster",
+            "aws_elb", "aws_lb", "aws_alb",
+            "aws_ecs_service", "aws_ecs_task_definition",
+            "aws_autoscaling_group", "aws_launch_configuration", "aws_launch_template",
+            "aws_lambda_function",
+        }
+        if rtype in _SG_MEMBER_TYPES:
+            sg_refs = _list_prop(resource.properties or {}, "security_group_refs")
+            for sg_label in sg_refs:
+                context.relationships.append(Relationship(
+                    source_type=rtype,
+                    source_name=rname,
+                    target_type="aws_security_group",
+                    target_name=sg_label,
+                    relationship_type=RelationshipType.MEMBER_OF,
+                    source_repo=repo_name,
+                    confidence="extracted",
+                    notes="resource belongs to this security group",
+                ))
+
+        # --- automation_runbook → automation_account connection ---
+        # The parent is set via parent_resource_id but no connection row is emitted; add it.
+        if rtype == "azurerm_automation_runbook" and resource.parent:
+            parts = resource.parent.split(".", 1)
+            if len(parts) == 2:
+                p_type, p_name = parts
+                # Already emitted CONTAINS above; add a DEPENDS_ON for diagrams that use edges
+                context.relationships.append(Relationship(
+                    source_type=p_type,
+                    source_name=p_name,
+                    target_type=rtype,
+                    target_name=rname,
+                    relationship_type=RelationshipType.DEPENDS_ON,
+                    source_repo=repo_name,
+                    confidence="extracted",
+                    notes="automation account hosts this runbook",
+                ))
+
+
         for pattern, rel_type, swap in _ATTR_RELATIONSHIP_PATTERNS:
             if rel_type == RelationshipType.DEPENDS_ON:
                 # depends_on lists refs like [azurerm_foo.bar, azurerm_baz.qux]

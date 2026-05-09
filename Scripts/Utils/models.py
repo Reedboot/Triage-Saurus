@@ -22,6 +22,8 @@ class RelationshipType(str, Enum):
     RESTRICTS_ACCESS   = "restricts_access"
     MONITORS           = "monitors"
     AUTHENTICATES_VIA  = "authenticates_via"
+    MEMBER_OF          = "member_of"
+    DATA_ACCESS        = "data_access"
 
 
 @dataclass

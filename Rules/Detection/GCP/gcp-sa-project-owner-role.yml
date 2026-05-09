@@ -1,0 +1,73 @@
+rules:
+  - id: gcp-sa-project-owner-role
+    message: |
+      A GCP service account (or other principal) has been granted the primitive 'roles/owner'
+      role at the project level. Project Owner is an extremely broad permission that grants
+      full control over all resources, APIs, and IAM policies within the project.
+
+      Assigning roles/owner to a service account is an overprivileged configuration. If the
+      service account key or the workload using it is compromised, an attacker gains complete
+      control of the GCP project — including the ability to add IAM members, exfiltrate data,
+      and escalate privileges further.
+
+      Remediation: Replace roles/owner with a minimal custom role or a predefined role that
+      grants only the permissions the service account actually requires.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_project_iam_member" $NAME {
+            ...
+            role = $ROLE
+            ...
+          }
+      - pattern-regex: 'role\s*=\s*"roles/owner"'
+    metadata:
+      finding_kind: Finding
+      asset_provider: gcp
+      rule_type: security_finding
+      category: misconfiguration
+      subcategory: [iam, privilege-escalation, overprivileged]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      technology: [terraform, gcp, iam]
+      target_files: ["**/*.tf"]
+    description: |
+      Detects GCP project IAM member bindings that assign the primitive 'roles/owner'
+      permission, indicating an overprivileged service account or principal.
+
+  - id: gcp-sa-project-editor-role
+    message: |
+      A GCP principal has been granted the primitive 'roles/editor' role at the project
+      level. Editor grants broad write access to most GCP services, which violates the
+      principle of least privilege.
+
+      Remediation: Replace roles/editor with a minimal custom or predefined role scoped
+      to only the APIs and operations the principal requires.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "google_project_iam_member" $NAME {
+            ...
+            role = $ROLE
+            ...
+          }
+      - pattern-regex: 'role\s*=\s*"roles/editor"'
+    metadata:
+      finding_kind: Finding
+      asset_provider: gcp
+      rule_type: security_finding
+      category: misconfiguration
+      subcategory: [iam, privilege-escalation, overprivileged]
+      cwe: CWE-269
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      technology: [terraform, gcp, iam]
+      target_files: ["**/*.tf"]
+    description: |
+      Detects GCP project IAM member bindings that assign the primitive 'roles/editor'
+      permission, indicating a broadly privileged principal.
