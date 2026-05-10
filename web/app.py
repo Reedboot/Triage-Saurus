@@ -2183,6 +2183,59 @@ def api_scans(repo_name: str):
     return jsonify(result)
 
 
+@app.route("/api/experiment/<experiment_id>/repo")
+def api_experiment_repo(experiment_id: str):
+    """Resolve repo name/path for deep links that only include experiment ID."""
+    conn = _get_db()
+    if conn is None:
+        return jsonify({"repo_name": "", "repo_path": "", "error": "DB unavailable"}), 503
+
+    repo_name = ""
+    repo_path = ""
+    try:
+        # Primary source: repositories table.
+        row = conn.execute(
+            """
+            SELECT repo_name
+            FROM repositories
+            WHERE experiment_id = ?
+              AND COALESCE(repo_name, '') <> ''
+            ORDER BY scanned_at DESC
+            LIMIT 1
+            """,
+            (experiment_id,),
+        ).fetchone()
+        if row:
+            repo_name = (row["repo_name"] or "").strip()
+
+        # Fallback source: experiments.repos JSON metadata.
+        if not repo_name:
+            exp_row = conn.execute(
+                "SELECT repos FROM experiments WHERE id = ? LIMIT 1",
+                (experiment_id,),
+            ).fetchone()
+            if exp_row:
+                try:
+                    repos_raw = exp_row["repos"]
+                    repos_list = json.loads(repos_raw) if isinstance(repos_raw, str) else (repos_raw or [])
+                    if repos_list:
+                        repo_path = str(repos_list[0]).strip()
+                        repo_name = Path(repo_path).name
+                except Exception:
+                    pass
+    except Exception as exc:
+        conn.close()
+        return jsonify({"repo_name": "", "repo_path": "", "error": str(exc)}), 500
+    finally:
+        conn.close()
+
+    if repo_name and not repo_path:
+        resolved = _resolve_repo_path(repo_name)
+        repo_path = str(resolved) if resolved else ""
+
+    return jsonify({"repo_name": repo_name, "repo_path": repo_path})
+
+
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_start(experiment_id: str, repo_name: str):
     """Start a fresh AI analysis job (Steps 1, 2, 3 from the beginning)."""
@@ -10358,14 +10411,14 @@ def index():
     try:
         with db_helpers.get_db_connection() as conn:
             rows = conn.execute("""
-                SELECT e.id, e.name,
+                SELECT e.id, e.name, e.repos,
                        COUNT(DISTINCT r.id) as resource_count,
                        COUNT(DISTINCT f.id) as finding_count,
                        MAX(f.created_at) as last_scanned
                 FROM experiments e
                 LEFT JOIN resources r ON r.experiment_id = e.id
                 LEFT JOIN findings f ON f.experiment_id = e.id
-                GROUP BY e.id, e.name
+                GROUP BY e.id, e.name, e.repos
                 ORDER BY e.id DESC
                 LIMIT 10
             """).fetchall()

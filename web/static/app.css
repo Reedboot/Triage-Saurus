@@ -222,7 +222,8 @@ button[type="submit"], button.primary, .btn-primary {
 button[type="submit"]:hover, button.primary:hover, .btn-primary:hover { background: #2ea043; }
 button[type="submit"]:disabled, button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-#scan-btn {
+#scan-btn,
+#run-compare-btn {
   padding: 6px 12px;
   font-size: 0.8rem;
   line-height: 1.1;
@@ -1299,6 +1300,12 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   padding: 2px 6px;
   font-weight: 500;
   text-transform: none;
+}
+
+.recent-count-pill {
+  background: #6d28d94d;
+  color: #c4b5fd;
+  border: 1px solid #7c3aed80;
 }
 
 /* ── Code/file references ── */

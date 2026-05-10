@@ -263,6 +263,11 @@ function init() {
           if (pastSelect && scans.length > 0) {
             const targetExpId = window._urlParamTargetExp;
             let chosenScan = targetExpId ? scans.find(s => s.experiment_id === targetExpId) : null;
+            if (targetExpId && !chosenScan) {
+              buildSectionTabs(targetExpId, repoName);
+              window._urlParamTargetExp = null;
+              return;
+            }
             window._urlParamTargetExp = null;
             if (!chosenScan) {
               chosenScan = scans.reduce((latest, cur) =>
@@ -293,14 +298,52 @@ function init() {
       const opt = Array.from(repoSelect.options).find(o => o.value === repoP);
       if (opt) { repoSelect.value = repoP; repoSelect.dispatchEvent(new Event('change')); }
     } else if (expId && !repoP) {
-      setTimeout(() => {
-        const ps = document.getElementById('past-scan-select');
-        if (ps) {
-          const opt = Array.from(ps.options).find(o => o.value === expId);
-          if (opt) { ps.value = expId; ps.dispatchEvent(new Event('change')); }
-        }
-        window._urlParamTargetExp = null;
-      }, 500);
+      fetch(`/api/experiment/${encodeURIComponent(expId)}/repo`)
+        .then(r => r.json())
+        .then(data => {
+          const resolvedRepoPath = (data && data.repo_path) ? String(data.repo_path).trim() : '';
+          const resolvedRepoName = (data && data.repo_name) ? String(data.repo_name).trim() : '';
+
+          if (repoSelect) {
+            let targetOpt = null;
+            if (resolvedRepoPath) {
+              targetOpt = Array.from(repoSelect.options).find(o => o.value === resolvedRepoPath) || null;
+            }
+            if (!targetOpt && resolvedRepoName) {
+              targetOpt = Array.from(repoSelect.options).find(o => (o.dataset && o.dataset.name) === resolvedRepoName) || null;
+            }
+            if (targetOpt) {
+              repoSelect.value = targetOpt.value;
+              repoSelect.dispatchEvent(new Event('change'));
+              return;
+            }
+          }
+
+          if (resolvedRepoName) {
+            state.currentExperimentId = expId;
+            buildSectionTabs(expId, resolvedRepoName);
+            return;
+          }
+
+          setTimeout(() => {
+            const ps = document.getElementById('past-scan-select');
+            if (ps) {
+              const opt = Array.from(ps.options).find(o => o.value === expId);
+              if (opt) { ps.value = expId; ps.dispatchEvent(new Event('change')); }
+            }
+            window._urlParamTargetExp = null;
+          }, 500);
+        })
+        .catch(() => {
+          setTimeout(() => {
+            const ps = document.getElementById('past-scan-select');
+            if (ps) {
+              const opt = Array.from(ps.options).find(o => o.value === expId);
+              if (opt) { ps.value = expId; ps.dispatchEvent(new Event('change')); }
+            }
+            window._urlParamTargetExp = null;
+          }, 500);
+        });
     }
   })();
 

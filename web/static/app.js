@@ -2338,7 +2338,14 @@
                 let chosenScan = null;
                 if (targetExpId) {
                   chosenScan = scans.find(s => s.experiment_id === targetExpId);
-                  window._urlParamTargetExp = null; // consume flag
+                  if (!chosenScan) {
+                    // Deep-link fallback: if scans list does not include the target experiment
+                    // for this repo, still try loading tabs directly for the requested experiment.
+                    buildSectionTabs(targetExpId, repoName);
+                    window._urlParamTargetExp = null;
+                    return;
+                  }
+                  window._urlParamTargetExp = null; // consume flag once used
                 }
                 if (!chosenScan) {
                   chosenScan = scans.reduce((latest, current) => {
@@ -2385,19 +2392,62 @@
           repoSelect.dispatchEvent(new Event('change'));
         }
       } else if (expId && !repoP) {
-        // No repo param but have experiment — fire pastScanSelect change directly
-        // after a short delay to let the DOM settle
-        setTimeout(() => {
-          const ps = document.getElementById('past-scan-select');
-          if (ps) {
-            const opt = Array.from(ps.options).find(o => o.value === expId);
-            if (opt) {
-              ps.value = expId;
-              ps.dispatchEvent(new Event('change'));
+        // No repo param but have experiment: resolve repo via API, then trigger normal flow.
+        fetch(`/api/experiment/${encodeURIComponent(expId)}/repo`)
+          .then(r => r.json())
+          .then(data => {
+            const resolvedRepoPath = (data && data.repo_path) ? String(data.repo_path).trim() : '';
+            const resolvedRepoName = (data && data.repo_name) ? String(data.repo_name).trim() : '';
+
+            if (repoSelect) {
+              let targetOpt = null;
+              if (resolvedRepoPath) {
+                targetOpt = Array.from(repoSelect.options).find(o => o.value === resolvedRepoPath) || null;
+              }
+              if (!targetOpt && resolvedRepoName) {
+                targetOpt = Array.from(repoSelect.options).find(o => (o.dataset && o.dataset.name) === resolvedRepoName) || null;
+              }
+              if (targetOpt) {
+                repoSelect.value = targetOpt.value;
+                repoSelect.dispatchEvent(new Event('change'));
+                return;
+              }
             }
-          }
-          window._urlParamTargetExp = null;
-        }, 500);
+
+            // Final fallback: if repo isn't in dropdown, still try loading section tabs directly.
+            if (resolvedRepoName) {
+              currentExperimentId = expId;
+              currentRepoName = resolvedRepoName;
+              buildSectionTabs(expId, resolvedRepoName);
+              return;
+            }
+
+            // Last resort: old behavior for legacy pages.
+            setTimeout(() => {
+              const ps = document.getElementById('past-scan-select');
+              if (ps) {
+                const opt = Array.from(ps.options).find(o => o.value === expId);
+                if (opt) {
+                  ps.value = expId;
+                  ps.dispatchEvent(new Event('change'));
+                }
+              }
+              window._urlParamTargetExp = null;
+            }, 500);
+          })
+          .catch(() => {
+            setTimeout(() => {
+              const ps = document.getElementById('past-scan-select');
+              if (ps) {
+                const opt = Array.from(ps.options).find(o => o.value === expId);
+                if (opt) {
+                  ps.value = expId;
+                  ps.dispatchEvent(new Event('change'));
+                }
+              }
+              window._urlParamTargetExp = null;
+            }, 500);
+          });
       }
     })();
 
