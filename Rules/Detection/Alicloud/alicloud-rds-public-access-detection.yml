@@ -1,0 +1,37 @@
+rules:
+  - id: context-alicloud-rds-public-security-ips
+    message: |
+      Alibaba Cloud RDS instance allows access from 0.0.0.0/0 via security_ips.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "alicloud_db_instance" $NAME {
+            ...
+            security_ips = [
+              ...
+              "0.0.0.0",
+              ...
+            ]
+            ...
+          }
+      - pattern: |
+          resource "alicloud_db_instance" $NAME {
+            ...
+            security_ips = [
+              ...
+              "0.0.0.0/0",
+              ...
+            ]
+            ...
+          }
+    metadata:
+      finding_kind: Misconfiguration
+      asset_provider: alicloud
+      rule_type: misconfiguration
+      category: infrastructure
+      subcategory: database
+      technology: [terraform, alicloud, database]
+      target_files: ["*.tf", "**/*.tf"]
+    description: |
+      Detects Alibaba Cloud RDS instances whose whitelist includes 0.0.0.0.

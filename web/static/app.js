@@ -234,6 +234,41 @@
       : wrapHeight / (2 * fitScale) - bounds.height / 2;
     applyTransform();
     saveDiagramState(currentDiagramIndex);
+
+    // Nudge pan so the Internet / 🌐 node stays visible after fit.
+    // We find the first label containing "internet" (case-insensitive), measure it
+    // relative to the scaled diagram-zoom-inner, and if it's outside the visible wrap
+    // area we shift panX/panY just enough to bring it into view with 24px margin.
+    try {
+      const innerEl = document.getElementById('diagram-zoom-inner');
+      if (!innerEl) return;
+      const allLabels = activeDiagram.querySelectorAll('.nodeLabel, .node text, text');
+      let internetEl = null;
+      for (const el of allLabels) {
+        if (/internet/i.test(el.textContent || '')) { internetEl = el; break; }
+      }
+      if (!internetEl) return;
+      const innerRect = innerEl.getBoundingClientRect();
+      const nodeRect  = internetEl.getBoundingClientRect();
+      const margin = 24;
+      // Node position relative to inner element in unscaled coords
+      // In screen px the visible wrap area is [0, wrapWidth] x [0, wrapHeight]
+      const nodeScreenLeft   = nodeRect.left   - innerRect.left;
+      const nodeScreenRight  = nodeRect.right  - innerRect.left;
+      const nodeScreenTop    = nodeRect.top    - innerRect.top;
+      const nodeScreenBottom = nodeRect.bottom - innerRect.top;
+      let nudgeX = 0, nudgeY = 0;
+      if (nodeScreenLeft < margin)                nudgeX = (margin - nodeScreenLeft)    / fitScale;
+      if (nodeScreenRight > wrapWidth - margin)   nudgeX = (wrapWidth - margin - nodeScreenRight) / fitScale;
+      if (nodeScreenTop < margin)                 nudgeY = (margin - nodeScreenTop)     / fitScale;
+      if (nodeScreenBottom > wrapHeight - margin) nudgeY = (wrapHeight - margin - nodeScreenBottom) / fitScale;
+      if (nudgeX !== 0 || nudgeY !== 0) {
+        zoomState.panX += nudgeX;
+        zoomState.panY += nudgeY;
+        applyTransform();
+        saveDiagramState(currentDiagramIndex);
+      }
+    } catch (_) { /* non-critical */ }
   }
 
   function scheduleDiagramFit(attempt = 0) {
@@ -1160,6 +1195,8 @@
             if (vb && vb.width > 0 && vb.height > 0) {
               svg.setAttribute('width', `${vb.width}px`);
               svg.setAttribute('height', `${vb.height}px`);
+              svg.style.setProperty('width', `${vb.width}px`);
+              svg.style.setProperty('height', `${vb.height}px`);
               svg.style.removeProperty('max-width');
             }
           }
@@ -1882,6 +1919,8 @@
 
         // Build tab buttons
         tabBar.innerHTML = '';
+        tabBar.setAttribute('role', 'tablist');
+        tabBar.setAttribute('aria-label', 'Scan result sections');
         tabs.forEach((tab, idx) => {
           const btn = document.createElement('button');
           btn.className = 'section-tab-btn' + (idx === 0 ? ' active' : '');
@@ -1889,9 +1928,16 @@
           btn.dataset.experimentId = experimentId;
           btn.dataset.repoName = repoName;
           btn.textContent = tab.label;
+          btn.setAttribute('role', 'tab');
+          btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+          btn.setAttribute('aria-controls', 'section-panel-content');
           btn.addEventListener('click', function () {
-            tabBar.querySelectorAll('.section-tab-btn').forEach(b => b.classList.remove('active'));
+            tabBar.querySelectorAll('.section-tab-btn').forEach(b => {
+              b.classList.remove('active');
+              b.setAttribute('aria-selected', 'false');
+            });
             btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
             loadSectionContent(tab.key, experimentId, repoName);
           });
           tabBar.appendChild(btn);
@@ -2285,15 +2331,23 @@
                 pastRow.classList.toggle('visible', scans.length > 0);
               }
 
-              // Auto-select the most recent scan (by scanned_at timestamp) and load its data
+              // Auto-select the most recent scan (or a URL-param override) and load its data
               if (pastSelect && scans.length > 0) {
-                const mostRecentScan = scans.reduce((latest, current) => {
-                  const latestTime = new Date(latest.scanned_at).getTime();
-                  const currentTime = new Date(current.scanned_at).getTime();
-                  return currentTime > latestTime ? current : latest;
-                });
-                pastSelect.value = mostRecentScan.experiment_id;
-                // Trigger change event to load section tabs and relevant data
+                // If handleUrlParams set a target experiment, use that instead of most-recent
+                const targetExpId = window._urlParamTargetExp;
+                let chosenScan = null;
+                if (targetExpId) {
+                  chosenScan = scans.find(s => s.experiment_id === targetExpId);
+                  window._urlParamTargetExp = null; // consume flag
+                }
+                if (!chosenScan) {
+                  chosenScan = scans.reduce((latest, current) => {
+                    const latestTime = new Date(latest.scanned_at).getTime();
+                    const currentTime = new Date(current.scanned_at).getTime();
+                    return currentTime > latestTime ? current : latest;
+                  });
+                }
+                pastSelect.value = chosenScan.experiment_id;
                 pastSelect.dispatchEvent(new Event('change'));
               }
             })
@@ -2317,32 +2371,33 @@
 
       if (!expId && !repoP) return;
 
-      // Select the repo in the dropdown first (triggers past-scan population)
+      // Clean URL immediately
+      window.history.replaceState({}, '', window.location.pathname);
+
+      // Set target experiment flag so repoSelect change handler selects it directly
+      if (expId) window._urlParamTargetExp = expId;
+
+      // Select the repo in the dropdown (triggers past-scan population + auto-select)
       if (repoP && repoSelect) {
-        // Find a matching option
         const opt = Array.from(repoSelect.options).find(o => o.value === repoP);
         if (opt) {
           repoSelect.value = repoP;
           repoSelect.dispatchEvent(new Event('change'));
         }
-      }
-
-      // After the repo change fires and populates past-scan-select, select the experiment
-      if (expId) {
-        const trySelect = (attempts) => {
+      } else if (expId && !repoP) {
+        // No repo param but have experiment — fire pastScanSelect change directly
+        // after a short delay to let the DOM settle
+        setTimeout(() => {
           const ps = document.getElementById('past-scan-select');
-          if (!ps) return;
-          const opt = Array.from(ps.options).find(o => o.value === expId);
-          if (opt) {
-            ps.value = expId;
-            ps.dispatchEvent(new Event('change'));
-            // Clean URL without reloading
-            window.history.replaceState({}, '', window.location.pathname);
-          } else if (attempts < 20) {
-            setTimeout(() => trySelect(attempts + 1), 250);
+          if (ps) {
+            const opt = Array.from(ps.options).find(o => o.value === expId);
+            if (opt) {
+              ps.value = expId;
+              ps.dispatchEvent(new Event('change'));
+            }
           }
-        };
-        setTimeout(() => trySelect(0), 500);
+          window._urlParamTargetExp = null;
+        }, 500);
       }
     })();
 

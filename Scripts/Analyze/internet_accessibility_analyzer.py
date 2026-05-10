@@ -33,6 +33,22 @@ for candidate in (SCRIPTS_DIR / "Persist", REPO_ROOT / "Scripts" / "Persist"):
 from db_helpers import get_db_connection
 
 
+def _contains_open_whitelist(value: str) -> bool:
+    """Return True when a whitelist/property contains 0.0.0.0 or 0.0.0.0/0."""
+    if not value:
+        return False
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return '0.0.0.0' in value or '0.0.0.0/0' in value
+
+    if isinstance(parsed, list):
+        return any(str(item) in ('0.0.0.0', '0.0.0.0/0') for item in parsed)
+    if isinstance(parsed, dict):
+        return any(str(item) in ('0.0.0.0', '0.0.0.0/0') for item in parsed.values())
+    return str(parsed) in ('0.0.0.0', '0.0.0.0/0')
+
+
 @dataclass
 class AccessibilityPath:
     """Represents a path from Internet to a resource."""
@@ -153,7 +169,7 @@ class InternetAccessibilityAnalyzer:
         return any(
             props.get(key, "").lower() == "true"
             for key in ("internet_access", "is_internet_accessible", "publicly_accessible", "internet_facing")
-        )
+        ) or _contains_open_whitelist(props.get("security_ips", ""))
 
     def _is_public_endpoint_resource(self, resource_id: int) -> bool:
         """Check if resource is a public endpoint (API, LB, gateway)."""

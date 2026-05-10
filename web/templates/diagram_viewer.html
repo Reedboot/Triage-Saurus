@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ diagram_title }} | Triage-Saurus</title>
+    <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/static/vendor/mermaid.min.js"></script>
     <script src="/static/js/mermaid-icon-injector.js" defer></script>
@@ -122,6 +123,16 @@
 
             {# Action buttons #}
             <div class="flex items-center gap-2 flex-shrink-0">
+                <button id="btn-export-png"
+                        title="Export diagram as PNG"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+                               bg-[#21262d] text-[#8b949e] border border-[#30363d]
+                               hover:bg-[#30363d] hover:text-[#e6edf3] transition-colors cursor-pointer">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/>
+                    </svg>
+                    <span>PNG</span>
+                </button>
                 <button id="btn-share"
                         title="Copy link to clipboard"
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
@@ -392,6 +403,12 @@
                 iconDot.style.display = 'block';
                 iconDot.style.background = meta.color;
             }
+
+            // Dynamic favicon: use the provider icon SVG if available
+            const faviconLink = document.getElementById('favicon-link');
+            if (faviconLink && meta.icon) {
+                faviconLink.href = meta.icon;
+            }
         }
 
         // ── Render diagram for the given provider ────────────────────────────
@@ -418,10 +435,21 @@
                 skeleton.classList.add('hidden');
                 container.innerHTML = svg;
 
+                // Stamp explicit pixel dimensions from viewBox so autoFit reads correctly
+                const svgEl = container.querySelector('svg');
+                if (svgEl) {
+                    const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+                    if (vb && vb.width > 0 && vb.height > 0) {
+                        svgEl.setAttribute('width',  `${vb.width}px`);
+                        svgEl.setAttribute('height', `${vb.height}px`);
+                        svgEl.style.removeProperty('max-width');
+                    }
+                }
+
                 // Auto-fit after the browser has laid out the SVG
                 requestAnimationFrame(() => requestAnimationFrame(() => {
                     autoFit();
-                    if (window.injectMermaidIcons) window.injectMermaidIcons();
+                    if (window.MermaidIconInjector) window.MermaidIconInjector.processAllDiagrams();
                 }));
             } catch (err) {
                 if (seq !== renderSeq) return;
@@ -470,6 +498,46 @@
             // Recalculate fit after layout change
             setTimeout(autoFit, 60);
         }
+
+        // ── PNG export ────────────────────────────────────────────────────────
+        document.getElementById('btn-export-png').addEventListener('click', async () => {
+            const svg = container.querySelector('svg');
+            if (!svg) { return; }
+            try {
+                // Serialise the SVG with all inline styles resolved
+                const clone = svg.cloneNode(true);
+                clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                // Embed dark background
+                const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                bg.setAttribute('width', clone.getAttribute('width') || '1200');
+                bg.setAttribute('height', clone.getAttribute('height') || '800');
+                bg.setAttribute('fill', '#0d1117');
+                clone.insertBefore(bg, clone.firstChild);
+                const svgData = new XMLSerializer().serializeToString(clone);
+                const blob = new Blob([svgData], { type: 'image/svg+xml' });
+                const url  = URL.createObjectURL(blob);
+                const img  = new Image();
+                img.onload = () => {
+                    const w = parseInt(svg.getAttribute('width'))  || 1200;
+                    const h = parseInt(svg.getAttribute('height')) || 800;
+                    const canvas = document.createElement('canvas');
+                    canvas.width  = w;
+                    canvas.height = h;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#0d1117';
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                    const a = document.createElement('a');
+                    a.href     = canvas.toDataURL('image/png');
+                    a.download = (document.title || 'diagram').replace(/[^a-z0-9_-]/gi, '_') + '.png';
+                    a.click();
+                };
+                img.src = url;
+            } catch (err) {
+                console.error('[PNG export]', err);
+            }
+        });
 
         // ── Share: copy URL to clipboard ─────────────────────────────────────
         document.getElementById('btn-share').addEventListener('click', async () => {

@@ -18,7 +18,7 @@ class TestInternetExposureDetector:
     
     def test_detector_init(self):
         """Test detector initialization with different providers."""
-        for provider in ['aws', 'azure', 'gcp', 'oci']:
+        for provider in ['aws', 'azure', 'gcp', 'oci', 'alicloud']:
             detector = InternetExposureDetector(provider)
             assert detector.provider == provider.lower()
     
@@ -268,6 +268,21 @@ class TestInternetExposureDetector:
         assert 'alb' in exposed_azure
         assert 'gateway' in exposed_gcp
         assert 'cdn' in exposed_alicloud
+
+    def test_alicloud_rds_security_ips_is_public(self):
+        detector = InternetExposureDetector('alicloud')
+        resources = [
+            {'id': 1, 'resource_name': 'seeme', 'resource_type': 'alicloud_db_instance'}
+        ]
+        properties = {
+            1: {'security_ips': json.dumps(['0.0.0.0', '10.23.12.24/24'])}
+        }
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=None, properties=properties)
+
+        assert 'seeme' in exposed
+        assert exposed['seeme'].exposure_type == 'firewall_rule'
+        assert 'security_ips' in exposed['seeme'].reason
 
     def test_public_entry_type_inventory_includes_missing_providers(self):
         public_types = InternetExposureDetector.get_public_entry_types()

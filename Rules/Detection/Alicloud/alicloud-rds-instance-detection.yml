@@ -40,5 +40,7 @@ rules:
             pattern: instance_type = "$INST_TYPE"
           - name: vswitch_id
             pattern: vswitch_id = "$VSWITCH_ID"
+          - name: security_ips
+            pattern: security_ips = $SECURITY_IPS
     description: |
       Detects RDS Instance resources in Alibaba Cloud Terraform configurations.

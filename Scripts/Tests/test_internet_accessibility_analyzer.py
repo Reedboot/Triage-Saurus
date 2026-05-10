@@ -76,6 +76,24 @@ class TestInternetAccessibilityAnalyzer:
         result = analyzer._is_public_ip_resource(3)
         assert isinstance(result, bool)
 
+    def test_find_internet_entry_points_security_ips(self, analyzer):
+        """Test Alicloud RDS exposure via security_ips whitelist."""
+        analyzer.resources_by_id[1] = {
+            "id": 1,
+            "resource_name": "seeme",
+            "resource_type": "alicloud_db_instance",
+            "provider": "alicloud",
+        }
+        analyzer.properties_by_resource[1] = {
+            "security_ips": json.dumps(["0.0.0.0", "10.23.12.24/24"])
+        }
+
+        analyzer.find_internet_entry_points()
+
+        assert len(analyzer.internet_entry_points) == 1
+        assert analyzer.internet_entry_points[0]["via_type"] == "public_access"
+        assert 1 in analyzer.accessible_resources
+
     def test_is_public_endpoint_resource_detection(self, analyzer):
         """Test detection of public endpoint resources."""
         # API Management should be public by default

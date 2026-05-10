@@ -350,6 +350,8 @@ class InternetExposureDetector:
                 reason_parts.append('Firewall rule: 0.0.0.0/0 allowed')
             if props.get('start_ip') == '0.0.0.0':
                 reason_parts.append('Firewall rule: 0.0.0.0/0 allowed')
+            if 'security_ips' in props and self._contains_open_rules(props.get('security_ips', '')):
+                reason_parts.append('security_ips: allows 0.0.0.0/0')
 
             # SQL Server: Check for public network access
             if 'sql' in resource_type and props.get('public_network_access_enabled') == 'true':

@@ -223,8 +223,12 @@ button[type="submit"]:hover, button.primary:hover, .btn-primary:hover { backgrou
 button[type="submit"]:disabled, button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Secondary — slate */
-button.secondary { background: var(--bg-subtle); color: var(--text-muted); border-color: var(--border); }
-button.secondary:hover { background: var(--border); color: var(--text); }
+button.secondary, .btn-secondary { background: var(--bg-subtle); color: var(--text-muted); border-color: var(--border); }
+button.secondary:hover, .btn-secondary:hover { background: var(--border); color: var(--text); }
+
+/* Ghost — transparent with border */
+.btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 0.85rem; }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
 
 /* ── Past scans row ── */
 .past-scans-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); max-height: 100px; overflow-y: auto; }
@@ -1669,8 +1673,6 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   /* Natural size — JS transform handles fit/pan/zoom, no CSS scaling */
   max-width: none !important;
   max-height: none !important;
-  width: auto !important;
-  height: auto !important;
   margin: 0;
   transform-origin: 0 0;
   image-rendering: crisp-edges;
