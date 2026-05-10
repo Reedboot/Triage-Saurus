@@ -41,7 +41,7 @@ def build_and_save_icon_caches(providers=None):
         providers: List of provider names to build. If None, builds all.
     """
     if providers is None:
-        providers = ['azure', 'aws', 'gcp', 'kubernetes', 'other']
+        providers = ['azure', 'aws', 'gcp', 'kubernetes', 'alicloud', 'oci', 'other']
     
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     

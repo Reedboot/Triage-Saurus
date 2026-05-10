@@ -1283,6 +1283,8 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
         resource_mapping = GCP_RESOURCE_TYPE_TO_ICON
     elif provider == 'kubernetes':
         resource_mapping = KUBERNETES_RESOURCE_TYPE_TO_ICON
+    elif provider in {'alicloud', 'oci'}:
+        resource_mapping = OTHER_RESOURCE_TYPE_TO_ICON
     else:
         resource_mapping = OTHER_RESOURCE_TYPE_TO_ICON
     
@@ -1307,10 +1309,14 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
     
     for resource_type, (category, icon_name) in resource_mapping.items():
         icon_name_lower = icon_name.lower()
+        if '/' in icon_name_lower:
+            category_part, icon_part = icon_name_lower.split('/', 1)
+        else:
+            category_part, icon_part = category, icon_name_lower
         
         # Try exact match first
-        if icon_name_lower in icon_files_by_name:
-            icon_file = icon_files_by_name[icon_name_lower][0]
+        if icon_part in icon_files_by_name:
+            icon_file = icon_files_by_name[icon_part][0]
             try:
                 rel_path = icon_file.relative_to(web_root)
                 icon_url = f"/{rel_path.as_posix()}"
@@ -1320,7 +1326,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
                 pass
         
         # Try word-based match
-        words = [w for w in icon_name_lower.split('-') if w]
+        words = [w for w in icon_part.split('-') if w]
         best_match = None
         for name, files in icon_files_by_name.items():
             if all(word in name for word in words):
@@ -1354,49 +1360,48 @@ KUBERNETES_RESOURCE_TYPE_TO_ICON = {
     'kubernetes_secret': ('kubernetes', 'secret'),
     'kubernetes_cluster': ('kubernetes', 'cluster'),
     'kubernetes_replicaset': ('kubernetes', 'deployment'),
-    'kubernetes_networkpolicy': ('kubernetes', 'ingress'),
-    'kubernetes_serviceaccount': ('kubernetes', 'service'),
+    'kubernetes_networkpolicy': ('kubernetes', 'networkpolicy'),
+    'kubernetes_serviceaccount': ('kubernetes', 'serviceaccount'),
 }
 
-# Alicloud, OCI, and synthetic resource types — mapped to semantically equivalent
-# AWS/GCP icons (no dedicated Alicloud/OCI icon sets available).
-# Format: (provider_dir, 'Category/icon-name') — _find_icon_file appends /64 for aws, /SVG for gcp.
+# Alicloud, OCI, and synthetic resource types.
+# Format: (provider_dir, 'Category/icon-name') — _find_icon_file handles provider-specific layouts.
 OTHER_RESOURCE_TYPE_TO_ICON: dict = {
     # ── Alicloud ─────────────────────────────────────────────────────────────
-    'alicloud_db_instance':           ('aws', 'Arch_Databases/rds'),
-    'alicloud_polardb_cluster':       ('aws', 'Arch_Databases/aurora'),
-    'alicloud_mongodb_instance':      ('aws', 'Arch_Databases/documentdb'),
-    'alicloud_redis_instance':        ('aws', 'Arch_Databases/elasticache'),
-    'alicloud_oss_bucket':            ('gcp', 'Cloud_Storage/cloud-storage'),
-    'alicloud_nas_file_system':       ('aws', 'Arch_Storage/efs'),
-    'alicloud_instance':              ('aws', 'Arch_Compute/ec2'),
-    'alicloud_ecs_instance':          ('aws', 'Arch_Compute/ec2'),
-    'alicloud_vpc':                   ('aws', 'Arch_Networking-Content-Delivery/virtual-private-cloud'),
-    'alicloud_vswitch':               ('aws', 'Arch_Networking-Content-Delivery/vpc'),
-    'alicloud_security_group':        ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'alicloud_security_group_rule':   ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'alicloud_ram_role':              ('aws', 'Arch_Security-Identity/iam'),
-    'alicloud_ram_policy':            ('aws', 'Arch_Security-Identity/shield'),
-    'alicloud_slb':                   ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'alicloud_eip':                   ('aws', 'Arch_Networking-Content-Delivery/elastic-ip-address'),
-    'alicloud_cs_kubernetes':         ('aws', 'Arch_Containers/elastic-kubernetes-service'),
-    'alicloud_fc_function':           ('aws', 'Arch_Compute/lambda'),
-    'alicloud_log_store':             ('gcp', 'Cloud_Storage/cloud-storage'),
+    'alicloud_db_instance':           ('alicloud', 'database/db-instance'),
+    'alicloud_polardb_cluster':       ('alicloud', 'database/db-instance'),
+    'alicloud_mongodb_instance':      ('alicloud', 'database/db-instance'),
+    'alicloud_redis_instance':        ('alicloud', 'database/db-instance'),
+    'alicloud_oss_bucket':            ('alicloud', 'storage/oss-bucket'),
+    'alicloud_nas_file_system':       ('alicloud', 'storage/oss-bucket'),
+    'alicloud_instance':              ('alicloud', 'compute/ecs-instance'),
+    'alicloud_ecs_instance':          ('alicloud', 'compute/ecs-instance'),
+    'alicloud_vpc':                   ('alicloud', 'networking/vpc'),
+    'alicloud_vswitch':               ('alicloud', 'networking/vswitch'),
+    'alicloud_security_group':        ('alicloud', 'security/security-group'),
+    'alicloud_security_group_rule':   ('alicloud', 'security/security-group'),
+    'alicloud_ram_role':              ('alicloud', 'security/ram-role'),
+    'alicloud_ram_policy':            ('alicloud', 'security/ram-policy'),
+    'alicloud_slb':                   ('alicloud', 'networking/load-balancer'),
+    'alicloud_eip':                   ('alicloud', 'networking/eip'),
+    'alicloud_cs_kubernetes':         ('alicloud', 'containers/kubernetes-cluster'),
+    'alicloud_fc_function':           ('alicloud', 'compute/function'),
+    'alicloud_log_store':             ('alicloud', 'storage/log-store'),
     # ── Oracle Cloud Infrastructure ──────────────────────────────────────────
-    'oci_objectstorage_bucket':       ('gcp', 'Cloud_Storage/cloud-storage'),
-    'oci_core_instance':              ('aws', 'Arch_Compute/ec2'),
-    'oci_core_vcn':                   ('aws', 'Arch_Networking-Content-Delivery/virtual-private-cloud'),
-    'oci_core_subnet':                ('aws', 'Arch_Networking-Content-Delivery/vpc'),
-    'oci_core_security_list':         ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'oci_core_network_security_group':('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'oci_database_db_system':         ('aws', 'Arch_Databases/rds'),
-    'oci_database_autonomous_database':('aws', 'Arch_Databases/aurora'),
-    'oci_load_balancer':              ('aws', 'Arch_Networking-Content-Delivery/elastic-load-balancing'),
-    'oci_identity_policy':            ('aws', 'Arch_Security-Identity/shield'),
-    'oci_vault_secret':               ('aws', 'Arch_Security-Identity/shield'),
-    'oci_kms_key':                    ('aws', 'Arch_Security-Identity/shield'),
-    'oci_functions_function':         ('aws', 'Arch_Compute/lambda'),
-    'oci_oke_cluster':                ('aws', 'Arch_Containers/elastic-kubernetes-service'),
+    'oci_objectstorage_bucket':       ('oci', 'storage/object-storage'),
+    'oci_core_instance':              ('oci', 'compute/compute-instance'),
+    'oci_core_vcn':                   ('oci', 'networking/vcn'),
+    'oci_core_subnet':                ('oci', 'networking/subnet'),
+    'oci_core_security_list':         ('oci', 'security/security-list'),
+    'oci_core_network_security_group':('oci', 'security/network-security-group'),
+    'oci_database_db_system':         ('oci', 'database/db-system'),
+    'oci_database_autonomous_database':('oci', 'database/autonomous-database'),
+    'oci_load_balancer':              ('oci', 'networking/load-balancer'),
+    'oci_identity_policy':            ('oci', 'security/policy'),
+    'oci_vault_secret':               ('oci', 'security/secret'),
+    'oci_kms_key':                    ('oci', 'security/kms-key'),
+    'oci_functions_function':         ('oci', 'compute/function'),
+    'oci_oke_cluster':                ('oci', 'containers/kubernetes-cluster'),
     # ── Synthetic/inferred nodes (created by diagram generator) ──────────────
     'synthetic_sql_server':           ('gcp', 'Cloud_SQL/cloud-sql'),
     'synthetic_database':             ('gcp', 'Cloud_SQL/cloud-sql'),

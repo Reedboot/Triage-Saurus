@@ -222,6 +222,12 @@ button[type="submit"], button.primary, .btn-primary {
 button[type="submit"]:hover, button.primary:hover, .btn-primary:hover { background: #2ea043; }
 button[type="submit"]:disabled, button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+#scan-btn {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  line-height: 1.1;
+}
+
 /* Secondary — slate */
 button.secondary, .btn-secondary { background: var(--bg-subtle); color: var(--text-muted); border-color: var(--border); }
 button.secondary:hover, .btn-secondary:hover { background: var(--border); color: var(--text); }
@@ -1280,8 +1286,20 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 .prov-pill.aws      { background: #ff990033; color: var(--yellow); border: 1px solid #ff990066; }
 .prov-pill.gcp      { background: #34a85333; color: var(--green);  border: 1px solid #34a85366; }
 .prov-pill.oracle   { background: #f8000033; color: var(--red);    border: 1px solid #f8000066; }
+.prov-pill.oci      { background: #f8000033; color: var(--red);    border: 1px solid #f8000066; }
 .prov-pill.alicloud { background: #ff6a0033; color: var(--orange);  border: 1px solid #ff6a0066; }
+.prov-pill.kubernetes { background: #326ce533; color: #79c0ff; border: 1px solid #326ce566; }
+.prov-pill.tencentcloud { background: #006eff33; color: #7db4ff; border: 1px solid #006eff66; }
+.prov-pill.huaweicloud { background: #c7000b33; color: #ff7b72; border: 1px solid #c7000b66; }
 .prov-pill.unknown  { background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border); }
+
+/* Recent-scan provider chips reuse provider colours without forcing uppercase */
+.recent-prov-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  font-weight: 500;
+  text-transform: none;
+}
 
 /* ── Code/file references ── */
 .file-link {
@@ -1663,6 +1681,7 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .diagram-zoom-inner {
   position: absolute;
   top: 0; left: 0;
+  min-width: 100%; min-height: 100%;
   transform-origin: 0 0;
   transform: translate(0,0) scale(1);
   will-change: transform;

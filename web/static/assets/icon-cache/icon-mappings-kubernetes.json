@@ -12,6 +12,6 @@
   "kubernetes_secret": "/kubernetes/secret.svg",
   "kubernetes_cluster": "/kubernetes/cluster.svg",
   "kubernetes_replicaset": "/kubernetes/deployment.svg",
-  "kubernetes_networkpolicy": "/kubernetes/ingress.svg",
-  "kubernetes_serviceaccount": "/kubernetes/service.svg"
+  "kubernetes_networkpolicy": "/kubernetes/networkpolicy.svg",
+  "kubernetes_serviceaccount": "/kubernetes/serviceaccount.svg"
 }

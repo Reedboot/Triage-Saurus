@@ -216,10 +216,10 @@ class TestInternetExposureDetector:
     def test_no_false_positives(self):
         """Test that private resources are not marked as exposed."""
         detector = InternetExposureDetector('azure')
-        
+
         resources = [
             {'id': 1, 'resource_name': 'vm-internal', 'resource_type': 'azurerm_virtual_machine'},
-            {'id': 2, 'resource_name': 'db-internal', 'resource_type': 'azurerm_mssql_server'},
+            {'id': 2, 'resource_name': 'disk-internal', 'resource_type': 'azurerm_managed_disk'},
         ]
         
         # No findings, properties, or public indicators

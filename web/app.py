@@ -4142,6 +4142,8 @@ def api_icon_mappings():
         "aws": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-aws.json",
         "gcp": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-gcp.json",
         "kubernetes": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-kubernetes.json",
+        "alicloud": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-alicloud.json",
+        "oci": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-oci.json",
         "other": REPO_ROOT / "web" / "static" / "assets" / "icon-cache" / "icon-mappings-other.json",
     }
     
@@ -4149,7 +4151,7 @@ def api_icon_mappings():
     if not cache_file:
         return jsonify({"error": f"Unknown provider: {provider}"}), 400
     
-    providers_for_all = ["azure", "aws", "gcp", "kubernetes", "other"]
+    providers_for_all = ["azure", "aws", "gcp", "kubernetes", "alicloud", "oci", "other"]
 
     def _build_icon_map_runtime(selected_provider: str) -> dict[str, str]:
         """Build icon mappings dynamically when cache files are missing."""

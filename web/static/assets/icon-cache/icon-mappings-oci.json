@@ -1,0 +1,21 @@
+{
+  "alicloud_security_group": "/oci/security/network-security-group.svg",
+  "alicloud_security_group_rule": "/oci/security/network-security-group.svg",
+  "alicloud_slb": "/oci/networking/load-balancer.svg",
+  "alicloud_cs_kubernetes": "/oci/containers/kubernetes-cluster.svg",
+  "alicloud_fc_function": "/oci/compute/function.svg",
+  "oci_objectstorage_bucket": "/oci/storage/object-storage.svg",
+  "oci_core_instance": "/oci/compute/compute-instance.svg",
+  "oci_core_vcn": "/oci/networking/vcn.svg",
+  "oci_core_subnet": "/oci/networking/subnet.svg",
+  "oci_core_security_list": "/oci/security/security-list.svg",
+  "oci_core_network_security_group": "/oci/security/network-security-group.svg",
+  "oci_database_db_system": "/oci/database/db-system.svg",
+  "oci_database_autonomous_database": "/oci/database/autonomous-database.svg",
+  "oci_load_balancer": "/oci/networking/load-balancer.svg",
+  "oci_identity_policy": "/oci/security/policy.svg",
+  "oci_vault_secret": "/oci/security/secret.svg",
+  "oci_kms_key": "/oci/security/kms-key.svg",
+  "oci_functions_function": "/oci/compute/function.svg",
+  "oci_oke_cluster": "/oci/containers/kubernetes-cluster.svg"
+}

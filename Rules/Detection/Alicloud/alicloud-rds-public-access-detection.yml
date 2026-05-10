@@ -4,27 +4,16 @@ rules:
       Alibaba Cloud RDS instance allows access from 0.0.0.0/0 via security_ips.
     severity: WARNING
     languages: [terraform, hcl]
-    pattern-either:
+    patterns:
       - pattern: |
           resource "alicloud_db_instance" $NAME {
             ...
-            security_ips = [
-              ...
-              "0.0.0.0",
-              ...
-            ]
+            security_ips = $SECURITY_IPS
             ...
           }
-      - pattern: |
-          resource "alicloud_db_instance" $NAME {
-            ...
-            security_ips = [
-              ...
-              "0.0.0.0/0",
-              ...
-            ]
-            ...
-          }
+      - metavariable-regex:
+          metavariable: $SECURITY_IPS
+          regex: "(?s).*0\\.0\\.0\\.0(?:/0)?.*"
     metadata:
       finding_kind: Misconfiguration
       asset_provider: alicloud
