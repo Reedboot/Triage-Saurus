@@ -242,7 +242,7 @@ export function checkForRunningScan(repoPath) {
         reconnectToRunningExperiment(repoPath, data.running_experiment, data.running_experiment_created_at);
       }
     })
-    .catch(err => console.log('[Stream] Could not check running scan status:', err));
+    .catch(() => {});
 }
 
 // ── Reconnect ─────────────────────────────────────────────────────────────────
@@ -331,7 +331,7 @@ export function _startReconnectPoll(repoName, experimentId, createdAt) {
           );
         }
       })
-      .catch(err => { if (pollCount === 1) console.log('[Reconnect] Error checking scan status:', err); });
+      .catch(() => {});
   }, 5000);
 
   if (state.spinner) state.spinner.style.display = 'none';

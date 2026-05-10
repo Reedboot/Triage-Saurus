@@ -64,8 +64,10 @@ def build_and_save_icon_caches(providers=None):
         
         print(f"✓ {len(icon_map)} mappings in {elapsed:.2f}s")
         
-        # Merge into all-provider map
-        all_icons.update(icon_map)
+        # Merge into all-provider map, preserving first-seen keys so shared
+        # synthetic types stay deterministic.
+        for key, value in icon_map.items():
+            all_icons.setdefault(key, value)
     
     # Save all-provider cache
     print(f"Saving all-provider cache...", end=" ", flush=True)

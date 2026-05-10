@@ -193,11 +193,6 @@ function init() {
     }).observe(diagramTabs, { childList: true });
   }
 
-  // Page visibility
-  document.addEventListener('visibilitychange', () => {
-    console.log('[Stream] Page', document.hidden ? 'hidden' : 'visible');
-  });
-
   // Repo select
   const repoSelect = document.getElementById('repo-select');
   if (repoSelect) {
@@ -278,7 +273,7 @@ function init() {
             pastSelect.dispatchEvent(new Event('change'));
           }
         })
-        .catch(err => console.log('[Repo] Could not load past scans:', err));
+        .catch(() => {});
 
       checkForRunningScan(this.value);
     });
@@ -294,30 +289,41 @@ function init() {
     if (!expId && !repoP) return;
     window.history.replaceState({}, '', window.location.pathname);
     if (expId) window._urlParamTargetExp = expId;
-    if (repoP && repoSelect) {
-      const opt = Array.from(repoSelect.options).find(o => o.value === repoP);
-      if (opt) { repoSelect.value = repoP; repoSelect.dispatchEvent(new Event('change')); }
-    } else if (expId && !repoP) {
+
+    const trySelectRepoOption = (repoPath, repoName) => {
+      if (!repoSelect) return false;
+      const normalizedPath = String(repoPath || '').trim();
+      const pathBaseName = normalizedPath ? normalizedPath.split('/').filter(Boolean).pop() : '';
+      const normalizedName = String(repoName || '').trim().toLowerCase();
+
+      let targetOpt = null;
+      if (normalizedPath) {
+        targetOpt = Array.from(repoSelect.options).find(o => o.value === normalizedPath) || null;
+      }
+      if (!targetOpt && pathBaseName) {
+        targetOpt = Array.from(repoSelect.options).find(o => {
+          const optBaseName = String(o.value || '').split('/').filter(Boolean).pop();
+          return optBaseName === pathBaseName;
+        }) || null;
+      }
+      if (!targetOpt && normalizedName) {
+        targetOpt = Array.from(repoSelect.options).find(o => ((o.dataset && o.dataset.name) || '').toLowerCase() === normalizedName) || null;
+      }
+      if (!targetOpt) return false;
+      repoSelect.value = targetOpt.value;
+      repoSelect.dispatchEvent(new Event('change'));
+      return true;
+    };
+
+    const resolveExperimentRepoAndLoad = () => {
+      if (!expId) return;
       fetch(`/api/experiment/${encodeURIComponent(expId)}/repo`)
         .then(r => r.json())
         .then(data => {
           const resolvedRepoPath = (data && data.repo_path) ? String(data.repo_path).trim() : '';
           const resolvedRepoName = (data && data.repo_name) ? String(data.repo_name).trim() : '';
 
-          if (repoSelect) {
-            let targetOpt = null;
-            if (resolvedRepoPath) {
-              targetOpt = Array.from(repoSelect.options).find(o => o.value === resolvedRepoPath) || null;
-            }
-            if (!targetOpt && resolvedRepoName) {
-              targetOpt = Array.from(repoSelect.options).find(o => (o.dataset && o.dataset.name) === resolvedRepoName) || null;
-            }
-            if (targetOpt) {
-              repoSelect.value = targetOpt.value;
-              repoSelect.dispatchEvent(new Event('change'));
-              return;
-            }
-          }
+          if (trySelectRepoOption(resolvedRepoPath, resolvedRepoName)) return;
 
           if (resolvedRepoName) {
             state.currentExperimentId = expId;
@@ -344,6 +350,14 @@ function init() {
             window._urlParamTargetExp = null;
           }, 500);
         });
+    };
+
+    if (repoP && repoSelect) {
+      if (!trySelectRepoOption(repoP, '')) {
+        resolveExperimentRepoAndLoad();
+      }
+    } else if (expId && !repoP) {
+      resolveExperimentRepoAndLoad();
     }
   })();
 

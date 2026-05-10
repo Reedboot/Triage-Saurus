@@ -1103,6 +1103,49 @@ def _discover_icon_by_name(icon_name: str, provider: str) -> Optional[Path]:
     return None
 
 
+def _synthetic_icon_target(resource_type: str, provider: str) -> Optional[tuple[str, str]]:
+    """Return provider-aware icon target for synthetic/inferred node types."""
+    rtype = (resource_type or "").lower().strip()
+    prov = (provider or "").lower().strip()
+    provider_targets = {
+        "synthetic_sql_server": {
+            "alicloud": ("alicloud", "database/db-instance"),
+            "oci": ("oci", "database/db-system"),
+            "aws": ("aws", "Arch_Databases/rds"),
+            "azure": ("azure", "other/sql-server"),
+            "gcp": ("gcp", "Cloud_SQL/cloud-sql"),
+        },
+        "synthetic_database": {
+            "alicloud": ("alicloud", "database/db-instance"),
+            "oci": ("oci", "database/db-system"),
+            "aws": ("aws", "Arch_Databases/rds"),
+            "azure": ("azure", "other/sql-server"),
+            "gcp": ("gcp", "Cloud_SQL/cloud-sql"),
+        },
+        "synthetic_storage": {
+            "alicloud": ("alicloud", "storage/oss-bucket"),
+            "oci": ("oci", "storage/object-storage"),
+            "aws": ("aws", "Arch_Storage/s3"),
+            "azure": ("azure", "storage/storage-account"),
+            "gcp": ("gcp", "Cloud_Storage/cloud-storage"),
+        },
+        "synthetic_server": {
+            "alicloud": ("alicloud", "compute/ecs-instance"),
+            "oci": ("oci", "compute/compute-instance"),
+            "aws": ("aws", "Arch_Compute/ec2"),
+            "azure": ("azure", "compute/virtual-machine"),
+            "gcp": ("gcp", "Compute_Engine/compute-engine"),
+        },
+    }
+    targets = provider_targets.get(rtype)
+    if not targets:
+        return None
+    if prov in targets:
+        return targets[prov]
+    # For unknown/external synthetic nodes, prefer Alicloud over cross-cloud SQL icon leakage.
+    return targets.get("alicloud")
+
+
 def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]:
     """Get the filesystem path to the icon for a given resource type.
     
@@ -1119,6 +1162,17 @@ def get_icon_path(resource_type: str, provider: str = 'azure') -> Optional[Path]
     rtype = (resource_type or '').lower().strip()
     if not rtype:
         return None
+
+    # Synthetic/inferred resource types are provider-aware.
+    synthetic_target = _synthetic_icon_target(rtype, provider)
+    if synthetic_target:
+        syn_provider, syn_icon_rel = synthetic_target
+        syn_parts = syn_icon_rel.split('/', 1)
+        if len(syn_parts) == 2:
+            syn_cat, syn_name = syn_parts
+            icon_file = _find_icon_file(syn_cat, syn_name, syn_provider)
+            if icon_file:
+                return icon_file
 
     # Check OTHER_RESOURCE_TYPE_TO_ICON first (alicloud, oci, synthetic, etc.)
     if rtype in OTHER_RESOURCE_TYPE_TO_ICON:
@@ -1338,6 +1392,28 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
                 rel_path = best_match.relative_to(web_root)
                 icon_url = f"/{rel_path.as_posix()}"
                 icon_map[resource_type] = icon_url
+            except Exception:
+                pass
+
+    # Ensure synthetic nodes are present for Alicloud/OCI provider caches.
+    # In "all" cache merges, we want one deterministic synthetic mapping and avoid
+    # cloud-agnostic keys flipping between providers.
+    if provider in {"alicloud", "oci"}:
+        for synthetic_type in ("synthetic_sql_server", "synthetic_database", "synthetic_storage", "synthetic_server"):
+            synthetic_target = _synthetic_icon_target(synthetic_type, provider)
+            if not synthetic_target:
+                continue
+            syn_provider, syn_icon_rel = synthetic_target
+            syn_parts = syn_icon_rel.split("/", 1)
+            if len(syn_parts) != 2:
+                continue
+            syn_cat, syn_icon_name = syn_parts
+            syn_icon_file = _find_icon_file(syn_cat, syn_icon_name, syn_provider)
+            if not syn_icon_file:
+                continue
+            try:
+                rel_path = syn_icon_file.relative_to(web_root)
+                icon_map[synthetic_type] = f"/{rel_path.as_posix()}"
             except Exception:
                 pass
     

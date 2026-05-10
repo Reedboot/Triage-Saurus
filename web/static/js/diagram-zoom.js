@@ -105,11 +105,6 @@ export function fitActiveDiagram(mode = 'contain') {
     mode === 'width' ? widthScale : containScale
   );
 
-  console.log(
-    `[fitActiveDiagram] bounds: ${bounds.width}x${bounds.height}, wrap: ${wrapWidth}x${wrapHeight}, ` +
-    `mode: ${mode}, fitScale: ${fitScale.toFixed(3)}`
-  );
-
   state.zoomState.scale = fitScale;
   state.zoomState.panX  = wrapWidth  / (2 * fitScale) - bounds.width  / 2;
   state.zoomState.panY  = mode === 'width'
@@ -119,34 +114,43 @@ export function fitActiveDiagram(mode = 'contain') {
   saveDiagramState(state.currentDiagramIndex);
 
   // Nudge so the Internet / 🌐 node stays visible after fit.
-  try {
-    const innerEl = document.getElementById('diagram-zoom-inner');
-    if (!innerEl) return;
-    const allLabels = activeDiagram.querySelectorAll('.nodeLabel, .node text, text');
-    let internetEl = null;
-    for (const el of allLabels) {
-      if (/internet/i.test(el.textContent || '')) { internetEl = el; break; }
-    }
-    if (!internetEl) return;
-    const innerRect = innerEl.getBoundingClientRect();
-    const nodeRect  = internetEl.getBoundingClientRect();
-    const margin = 24;
-    const nodeScreenLeft   = nodeRect.left   - innerRect.left;
-    const nodeScreenRight  = nodeRect.right  - innerRect.left;
-    const nodeScreenTop    = nodeRect.top    - innerRect.top;
-    const nodeScreenBottom = nodeRect.bottom - innerRect.top;
-    let nudgeX = 0, nudgeY = 0;
-    if (nodeScreenLeft < margin)                nudgeX = (margin - nodeScreenLeft)    / fitScale;
-    if (nodeScreenRight > wrapWidth - margin)   nudgeX = (wrapWidth - margin - nodeScreenRight) / fitScale;
-    if (nodeScreenTop < margin)                 nudgeY = (margin - nodeScreenTop)     / fitScale;
-    if (nodeScreenBottom > wrapHeight - margin) nudgeY = (wrapHeight - margin - nodeScreenBottom) / fitScale;
-    if (nudgeX !== 0 || nudgeY !== 0) {
-      state.zoomState.panX += nudgeX;
-      state.zoomState.panY += nudgeY;
-      applyTransform();
-      saveDiagramState(state.currentDiagramIndex);
-    }
-  } catch (_) { /* non-critical */ }
+  // IMPORTANT: wrap in double-rAF so getBoundingClientRect reads happen AFTER
+  // applyTransform's own requestAnimationFrame has flushed the CSS transform.
+  // Without this, stale layout coords cause a massive erroneous panX offset.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      const innerEl = document.getElementById('diagram-zoom-inner');
+      if (!innerEl) return;
+      const allLabels = activeDiagram.querySelectorAll('.nodeLabel, .node text, text');
+      let internetEl = null;
+      for (const el of allLabels) {
+        if (/internet/i.test(el.textContent || '')) { internetEl = el; break; }
+      }
+      if (!internetEl) return;
+      const innerRect = innerEl.getBoundingClientRect();
+      const nodeRect  = internetEl.getBoundingClientRect();
+      const margin = 24;
+      const nodeScreenLeft   = nodeRect.left   - innerRect.left;
+      const nodeScreenRight  = nodeRect.right  - innerRect.left;
+      const nodeScreenTop    = nodeRect.top    - innerRect.top;
+      const nodeScreenBottom = nodeRect.bottom - innerRect.top;
+      let nudgeX = 0, nudgeY = 0;
+      if (nodeScreenLeft < margin)                nudgeX = (margin - nodeScreenLeft)    / fitScale;
+      if (nodeScreenRight > wrapWidth - margin)   nudgeX = (wrapWidth - margin - nodeScreenRight) / fitScale;
+      if (nodeScreenTop < margin)                 nudgeY = (margin - nodeScreenTop)     / fitScale;
+      if (nodeScreenBottom > wrapHeight - margin) nudgeY = (wrapHeight - margin - nodeScreenBottom) / fitScale;
+      // Clamp nudge to prevent runaway offsets (should never exceed diagram dimensions)
+      const maxNudge = Math.max(bounds.width, bounds.height);
+      nudgeX = Math.max(-maxNudge, Math.min(maxNudge, nudgeX));
+      nudgeY = Math.max(-maxNudge, Math.min(maxNudge, nudgeY));
+      if (nudgeX !== 0 || nudgeY !== 0) {
+        state.zoomState.panX += nudgeX;
+        state.zoomState.panY += nudgeY;
+        applyTransform();
+        saveDiagramState(state.currentDiagramIndex);
+      }
+    } catch (_) { /* non-critical */ }
+  }));
 }
 
 export function scheduleDiagramFit(attempt = 0) {

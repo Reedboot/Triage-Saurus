@@ -93,9 +93,7 @@ export async function renderMermaidInContainer(container) {
 // ── Main render entry point ───────────────────────────────────────────────────
 
 export function renderDiagrams(diagrams) {
-  console.log('[renderDiagrams] Called with:', diagrams);
   if (!Array.isArray(diagrams) || !diagrams.length) {
-    console.log('[renderDiagrams] No diagrams or not an array');
     return;
   }
 
@@ -168,16 +166,8 @@ export function renderDiagrams(diagrams) {
     });
   });
 
-  console.log('[renderDiagrams] Added', addedCount, 'diagrams to UI');
-
   const doRender = () => {
     window.mermaid.initialize(getMermaidConfig());
-    diagramViews.querySelectorAll('.mermaid').forEach((elem, idx) => {
-      console.log(
-        `[renderDiagrams] Diagram ${idx}: ${elem.textContent.length} bytes, ` +
-        `starts with: "${elem.textContent.substring(0, 50).replace(/\n/g, ' ')}..."`
-      );
-    });
     renderMermaidInContainer(diagramViews).then(() => {
       setTimeout(() => {
         initPanZoom();

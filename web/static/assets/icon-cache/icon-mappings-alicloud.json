@@ -21,5 +21,9 @@
   "oci_load_balancer": "/alicloud/networking/load-balancer.svg",
   "oci_identity_policy": "/alicloud/security/ram-policy.svg",
   "oci_functions_function": "/alicloud/compute/function.svg",
-  "oci_oke_cluster": "/alicloud/containers/kubernetes-cluster.svg"
+  "oci_oke_cluster": "/alicloud/containers/kubernetes-cluster.svg",
+  "synthetic_sql_server": "/alicloud/database/db-instance.svg",
+  "synthetic_database": "/alicloud/database/db-instance.svg",
+  "synthetic_storage": "/alicloud/storage/oss-bucket.svg",
+  "synthetic_server": "/alicloud/compute/ecs-instance.svg"
 }

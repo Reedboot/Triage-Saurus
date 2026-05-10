@@ -94,7 +94,7 @@ export function buildSectionTabs(experimentId, repoName) {
       showSectionsView();
       if (tabs.length > 0) loadSectionContent(tabs[0].key, experimentId, repoName);
     })
-    .catch(err => console.log('[Sections] Could not load tabs:', err));
+    .catch(() => {});
 
   refetchDiagramsWithApiOpsMode(true);
 }

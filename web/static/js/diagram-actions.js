@@ -178,7 +178,6 @@ export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
   const repoName     = state.currentRepoName || getCurrentRepoName();
 
   if (!experimentId || !repoName) {
-    console.log('[Diagrams] No experiment or repo to load');
     return;
   }
 
@@ -193,7 +192,6 @@ export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
       return r.json();
     })
     .then(data => {
-      console.log('[Diagrams] Response:', data);
       if (data?.diagrams?.length > 0) {
         state.storedDiagrams = data.diagrams;
         renderDiagrams(data.diagrams);

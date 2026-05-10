@@ -149,7 +149,6 @@ const MermaidIconInjector = (() => {
     try {
       // Find all Mermaid nodes (they have class 'node' or similar identifiers)
       const nodes = findMermaidNodes(svgElement);
-      console.log(`[MermaidIconInjector] Found ${nodes.length} nodes in diagram`);
       
       let injected = 0;
       for (const node of nodes) {
@@ -160,7 +159,6 @@ const MermaidIconInjector = (() => {
           console.warn('[MermaidIconInjector] Failed to inject icon for node:', err.message);
         }
       }
-      console.log(`[MermaidIconInjector] Injected ${injected} inline SVG icons`);
     } catch (err) {
       console.error('[MermaidIconInjector] Failed to inject icons:', err.message);
     }
@@ -180,52 +178,22 @@ const MermaidIconInjector = (() => {
     
     // Strategy 2: If no nodes found, try ANY <g> element with an icon class marker
     if (results.length === 0) {
-      console.log(`[MermaidIconInjector] Strategy 1 found 0 nodes, trying fallback strategies...`);
-      
       // Look for <g> containing icon class markers (:::icon_*)
       const possibleNodes = svgElement.querySelectorAll('g[class*="icon_"]');
       for (const el of possibleNodes) {
         if (!seen.has(el)) { seen.add(el); results.push(el); }
       }
-      console.log(`[MermaidIconInjector] Strategy 2 (g[class*="icon_"]): found ${results.length}`);
     }
     
     // Strategy 3: If still nothing, look at ALL g elements and report structure
     if (results.length === 0) {
-      console.log(`[MermaidIconInjector] Strategies 1-2 failed, analyzing SVG structure...`);
-      
       const allGs = svgElement.querySelectorAll('g');
       const allGsWithClass = svgElement.querySelectorAll('g[class]');
       const allTexts = svgElement.querySelectorAll('text');
       const allTextsWithClass = svgElement.querySelectorAll('text[class]');
       
-      console.log(`[MermaidIconInjector DEBUG] SVG Structure:`);
-      console.log(`[MermaidIconInjector DEBUG]  Total <g> elements: ${allGs.length}`);
-      console.log(`[MermaidIconInjector DEBUG]  <g> with class attr: ${allGsWithClass.length}`);
-      console.log(`[MermaidIconInjector DEBUG]  Total <text> elements: ${allTexts.length}`);
-      console.log(`[MermaidIconInjector DEBUG]  <text> with class attr: ${allTextsWithClass.length}`);
-      
-      if (allGsWithClass.length > 0) {
-        const classes = [];
-        for (let i = 0; i < Math.min(5, allGsWithClass.length); i++) {
-          const cls = allGsWithClass[i].className.baseVal || allGsWithClass[i].className || 'no-class';
-          classes.push(cls.substring(0, 60));
-        }
-        console.log(`[MermaidIconInjector DEBUG]  Sample <g> classes: ${JSON.stringify(classes)}`);
-      }
-      
-      if (allTextsWithClass.length > 0) {
-        const classes = [];
-        for (let i = 0; i < Math.min(3, allTextsWithClass.length); i++) {
-          const cls = allTextsWithClass[i].className.baseVal || allTextsWithClass[i].className || 'no-class';
-          classes.push(cls.substring(0, 60));
-        }
-        console.log(`[MermaidIconInjector DEBUG]  Sample <text> classes: ${JSON.stringify(classes)}`);
-      }
-      
       // Strategy 4: As last resort, try all g elements regardless of class
       results = Array.from(svgElement.querySelectorAll('g')).filter((el, idx) => idx < 50); // Limit to first 50
-      console.log(`[MermaidIconInjector DEBUG]  Fallback to all <g> elements (first 50): ${results.length}`);
     }
     
     return results;
@@ -271,35 +239,56 @@ const MermaidIconInjector = (() => {
     // Skip nodes that already have an injected icon (idempotency guard)
     if (node.querySelector('.mermaid-icon')) return false;
 
-    // Find the text element (label) within this node
-    const textElement = node.querySelector('text');
-    if (!textElement) return false;
-
-    const textContent = textElement.textContent || '';
-    if (!textContent) return false;
-
     // Extract resource type from the CSS class applied to the node
     const resourceType = extractResourceTypeFromClass(node);
-    if (!resourceType) {
-      console.debug('[MermaidIconInjector] No icon class found on node');
-      return false;
-    }
+    if (!resourceType) return false;
 
     // Look up icon path in the provided map
     const iconPath = iconMap[resourceType];
-    if (!iconPath) {
-      console.debug(`[MermaidIconInjector] No icon mapping for: ${resourceType}`);
-      return false;
-    }
+    if (!iconPath) return false;
 
-    // Fetch and parse the SVG file
+    // Find the label element — Mermaid uses either <text> (legacy) or
+    // <foreignObject> (modern HTML-label mode) for node/cluster labels.
+    const textElement = node.querySelector('text');
+    const foreignObj  = !textElement ? node.querySelector('foreignObject') : null;
+    if (!textElement && !foreignObj) return false;
+
+    const labelContent = textElement
+      ? textElement.textContent || ''
+      : (foreignObj.textContent || '').trim();
+    if (!labelContent) return false;
+
+    // Fetch and parse the SVG icon
     const sourceSvg = await _fetchSvg(iconPath);
     if (!sourceSvg) return false;
 
-    // Get the bounding box of the text element to position the icon
+    // Get the bounding box of the label element to position the icon.
+    // For foreignObject we use getBoundingClientRect mapped to SVG coords.
     let textBBox;
     try {
-      textBBox = textElement.getBBox();
+      if (textElement) {
+        textBBox = textElement.getBBox();
+      } else {
+        // Map foreignObject client rect into SVG coordinate space
+        const foRect   = foreignObj.getBoundingClientRect();
+        const svgRect  = svgElement.getBoundingClientRect();
+        const ctm      = svgElement.getScreenCTM();
+        if (!ctm) return false;
+        const invCTM   = ctm.inverse();
+        // Convert screen point (top-left of foreignObject) to SVG coords
+        let pt = svgElement.createSVGPoint();
+        pt.x = foRect.left - svgRect.left + svgRect.left;
+        pt.y = foRect.top  - svgRect.top  + svgRect.top;
+        // Use screen coordinates directly
+        pt.x = foRect.left; pt.y = foRect.top;
+        const svgPt = pt.matrixTransform(invCTM);
+        textBBox = {
+          x: svgPt.x,
+          y: svgPt.y,
+          width:  foRect.width  / Math.abs(ctm.a),
+          height: foRect.height / Math.abs(ctm.d),
+        };
+      }
     } catch (err) {
       console.warn(`[MermaidIconInjector] Could not get text bounding box: ${err.message}`);
       return false;
@@ -319,10 +308,7 @@ const MermaidIconInjector = (() => {
     const vbW = viewBoxParts[2] || 100;
     const vbH = viewBoxParts[3] || 100;
     const scale = CONFIG.ICON_SIZE / Math.max(vbW, vbH);
-    // Position icon and scale to exact size
     groupElement.setAttribute('transform', `translate(${iconX},${iconY}) scale(${scale})`);
-
-    // Clone the source SVG content into the group
 
     // Clone all children from the source SVG into the group
     for (const child of sourceSvg.children) {
@@ -335,8 +321,12 @@ const MermaidIconInjector = (() => {
     titleElement.textContent = resourceType;
     groupElement.appendChild(titleElement);
 
-    // Insert icon into the SVG, positioned before the text (so it renders underneath)
-    node.insertBefore(groupElement, textElement);
+    // Insert icon: before <text> if present, else prepend to node group
+    if (textElement) {
+      node.insertBefore(groupElement, textElement);
+    } else {
+      node.insertBefore(groupElement, node.firstChild);
+    }
 
     return true;
   }
@@ -361,7 +351,6 @@ const MermaidIconInjector = (() => {
       Object.keys(_iconMapCache).forEach((k) => {
         _iconMapCache[k] = _sanitizeIconPath(_iconMapCache[k]);
       });
-      console.log(`[MermaidIconInjector] Loaded ${Object.keys(_iconMapCache).length} icon mappings`);
       return _iconMapCache;
     } catch (err) {
       console.error('[MermaidIconInjector] Error fetching icon mappings:', err.message);
@@ -386,7 +375,6 @@ const MermaidIconInjector = (() => {
       }
 
       const svgElements = document.querySelectorAll('.mermaid svg');
-      console.log(`[MermaidIconInjector] Found ${svgElements.length} Mermaid SVG(s) with ${Object.keys(iconMap).length} icons`);
 
       for (const svgElement of svgElements) {
         await injectIcons(svgElement, iconMap);
@@ -466,7 +454,6 @@ const MermaidIconInjector = (() => {
     _clearCache: () => {
       _svgCache = {};
       _iconMapCache = null;
-      console.log('[MermaidIconInjector] Caches cleared');
     }
   };
 })();

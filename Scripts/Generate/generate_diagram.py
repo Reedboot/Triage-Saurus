@@ -1734,7 +1734,7 @@ class HierarchicalDiagramBuilder:
             'id': synthetic_id,
             'resource_name': sql_node_name,
             'resource_type': 'synthetic_sql_server',
-            'provider': 'external',
+            'provider': (self.provider_filter or 'external'),
             'repo_name': self.repo_name or '',
             'properties': {'synthetic': True},
         }

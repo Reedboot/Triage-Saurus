@@ -4240,7 +4240,8 @@ def api_icon_mappings():
         if selected_provider == "all":
             merged: dict[str, str] = {}
             for p in providers_for_all:
-                merged.update(build_icon_map_bulk(p) or {})
+                for key, value in (build_icon_map_bulk(p) or {}).items():
+                    merged.setdefault(key, value)
             return merged
         return build_icon_map_bulk(selected_provider) or {}
 
@@ -4404,6 +4405,29 @@ def api_diagrams(experiment_id: str):
             "diagrams": [d for d in response_diagrams if d.get("code")]
         }
 
+    def _diagram_icon_provider_mismatch(diagrams: list[dict]) -> bool:
+        """Detect persisted diagrams embedding icon paths for a different provider."""
+        provider_re = re.compile(r"/static/assets/icons/([^/]+)/", re.IGNORECASE)
+        for d in diagrams or []:
+            expected = _canonical_provider_key((d.get("provider") or "").lower())
+            if expected in {"", "unknown", "kubernetes"}:
+                continue
+            code = d.get("mermaid_code") or ""
+            seen = {
+                _canonical_provider_key(m.group(1).lower())
+                for m in provider_re.finditer(code)
+            }
+            seen.discard("")
+            seen.discard("unknown")
+            if not seen:
+                continue
+            if expected not in seen:
+                return True
+            foreign = seen - {expected, "kubernetes"}
+            if foreign:
+                return True
+        return False
+
     try:
         sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
@@ -4418,10 +4442,12 @@ def api_diagrams(experiment_id: str):
                     and _edge_count(d.get("mermaid_code") or "") == 0
                     for d in (db_diagrams or [])
                 )
+                has_provider_icon_mismatch = _diagram_icon_provider_mismatch(db_diagrams or [])
                 if (
                     db_diagrams
                     and not force_regenerate
                     and not has_sparse_alicloud_or_oci
+                    and not has_provider_icon_mismatch
                     and max((_edge_count(d.get("mermaid_code") or "") for d in db_diagrams), default=0) > 0
                 ):
                     return jsonify(_response_payload(db_diagrams))

@@ -17,5 +17,9 @@
   "oci_vault_secret": "/oci/security/secret.svg",
   "oci_kms_key": "/oci/security/kms-key.svg",
   "oci_functions_function": "/oci/compute/function.svg",
-  "oci_oke_cluster": "/oci/containers/kubernetes-cluster.svg"
+  "oci_oke_cluster": "/oci/containers/kubernetes-cluster.svg",
+  "synthetic_sql_server": "/oci/database/db-system.svg",
+  "synthetic_database": "/oci/database/db-system.svg",
+  "synthetic_storage": "/oci/storage/object-storage.svg",
+  "synthetic_server": "/oci/compute/compute-instance.svg"
 }
