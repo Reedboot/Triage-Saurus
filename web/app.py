@@ -1640,7 +1640,34 @@ def _sanitize_mermaid(code: str) -> str:
     return code
 
 
-def _collect_diagrams_dbfirst(experiment_id: str) -> list[dict]:
+def _strip_orphan_styles(code: str) -> str:
+    """Remove `style X` lines for nodes not defined in the diagram.
+
+    Lighter than _sanitize_mermaid — preserves linkStyle coloring so
+    stored DB diagrams keep their colored arrows (critical/warning indicators).
+    """
+    defined_ids: set[str] = set()
+    for ln in code.splitlines():
+        t = ln.strip()
+        m = re.match(r'^([^\s\[\(\{]+)\s*(?:\[\[|\[\(|\[|\(\[|\("|\(\(|\{)', t)
+        if m:
+            defined_ids.add(m.group(1))
+        m2 = re.match(r'^subgraph\s+([^\s\[]+)', t, flags=re.I)
+        if m2:
+            defined_ids.add(m2.group(1))
+    keep_always = {'internet', 'Internet', 'default'}
+    lines = []
+    for ln in code.splitlines():
+        sm = re.match(r'^\s*style\s+([^\s]+)', ln.strip(), flags=re.I)
+        if sm:
+            nid = sm.group(1)
+            if nid not in defined_ids and nid not in keep_always:
+                continue
+        lines.append(ln)
+    return "\n".join(lines)
+
+
+
     """Return DB-backed cloud diagrams only (no markdown fallback)."""
     try:
         sys.path.insert(0, str(REPO_ROOT))
@@ -10916,9 +10943,9 @@ def view_diagram(experiment_id: str):
         if active_provider not in providers_in_experiment:
             active_provider = rows[0][2]
 
-        # Build list of all diagrams for tab rendering
+        # Build list of all diagrams for tab rendering (strip orphan styles, preserve linkStyle coloring)
         diagrams = [
-            {"code": r[0], "title": r[1], "provider": r[2]}
+            {"code": _strip_orphan_styles(r[0] or ""), "title": r[1], "provider": r[2]}
             for r in rows
         ]
 
@@ -10928,7 +10955,7 @@ def view_diagram(experiment_id: str):
             diagrams[0]
         )
 
-        mermaid_code = active_diagram["code"]
+        mermaid_code = _strip_orphan_styles(active_diagram["code"] or "")
         title = active_diagram["title"]
 
         icon_type = (

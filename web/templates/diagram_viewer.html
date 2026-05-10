@@ -446,11 +446,20 @@
                     }
                 }
 
-                // Auto-fit after the browser has laid out the SVG
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                    autoFit();
-                    if (window.MermaidIconInjector) window.MermaidIconInjector.processAllDiagrams();
-                }));
+                // Auto-fit: retry until SVG has non-zero dimensions (layout may take >2 rAFs)
+                let _fitAttempts = 0;
+                function _tryFit() {
+                    const svgEl = container.querySelector('svg');
+                    const sw = parseFloat(svgEl?.getAttribute('width'))  || svgEl?.viewBox?.baseVal?.width  || svgEl?.scrollWidth  || 0;
+                    const sh = parseFloat(svgEl?.getAttribute('height')) || svgEl?.viewBox?.baseVal?.height || svgEl?.scrollHeight || 0;
+                    if ((sw > 0 && sh > 0) || _fitAttempts++ >= 8) {
+                        autoFit();
+                        if (window.MermaidIconInjector) window.MermaidIconInjector.processAllDiagrams();
+                    } else {
+                        requestAnimationFrame(_tryFit);
+                    }
+                }
+                requestAnimationFrame(() => requestAnimationFrame(_tryFit));
             } catch (err) {
                 if (seq !== renderSeq) return;
                 skeleton.classList.add('hidden');
