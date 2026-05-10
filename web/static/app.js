@@ -656,9 +656,12 @@
     // Disable submit button
     if (scanBtn) scanBtn.disabled = true;
 
-    // Create form data
+    // Create form data — derive a clean scan name from the repo folder name
+    const repoBaseName = repoPath.split('/').filter(Boolean).pop() || 'repo';
+    const scanName = repoBaseName.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_scan';
     const formData = new FormData();
     formData.append('repo_path', repoPath);
+    formData.append('scan_name', scanName);
 
     // Start the scan with EventSource for streaming
     try {
@@ -1149,6 +1152,17 @@
           const renderId = `diag_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
           const rendered = await window.mermaid.render(renderId, source);
           block.innerHTML = rendered.svg || '';
+          // After injection, stamp the SVG with explicit pixel dimensions from its viewBox
+          // so it renders at natural size (not collapsed to 0 when the parent has no size).
+          const svg = block.querySelector('svg');
+          if (svg) {
+            const vb = svg.viewBox && svg.viewBox.baseVal;
+            if (vb && vb.width > 0 && vb.height > 0) {
+              svg.setAttribute('width', `${vb.width}px`);
+              svg.setAttribute('height', `${vb.height}px`);
+              svg.style.removeProperty('max-width');
+            }
+          }
         } catch (err) {
           console.error('[Mermaid] Rendering error:', err.message || err);
         }
@@ -2294,6 +2308,43 @@
     if (repoSelect && repoSelect.value) {
       checkForRunningScan(repoSelect.value);
     }
+
+    // ── Handle ?experiment= / ?repo= URL params (from recent-scan pill clicks) ──
+    (function handleUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      const expId  = params.get('experiment');
+      const repoP  = params.get('repo');
+
+      if (!expId && !repoP) return;
+
+      // Select the repo in the dropdown first (triggers past-scan population)
+      if (repoP && repoSelect) {
+        // Find a matching option
+        const opt = Array.from(repoSelect.options).find(o => o.value === repoP);
+        if (opt) {
+          repoSelect.value = repoP;
+          repoSelect.dispatchEvent(new Event('change'));
+        }
+      }
+
+      // After the repo change fires and populates past-scan-select, select the experiment
+      if (expId) {
+        const trySelect = (attempts) => {
+          const ps = document.getElementById('past-scan-select');
+          if (!ps) return;
+          const opt = Array.from(ps.options).find(o => o.value === expId);
+          if (opt) {
+            ps.value = expId;
+            ps.dispatchEvent(new Event('change'));
+            // Clean URL without reloading
+            window.history.replaceState({}, '', window.location.pathname);
+          } else if (attempts < 20) {
+            setTimeout(() => trySelect(attempts + 1), 250);
+          }
+        };
+        setTimeout(() => trySelect(0), 500);
+      }
+    })();
 
     // Load section tabs when a past scan is selected
     const pastScanSelect = document.getElementById('past-scan-select');

@@ -10375,6 +10375,14 @@ def index():
                 ).fetchall()
                 exp['providers'] = [p['provider'] for p in providers]
                 exp['display_name'] = exp['name'].replace('_scan', '').replace('_', ' ').title()
+                # Extract first repo path for linking back to main page
+                try:
+                    import json as _json
+                    repos_raw = exp.get('repos', '[]')
+                    repos_list = _json.loads(repos_raw) if isinstance(repos_raw, str) else (repos_raw or [])
+                    exp['repo_path'] = repos_list[0] if repos_list else ''
+                except Exception:
+                    exp['repo_path'] = ''
                 experiments.append(exp)
     except Exception:
         pass
