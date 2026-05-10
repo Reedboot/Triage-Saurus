@@ -4620,6 +4620,35 @@ def api_repo_summary(experiment_id: str, repo_name: str):
     return jsonify({"sections": sections})
 
 
+@app.route("/api/experiments")
+def api_experiments():
+    """List all experiments with summary stats."""
+    try:
+        with db_helpers.get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT e.id, e.name,
+                       COUNT(DISTINCT r.id) as resource_count,
+                       COUNT(DISTINCT f.id) as finding_count
+                FROM experiments e
+                LEFT JOIN resources r ON r.experiment_id = e.id
+                LEFT JOIN findings f ON f.experiment_id = e.id
+                GROUP BY e.id, e.name
+                ORDER BY e.id DESC
+            """).fetchall()
+            experiments = []
+            for row in rows:
+                exp = dict(row)
+                providers = conn.execute(
+                    "SELECT DISTINCT provider FROM cloud_diagrams WHERE experiment_id = ? ORDER BY provider",
+                    [exp['id']]
+                ).fetchall()
+                exp['providers'] = [p['provider'] for p in providers]
+                experiments.append(exp)
+        return jsonify(experiments)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/diff")
 def api_diff():
     """Compare findings and architecture between two scan experiment IDs.
@@ -4997,7 +5026,7 @@ def api_view_tabs(experiment_id: str, repo_name: str):
             {"key": "overview",   "label": "📝 Overview"},
             {"key": "assets",     "label": "🗂️ Assets"},
             {"key": "findings",   "label": "🔎 Findings"},
-            {"key": "containers", "label": "🐳 Containers"},
+            {"key": "containers", "label": "☸️ Kubernetes"},
             {"key": "roles",      "label": "🧑‍💼 Roles & Permissions"},
             {"key": "traffic",    "label": "📶 Traffic"},
             {"key": "subscription", "label": "🌐 Global Knowledge Q&A"},
@@ -9790,7 +9819,8 @@ def api_view_containers(experiment_id: str, repo_name: str):
         if not resolved_exp_id:
             return _db_render("tab_containers.html", containers=[], container_providers=[], experiment_id="", repo_name=repo_name)
         
-        # Query for Dockerfile resources and get their properties (base images)
+        # Query for Kubernetes and Docker/container workload resources.
+        # Deliberately excludes storage containers (azurerm_storage_container etc.)
         rows = conn.execute("""
             SELECT 
                 r.id,
@@ -9806,26 +9836,26 @@ def api_view_containers(experiment_id: str, repo_name: str):
             LEFT JOIN resource_properties rp ON rp.resource_id = r.id
             WHERE LOWER(repo.repo_name) = LOWER(?) AND repo.experiment_id = ?
               AND (
-                                     LOWER(r.resource_type) LIKE '%docker%' 
-                                     OR LOWER(r.resource_type) LIKE '%container%'
-                                     OR LOWER(r.resource_type) LIKE '%image%'
-                                     OR LOWER(r.resource_type) LIKE '%helm%'
-                                     OR LOWER(r.resource_name) LIKE '%dockerfile%'
-                                     OR r.resource_type IN (
-                                         'aws_ecr_repository', 'aws_ecr_registry',
-                                         'google_artifact_registry_repository',
-                                         'azurerm_container_registry',
-                                         'azurerm_kubernetes_cluster',
-                                         'google_container_cluster', 'google_container_node_pool',
-                                         'aws_eks_cluster', 'aws_eks_node_group',
-                                         'aws_ecs_cluster', 'aws_ecs_task_definition',
-                                         'aws_ecs_service'
-                                     )
-                   OR EXISTS (
-                       SELECT 1 FROM resource_properties rp_d
-                                             WHERE rp_d.resource_id = r.id
-                                                 AND rp_d.property_key IN ('dockerfile', 'image', 'registry')
-                   )
+                  r.provider = 'kubernetes'
+                  OR LOWER(r.resource_type) LIKE '%kubernetes%'
+                  OR LOWER(r.resource_type) LIKE '%k8s%'
+                  OR LOWER(r.resource_type) LIKE '%docker%'
+                  OR LOWER(r.resource_type) LIKE '%helm%'
+                  OR LOWER(r.resource_name) LIKE '%dockerfile%'
+                  OR r.resource_type IN (
+                      'aws_ecr_repository', 'aws_ecr_registry',
+                      'google_artifact_registry_repository',
+                      'azurerm_container_registry',
+                      'google_container_cluster', 'google_container_node_pool',
+                      'aws_eks_cluster', 'aws_eks_node_group',
+                      'aws_ecs_cluster', 'aws_ecs_task_definition',
+                      'aws_ecs_service'
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM resource_properties rp_d
+                      WHERE rp_d.resource_id = r.id
+                        AND rp_d.property_key IN ('dockerfile', 'image', 'registry')
+                  )
               )
             GROUP BY r.id, r.resource_name, r.resource_type, r.provider, r.source_file
             ORDER BY r.provider, r.resource_name
@@ -10322,7 +10352,33 @@ def api_export_csv(experiment_id: str, repo_name: str, section: str):
 
 @app.route("/")
 def index():
-    return render_template("index.html", repos=_resolve_repos())
+    experiments = []
+    try:
+        with db_helpers.get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT e.id, e.name,
+                       COUNT(DISTINCT r.id) as resource_count,
+                       COUNT(DISTINCT f.id) as finding_count,
+                       MAX(f.created_at) as last_scanned
+                FROM experiments e
+                LEFT JOIN resources r ON r.experiment_id = e.id
+                LEFT JOIN findings f ON f.experiment_id = e.id
+                GROUP BY e.id, e.name
+                ORDER BY e.id DESC
+                LIMIT 10
+            """).fetchall()
+            for row in rows:
+                exp = dict(row)
+                providers = conn.execute(
+                    "SELECT DISTINCT provider FROM cloud_diagrams WHERE experiment_id = ? ORDER BY provider",
+                    [exp['id']]
+                ).fetchall()
+                exp['providers'] = [p['provider'] for p in providers]
+                exp['display_name'] = exp['name'].replace('_scan', '').replace('_', ' ').title()
+                experiments.append(exp)
+    except Exception:
+        pass
+    return render_template("index.html", repos=_resolve_repos(), experiments=experiments)
 
 
 @app.route("/scan-001-diagram")

@@ -746,11 +746,29 @@ class HierarchicalDiagramBuilder:
             if not providers_in_diagram:
                 return
             combined_exposed: Dict[str, 'ExposureDetail'] = {}
+            # Load properties once for all providers
+            multi_properties: Dict[int, Dict[str, str]] = {}
+            try:
+                with get_db_connection() as conn:
+                    rows = conn.execute("""
+                        SELECT resource_id, property_key, property_value
+                        FROM resource_properties
+                        WHERE resource_id IN (SELECT id FROM resources WHERE experiment_id = ?)
+                    """, [self.experiment_id]).fetchall()
+                    for row in rows:
+                        rid = row['resource_id']
+                        if rid not in multi_properties:
+                            multi_properties[rid] = {}
+                        multi_properties[rid][row['property_key']] = row['property_value']
+            except Exception:
+                pass
             try:
                 for prov in providers_in_diagram:
                     prov_resources = [r for r in self.resources if (r.get('provider') or '').lower() == prov]
                     prov_detector = InternetExposureDetector(prov)
-                    prov_exposed = prov_detector.detect_exposed_resources(prov_resources, self.connections)
+                    prov_exposed = prov_detector.detect_exposed_resources(
+                        prov_resources, self.connections, properties=multi_properties if multi_properties else None
+                    )
                     combined_exposed.update(prov_exposed)
                 self.exposed_resources = combined_exposed
             except Exception as e:
@@ -4065,8 +4083,9 @@ class HierarchicalDiagramBuilder:
         # These children are skipped so we don't create duplicate Internet edges
         # (e.g. a security_group AND each of its 28 rules all getting individual edges).
         _exposed_parents: set = set()
-        for _rn in self.exposed_resources:
-            _r = self.resource_by_name.get(_rn)
+        for _dict_key, _detail in self.exposed_resources.items():
+            _rn = _detail.resource_name if _dict_key.startswith('__id_') else _dict_key
+            _r = self.resource_by_id.get(_detail.resource_id) if _detail.resource_id else self.resource_by_name.get(_rn)
             if isinstance(_r, list):
                 _r = _r[0]
             if _r and _r.get('id') in self.children_by_parent:
@@ -4093,10 +4112,20 @@ class HierarchicalDiagramBuilder:
             'compute_firewall',     # google_compute_firewall
             # K8s identity/RBAC resources are not network endpoints
             'serviceaccount', 'role_binding', 'clusterrole',
+            # Block storage / disk resources are not internet endpoints
+            'managed_disk',         # azurerm_managed_disk, aws_ebs_volume
+            'disk',                 # google_compute_disk
         )
 
         if self.exposed_resources:
-            for resource_name, exposure_detail in self.exposed_resources.items():
+            for dict_key, exposure_detail in self.exposed_resources.items():
+                # dict_key is normally resource_name, but may be "__id_{resource_id}" when
+                # multiple resources share the same Terraform name (e.g., "example").
+                if dict_key.startswith('__id_'):
+                    resource_name = exposure_detail.resource_name
+                else:
+                    resource_name = dict_key
+
                 if resource_name not in self.emitted_nodes:
                     continue
 
@@ -4105,10 +4134,15 @@ class HierarchicalDiagramBuilder:
                 if resource_name in _exposed_parents:
                     continue
 
-                # Handle duplicate resource names (returns list when duplicates exist)
-                resource = self.resource_by_name.get(resource_name)
-                if isinstance(resource, list):
-                    resource = resource[0]  # Use first resource if duplicates
+                # Prefer the specific resource that was detected (by ID) to avoid
+                # name collision when multiple resources share the same Terraform name (e.g., "example").
+                resource = None
+                if exposure_detail.resource_id is not None:
+                    resource = self.resource_by_id.get(exposure_detail.resource_id)
+                if resource is None:
+                    resource = self.resource_by_name.get(resource_name)
+                    if isinstance(resource, list):
+                        resource = resource[0]
 
                 resource_type = (resource.get('resource_type') or '').lower() if resource else ''
 

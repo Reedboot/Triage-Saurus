@@ -1,14 +1,14 @@
-{# partials/tab_containers.html — Containers / Dockerfile / images listing #}
+{# partials/tab_containers.html — Kubernetes workloads, Dockerfiles and image listing #}
 <div class="containers-section">
   {% if containers %}
   <div class="containers-hero markdown-card">
     <div>
-      <div class="containers-pill">Containers</div>
-      <h3>{{ containers | length }} container{{ 's' if containers | length != 1 else '' }} discovered</h3>
+      <div class="containers-pill">Kubernetes</div>
+      <h3>{{ containers | length }} resource{{ 's' if containers | length != 1 else '' }} discovered</h3>
       <p class="containers-subtitle">Results are cached from the last scan so this tab loads instantly.</p>
     </div>
     <div class="containers-search-wrap">
-      <label for="containers-search">Search containers</label>
+      <label for="containers-search">Search</label>
       <input type="text" id="containers-search" class="assets-search" placeholder="Filter by name, image, provider…" autocomplete="off" />
     </div>
   </div>
@@ -110,10 +110,9 @@
   {% else %}
   <div class="empty-state">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-      <rect x="3" y="7" width="18" height="10" rx="2"/>
-      <path d="M7 11h10"/>
+      <circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>
     </svg>
-    <p>No container or Dockerfile resources detected.<br/>Container data is populated from Dockerfiles, skaffold manifests and Kubernetes manifests during scanning.</p>
+    <p>No Kubernetes or Docker resources detected.<br/>This tab is populated from Kubernetes manifests, Helm charts, Dockerfiles and container orchestration resources during scanning.</p>
   </div>
   {% endif %}
 </div>

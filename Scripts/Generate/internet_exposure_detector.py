@@ -86,6 +86,9 @@ class InternetExposureDetector:
             'azurerm_public_ip', 'azurerm_public_ip_prefix',
             'azurerm_storage_account',  # Storage accounts can be publicly accessible
             'azurerm_cosmosdb_account',  # Public network access is enabled by default
+            # SQL servers default to public unless public_network_access_enabled=false
+            'azurerm_mssql_server', 'azurerm_sql_server',
+            'azurerm_mysql_server', 'azurerm_postgresql_server',
         },
         'gcp': {
             'compute_backend_service', 'compute_url_map',
@@ -228,7 +231,7 @@ class InternetExposureDetector:
                     exposed[resource_name] = detail
 
         # Method 4: Resource type heuristics (medium confidence)
-        heuristic_results = self._detect_by_heuristics(resources)
+        heuristic_results = self._detect_by_heuristics(resources, properties)
         for resource_name, detail in heuristic_results.items():
             if resource_name not in exposed:
                 exposed[resource_name] = detail
@@ -562,22 +565,40 @@ class InternetExposureDetector:
     def _detect_by_heuristics(
         self,
         resources: List[Dict],
+        properties: Optional[Dict[int, Dict[str, str]]] = None,
     ) -> Dict[str, ExposureDetail]:
         """Detect resources by type heuristics (inherently public types)."""
         exposed = {}
 
         public_types = self.PUBLIC_BY_DESIGN.get(self.provider, set())
+        props_map = properties or {}
+
+        # Azure SQL types that default to public unless explicitly restricted
+        AZURE_SQL_TYPES = {
+            'azurerm_mssql_server', 'azurerm_sql_server',
+            'azurerm_mysql_server', 'azurerm_postgresql_server',
+        }
+
+        # Track by resource_id to avoid false-dedup when multiple resources share the
+        # same Terraform name (e.g., many "example" resources in TF tutorials).
+        _seen_ids: set = set()
 
         for resource in resources:
             resource_name = resource.get('resource_name')
             resource_type = (resource.get('resource_type') or '').lower()
             cleaned_resource_type = _clean_resource_type(resource_type).lower()
+            resource_id = resource.get('id')
 
             if not resource_name:
                 continue
 
-            # Skip if already detected by higher-confidence method
-            if resource_name in exposed:
+            # Dedup by resource_id where possible; fall back to name for resources without IDs
+            dedup_key = resource_id if resource_id is not None else resource_name
+            if dedup_key in _seen_ids:
+                continue
+
+            # Skip if already detected by higher-confidence method for the SAME resource
+            if resource_name in exposed and exposed[resource_name].resource_id == resource_id:
                 continue
 
             # Check if resource type is inherently public
@@ -601,6 +622,14 @@ class InternetExposureDetector:
                 if 'private' in resource_name.lower():
                     continue
 
+                # Azure SQL servers: skip if explicitly VNet-restricted or public_network_access disabled
+                if resource_type in AZURE_SQL_TYPES:
+                    r_props = props_map.get(resource_id, {})
+                    if r_props.get('vnet_restricted') == 'true':
+                        continue
+                    if str(r_props.get('public_network_access_enabled', '')).lower() == 'false':
+                        continue
+
                 # GCP-specific filters for false positives
                 if self.provider == 'gcp':
                     # Cloud Functions require trigger_http=true to be public
@@ -621,7 +650,12 @@ class InternetExposureDetector:
                         continue
 
                 clean_type = _clean_resource_type(matched_type)
-                exposed[resource_name] = ExposureDetail(
+                _seen_ids.add(dedup_key)
+                # When multiple resources share the same Terraform name (e.g. "example"),
+                # store collisions under a resource-id-keyed synthetic key so all
+                # exposed resources get their own internet edge in the diagram.
+                dict_key = resource_name if resource_name not in exposed else f"__id_{resource_id}"
+                exposed[dict_key] = ExposureDetail(
                     resource_name=resource_name,
                     resource_id=resource.get('id'),
                     exposure_type='heuristic',

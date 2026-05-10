@@ -5,23 +5,48 @@
 
 /* ── CSS variables ── */
 :root {
-  --bg-base:      #0d1117;
-  --bg-surface:   #161b22;
-  --bg-subtle:    #21262d;
-  --bg-hover:     #1c2129;
-  --border:       #30363d;
-  --border-subtle:#21262d;
-  --text:         #c9d1d9;
-  --text-muted:   #8b949e;
-  --text-faint:   #484f58;
-  --accent:       #58a6ff;
-  --accent-dim:   #388bfd26;
-  --accent-border:#388bfd66;
-  --green:        #3fb950;
-  --yellow:       #e3b341;
-  --orange:       #ffa657;
-  --red:          #f85149;
-  --red-bright:   #ff7b72;
+  /* Backgrounds */
+  --bg-base:       #0d1117;
+  --bg-surface:    #161b22;
+  --bg-subtle:     #21262d;
+  --bg-hover:      #1c2129;
+  /* Borders */
+  --border:        #30363d;
+  --border-subtle: #21262d;
+  /* Text */
+  --text:          #e6edf3;
+  --text-muted:    #7d8590;
+  --text-faint:    #484f58;
+  /* Accent — blue link/active; green primary action */
+  --accent:        #388bfd;
+  --accent-hover:  #2ea043;
+  --accent-dim:    #388bfd26;
+  --accent-border: #388bfd66;
+  /* Named colours */
+  --blue:          #388bfd;
+  --green:         #3fb950;
+  --yellow:        #d29922;
+  --orange:        #ffa657;
+  --red:           #f85149;
+  --red-bright:    #ff7b72;
+  --purple:        #a5a5ff;
+  /* Backward-compat aliases for legacy var names used in generated HTML */
+  --bg-secondary:  var(--bg-subtle);
+  --bg-elevated:   var(--bg-subtle);
+  --card-bg:       var(--bg-surface);
+  --border-color:  var(--border);
+  --text-primary:  var(--text);
+  --text-secondary:var(--text-muted);
+}
+
+/* ── Tailwind bridge — exposes CSS vars as utility classes ── */
+@layer utilities {
+  .bg-surface    { background-color: var(--bg-surface); }
+  .bg-base       { background-color: var(--bg-base); }
+  .bg-subtle     { background-color: var(--bg-subtle); }
+  .text-muted    { color: var(--text-muted); }
+  .border-subtle { border-color: var(--border); }
+  .text-accent   { color: var(--accent); }
 }
 
 /* ── Reset ── */
@@ -89,9 +114,6 @@ header span.badge {
   /* Let the scan controls expand naturally so rows do not visually overlap. */
   overflow: visible;
 }
-
-/* Keep past-scans list scrollable without clipping the whole scan card */
-.past-scans-row { max-height: 100px; overflow-y: auto; }
 
 .scan-card h2 {
   font-size: 0.9rem;
@@ -183,39 +205,29 @@ select, input[type="text"] {
 select:focus, input[type="text"]:focus { border-color: var(--accent); }
 option.not-found { color: var(--text-faint); }
 
-button[type="submit"], button.primary {
-  background: #238636;
-  border: 1px solid #2ea043;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: 7px 18px;
-  cursor: pointer;
-  transition: background 0.15s;
-  white-space: nowrap;
+/* ── Buttons ── */
+button, .btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 6px; font-size: 0.85rem;
+  font-weight: 500; cursor: pointer; transition: all 0.15s;
+  border: 1px solid transparent;
 }
 
-button[type="submit"]:hover, button.primary:hover { background: #2ea043; }
+/* Primary — green action */
+button[type="submit"], button.primary, .btn-primary {
+  background: #238636; color: #fff; border-color: #2ea043;
+  font-weight: 600; white-space: nowrap; padding: 7px 18px;
+}
+button[type="submit"]:hover, button.primary:hover, .btn-primary:hover { background: #2ea043; }
 button[type="submit"]:disabled, button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-button.secondary {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  padding: 7px 14px;
-  cursor: pointer;
-}
-
+/* Secondary — slate */
+button.secondary { background: var(--bg-subtle); color: var(--text-muted); border-color: var(--border); }
 button.secondary:hover { background: var(--border); color: var(--text); }
 
 /* ── Past scans row ── */
-.past-scans-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+.past-scans-row { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-subtle); max-height: 100px; overflow-y: auto; }
 .past-scans-row.visible { display: flex; }
-/* Constrain the past scans area to avoid pushing the page down; add internal scroll when many items */
-.past-scans-row { max-height: 100px; overflow-y: auto; }
 .past-scans-row .row-inner, .compare-row .row-inner {
   display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; width: 100%;
 }
@@ -262,9 +274,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .container { height: calc(100vh - 64px); }
 .workspace { min-height: 0; height: 100%; }
 
-/* Enforce independent vertical scrolling for panels */
-.workspace > #log-panel, .workspace > #diagram-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.workspace > #log-panel .panel-section, .workspace > #log-panel #log-output, .workspace > #log-panel .section-panel-content { overflow-y: auto; min-height: 0; }
+/* Diagram panel scrolling */
 .workspace > #diagram-panel .panel-section, .workspace > #diagram-panel .diagram-views { overflow-y: auto; }
 
 /* When collapsed (log hidden), use a single full-width column so the diagram expands */
@@ -325,17 +335,11 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 .btn-small:hover { color: var(--text); background: var(--border); }
 .btn-small.active { color: var(--accent); background: var(--bg-elevated); border-color: var(--accent); font-weight: 600; }
 
-/* Diagram toggle button: match Run Scan sizing and give distinct style */
+/* Secondary/ghost — diagram toggle */
 .btn-diagram {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: 7px 18px;
-  cursor: pointer;
-  white-space: nowrap;
+  background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-size: 0.85rem; font-weight: 600;
+  padding: 7px 18px; cursor: pointer; white-space: nowrap;
 }
 .btn-diagram:hover { background: var(--bg-hover); }
 
@@ -358,8 +362,7 @@ button.secondary:hover { background: var(--border); color: var(--text); }
 #log-output::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 6px; border: 2px solid var(--bg-secondary); background-clip: padding-box; }
 #log-output::-webkit-scrollbar-thumb:hover { background: #1f6feb; }
 
-/* Make the left workspace column (log panel) independently scrollable when page is tall */
-.workspace { min-height: 0; }
+/* Log panel — independent scroll column */
 .workspace > #log-panel { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
 #log-panel .panel-section { min-height: 0; overflow: auto; }
 #log-panel .panel-header { flex: 0 0 auto; }
@@ -708,14 +711,9 @@ button.secondary:hover { background: var(--border); color: var(--text); }
   padding: 12px !important;
 }
 
-/* Ensure the diagram zoom inner and views fill available space so Mermaid doesn't leave gaps */
-.diagram-zoom-inner, .diagram-zoom-inner .diagram-view {
-  width: 100%;
-  height: 100%;
-}
+/* diagram-zoom-inner shrink-wraps content; JS transform handles all scaling */
 .diagram-zoom-inner .mermaid {
-  width: 100%;
-  height: 100%;
+  display: block;
 }
 .diagram-zoom-wrap {
   height: 100%;
@@ -1670,11 +1668,11 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .diagram-zoom-wrap {
   position: relative;
   flex: 1 1 auto;
-  overflow: auto;
+  overflow: hidden;
   background: #1a1a1a;
   cursor: grab;
   touch-action: none;
-  min-width: 0; /* ensure it can shrink/fill inside split layout */
+  min-width: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -1684,20 +1682,14 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 .diagram-zoom-inner {
   position: absolute;
   top: 0; left: 0;
-  right: 0; bottom: 0;
   transform-origin: 0 0;
   transform: translate(0,0) scale(1);
   will-change: transform;
-  width: 100%;
-  height: 100%;
 }
 
 .diagram-zoom-wrap .mermaid svg {
   display: block;
-  /* Don't force 100% - let the SVG be its natural size so getBBox() works correctly */
-  /* The pan/zoom transform will handle scaling to fit the viewport */
-  max-width: 100%;
-  max-height: 100%;
+  /* Natural size — JS transform handles fit/pan/zoom, no CSS scaling */
   margin: 0;
   transform-origin: 0 0;
   image-rendering: crisp-edges;
@@ -2269,51 +2261,6 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
 
 .footprint-table tbody tr:hover {
   background: var(--bg-secondary);
-}
-
-/* ── Summary tab strip (index.html) ─────────────────────────────── */
-
-.summary-tabs {
-  display: none;
-  gap: 4px;
-  padding: 6px 12px 0;
-  border-bottom: 1px solid #30363d;
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-
-.summary-tabs.visible {
-  display: flex;
-}
-
-.summary-tab-btn {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: #8b949e;
-  font-size: 0.8rem;
-  padding: 6px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.summary-tab-btn:hover:not(:disabled) {
-  color: #c9d1d9;
-}
-
-.summary-tab-btn.active {
-  color: #58a6ff;
-  border-bottom-color: #58a6ff;
-}
-
-.summary-view {
-  display: none;
-  padding: 14px;
-  overflow: auto;
-}
-
-.summary-view.active {
-  display: block;
 }
 
 /* ── Repo-select modal ───────────────────────────────────────────── */

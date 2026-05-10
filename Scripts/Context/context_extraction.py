@@ -2336,6 +2336,17 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             pna_enabled = _normalize_bool(attrs.get("public_network_access_enabled"))
             if pna_enabled is True:
                 _mark_internet_access(props, "sql server public network access enabled")
+            elif pna_enabled is None:
+                # Azure default: public_network_access_enabled defaults to true when not specified
+                _mark_internet_access(props, "sql server public network access enabled (Azure default)")
+
+        if resource_type in {"azurerm_mysql_server", "azurerm_postgresql_server", "azurerm_mysql_flexible_server", "azurerm_postgresql_flexible_server"}:
+            pna_enabled = _normalize_bool(attrs.get("public_network_access_enabled"))
+            if pna_enabled is True:
+                _mark_internet_access(props, "db server public network access enabled")
+            elif pna_enabled is None:
+                # Azure default: public_network_access defaults to enabled when not specified
+                _mark_internet_access(props, "db server public network access enabled (Azure default)")
 
         if resource_type in {"azurerm_mssql_firewall_rule", "azurerm_sql_firewall_rule"}:
             start_ip = str(attrs.get("start_ip_address", "")).strip()

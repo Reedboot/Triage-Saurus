@@ -20,8 +20,8 @@
 
   // Zoom state for mermaid diagrams - now per-diagram
   const zoomState = {
-    scale: 2.0,
-    minScale: 0.5,
+    scale: 1.0,
+    minScale: 0.05,
     maxScale: 8.0,
     panX: 0,
     panY: 0
@@ -222,10 +222,16 @@
     console.log(`[fitActiveDiagram] bounds: ${bounds.width}x${bounds.height}, wrap: ${wrapWidth}x${wrapHeight}, mode: ${mode}, fitScale: ${fitScale.toFixed(3)}`);
 
     zoomState.scale = fitScale;
-    zoomState.panX = (wrapWidth * (1 - fitScale)) / (2 * fitScale);
+    // Centre the content in the wrap.
+    // The transform is: scale(s) translate(panX, panY)
+    // In CSS, operations apply left-to-right: first scale, then translate in scaled space.
+    // Screen position of content left-edge = (0 + panX) * s
+    // We want that = (wrapWidth - bounds.width * s) / 2 (centred)
+    // So panX = (wrapWidth - bounds.width * s) / (2 * s) = wrapWidth/(2s) - bounds.width/2
+    zoomState.panX = wrapWidth / (2 * fitScale) - bounds.width / 2;
     zoomState.panY = mode === 'width'
       ? 0
-      : (wrapHeight * (1 - fitScale)) / (2 * fitScale);
+      : wrapHeight / (2 * fitScale) - bounds.height / 2;
     applyTransform();
     saveDiagramState(currentDiagramIndex);
   }
@@ -239,12 +245,12 @@
     if (svg && zoomWrap && bounds && bounds.width > 0 && bounds.height > 0 &&
       (zoomWrap.clientWidth || zoomWrap.offsetWidth) &&
       (zoomWrap.clientHeight || zoomWrap.offsetHeight)) {
-      fitActiveDiagram('width');
+      fitActiveDiagram('contain');
       return;
     }
 
     if (attempt >= 30) {
-      fitActiveDiagram('width');
+      fitActiveDiagram('contain');
       return;
     }
 

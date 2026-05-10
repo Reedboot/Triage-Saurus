@@ -111,7 +111,13 @@
     "random_password",
     "random_pet",
     "random_uuid",
-    "time_sleep"
+    "time_sleep",
+    "azurerm_managed_disk",
+    "azurerm_managed_disk_sas_token",
+    "aws_ebs_volume",
+    "aws_ebs_snapshot",
+    "aws_volume_attachment",
+    "azurerm_network_security_group"
   ],
   "notes": [
     "These are typically configuration objects, metadata, or data sources",

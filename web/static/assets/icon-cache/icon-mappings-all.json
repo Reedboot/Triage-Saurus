@@ -569,7 +569,7 @@
   "azurerm_network_watcher_flow_log": "/azure/monitor/network-watcher.svg",
   "azurerm_mssql_server_security_alert_policy": "/azure/security/microsoft-defender-for-cloud.svg",
   "azurerm_mysql_server": "/azure/databases/sql.svg",
-  "azurerm_postgresql_server": "/azure/other/postgresql.svg",
+  "azurerm_postgresql_server": "/azure/databases/sql.svg",
   "azurerm_cosmosdb_account": "/azure/databases/cosmos-db.svg",
   "azurerm_storage_blob": "/azure/general/blob-block.svg",
   "azurerm_virtual_router": "/azure/networking/virtual-router.svg",
@@ -995,5 +995,9 @@
   "kubernetes_cluster": "/kubernetes/cluster.svg",
   "kubernetes_replicaset": "/kubernetes/deployment.svg",
   "kubernetes_networkpolicy": "/kubernetes/ingress.svg",
-  "kubernetes_serviceaccount": "/kubernetes/service.svg"
+  "kubernetes_serviceaccount": "/kubernetes/service.svg",
+  "azurerm_mssql_server": "/azure/databases/sql-server.svg",
+  "azurerm_mssql_database": "/azure/databases/sql-database.svg",
+  "azurerm_mysql_flexible_server": "/azure/databases/sql.svg",
+  "azurerm_postgresql_flexible_server": "/azure/databases/sql.svg"
 }
