@@ -205,27 +205,29 @@ const MermaidIconInjector = (() => {
    * We need to convert: "icon-azurerm-app-service" → "azurerm_app_service"
    */
   function extractResourceTypeFromClass(node) {
-    let classList = node.className.baseVal || node.className || '';
-    
-    // Handle DOMTokenList or other non-string types
-    if (typeof classList !== 'string') {
-      classList = String(classList);
-    }
-    
-    // Look for classes starting with "icon-" (from node markers) or "icon_" (from classDef)
-    // Mermaid may apply either form depending on how classes are applied
-    const classes = classList.split(/\s+/);
-    for (const cls of classes) {
+    const classCandidates = [];
+    const pushClasses = (el) => {
+      if (!el) return;
+      let classList = el.className && (el.className.baseVal || el.className) || '';
+      if (typeof classList !== 'string') classList = String(classList);
+      if (classList) classCandidates.push(...classList.split(/\s+/));
+      if (typeof el.getAttribute === 'function') {
+        const attr = el.getAttribute('class');
+        if (attr) classCandidates.push(...String(attr).split(/\s+/));
+      }
+    };
+
+    // Check node first, then descendant elements (Mermaid may attach icon classes on inner groups/shapes).
+    pushClasses(node);
+    node.querySelectorAll?.('[class]').forEach(pushClasses);
+
+    for (const cls of classCandidates) {
+      if (!cls) continue;
       if (cls.startsWith('icon-')) {
-        // From hyphenated class marker :::icon-azurerm-app-service
-        // Remove "icon-" prefix and convert hyphens to underscores
-        const resourceType = cls.substring(5).replace(/-/g, '_');
-        return resourceType;
-      } else if (cls.startsWith('icon_')) {
-        // From underscore classDef (Mermaid applies underscored names)
-        // Remove "icon_" prefix, already has underscores
-        const resourceType = cls.substring(5);
-        return resourceType;
+        return cls.substring(5).replace(/-/g, '_');
+      }
+      if (cls.startsWith('icon_')) {
+        return cls.substring(5);
       }
     }
     return null;
@@ -383,6 +385,19 @@ const MermaidIconInjector = (() => {
       for (const svgElement of svgElements) {
         await injectIcons(svgElement, iconMap);
       }
+
+      // /diagrams/<id> view can auto-fit to an unreadably tiny scale for very wide graphs.
+      // Clamp to a readable minimum after rendering/icon pass.
+      const viewerContainer = document.getElementById('diagram-container');
+      if (viewerContainer && viewerContainer.style && viewerContainer.style.transform) {
+        const match = viewerContainer.style.transform.match(/scale\(([\d.]+)\)/);
+        if (match) {
+          const scale = parseFloat(match[1]);
+          if (!Number.isNaN(scale) && scale > 0 && scale < 0.40) {
+            viewerContainer.style.transform = 'scale(0.40)';
+          }
+        }
+      }
     } catch (err) {
       console.error('[MermaidIconInjector] Failed to process diagrams:', err.message);
     }
@@ -447,6 +462,11 @@ const MermaidIconInjector = (() => {
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // Process diagrams that may have rendered before/around injector init.
+    [0, 300, 1000, 2500].forEach((delay) => {
+      setTimeout(() => processAllDiagrams(), delay);
+    });
   }
 
   // Public API

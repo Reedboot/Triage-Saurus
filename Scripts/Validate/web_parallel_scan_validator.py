@@ -114,6 +114,51 @@ PROVIDER_DEFAULT_REFERENCES: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+SCAN_SOURCE_SUFFIXES = {
+    ".tf",
+    ".tfvars",
+    ".hcl",
+    ".bicep",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".md",
+    ".txt",
+}
+
+EXPECTED_ASSET_PATTERNS: dict[str, tuple[str, ...]] = {
+    "internet_ingress": (
+        r"\b(public\s+ip|internet|internet-facing|ingress|load\s*balancer|application\s+gateway|api\s+gateway|apim|front\s+door|cloudfront)\b",
+    ),
+    "database": (
+        r"\b(database|sql|postgres|mysql|mssql|rds|cosmos)\b",
+    ),
+    "storage": (
+        r"\b(storage\s+account|blob|bucket|s3|object\s+storage)\b",
+    ),
+    "queue": (
+        r"\b(queue|service\s+bus|sqs|pubsub|topic|event\s*hub|kafka)\b",
+    ),
+}
+
+ASSET_TO_DIAGRAM_TERMS: dict[str, tuple[str, ...]] = {
+    "internet_ingress": (
+        "internet",
+        "public",
+        "ingress",
+        "gateway",
+        "load balancer",
+        "application gateway",
+        "api gateway",
+        "apim",
+        "front door",
+        "cloudfront",
+    ),
+    "database": ("database", "db", "sql", "rds", "cosmos", "postgres", "mysql"),
+    "storage": ("storage", "bucket", "blob", "s3", "object"),
+    "queue": ("queue", "service bus", "sqs", "pubsub", "topic", "event hub", "kafka"),
+}
+
 
 @dataclass
 class RepoOption:
@@ -135,6 +180,8 @@ class ScanResult:
     error: str = ""
     provider_screenshots: list[dict[str, Any]] | None = None
     orphan_issues: list[dict[str, Any]] | None = None
+    connection_issues: list[dict[str, Any]] | None = None
+    parity_issues: list[dict[str, Any]] | None = None
     rule_candidates: list[dict[str, Any]] | None = None
 
 
@@ -151,6 +198,8 @@ def scan_result_to_dict(result: ScanResult) -> dict[str, Any]:
         "error": result.error,
         "provider_screenshots": result.provider_screenshots or [],
         "orphan_issues": result.orphan_issues or [],
+        "connection_issues": result.connection_issues or [],
+        "parity_issues": result.parity_issues or [],
         "rule_candidates": result.rule_candidates or [],
     }
 
@@ -202,6 +251,8 @@ def make_failed_result(repo: RepoOption, error: str) -> ScanResult:
         error=error,
         provider_screenshots=[],
         orphan_issues=[],
+        connection_issues=[],
+        parity_issues=[],
         rule_candidates=[],
     )
 
@@ -305,6 +356,12 @@ def partition_repos(
     return [repo for idx, repo in enumerate(ordered) if idx % partition_count == partition_index]
 
 
+def effective_concurrency(mode: str, requested_concurrency: int) -> int:
+    if mode == "serial":
+        return 1
+    return requested_concurrency
+
+
 class ProgressLogger:
     def __init__(self, log_file: Path):
         self.log_file = log_file
@@ -372,6 +429,106 @@ def _extract_edges(code: str) -> list[tuple[str, str]]:
     return edges
 
 
+def _extract_node_label_map(code: str) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    pattern = re.compile(
+        r"\b([A-Za-z][A-Za-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)([^\]\)\}\n]{1,200})",
+    )
+    for m in pattern.finditer(code):
+        node_id = m.group(1)
+        label = m.group(2).strip().strip('"').strip("'").strip()
+        if label:
+            labels[node_id] = label
+    return labels
+
+
+def _extract_diagram_text(code: str) -> str:
+    labels = _extract_node_label_map(code)
+    return " ".join(labels.values()).lower()
+
+
+def _path_exists(edges: list[tuple[str, str]], sources: set[str], targets: set[str]) -> bool:
+    if not sources or not targets:
+        return False
+    graph: dict[str, set[str]] = {}
+    for src, dst in edges:
+        graph.setdefault(src, set()).add(dst)
+    frontier = list(sources)
+    seen = set(frontier)
+    while frontier:
+        cur = frontier.pop()
+        if cur in targets:
+            return True
+        for nxt in graph.get(cur, set()):
+            if nxt not in seen:
+                seen.add(nxt)
+                frontier.append(nxt)
+    return False
+
+
+def detect_missing_connections(code: str, provider: str, diagram_title: str) -> list[dict[str, Any]]:
+    labels = _extract_node_label_map(code)
+    edges = _extract_edges(code)
+    id_to_text = {node_id: (label or "").lower() for node_id, label in labels.items()}
+
+    internet_nodes = {
+        node_id
+        for node_id, text in id_to_text.items()
+        if any(term in text for term in ("internet", "public internet"))
+    }
+    ingress_nodes = {
+        node_id
+        for node_id, text in id_to_text.items()
+        if any(term in text for term in ("ingress", "gateway", "load balancer", "front door", "apim"))
+    }
+    service_nodes = {
+        node_id
+        for node_id, text in id_to_text.items()
+        if any(term in text for term in ("service", "backend", "api", "function", "lambda", "container", "app"))
+    }
+    data_nodes = {
+        node_id
+        for node_id, text in id_to_text.items()
+        if any(term in text for term in ("database", "db", "sql", "storage", "bucket", "blob", "queue", "topic", "cache"))
+    }
+
+    issues: list[dict[str, Any]] = []
+    if internet_nodes and ingress_nodes and not _path_exists(edges, internet_nodes, ingress_nodes):
+        issues.append(
+            {
+                "issue_type": "missing_internet_to_ingress",
+                "diagram_title": diagram_title,
+                "provider": provider,
+                "description": "Internet/public node exists but no path reaches ingress/gateway nodes.",
+                "repo_evidence_files": [],
+                "provider_default_refs": PROVIDER_DEFAULT_REFERENCES.get(provider, []),
+            }
+        )
+    if ingress_nodes and service_nodes and not _path_exists(edges, ingress_nodes, service_nodes):
+        issues.append(
+            {
+                "issue_type": "missing_ingress_to_service",
+                "diagram_title": diagram_title,
+                "provider": provider,
+                "description": "Ingress/gateway nodes exist but no path reaches application service nodes.",
+                "repo_evidence_files": [],
+                "provider_default_refs": PROVIDER_DEFAULT_REFERENCES.get(provider, []),
+            }
+        )
+    if service_nodes and data_nodes and not _path_exists(edges, service_nodes, data_nodes):
+        issues.append(
+            {
+                "issue_type": "missing_service_to_data",
+                "diagram_title": diagram_title,
+                "provider": provider,
+                "description": "Service/application nodes exist but no path reaches data-tier nodes.",
+                "repo_evidence_files": [],
+                "provider_default_refs": PROVIDER_DEFAULT_REFERENCES.get(provider, []),
+            }
+        )
+    return issues
+
+
 def find_orphan_nodes(code: str) -> list[str]:
     nodes = _extract_node_ids(code)
     edges = _extract_edges(code)
@@ -389,6 +546,59 @@ def find_orphan_nodes(code: str) -> list[str]:
         if d == 0 and node.lower() not in IGNORED_ORPHAN_NODE_IDS
     ]
     return sorted(orphans)
+
+
+def infer_expected_assets(repo_path: Path) -> dict[str, list[str]]:
+    expected: dict[str, list[str]] = {}
+    if not repo_path.is_dir():
+        return expected
+    for path in repo_path.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(skip in path.parts for skip in (".git", ".venv", "node_modules", ".terraform", "Output")):
+            continue
+        suffix = path.suffix.lower()
+        if suffix not in SCAN_SOURCE_SUFFIXES and path.name.lower() not in {"readme", "readme.md"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")[:200000].lower()
+        except Exception:
+            continue
+        rel_path = str(path.relative_to(repo_path))
+        for asset, patterns in EXPECTED_ASSET_PATTERNS.items():
+            if any(re.search(pattern, text) for pattern in patterns):
+                expected.setdefault(asset, [])
+                if rel_path not in expected[asset]:
+                    expected[asset].append(rel_path)
+    return expected
+
+
+def detect_docs_iac_parity_issues(
+    code: str,
+    provider: str,
+    diagram_title: str,
+    expected_assets: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    diagram_text = _extract_diagram_text(code)
+    issues: list[dict[str, Any]] = []
+    for asset, evidence_files in expected_assets.items():
+        required_terms = ASSET_TO_DIAGRAM_TERMS.get(asset, ())
+        if required_terms and any(term in diagram_text for term in required_terms):
+            continue
+        issues.append(
+            {
+                "issue_type": "docs_iac_parity_gap",
+                "expected_asset": asset,
+                "diagram_title": diagram_title,
+                "provider": provider,
+                "description": (
+                    f"Repo docs/IaC suggest '{asset}' but diagram nodes/labels do not clearly represent it."
+                ),
+                "repo_evidence_files": evidence_files[:5],
+                "provider_default_refs": PROVIDER_DEFAULT_REFERENCES.get(provider, []),
+            }
+        )
+    return issues
 
 
 def gather_repo_evidence(repo_path: Path, node_id: str, max_hits: int = 3) -> list[str]:
@@ -417,27 +627,28 @@ def gather_repo_evidence(repo_path: Path, node_id: str, max_hits: int = 3) -> li
 
 def write_rule_candidate_stubs(
     repo: RepoOption,
-    orphan_issues: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
     candidates_dir: Path,
 ) -> list[dict[str, Any]]:
-    """Write detection-rule candidates for orphan nodes with repo evidence."""
+    """Write detection-rule candidates for unresolved diagram/coverage issues."""
     candidates_dir.mkdir(parents=True, exist_ok=True)
     written: list[dict[str, Any]] = []
-    for issue in orphan_issues:
+    for issue in issues:
         if not issue.get("repo_evidence_files"):
             continue
         provider = issue.get("provider") or "unknown"
-        node_id = issue.get("node_id") or "orphan_node"
-        clean_node = _slug(str(node_id).lower())
+        issue_type = issue.get("issue_type") or "coverage_gap"
+        issue_key = issue.get("node_id") or issue.get("expected_asset") or issue_type
+        clean_node = _slug(str(issue_key).lower())
         rule_id = f"context-{provider}-{clean_node}-detection"
         path_regex = "(?:\\.tf|\\.yaml|\\.yml|README\\.md)$"
-        pattern_regex = rf"(?i){re.escape(str(node_id).replace('_', ' '))}"
+        pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
         content = "\n".join(
             [
                 "rules:",
                 f"  - id: {rule_id}",
                 "    message: |",
-                f"      Candidate detection rule generated for orphan node '{node_id}' in repo '{repo.name}'.",
+                f"      Candidate detection rule generated for {issue_type} ('{issue_key}') in repo '{repo.name}'.",
                 "      Confirm exact IaC/resource shape and tighten this rule before production use.",
                 "    severity: INFO",
                 "    languages: [regex]",
@@ -606,38 +817,62 @@ async def capture_provider_screenshots(browser, base_url: str, repo_name: str, e
     return screenshots
 
 
-async def collect_orphan_issues(page, repo: RepoOption, experiment_id: str, logger: ProgressLogger) -> list[dict[str, Any]]:
+async def collect_diagram_validation_issues(
+    page,
+    repo: RepoOption,
+    experiment_id: str,
+    logger: ProgressLogger,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     escaped_repo = quote(repo.api_key, safe="")
     response = await page.request.get(f"/api/diagrams/{experiment_id}?repo_name={escaped_repo}")
     if not response.ok:
         raise RuntimeError(f"{repo.name}: failed to load diagrams payload ({response.status})")
     payload = await response.json()
     diagrams = payload.get("diagrams") or []
-    issues: list[dict[str, Any]] = []
+    orphan_issues: list[dict[str, Any]] = []
+    connection_issues: list[dict[str, Any]] = []
+    parity_issues: list[dict[str, Any]] = []
     repo_root = Path(repo.path)
+    expected_assets = infer_expected_assets(repo_root) if repo_root.is_dir() else {}
     for d in diagrams:
         title = d.get("title") or "Untitled diagram"
         provider = _parse_provider_from_title(title)
         code = d.get("code") or ""
         orphans = find_orphan_nodes(code)
-        if not orphans:
-            continue
         for orphan in orphans:
             evidence = gather_repo_evidence(repo_root, orphan) if repo_root.is_dir() else []
             refs = PROVIDER_DEFAULT_REFERENCES.get(provider, [])
             issue = {
+                "issue_type": "orphan_node",
                 "diagram_title": title,
                 "provider": provider,
                 "node_id": orphan,
                 "repo_evidence_files": evidence,
                 "provider_default_refs": refs,
             }
-            issues.append(issue)
+            orphan_issues.append(issue)
             await logger.warn(
                 f"{repo.name}: orphan node '{orphan}' in '{title}' "
                 f"(evidence_files={len(evidence)}, provider_refs={len(refs)})"
             )
-    return issues
+        missing_connections = detect_missing_connections(code, provider, title)
+        connection_issues.extend(missing_connections)
+        for issue in missing_connections:
+            await logger.warn(f"{repo.name}: {issue['issue_type']} in '{title}'")
+
+        parity = detect_docs_iac_parity_issues(
+            code=code,
+            provider=provider,
+            diagram_title=title,
+            expected_assets=expected_assets,
+        )
+        parity_issues.extend(parity)
+        for issue in parity:
+            await logger.warn(
+                f"{repo.name}: docs+IaC parity gap '{issue.get('expected_asset', 'unknown')}' in '{title}' "
+                f"(evidence_files={len(issue.get('repo_evidence_files') or [])})"
+            )
+    return orphan_issues, connection_issues, parity_issues
 
 
 async def scan_repo_worker(
@@ -673,18 +908,24 @@ async def scan_repo_worker(
             output_dir=screenshots_dir,
             logger=logger,
         )
-        orphan_issues = await collect_orphan_issues(page, repo, experiment_id, logger)
+        orphan_issues, connection_issues, parity_issues = await collect_diagram_validation_issues(
+            page,
+            repo,
+            experiment_id,
+            logger,
+        )
         rule_candidates: list[dict[str, Any]] = []
-        if write_rule_candidates and orphan_issues:
-            rule_candidates = write_rule_candidate_stubs(repo, orphan_issues, candidate_rules_dir)
+        candidate_input = [*orphan_issues, *connection_issues, *parity_issues]
+        if write_rule_candidates and candidate_input:
+            rule_candidates = write_rule_candidate_stubs(repo, candidate_input, candidate_rules_dir)
             if rule_candidates:
                 await logger.improvement(
                     f"{repo.name}: wrote {len(rule_candidates)} candidate detection rules"
                 )
 
-        if orphan_issues:
+        if candidate_input:
             await logger.improvement(
-                f"{repo.name}: generated {len(orphan_issues)} evidence-backed improvement candidates"
+                f"{repo.name}: generated {len(candidate_input)} diagram/data-backed improvement candidates"
             )
 
         return ScanResult(
@@ -694,6 +935,8 @@ async def scan_repo_worker(
             status="completed",
             provider_screenshots=provider_screenshots,
             orphan_issues=orphan_issues,
+            connection_issues=connection_issues,
+            parity_issues=parity_issues,
             rule_candidates=rule_candidates,
         )
     except TimeoutError as exc:
@@ -708,6 +951,8 @@ async def scan_repo_worker(
             error=str(exc),
             provider_screenshots=[],
             orphan_issues=[],
+            connection_issues=[],
+            parity_issues=[],
             rule_candidates=[],
         )
     except Exception as exc:  # explicit surface, no silent failure
@@ -720,6 +965,8 @@ async def scan_repo_worker(
             error=str(exc),
             provider_screenshots=[],
             orphan_issues=[],
+            connection_issues=[],
+            parity_issues=[],
             rule_candidates=[],
         )
     finally:
@@ -744,9 +991,11 @@ async def run(args: argparse.Namespace) -> int:
     candidates_dir = run_dir / "rule_candidates"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
     logger = ProgressLogger(run_dir / "improvements.log")
-    await logger.info("Starting parallel web scan validator")
+    await logger.info("Starting headless web scan validator")
     await logger.info(f"Base URL: {args.base_url}")
-    await logger.info(f"Concurrency: {args.concurrency}")
+    worker_concurrency = effective_concurrency(args.mode, args.concurrency)
+    await logger.info(f"Mode: {args.mode}")
+    await logger.info(f"Concurrency: {worker_concurrency} (requested={args.concurrency})")
     await logger.info(f"Per-repo completion timeout: {args.scan_complete_timeout_sec}s")
 
     intake_resolved, intake_unresolved, search_roots = resolve_intake_repos()
@@ -801,7 +1050,7 @@ async def run(args: argparse.Namespace) -> int:
                 await logger.info(
                     f"Discovered {len(dropdown_repos)} repositories from dropdown, targeting {len(repos)} resolved repo(s)"
                 )
-                semaphore = asyncio.Semaphore(args.concurrency)
+                semaphore = asyncio.Semaphore(worker_concurrency)
                 worker_timeout_sec = args.scan_complete_timeout_sec + WORKER_TIMEOUT_GRACE_SEC
 
                 async def execute_pass(pass_name: str, target_repos: list[RepoOption]) -> list[ScanResult]:
@@ -843,13 +1092,17 @@ async def run(args: argparse.Namespace) -> int:
                                     "batch will continue without stalling"
                                 )
 
-                    tasks = [asyncio.create_task(_run_one(repo)) for repo in target_repos]
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    pending_tasks = [task for task in tasks if not task.done()]
-                    for task in pending_tasks:
-                        task.cancel()
-                    if pending_tasks:
-                        await asyncio.gather(*pending_tasks, return_exceptions=True)
+                    if args.mode == "serial":
+                        for repo in target_repos:
+                            await _run_one(repo)
+                    else:
+                        tasks = [asyncio.create_task(_run_one(repo)) for repo in target_repos]
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        pending_tasks = [task for task in tasks if not task.done()]
+                        for task in pending_tasks:
+                            task.cancel()
+                        if pending_tasks:
+                            await asyncio.gather(*pending_tasks, return_exceptions=True)
                     await logger.info(
                         f"Finished {pass_name} pass: completed="
                         f"{sum(1 for r in pass_results if r.status == 'completed')} "
@@ -908,7 +1161,9 @@ async def run(args: argparse.Namespace) -> int:
     summary = {
         "run_timestamp": run_stamp,
         "base_url": args.base_url,
+        "mode": args.mode,
         "concurrency": args.concurrency,
+        "effective_concurrency": worker_concurrency,
         "scan_complete_timeout_sec": args.scan_complete_timeout_sec,
         "partition_count": args.partition_count,
         "partition_index": args.partition_index,
@@ -946,10 +1201,16 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Headless parallel web scan + diagram validator (6 concurrent by default)."
+        description="Headless web scan + diagram validator (parallel or serial execution)."
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Web UI base URL (default: http://127.0.0.1:9000)")
     parser.add_argument("--concurrency", type=int, default=6, help="Maximum concurrent scans (default: 6)")
+    parser.add_argument(
+        "--mode",
+        choices=("parallel", "serial"),
+        default="parallel",
+        help="Execution mode: parallel (default) or serial one-by-one.",
+    )
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT), help="Audit output root directory")
     parser.add_argument("--repos", nargs="*", help="Optional repo names to include (defaults to all dropdown repos)")
     parser.add_argument("--partition-count", type=int, help="Total partition count for deterministic repo sharding")

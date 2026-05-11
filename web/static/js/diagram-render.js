@@ -210,6 +210,12 @@ export function renderDiagrams(diagrams) {
         try { doRender(); } catch (e) { console.error('[Diagrams] Mermaid render error:', e); }
       }
     }, 300);
-    setTimeout(() => clearInterval(wait), 10000);
+    setTimeout(() => {
+      clearInterval(wait);
+      if (!window.mermaid) {
+        // Never leave the loading overlay stuck if Mermaid fails to initialize.
+        setDiagramLoadingVisible(false);
+      }
+    }, 10000);
   }
 }

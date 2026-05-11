@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Scripts" / "Validate"))
 
 from web_parallel_scan_validator import (  # noqa: E402
+    detect_docs_iac_parity_issues,
+    detect_missing_connections,
+    effective_concurrency,
     RepoOption,
     ScanResult,
     build_retry_metadata,
@@ -47,6 +50,37 @@ def test_find_orphan_nodes_ignores_known_placeholder_nodes():
       Legend[Legend]
     """
     assert find_orphan_nodes(code) == []
+
+
+def test_detect_missing_connections_reports_expected_path_gaps():
+    code = """
+    flowchart LR
+      Internet[Internet]
+      GW[API Gateway]
+      APP[Backend Service]
+      DB[(Database)]
+    """
+    issues = detect_missing_connections(code, provider="azure", diagram_title="Azure diagram")
+    kinds = {issue["issue_type"] for issue in issues}
+    assert "missing_internet_to_ingress" in kinds
+    assert "missing_ingress_to_service" in kinds
+    assert "missing_service_to_data" in kinds
+
+
+def test_detect_docs_iac_parity_issues_flags_missing_expected_asset():
+    code = """
+    flowchart LR
+      APP[Backend Service]
+    """
+    issues = detect_docs_iac_parity_issues(
+        code=code,
+        provider="aws",
+        diagram_title="AWS diagram",
+        expected_assets={"internet_ingress": ["README.md"], "database": ["main.tf"]},
+    )
+    expected_assets = {issue["expected_asset"] for issue in issues}
+    assert "internet_ingress" in expected_assets
+    assert "database" in expected_assets
 
 
 def test_gather_repo_evidence_returns_matching_files(tmp_path: Path):
@@ -158,9 +192,15 @@ def test_parse_args_scan_complete_timeout_default_and_override():
     default_args = parse_args([])
     assert default_args.scan_complete_timeout_sec == 600
     assert default_args.concurrency == 6
+    assert default_args.mode == "parallel"
 
     overridden_args = parse_args(["--scan-complete-timeout-sec", "777"])
     assert overridden_args.scan_complete_timeout_sec == 777
+
+
+def test_effective_concurrency_enforces_serial_mode():
+    assert effective_concurrency("parallel", 6) == 6
+    assert effective_concurrency("serial", 6) == 1
 
 
 def test_retry_metadata_tracks_retry_outcome():
@@ -370,3 +410,96 @@ def test_run_writes_summary_and_finishes_when_worker_hangs(monkeypatch, tmp_path
     assert "worker lifecycle timeout" in summary["results"][0]["error"]
     assert call_count == ["repo-a", "repo-a"]
     assert cancellations == ["repo-a", "repo-a"]
+
+
+def test_run_serial_mode_processes_repos_in_order(monkeypatch, tmp_path: Path):
+    class DummyPage:
+        pass
+
+    class DummyContext:
+        async def new_page(self):
+            return DummyPage()
+
+        async def close(self):
+            return None
+
+    class DummyBrowser:
+        async def new_context(self, base_url):
+            return DummyContext()
+
+        async def close(self):
+            return None
+
+    class DummyPlaywright:
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return DummyBrowser()
+
+        def __init__(self):
+            self.chromium = self.Chromium()
+
+    class DummyPlaywrightContext:
+        async def __aenter__(self):
+            return DummyPlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.async_api",
+        SimpleNamespace(async_playwright=lambda: DummyPlaywrightContext()),
+    )
+
+    repos = [
+        RepoOption(name="repo-a", path=str(tmp_path / "repo-a")),
+        RepoOption(name="repo-b", path=str(tmp_path / "repo-b")),
+    ]
+    async def fake_discover_repos(_page):
+        return repos
+
+    monkeypatch.setattr("web_parallel_scan_validator.discover_repos", fake_discover_repos)
+    monkeypatch.setattr(
+        "web_parallel_scan_validator.resolve_intake_repos",
+        lambda: (repos, [], [str(tmp_path)]),
+    )
+
+    call_order: list[str] = []
+
+    async def fake_worker(**kwargs):
+        repo = kwargs["repo"]
+        call_order.append(repo.name)
+        return ScanResult(
+            repo_name=repo.name,
+            repo_path=repo.path,
+            experiment_id=f"exp-{repo.name}",
+            status="completed",
+            provider_screenshots=[],
+            orphan_issues=[],
+            connection_issues=[],
+            parity_issues=[],
+            rule_candidates=[],
+        )
+
+    monkeypatch.setattr("web_parallel_scan_validator.scan_repo_worker", fake_worker)
+
+    args = parse_args(
+        [
+            "--audit-root",
+            str(tmp_path),
+            "--mode",
+            "serial",
+            "--concurrency",
+            "6",
+        ]
+    )
+    exit_code = asyncio.run(run(args))
+
+    summary_paths = list(tmp_path.glob("WebScanValidation_*/summary.json"))
+    assert exit_code == 0
+    assert len(summary_paths) == 1
+    summary = json.loads(summary_paths[0].read_text(encoding="utf-8"))
+    assert summary["mode"] == "serial"
+    assert summary["effective_concurrency"] == 1
+    assert summary["completed"] == 2
+    assert call_order == ["repo-a", "repo-b"]

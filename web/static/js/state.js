@@ -26,8 +26,6 @@ export const state = {
   architectureAiStream:        null,
   architectureAiStopInFlight:  false,
 
-  // ── API-ops visibility mode ───────────────────────────────────────────────
-  apiOpsMode:    'auto',   // 'auto' | 'all' | 'hide'
   storedDiagrams: [],
 
   // ── Zoom / pan state (current diagram) ───────────────────────────────────

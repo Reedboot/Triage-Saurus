@@ -3,8 +3,7 @@
  */
 import { state }                         from './state.js';
 import {
-  refetchDiagramsWithApiOpsMode,
-  updateApiOpsButtonText,
+  refetchDiagrams,
 } from './diagram-actions.js';
 
 // ── View switching ────────────────────────────────────────────────────────────
@@ -52,8 +51,6 @@ export function buildSectionTabs(experimentId, repoName) {
   if (!experimentId || !repoName) return;
   state.currentExperimentId = experimentId;
   state.currentRepoName     = repoName;
-  state.apiOpsMode          = 'auto';
-  updateApiOpsButtonText();
 
   fetch(`/api/view/tabs/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`)
     .then(r => r.json())
@@ -96,7 +93,7 @@ export function buildSectionTabs(experimentId, repoName) {
     })
     .catch(() => {});
 
-  refetchDiagramsWithApiOpsMode(true);
+  refetchDiagrams(true);
 }
 
 // ── Section content loader ────────────────────────────────────────────────────

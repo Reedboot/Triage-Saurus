@@ -11,7 +11,7 @@ import {
 } from './scan-stream.js';
 import {
   refreshDiagram, copyDiagramSource, exportDiagramSvg, exportDiagramPNG,
-  handleToggleApiOps, updateApiOpsButtonText, refetchDiagramsWithApiOpsMode,
+  refetchDiagrams,
   runArchitectureAiReview, updateArchitectureAiButton, closeArchitectureAiStream,
   _showDiagramNotReady,
 } from './diagram-actions.js';
@@ -189,12 +189,11 @@ function init() {
   document.getElementById('copy-diagram-btn')        ?.addEventListener('click', copyDiagramSource);
   document.getElementById('export-diagram-svg-btn')  ?.addEventListener('click', exportDiagramSvg);
   document.getElementById('export-diagram-png-btn')  ?.addEventListener('click', exportDiagramPNG);
-  document.getElementById('toggle-api-ops-btn')      ?.addEventListener('click', handleToggleApiOps);
   document.getElementById('architecture-run-ai-btn') ?.addEventListener('click', runArchitectureAiReview);
 
   // Retry button (delegated — injected dynamically by _showDiagramNotReady)
   document.getElementById('diagram-panel')?.addEventListener('click', e => {
-    if (e.target.closest('.retry-diagram-btn')) refetchDiagramsWithApiOpsMode(true);
+    if (e.target.closest('.retry-diagram-btn')) refetchDiagrams(true);
   });
 
   document.addEventListener('keydown', (e) => {
@@ -207,8 +206,6 @@ function init() {
       updateFullscreenUi();
     }
   });
-
-  updateApiOpsButtonText();
 
   // Attach zoom-reset to dynamically-added diagram tab buttons
   const diagramTabs = document.getElementById('diagram-tabs');
@@ -257,10 +254,6 @@ function init() {
         document.getElementById('past-scans-row')?.classList.remove('visible');
         const pastSelect = document.getElementById('past-scan-select');
         if (pastSelect) pastSelect.innerHTML = '<option value="" disabled selected>— select a past scan —</option>';
-        ['compare-from-select', 'compare-to-select'].forEach(id => {
-          const sel = document.getElementById(id);
-          if (sel) sel.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
-        });
         return;
       }
 
@@ -281,18 +274,6 @@ function init() {
               pastSelect.appendChild(opt);
             });
           }
-
-          ['compare-from-select', 'compare-to-select'].forEach(id => {
-            const sel = document.getElementById(id);
-            if (!sel) return;
-            sel.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
-            scans.forEach(s => {
-              const opt = document.createElement('option');
-              opt.value = s.experiment_id;
-              opt.textContent = `#${s.experiment_id} — ${s.scanned_at ? new Date(s.scanned_at).toLocaleString() : s.experiment_id}`;
-              sel.appendChild(opt);
-            });
-          });
 
           document.getElementById('past-scans-row')?.classList.toggle('visible', scans.length > 0);
 

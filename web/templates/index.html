@@ -22,92 +22,46 @@
 <body>
 
   <header>
-    <span class="dino">🦖</span>
-    <h1>Triage-Saurus</h1>
-    <span class="badge">Repo Scanner</span>
+    <form id="scan-form" action="/scan" method="POST" class="header-scan-form">
+      <div class="header-left-controls">
+        <label for="repo-select" class="header-field-label">Repository</label>
+        <select id="repo-select" name="repo_path" required>
+          <option value="" disabled selected>— select a repository —</option>
+          {% for repo in repos %}
+          {% if repo.found %}
+          <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
+          {% else %}
+          <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <button type="submit" id="scan-btn">▶ Run Scan</button>
+      </div>
+
+      <div class="header-brand">
+        <span class="dino">🦖</span>
+        <h1>Triage-Saurus</h1>
+        <span class="badge">Repo Scanner</span>
+      </div>
+
+      <div class="header-right-controls">
+        <div class="past-scans-row" id="past-scans-row">
+          <span class="section-label">📁 Past Scans</span>
+          <select id="past-scan-select">
+            <option value="" disabled selected>— select a past scan —</option>
+          </select>
+        </div>
+        <button type="button" class="btn-diagram" id="toggle-diagram-btn-persistent"
+          title="Hide/show architecture diagram">Hide diagram</button>
+        <button type="button" class="btn-diagram" id="toggle-log-btn" title="Hide/show scan output">📜 Hide scan</button>
+      </div>
+    </form>
   </header>
 
   <div class="container">
-
-    <!-- Scan form -->
-    <div class="scan-card">
-      <form id="scan-form" action="/scan" method="POST">
-        <div class="form-row">
-          <div class="field grow">
-            <label for="repo-select">Repository</label>
-            <select id="repo-select" name="repo_path" required>
-              <option value="" disabled selected>— select a repository —</option>
-              {% for repo in repos %}
-              {% if repo.found %}
-              <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
-              {% else %}
-              <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
-              {% endif %}
-              {% endfor %}
-            </select>
-          </div>
-          <div class="field compact">
-            <label>&nbsp;</label>
-            <button type="submit" id="scan-btn">▶ Run Scan</button>
-          </div>
-
-          <!-- Past scans row (shown when a repo with history is selected) -->
-          <div class="past-scans-row" id="past-scans-row">
-            <div class="row-inner">
-              <span class="section-label">📁 Past Scans</span>
-              <div class="field grow">
-                <select id="past-scan-select">
-                  <option value="" disabled selected>— select a past scan —</option>
-                </select>
-              </div>
-            </div>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="btn-diagram" id="toggle-diagram-btn-persistent"
-              title="Hide/show architecture diagram">Hide diagram</button>
-          </div>
-
-          <div class="field">
-            <label>&nbsp;</label>
-            <button type="button" class="btn-diagram" id="toggle-log-btn" title="Hide/show scan output">📜 Hide
-              scan</button>
-          </div>
-        </div>
-        <!-- Compare row (shown when Compare is clicked) -->
-
-        <!-- Compare row: allow diffing two scans -->
-        <div class="compare-row visible" id="compare-row">
-          <div class="row-inner">
-            <span class="section-label">🔁 Compare scans</span>
-            <div class="field compact">
-              <label for="compare-from-select">From</label>
-              <select id="compare-from-select">
-                <option value="" disabled selected>— select a scan —</option>
-              </select>
-            </div>
-            <div class="field compact">
-              <label for="compare-to-select">To</label>
-              <select id="compare-to-select">
-                <option value="" disabled selected>— select a scan —</option>
-              </select>
-            </div>
-            <div class="field compact">
-              <label>&nbsp;</label>
-              <button type="button" id="run-compare-btn" class="btn-primary">Compare</button>
-            </div>
-          </div>
-        </div>
-
-
-
-
-
-        <div class="status-bar" id="status-bar">
-          <div class="spinner" id="spinner"></div>
-          <span class="status-text" id="status-text">Starting…</span>
-        </div>
-      </form>
+    <div class="status-bar" id="status-bar">
+      <div class="spinner" id="spinner"></div>
+      <span class="status-text" id="status-text">Starting…</span>
     </div>
 
     <!-- Pipeline phase progress indicator (Alpine reactive) -->
@@ -206,19 +160,11 @@
             <div class="right-panel-header">
               <span class="right-panel-title">Architecture</span>
               <div class="panel-actions">
-                <button class="btn-small" id="zoom-in-btn" title="Zoom in">🔍+ Zoom</button>
-                <button class="btn-small" id="zoom-out-btn" title="Zoom out">🔍- Zoom</button>
-                <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">🎯 Fit</button>
-                <button class="btn-small" id="diagram-fullscreen-btn" title="Fullscreen (F11 / Esc to exit)">⛶</button>
-                <span id="zoom-level-display"
-                  style="display: inline-block; min-width: 40px; text-align: center; font-size: 0.9em; color: var(--text-subtle);">100%</span>
                 <button class="btn-small" id="refresh-diagram-btn" title="Refresh / re-render diagram">🔄
                   Refresh</button>
                 <button class="btn-small" id="architecture-run-ai-btn"
                   title="Run AI against the architecture diagram and suggest code/rule changes">🤖 Run AI
                   (Architecture)</button>
-                <button class="btn-small" id="toggle-api-ops-btn" title="API operation visibility mode">🧩 API ops: Auto
-                  (&lt;10)</button>
                 <button class="btn-small" id="copy-diagram-btn" title="Copy Mermaid source">📋 Copy source</button>
                 <button class="btn-small" id="export-diagram-svg-btn"
                   title="Export diagram as SVG (scalable vector — ideal for zoom)">⬇ SVG</button>
@@ -229,6 +175,13 @@
               <div class="diagram-provider-tabs" id="diagram-tabs"></div>
             </div>
             <div class="diagram-zoom-wrap" id="diagram-zoom-wrap">
+              <div class="inline-diagram-controls" id="inline-diagram-controls" aria-label="Diagram controls">
+                <button class="btn-small" id="zoom-out-btn" title="Zoom out">−</button>
+                <button class="btn-small" id="zoom-in-btn" title="Zoom in">+</button>
+                <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">Fit</button>
+                <button class="btn-small" id="diagram-fullscreen-btn" title="Fullscreen (F11 / Esc to exit)">⛶</button>
+                <span id="zoom-level-display">100%</span>
+              </div>
               <div class="diagram-loading-overlay" id="diagram-loading-overlay" hidden aria-live="polite">
                 <div class="diagram-loading-card">
                   <span class="diagram-loading-spinner" aria-hidden="true"></span>
@@ -276,7 +229,7 @@
                 <span class="diagram-legend-swatch potential"></span>
                 Potentially accessible
               </span>
-              <span class="diagram-legend-help">Scroll to pan · Ctrl+scroll or +/- to zoom · F to fit · Esc to exit fullscreen</span>
+              <span class="diagram-legend-help">Scroll to pan · Ctrl+scroll to zoom · F to fit · Esc to exit fullscreen</span>
             </footer>
           </div>
 
@@ -319,7 +272,6 @@
   <script src="/static/roles.js" defer></script>
   <script src="/static/overview.js" defer></script>
   <script src="/static/subscription.js" defer></script>
-  <script src="/static/compare.js" defer></script>
   <script src="/static/open-questions.js" defer></script>
   <!-- Mermaid is loaded by mermaid-loader.js in <head> — do NOT add a second script tag here -->
 

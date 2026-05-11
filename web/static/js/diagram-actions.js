@@ -1,5 +1,5 @@
 /**
- * diagram-actions.js — export, copy, API-ops toggle, AI review, toast.
+ * diagram-actions.js — export, copy, diagram fetch, AI review, toast.
  */
 import { state }          from './state.js';
 import {
@@ -157,25 +157,9 @@ export function _showDiagramNotReady(message) {
   if (tabsEl) tabsEl.innerHTML = '';
 }
 
-// ── API-ops mode ──────────────────────────────────────────────────────────────
-
-export function updateApiOpsButtonText() {
-  const btn = document.getElementById('toggle-api-ops-btn');
-  if (!btn) return;
-  const labels = { auto: 'Auto (<10)', all: 'All', hide: 'Hidden' };
-  btn.textContent = `🧩 API ops: ${labels[state.apiOpsMode] || state.apiOpsMode}`;
-}
-
-export function handleToggleApiOps() {
-  const cycle = { auto: 'all', all: 'hide', hide: 'auto' };
-  state.apiOpsMode = cycle[state.apiOpsMode] || 'auto';
-  updateApiOpsButtonText();
-  refetchDiagramsWithApiOpsMode();
-}
-
 // ── Diagram fetch / render ────────────────────────────────────────────────────
 
-export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
+export function refetchDiagrams(forceRefresh = false) {
   const experimentId = state.currentExperimentId;
   const repoName     = state.currentRepoName || getCurrentRepoName();
 
@@ -185,8 +169,6 @@ export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
 
   const url = new URL(`/api/diagrams/${encodeURIComponent(experimentId)}`, window.location.origin);
   url.searchParams.set('repo_name', repoName);
-  if (state.apiOpsMode === 'all')  url.searchParams.set('include_api_operations', '1');
-  if (state.apiOpsMode === 'hide') url.searchParams.set('include_api_operations', '0');
   setDiagramLoadingVisible(true, 'Loading architecture diagram…');
 
   fetch(url.toString())
@@ -341,7 +323,7 @@ export function runArchitectureAiReview() {
     closeArchitectureAiStream();
     window._triage?.setStatus?.('Completed', 'success');
     window._triage?.appendLog?.('[Architecture] Architecture review completed');
-    refetchDiagramsWithApiOpsMode(true);
+    refetchDiagrams(true);
   };
 
   const finishFailure = (detail) => {
