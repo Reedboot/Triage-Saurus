@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ diagram_title }} | Triage-Saurus</title>
     <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/tailwind.css?v=1">
     <script src="/static/vendor/mermaid.min.js"></script>
     <script src="/static/js/mermaid-icon-injector.js" defer></script>
     <style>
@@ -58,6 +58,22 @@
             overflow: visible !important;
             height: auto !important;
             min-height: 80px !important;
+        }
+        /* Ensure text elements are visible */
+        #diagram-container svg text {
+            fill: #e2e8f0 !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+            font-size: 12px !important;
+            pointer-events: auto !important;
+            user-select: none !important;
+            visibility: visible !important;
+        }
+        /* Ensure node groups are visible and interactive */
+        #diagram-container svg g[class*="node"],
+        #diagram-container svg g[class*="cluster"],
+        #diagram-container svg g[class*="icon"] {
+            visibility: visible !important;
+            pointer-events: auto !important;
         }
 
         /* ── Drag-to-pan cursor ───────────────────────────────────────────── */

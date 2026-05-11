@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, Response, render_template, request, stream_with_context, jsonify
+from flask import Flask, Response, render_template, request, stream_with_context, jsonify, redirect
 
 app = Flask(__name__)
 
@@ -60,7 +60,7 @@ DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 # DB helpers are used to persist Copilot-generated overview metadata.
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS / "Utils"))
-from Scripts.Persist import db_helpers
+from Scripts.Persist import db_helpers, resource_type_db
 from Scripts.Generate.internet_exposure_detector import InternetExposureDetector
 
 # Load prompt builder for agent instructions
@@ -7478,32 +7478,114 @@ def api_view_overview(experiment_id: str, repo_name: str):
         except:
             pass
 
-    # Add technology stack section from database
+     # Add technology stack section from database
     try:
-        tech_stack_cursor = conn.execute('''
-            SELECT DISTINCT resource_type 
-            FROM resources 
-            WHERE experiment_id = ? 
-            AND repo_id = ?
-            AND resource_type IS NOT NULL
-            AND resource_type LIKE '%_%'
-            ORDER BY resource_type
-        ''', (resolved_exp_id, repo_id))
-        resource_types = [rt[0] for rt in tech_stack_cursor.fetchall()]
-        
-        if resource_types:
-            from Scripts.Generate.generate_diagram import get_friendly_type
-            
-            # Build technology stack HTML (text-only for performance)
-            tech_stack_html = ""
-            for rt in resource_types:
-                friendly = get_friendly_type(rt)
-                tech_stack_html += f'<span class="tech-badge">{html.escape(friendly)}</span>\n'
-            
-            overview_sections.append(f'<h2>🛠️ Technology Stack</h2><div class="tech-stack-items">{tech_stack_html}</div>')
+        tech_conn = _get_db()
+        if tech_conn is not None:
+            try:
+                tech_rows = tech_conn.execute(
+                    """
+                    SELECT DISTINCT resource_type
+                    FROM resources
+                    WHERE experiment_id = ?
+                      AND repo_id = ?
+                      AND resource_type IS NOT NULL
+                      AND TRIM(resource_type) != ''
+                    ORDER BY resource_type
+                    """,
+                    (resolved_exp_id, repo_id),
+                ).fetchall()
+
+                # Keep only "real technologies" and dedupe by friendly name + render category.
+                # This avoids duplicates from type aliases while excluding config/helper artifacts.
+                excluded_tokens = (
+                    "parameter", "parameters", "association", "attachment", "assignment",
+                    "binding", "policy", "rule", "acl", "option", "options",
+                    "config", "configuration", "diagnostic", "permission", "grant",
+                    "member", "membership", "profile", "setting", "settings",
+                )
+                seen_stack_items: set[tuple[str, str]] = set()
+                stack_items: list[tuple[str, str]] = []
+
+                category_class_map = {
+                    "Network": "tech-badge--network",
+                    "Firewall": "tech-badge--network",
+                    "Messaging": "tech-badge--network",
+                    "Compute": "tech-badge--app",
+                    "Container": "tech-badge--app",
+                    "Serverless": "tech-badge--app",
+                    "Database": "tech-badge--data",
+                    "Storage": "tech-badge--data",
+                    "Cache": "tech-badge--data",
+                    "API": "tech-badge--api",
+                    "Identity": "tech-badge--identity",
+                    "Security": "tech-badge--security",
+                    "Monitoring": "tech-badge--monitoring",
+                    "Logging": "tech-badge--monitoring",
+                }
+
+                for row in tech_rows:
+                    rt_raw = str(row["resource_type"] or "").strip()
+                    if not rt_raw:
+                        continue
+                    rt = rt_raw.lower()
+                    info = resource_type_db.get_resource_type(tech_conn, rt)
+                    if not bool(info.get("display_on_architecture_chart", True)):
+                        continue
+                    if any(tok in rt for tok in excluded_tokens):
+                        continue
+
+                    friendly = str(info.get("friendly_name") or "").strip() or rt.replace("_", " ").title()
+                    render_category = resource_type_db.get_render_category(tech_conn, rt) or "Other"
+                    dedupe_key = (friendly.lower(), render_category.lower())
+                    if dedupe_key in seen_stack_items:
+                        continue
+                    seen_stack_items.add(dedupe_key)
+                    badge_class = category_class_map.get(render_category, "tech-badge--other")
+                    stack_items.append((friendly, badge_class))
+
+                if stack_items:
+                    stack_items.sort(key=lambda item: item[0].lower())
+                    tech_stack_html = "".join(
+                        f'<span class="tech-badge {badge_class}">{html.escape(friendly)}</span>\n'
+                        for friendly, badge_class in stack_items
+                    )
+                    
+                    # Add detected programming languages before infrastructure
+                    languages_detected = ""
+                    try:
+                        lang_row = tech_conn.execute(
+                            "SELECT value FROM context_metadata WHERE experiment_id = ? AND repo_id = ? AND key = 'languages_detected' LIMIT 1",
+                            (resolved_exp_id, repo_id)
+                        ).fetchone()
+                        if lang_row and lang_row[0]:
+                            langs = [l.strip() for l in str(lang_row[0]).split(',') if l.strip()]
+                            if langs:
+                                # Map languages to badge classes
+                                for lang in langs:
+                                    # Language badge: prioritize neutral/other color
+                                    lang_badge = 'tech-badge--other'
+                                    if 'python' in lang.lower():
+                                        lang_badge = 'tech-badge--app'
+                                    elif 'java' in lang.lower() or '.net' in lang.lower() or 'c#' in lang.lower():
+                                        lang_badge = 'tech-badge--app'
+                                    elif 'sql' in lang.lower():
+                                        lang_badge = 'tech-badge--data'
+                                    elif 'terraform' in lang.lower() or 'powershell' in lang.lower():
+                                        lang_badge = 'tech-badge--network'
+                                    languages_detected += f'<span class="tech-badge {lang_badge}">{html.escape(lang.strip())}</span>\n'
+                    except Exception as e:
+                        pass
+                    
+                    # Combine languages and infrastructure
+                    full_tech_html = languages_detected + tech_stack_html
+                    overview_sections.append(
+                        f'<h2>🛠️ Technology Stack</h2><div class="tech-stack-items">{full_tech_html}</div>'
+                    )
+            finally:
+                tech_conn.close()
     except Exception as e:
-        # Silently fail if tech stack can't be built
-        pass
+        print(f"[Overview] Technology stack build failed: {e}", file=sys.stderr)
 
     final_html = '<div class="markdown-content">' + ''.join(overview_sections) + '</div>' if overview_sections else ''
     
@@ -10495,6 +10577,16 @@ def index():
     except Exception:
         pass
     return render_template("index.html", repos=_resolve_repos(), experiments=experiments)
+
+
+@app.route("/experiment")
+@app.route("/experiment/<experiment_id>")
+def experiment_diagram_redirect(experiment_id: str | None = None):
+    """Backward-compatible route for opening architecture diagrams."""
+    resolved_id = experiment_id or request.args.get("id") or request.args.get("experiment")
+    if not resolved_id:
+        return redirect("/", code=302)
+    return redirect(f"/diagrams/{resolved_id}", code=302)
 
 
 @app.route("/scan-001-diagram")

@@ -283,6 +283,19 @@ What the web UI does:
 - Runs the same offline Phase 1–3 pipeline (Scripts/Utils/run_pipeline.py) as subprocesses on the machine where the web server runs.
 - Streams the pipeline stdout/stderr to the browser using Server-Sent Events and renders any generated Mermaid diagrams.
 
+Parallel headless validation (dropdown repos, bounded concurrency):
+
+```bash
+python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --concurrency 4 --write-rule-candidates
+```
+
+- Discovers all repos from `#repo-select`, starts scans in parallel (4 at a time), and consumes results as they complete.
+- Uses a hard per-repo completion safeguard timeout (default: 600s) so stalled scans do not block the batch.
+- Use `--scan-complete-timeout-sec <seconds>` to override the per-repo completion wait time.
+- Automatically retries failed/time-out repos once after the primary pass.
+- Captures per-provider diagram screenshots and writes run artifacts to `Output/Audit/WebScanValidation_<timestamp>/`.
+- Produces `summary.json` (including retry metadata) plus `improvements.log` with orphan-node findings, repo evidence hints, and provider-default reference links.
+
 Security warning
 
 This web portal executes scanning commands against the server's filesystem. If the web server is exposed to untrusted users, it can be abused to browse directories, read files the web process can access, or trigger expensive scans. In short: yes — this is a potentially dangerous capability if published publicly.

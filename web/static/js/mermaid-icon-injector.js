@@ -374,7 +374,11 @@ const MermaidIconInjector = (() => {
         return;
       }
 
-      const svgElements = document.querySelectorAll('.mermaid svg');
+      // Find SVGs in both inline (.mermaid) and standalone (#diagram-container) viewers
+      const svgElements = new Set([
+        ...document.querySelectorAll('.mermaid svg'),
+        ...document.querySelectorAll('#diagram-container svg')
+      ]);
 
       for (const svgElement of svgElements) {
         await injectIcons(svgElement, iconMap);

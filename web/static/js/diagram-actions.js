@@ -12,6 +12,7 @@ import {
   sanitizeMermaidSource,
   getActiveDiagramView,
   renderDiagrams,
+  setDiagramLoadingVisible,
 } from './diagram-render.js';
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -139,6 +140,7 @@ export function copyDiagramSource() {
 // ── Not-ready placeholder ─────────────────────────────────────────────────────
 
 export function _showDiagramNotReady(message) {
+  setDiagramLoadingVisible(false);
   const placeholder  = document.getElementById('diagram-placeholder');
   const diagramViews = document.getElementById('diagram-views');
   if (placeholder) {
@@ -185,6 +187,7 @@ export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
   url.searchParams.set('repo_name', repoName);
   if (state.apiOpsMode === 'all')  url.searchParams.set('include_api_operations', '1');
   if (state.apiOpsMode === 'hide') url.searchParams.set('include_api_operations', '0');
+  setDiagramLoadingVisible(true, 'Loading architecture diagram…');
 
   fetch(url.toString())
     .then(r => {
@@ -196,10 +199,12 @@ export function refetchDiagramsWithApiOpsMode(forceRefresh = false) {
         state.storedDiagrams = data.diagrams;
         renderDiagrams(data.diagrams);
       } else {
+        setDiagramLoadingVisible(false);
         _showDiagramNotReady('No diagram data was returned.');
       }
     })
     .catch(err => {
+      setDiagramLoadingVisible(false);
       console.warn('[Diagrams] Failed to fetch:', err);
       _showDiagramNotReady(
         err.status === 404

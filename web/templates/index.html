@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Triage-Saurus — Repo Scanner</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/tailwind.css?v=1" />
   <script src="/static/js/alpine-store.js?v=1" defer></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
   <script src="/static/js/mermaid-loader.js"></script>
@@ -145,7 +145,7 @@
       <span class="text-xs text-gray-500 whitespace-nowrap flex-shrink-0">📂 Recent:</span>
       <div class="flex gap-2 overflow-x-auto pb-0.5" style="scrollbar-width:thin;scrollbar-color:#374151 transparent;">
         {% for exp in experiments %}
-        <a href="/?experiment={{ exp.id }}{% if exp.repo_path %}&repo={{ exp.repo_path | urlencode }}{% endif %}"
+        <a href="/experiment/{{ exp.id }}"
            class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-900 hover:border-gray-500 hover:bg-gray-800 transition-colors group">
           <span class="text-sm font-medium text-gray-200 group-hover:text-white whitespace-nowrap">{{ exp.display_name }}</span>
           {% if exp.finding_count > 0 %}
@@ -202,13 +202,14 @@
         <div class="split-layout">
 
           <!-- RIGHT: Architecture diagram with zoom/pan -->
-          <div class="split-right">
+          <div class="split-right" id="inline-diagram-main">
             <div class="right-panel-header">
               <span class="right-panel-title">Architecture</span>
               <div class="panel-actions">
                 <button class="btn-small" id="zoom-in-btn" title="Zoom in">🔍+ Zoom</button>
                 <button class="btn-small" id="zoom-out-btn" title="Zoom out">🔍- Zoom</button>
                 <button class="btn-small" id="zoom-reset-btn" title="Reset / fit">🎯 Fit</button>
+                <button class="btn-small" id="diagram-fullscreen-btn" title="Fullscreen (F11 / Esc to exit)">⛶</button>
                 <span id="zoom-level-display"
                   style="display: inline-block; min-width: 40px; text-align: center; font-size: 0.9em; color: var(--text-subtle);">100%</span>
                 <button class="btn-small" id="refresh-diagram-btn" title="Refresh / re-render diagram">🔄
@@ -228,6 +229,12 @@
               <div class="diagram-provider-tabs" id="diagram-tabs"></div>
             </div>
             <div class="diagram-zoom-wrap" id="diagram-zoom-wrap">
+              <div class="diagram-loading-overlay" id="diagram-loading-overlay" hidden aria-live="polite">
+                <div class="diagram-loading-card">
+                  <span class="diagram-loading-spinner" aria-hidden="true"></span>
+                  <span id="diagram-loading-text">Loading architecture diagram…</span>
+                </div>
+              </div>
               <div class="diagram-zoom-inner" id="diagram-zoom-inner">
                 <div id="diagram-views" class="diagram-views">
                   <div class="diagram-placeholder" id="diagram-placeholder">
@@ -243,6 +250,34 @@
                 </div>
               </div>
             </div>
+            <footer class="diagram-legend" id="inline-diagram-legend">
+              <span class="diagram-legend-title">Connections</span>
+              <span class="diagram-legend-item critical">
+                <svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true">
+                  <line x1="0" y1="5" x2="20" y2="5" stroke="#ef4444" stroke-width="2" stroke-dasharray="4 2" />
+                  <polygon points="20,2 27,5 20,8" fill="#ef4444" />
+                </svg>
+                Critical - direct internet exposure
+              </span>
+              <span class="diagram-legend-item warning">
+                <svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true">
+                  <line x1="0" y1="5" x2="20" y2="5" stroke="#f97316" stroke-width="2" stroke-dasharray="4 2" />
+                  <polygon points="20,2 27,5 20,8" fill="#f97316" />
+                </svg>
+                Warning - internet-reachable
+              </span>
+              <span class="diagram-legend-sep" aria-hidden="true">|</span>
+              <span class="diagram-legend-title">Node borders</span>
+              <span class="diagram-legend-item public">
+                <span class="diagram-legend-swatch public"></span>
+                Public resource
+              </span>
+              <span class="diagram-legend-item potential">
+                <span class="diagram-legend-swatch potential"></span>
+                Potentially accessible
+              </span>
+              <span class="diagram-legend-help">Scroll to pan · Ctrl+scroll or +/- to zoom · F to fit · Esc to exit fullscreen</span>
+            </footer>
           </div>
 
         </div>

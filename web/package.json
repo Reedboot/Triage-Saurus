@@ -1,0 +1,10 @@
+{
+  "name": "triage-saurus-web",
+  "private": true,
+  "scripts": {
+    "build:tailwind": "tailwindcss -c tailwind.config.js -i ./static/tailwind.input.css -o ./static/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

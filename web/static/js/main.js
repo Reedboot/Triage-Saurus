@@ -164,6 +164,24 @@ function init() {
   document.getElementById('zoom-in-btn') ?.addEventListener('click', zoomIn);
   document.getElementById('zoom-out-btn')?.addEventListener('click', zoomOut);
   document.getElementById('zoom-reset-btn')?.addEventListener('click', () => scheduleDiagramFit());
+  const inlineDiagramMain = document.getElementById('inline-diagram-main');
+  const fullscreenBtn = document.getElementById('diagram-fullscreen-btn');
+  let isDiagramFullscreen = false;
+
+  const updateFullscreenUi = () => {
+    if (!inlineDiagramMain || !fullscreenBtn) return;
+    inlineDiagramMain.classList.toggle('is-fullscreen', isDiagramFullscreen);
+    fullscreenBtn.textContent = isDiagramFullscreen ? '✕' : '⛶';
+    fullscreenBtn.title = isDiagramFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen (F11 / Esc to exit)';
+    setTimeout(() => scheduleDiagramFit(), 60);
+  };
+
+  if (fullscreenBtn && inlineDiagramMain) {
+    fullscreenBtn.addEventListener('click', () => {
+      isDiagramFullscreen = !isDiagramFullscreen;
+      updateFullscreenUi();
+    });
+  }
 
   // Diagram toolbar buttons
   document.getElementById('refresh-diagram-btn')    ?.addEventListener('click', refreshDiagram);
@@ -176,6 +194,17 @@ function init() {
   // Retry button (delegated — injected dynamically by _showDiagramNotReady)
   document.getElementById('diagram-panel')?.addEventListener('click', e => {
     if (e.target.closest('.retry-diagram-btn')) refetchDiagramsWithApiOpsMode(true);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches('input,textarea,select,[contenteditable]')) return;
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomIn(); }
+    if (e.key === '-') { e.preventDefault(); zoomOut(); }
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); scheduleDiagramFit(); }
+    if (e.key === 'Escape' && isDiagramFullscreen) {
+      isDiagramFullscreen = false;
+      updateFullscreenUi();
+    }
   });
 
   updateApiOpsButtonText();

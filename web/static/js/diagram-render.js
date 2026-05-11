@@ -45,6 +45,14 @@ export function setDiagramPlaceholderVisible(visible) {
   }
 }
 
+export function setDiagramLoadingVisible(visible, message = 'Loading architecture diagram…') {
+  const overlay = document.getElementById('diagram-loading-overlay');
+  if (!overlay) return;
+  const text = document.getElementById('diagram-loading-text');
+  if (text) text.textContent = message;
+  overlay.hidden = !visible;
+}
+
 // ── Mermaid init config ───────────────────────────────────────────────────────
 
 function getMermaidConfig() {
@@ -109,6 +117,8 @@ export function renderDiagrams(diagrams) {
     return;
   }
 
+  setDiagramLoadingVisible(true, 'Rendering architecture diagram…');
+
   // Reset per-diagram zoom state
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
   state.currentDiagramIndex = 0;
@@ -158,6 +168,12 @@ export function renderDiagrams(diagrams) {
       diagramViews.querySelectorAll('.diagram-view').forEach(v => {
         v.classList.toggle('active', v.dataset.idx === String(idx));
       });
+      const selectedView = diagramViews.querySelector(`.diagram-view[data-idx="${idx}"]`);
+      if (selectedView && !selectedView.querySelector('svg')) {
+        setDiagramLoadingVisible(true, 'Loading selected diagram…');
+      } else {
+        setDiagramLoadingVisible(false);
+      }
       state.currentDiagramIndex = idx;
       loadDiagramState(idx);
       if (window.MermaidIconInjector) {
@@ -168,16 +184,21 @@ export function renderDiagrams(diagrams) {
 
   const doRender = () => {
     window.mermaid.initialize(getMermaidConfig());
-    renderMermaidInContainer(diagramViews).then(() => {
-      setTimeout(() => {
-        initPanZoom();
-        state.currentDiagramIndex = 0;
-        scheduleDiagramFit();
-      }, 150);
-      setTimeout(() => {
-        if (window.MermaidIconInjector) window.MermaidIconInjector.processAllDiagrams();
-      }, 400);
-    });
+    renderMermaidInContainer(diagramViews)
+      .then(() => {
+        setTimeout(() => {
+          initPanZoom();
+          state.currentDiagramIndex = 0;
+          scheduleDiagramFit();
+          setDiagramLoadingVisible(false);
+        }, 150);
+        setTimeout(() => {
+          if (window.MermaidIconInjector) window.MermaidIconInjector.processAllDiagrams();
+        }, 400);
+      })
+      .catch(() => {
+        setDiagramLoadingVisible(false);
+      });
   };
 
   if (window.mermaid) {
