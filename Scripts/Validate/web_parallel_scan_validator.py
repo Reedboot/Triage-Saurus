@@ -485,6 +485,7 @@ def detect_missing_connections(code: str, provider: str, diagram_title: str) -> 
         node_id
         for node_id, text in id_to_text.items()
         if any(term in text for term in ("service", "backend", "api", "function", "lambda", "container", "app"))
+        and not any(term in text for term in ("gateway", "ingress", "load balancer", "front door", "apim"))
     }
     data_nodes = {
         node_id

@@ -296,14 +296,17 @@ def test_scan_repo_worker_plumbs_scan_complete_timeout(monkeypatch, tmp_path: Pa
     async def fake_capture_provider_screenshots(*args, **kwargs):
         return []
 
-    async def fake_collect_orphan_issues(*args, **kwargs):
-        return []
+    async def fake_collect_diagram_validation_issues(*args, **kwargs):
+        return ([], [], [])
 
     monkeypatch.setattr("web_parallel_scan_validator.start_scan_from_ui", fake_start_scan_from_ui)
     monkeypatch.setattr("web_parallel_scan_validator.wait_for_experiment", fake_wait_for_experiment)
     monkeypatch.setattr("web_parallel_scan_validator.wait_for_completion", fake_wait_for_completion)
     monkeypatch.setattr("web_parallel_scan_validator.capture_provider_screenshots", fake_capture_provider_screenshots)
-    monkeypatch.setattr("web_parallel_scan_validator.collect_orphan_issues", fake_collect_orphan_issues)
+    monkeypatch.setattr(
+        "web_parallel_scan_validator.collect_diagram_validation_issues",
+        fake_collect_diagram_validation_issues,
+    )
 
     repo = RepoOption(name="org/repo", path=str(tmp_path))
     result = asyncio.run(
