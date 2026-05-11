@@ -2244,7 +2244,6 @@
     const repoSelect = document.getElementById('repo-select');
     if (repoSelect) {
       repoSelect.addEventListener('change', function() {
-        if (this.value) {
           // Reset log output
           closeArchitectureAiStream();
           closeEventSource();
@@ -2277,6 +2276,7 @@
             diagramViews.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><p>Run or load a scan to view<br/>architecture diagrams.</p></div>';
             setDiagramPlaceholderVisible(true);
           }
+          setDiagramLoadingVisible(false);
           const diagramTabs = document.getElementById('diagram-tabs');
           if (diagramTabs) {
             diagramTabs.innerHTML = '';
@@ -2286,6 +2286,17 @@
              // Note: Don't clear diagram-zoom-wrap entirely as it contains nested elements
              // (diagram-zoom-inner, diagram-views) needed by renderDiagrams().
            }
+
+          if (!this.value) {
+            document.getElementById('past-scans-row')?.classList.remove('visible');
+            const pastSelect = document.getElementById('past-scan-select');
+            if (pastSelect) pastSelect.innerHTML = '<option value="" disabled selected>— select a past scan —</option>';
+            ['compare-from-select', 'compare-to-select'].forEach(id => {
+              const sel = document.getElementById(id);
+              if (sel) sel.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
+            });
+            return;
+          }
 
           // Populate past-scan and compare dropdowns from API
           // Use canonical repo name from data-name attribute if available
@@ -2361,7 +2372,6 @@
             .catch(err => console.log('[Repo] Could not load past scans:', err));
 
           checkForRunningScan(this.value);
-        }
       });
     }
 

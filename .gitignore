@@ -33,3 +33,5 @@ icon-cache/*
 .cache_ggshield
 
 node_modules/*
+.bin/*
+web/node_modules/*

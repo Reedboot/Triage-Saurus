@@ -133,6 +133,28 @@ class TestScanForm:
         expect(btn).to_be_visible()
         expect(btn).to_be_enabled()
 
+    def test_clearing_repo_hides_diagram_loading_overlay(self, home: Page):
+        """Clearing repo selection should never leave the diagram loading overlay visible."""
+        home.evaluate(
+            """
+            () => {
+              const select = document.querySelector('#repo-select');
+              const enabledOption = select?.querySelector('option:not([disabled])');
+              if (enabledOption) {
+                select.value = enabledOption.value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+              const overlay = document.querySelector('#diagram-loading-overlay');
+              if (overlay) overlay.hidden = false;
+              if (select) {
+                select.value = '';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }
+            """
+        )
+        expect(home.locator("#diagram-loading-overlay")).to_be_hidden()
+
 
     def test_hide_diagram_button(self, home: Page):
         """Hide/show diagram toggle button is visible."""

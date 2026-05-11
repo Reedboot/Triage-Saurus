@@ -3,7 +3,7 @@
 
 Workflow:
 1. Open the web UI and read all repositories from the dropdown.
-2. Start scans with bounded concurrency (default: 4).
+2. Start scans with bounded concurrency (default: 6).
 3. Process results as each repo completes (timeouts fail fast and move on).
 4. Retry failed repositories once after the primary pass.
 5. Capture provider-tab screenshots for each completed experiment.
@@ -35,6 +35,7 @@ INTAKE_REPOS_FILE = REPO_ROOT / "Intake" / "ReposToScan.txt"
 SCAN_START_TIMEOUT_SEC = 90
 DEFAULT_SCAN_COMPLETE_TIMEOUT_SEC = 600
 POLL_INTERVAL_SEC = 5
+WORKER_TIMEOUT_GRACE_SEC = 90
 
 IGNORED_ORPHAN_NODE_IDS = {
     "internet",
@@ -190,6 +191,19 @@ def merge_final_results(primary_results: list[ScanResult], retry_results: list[S
     for retry in retry_results:
         merged[_result_repo_key(retry.repo_name, retry.repo_path)] = retry
     return sorted(merged.values(), key=lambda x: x.repo_name.lower())
+
+
+def make_failed_result(repo: RepoOption, error: str) -> ScanResult:
+    return ScanResult(
+        repo_name=repo.name,
+        repo_path=repo.path,
+        experiment_id=None,
+        status="failed",
+        error=error,
+        provider_screenshots=[],
+        orphan_issues=[],
+        rule_candidates=[],
+    )
 
 
 def load_repo_search_roots(settings_file: Path = SETTINGS_PATH) -> list[Path]:
@@ -747,111 +761,148 @@ async def run(args: argparse.Namespace) -> int:
 
     dropdown_repos: list[RepoOption] = []
     skipped_dropdown_repos: list[RepoOption] = []
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=not args.headed)
-        context = await browser.new_context(base_url=args.base_url)
-        page = await context.new_page()
-        dropdown_repos = await discover_repos(page)
-        repos, skipped_dropdown_repos = filter_repos_to_resolved_intake(dropdown_repos, intake_resolved)
-        await context.close()
+    repos: list[RepoOption] = []
+    primary_results: list[ScanResult] = []
+    retry_results: list[ScanResult] = []
+    final_results: list[ScanResult] = []
+    run_error: str | None = None
+    browser = None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not args.headed)
+            context = await browser.new_context(base_url=args.base_url)
+            page = await context.new_page()
+            dropdown_repos = await discover_repos(page)
+            repos, skipped_dropdown_repos = filter_repos_to_resolved_intake(dropdown_repos, intake_resolved)
+            await context.close()
 
-        if skipped_dropdown_repos:
-            await logger.warn(
-                f"Skipping {len(skipped_dropdown_repos)} dropdown repo(s) not resolvable via Intake/search paths: "
-                f"{[r.name for r in skipped_dropdown_repos]}"
-            )
+            if skipped_dropdown_repos:
+                await logger.warn(
+                    f"Skipping {len(skipped_dropdown_repos)} dropdown repo(s) not resolvable via Intake/search paths: "
+                    f"{[r.name for r in skipped_dropdown_repos]}"
+                )
 
-        if args.repos:
-            filter_set = {r.strip().lower() for r in args.repos if r.strip()}
-            repos = [r for r in repos if r.name.lower() in filter_set]
-            await logger.info(f"Repo filter applied: {sorted(filter_set)}")
+            if args.repos:
+                filter_set = {r.strip().lower() for r in args.repos if r.strip()}
+                repos = [r for r in repos if r.name.lower() in filter_set]
+                await logger.info(f"Repo filter applied: {sorted(filter_set)}")
 
-        repos = partition_repos(repos, args.partition_count, args.partition_index)
-        if args.partition_count is not None:
-            await logger.info(
-                f"Partition filter applied: index={args.partition_index}/{args.partition_count - 1}, "
-                f"targeting {len(repos)} repo(s)"
-            )
+            repos = partition_repos(repos, args.partition_count, args.partition_index)
+            if args.partition_count is not None:
+                await logger.info(
+                    f"Partition filter applied: index={args.partition_index}/{args.partition_count - 1}, "
+                    f"targeting {len(repos)} repo(s)"
+                )
 
-        if not repos:
-            await logger.error("No repositories available from UI dropdown after filtering")
-            await browser.close()
-            return 1
+            if not repos:
+                await logger.error("No repositories available from UI dropdown after filtering")
+                run_error = "No repositories available from UI dropdown after filtering"
+            else:
+                await logger.info(
+                    f"Discovered {len(dropdown_repos)} repositories from dropdown, targeting {len(repos)} resolved repo(s)"
+                )
+                semaphore = asyncio.Semaphore(args.concurrency)
+                worker_timeout_sec = args.scan_complete_timeout_sec + WORKER_TIMEOUT_GRACE_SEC
 
-        await logger.info(
-            f"Discovered {len(dropdown_repos)} repositories from dropdown, targeting {len(repos)} resolved repo(s)"
-        )
-        semaphore = asyncio.Semaphore(args.concurrency)
+                async def execute_pass(pass_name: str, target_repos: list[RepoOption]) -> list[ScanResult]:
+                    await logger.info(f"Starting {pass_name} pass for {len(target_repos)} repo(s)")
+                    pass_results: list[ScanResult] = []
 
-        async def execute_pass(pass_name: str, target_repos: list[RepoOption]) -> list[ScanResult]:
-            await logger.info(f"Starting {pass_name} pass for {len(target_repos)} repo(s)")
-            pass_results: list[ScanResult] = []
+                    async def _run_one(repo: RepoOption):
+                        async with semaphore:
+                            try:
+                                result = await asyncio.wait_for(
+                                    scan_repo_worker(
+                                        browser=browser,
+                                        base_url=args.base_url,
+                                        repo=repo,
+                                        screenshots_dir=screenshots_dir,
+                                        candidate_rules_dir=candidates_dir,
+                                        write_rule_candidates=bool(args.write_rule_candidates),
+                                        scan_complete_timeout_sec=args.scan_complete_timeout_sec,
+                                        logger=logger,
+                                    ),
+                                    timeout=worker_timeout_sec,
+                                )
+                            except TimeoutError:
+                                msg = (
+                                    f"{repo.name}: worker lifecycle timeout after {worker_timeout_sec}s; "
+                                    "marking failed and continuing"
+                                )
+                                await logger.warn(msg)
+                                result = make_failed_result(repo, msg)
+                            except Exception as exc:
+                                await logger.error(f"{repo.name}: worker crashed unexpectedly: {exc}")
+                                result = make_failed_result(repo, str(exc))
+                            pass_results.append(result)
+                            if result.status == "completed":
+                                await logger.info(f"{repo.name}: {pass_name} pass ended with status=completed")
+                            else:
+                                await logger.warn(
+                                    f"{repo.name}: {pass_name} pass ended with status=failed; "
+                                    "batch will continue without stalling"
+                                )
 
-            async def _run_one(repo: RepoOption):
-                async with semaphore:
-                    try:
-                        result = await scan_repo_worker(
-                            browser=browser,
-                            base_url=args.base_url,
-                            repo=repo,
-                            screenshots_dir=screenshots_dir,
-                            candidate_rules_dir=candidates_dir,
-                            write_rule_candidates=bool(args.write_rule_candidates),
-                            scan_complete_timeout_sec=args.scan_complete_timeout_sec,
-                            logger=logger,
-                        )
-                    except Exception as exc:
-                        await logger.error(f"{repo.name}: worker crashed unexpectedly: {exc}")
-                        result = ScanResult(
-                            repo_name=repo.name,
-                            repo_path=repo.path,
-                            experiment_id=None,
-                            status="failed",
-                            error=str(exc),
-                            provider_screenshots=[],
-                            orphan_issues=[],
-                            rule_candidates=[],
-                        )
-                    pass_results.append(result)
-                    if result.status == "completed":
-                        await logger.info(f"{repo.name}: {pass_name} pass ended with status=completed")
-                    else:
-                        await logger.warn(
-                            f"{repo.name}: {pass_name} pass ended with status=failed; "
-                            "batch will continue without stalling"
-                        )
+                    tasks = [asyncio.create_task(_run_one(repo)) for repo in target_repos]
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    pending_tasks = [task for task in tasks if not task.done()]
+                    for task in pending_tasks:
+                        task.cancel()
+                    if pending_tasks:
+                        await asyncio.gather(*pending_tasks, return_exceptions=True)
+                    await logger.info(
+                        f"Finished {pass_name} pass: completed="
+                        f"{sum(1 for r in pass_results if r.status == 'completed')} "
+                        f"failed={sum(1 for r in pass_results if r.status != 'completed')}"
+                    )
+                    return pass_results
 
-            tasks = [asyncio.create_task(_run_one(repo)) for repo in target_repos]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await logger.info(
-                f"Finished {pass_name} pass: completed="
-                f"{sum(1 for r in pass_results if r.status == 'completed')} "
-                f"failed={sum(1 for r in pass_results if r.status != 'completed')}"
-            )
-            return pass_results
+                primary_results = await execute_pass("primary", repos)
+                primary_failed_keys = {
+                    _result_repo_key(result.repo_name, result.repo_path)
+                    for result in primary_results
+                    if result.status != "completed"
+                }
+                retry_repos = [
+                    repo for repo in repos if _result_repo_key(repo.name, repo.path) in primary_failed_keys
+                ]
+                if retry_repos:
+                    await logger.warn(
+                        f"Primary pass complete; retrying failed repos once at end: "
+                        f"{[repo.name for repo in retry_repos]}"
+                    )
+                    retry_results = await execute_pass("retry", retry_repos)
+                    await logger.info("Retry pass complete")
+                else:
+                    await logger.info("Primary pass complete with no failed repos; retry pass skipped")
 
-        primary_results = await execute_pass("primary", repos)
-        primary_failed_keys = {
-            _result_repo_key(result.repo_name, result.repo_path)
-            for result in primary_results
-            if result.status != "completed"
-        }
-        retry_repos = [
-            repo for repo in repos if _result_repo_key(repo.name, repo.path) in primary_failed_keys
-        ]
-        retry_results: list[ScanResult] = []
-        if retry_repos:
-            await logger.warn(
-                f"Primary pass complete; retrying failed repos once at end: "
-                f"{[repo.name for repo in retry_repos]}"
-            )
-            retry_results = await execute_pass("retry", retry_repos)
-            await logger.info("Retry pass complete")
-        else:
-            await logger.info("Primary pass complete with no failed repos; retry pass skipped")
+                final_results = merge_final_results(primary_results, retry_results)
+    except Exception as exc:
+        run_error = str(exc)
+        await logger.error(f"Run-level failure while scanning repos: {exc}")
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception as exc:
+                await logger.warn(f"Error while closing browser during finalization: {exc}")
 
+    if not final_results:
         final_results = merge_final_results(primary_results, retry_results)
-        await browser.close()
+    known_keys = {_result_repo_key(result.repo_name, result.repo_path) for result in final_results}
+    for repo in repos:
+        key = _result_repo_key(repo.name, repo.path)
+        if key not in known_keys:
+            final_results.append(
+                make_failed_result(
+                    repo,
+                    run_error or f"{repo.name}: scan did not produce a terminal result before finalization",
+                )
+            )
+    final_results = sorted(
+        final_results,
+        key=lambda x: (_normalize_path(x.repo_path).lower(), x.repo_name.lower()),
+    )
 
     retry_metadata = build_retry_metadata(primary_results, retry_results)
     summary = {
@@ -890,15 +941,15 @@ async def run(args: argparse.Namespace) -> int:
     await logger.improvement(
         "Improvement log includes orphan-node findings with repo evidence hints and provider-default reference links"
     )
-    return 0 if summary["failed"] == 0 else 1
+    return 0 if summary["failed"] == 0 and run_error is None else 1
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Headless parallel web scan + diagram validator (4 concurrent by default)."
+        description="Headless parallel web scan + diagram validator (6 concurrent by default)."
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Web UI base URL (default: http://127.0.0.1:9000)")
-    parser.add_argument("--concurrency", type=int, default=4, help="Maximum concurrent scans (default: 4)")
+    parser.add_argument("--concurrency", type=int, default=6, help="Maximum concurrent scans (default: 6)")
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT), help="Audit output root directory")
     parser.add_argument("--repos", nargs="*", help="Optional repo names to include (defaults to all dropdown repos)")
     parser.add_argument("--partition-count", type=int, help="Total partition count for deterministic repo sharding")

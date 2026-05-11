@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +23,7 @@ from web_parallel_scan_validator import (  # noqa: E402
     parse_args,
     partition_repos,
     resolve_intake_repos,
+    run,
     scan_repo_worker,
     should_finish_wait,
     validate_partition_args,
@@ -153,6 +157,7 @@ def test_partition_repos_deterministic_sharding():
 def test_parse_args_scan_complete_timeout_default_and_override():
     default_args = parse_args([])
     assert default_args.scan_complete_timeout_sec == 600
+    assert default_args.concurrency == 6
 
     overridden_args = parse_args(["--scan-complete-timeout-sec", "777"])
     assert overridden_args.scan_complete_timeout_sec == 777
@@ -275,3 +280,93 @@ def test_scan_repo_worker_plumbs_scan_complete_timeout(monkeypatch, tmp_path: Pa
     )
     assert result.status == "completed"
     assert seen["timeout_sec"] == 777
+
+
+def test_run_writes_summary_and_finishes_when_worker_hangs(monkeypatch, tmp_path: Path):
+    class DummyPage:
+        pass
+
+    class DummyContext:
+        async def new_page(self):
+            return DummyPage()
+
+        async def close(self):
+            return None
+
+    class DummyBrowser:
+        async def new_context(self, base_url):
+            return DummyContext()
+
+        async def close(self):
+            return None
+
+    class DummyPlaywright:
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return DummyBrowser()
+
+        def __init__(self):
+            self.chromium = self.Chromium()
+
+    class DummyPlaywrightContext:
+        async def __aenter__(self):
+            return DummyPlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.async_api",
+        SimpleNamespace(async_playwright=lambda: DummyPlaywrightContext()),
+    )
+    async def fake_discover_repos(_page):
+        return [RepoOption(name="repo-a", path=str(tmp_path / "repo-a"))]
+
+    monkeypatch.setattr("web_parallel_scan_validator.discover_repos", fake_discover_repos)
+    monkeypatch.setattr(
+        "web_parallel_scan_validator.resolve_intake_repos",
+        lambda: (
+            [RepoOption(name="repo-a", path=str(tmp_path / "repo-a"))],
+            [],
+            [str(tmp_path)],
+        ),
+    )
+    monkeypatch.setattr("web_parallel_scan_validator.WORKER_TIMEOUT_GRACE_SEC", 0)
+
+    call_count: list[str] = []
+    cancellations: list[str] = []
+
+    async def hanging_worker(**kwargs):
+        call_count.append(kwargs["repo"].name)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellations.append(kwargs["repo"].name)
+            raise
+
+    monkeypatch.setattr("web_parallel_scan_validator.scan_repo_worker", hanging_worker)
+
+    args = parse_args(
+        [
+            "--audit-root",
+            str(tmp_path),
+            "--scan-complete-timeout-sec",
+            "1",
+            "--concurrency",
+            "1",
+        ]
+    )
+    exit_code = asyncio.run(run(args))
+
+    summary_paths = list(tmp_path.glob("WebScanValidation_*/summary.json"))
+    assert exit_code == 1
+    assert len(summary_paths) == 1
+    summary = json.loads(summary_paths[0].read_text(encoding="utf-8"))
+    assert summary["repos_total"] == 1
+    assert summary["retry_attempted"] == 1
+    assert summary["failed"] == 1
+    assert summary["completed"] == 0
+    assert "worker lifecycle timeout" in summary["results"][0]["error"]
+    assert call_count == ["repo-a", "repo-a"]
+    assert cancellations == ["repo-a", "repo-a"]

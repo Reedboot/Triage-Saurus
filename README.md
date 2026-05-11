@@ -286,10 +286,10 @@ What the web UI does:
 Parallel headless validation (dropdown repos, bounded concurrency):
 
 ```bash
-python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --concurrency 4 --write-rule-candidates
+python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --concurrency 6 --write-rule-candidates
 ```
 
-- Discovers all repos from `#repo-select`, starts scans in parallel (4 at a time), and consumes results as they complete.
+- Discovers all repos from `#repo-select`, starts scans in parallel (6 at a time by default), and consumes results as they complete.
 - Uses a hard per-repo completion safeguard timeout (default: 600s) so stalled scans do not block the batch.
 - Use `--scan-complete-timeout-sec <seconds>` to override the per-repo completion wait time.
 - Automatically retries failed/time-out repos once after the primary pass.

@@ -15,6 +15,7 @@ import {
   runArchitectureAiReview, updateArchitectureAiButton, closeArchitectureAiStream,
   _showDiagramNotReady,
 } from './diagram-actions.js';
+import { setDiagramLoadingVisible, setDiagramPlaceholderVisible } from './diagram-render.js';
 import {
   showSectionsView, showLogView, getCurrentRepoName,
   buildSectionTabs, loadSectionContent, activateSectionKey,
@@ -226,7 +227,6 @@ function init() {
   const repoSelect = document.getElementById('repo-select');
   if (repoSelect) {
     repoSelect.addEventListener('change', function () {
-      if (!this.value) return;
       closeArchitectureAiStream();
       closeEventSource();
       if (state.currentPollInterval) { clearInterval(state.currentPollInterval); state.currentPollInterval = null; }
@@ -247,10 +247,22 @@ function init() {
       const diagramViews = document.getElementById('diagram-views');
       if (diagramViews) {
         diagramViews.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><p>Run or load a scan to view<br/>architecture diagrams.</p></div>';
-        import('./diagram-render.js').then(m => m.setDiagramPlaceholderVisible(true));
+        setDiagramPlaceholderVisible(true);
       }
+      setDiagramLoadingVisible(false);
       const dt = document.getElementById('diagram-tabs');
       if (dt) dt.innerHTML = '';
+
+      if (!this.value) {
+        document.getElementById('past-scans-row')?.classList.remove('visible');
+        const pastSelect = document.getElementById('past-scan-select');
+        if (pastSelect) pastSelect.innerHTML = '<option value="" disabled selected>— select a past scan —</option>';
+        ['compare-from-select', 'compare-to-select'].forEach(id => {
+          const sel = document.getElementById(id);
+          if (sel) sel.innerHTML = '<option value="" disabled selected>— select a scan —</option>';
+        });
+        return;
+      }
 
       const repoOpt = this.querySelector('option:checked');
       const repoName = (repoOpt?.dataset?.name) || this.value.split('/').pop();
