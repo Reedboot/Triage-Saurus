@@ -260,6 +260,57 @@
     </div>
   </div>
 
+  <!-- Module detection modal (Alpine reactive) -->
+  <div x-data x-show="$store.scan.moduleModalVisible"
+       x-transition:enter="transition ease-out duration-150"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-end="opacity-0"
+       id="module-modal" class="modal" style="display:none"
+       @keydown.escape.window="$store.scan.closeModuleModal()">
+    <div class="modal-content"
+         x-transition:enter="transition ease-out duration-150"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100">
+      <h3 id="module-modal-title">External Terraform Modules Detected</h3>
+      <p id="module-modal-intro" class="text-sm text-gray-400 mb-3">
+        Found <span id="module-count" x-text="$store.scan.detectedModules.length">0</span> external module(s) in this repository.
+        Select which ones to scan before proceeding with the main scan.
+      </p>
+      
+      <div id="module-list" class="module-list" style="max-height: 300px; overflow-y: auto; margin: 12px 0; padding: 8px; border: 1px solid #374151; border-radius: 4px; background: #111827;">
+        <template x-for="mod in $store.scan.detectedModules" :key="mod.name">
+          <div class="module-item" style="padding: 8px; margin-bottom: 8px; border: 1px solid #1f2937; border-radius: 3px; background: #0f1419; font-size: 0.875rem;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+              <input type="checkbox" :checked="mod.selected" @change="mod.selected = !mod.selected" style="margin-top: 4px; cursor: pointer;">
+              <div style="flex: 1; min-width: 0;">
+                <strong x-text="mod.name" style="display: block;"></strong>
+                <span x-text="'Type: ' + mod.inferred_type" style="display: block; font-size: 0.8rem; color: #9ca3af; margin-top: 2px;"></span>
+                <span x-text="'Source: ' + mod.source.substring(0, 60) + (mod.source.length > 60 ? '...' : '')" 
+                      style="display: block; font-size: 0.8rem; color: #6b7280; margin-top: 2px; word-break: break-all;"></span>
+                <span x-show="mod.already_scanned" 
+                      style="display: inline-block; margin-top: 4px; padding: 2px 6px; font-size: 0.75rem; background: #065f46; color: #d1fae5; border-radius: 3px;">
+                  ✓ Already scanned
+                </span>
+              </div>
+            </label>
+          </div>
+        </template>
+      </div>
+      
+      <p id="module-note" class="text-xs text-gray-500 mb-3">
+        Modules marked "Already scanned" are in the database and will not be re-scanned.
+      </p>
+      
+      <div class="modal-buttons">
+        <button id="module-scan" class="modal-btn primary" @click="$store.scan.proceedWithModuleScan()" x-text="'📦 Scan ' + ($store.scan.detectedModules.filter(m => m.selected).length) + ' Module(s)'">📦 Scan Modules</button>
+        <button id="module-skip" class="modal-btn" @click="$store.scan.skipModuleScan()">⊘ Skip Modules</button>
+        <button id="module-cancel" class="modal-btn cancel" @click="$store.scan.closeModuleModal()">✕ Cancel Scan</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal styles -->
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>

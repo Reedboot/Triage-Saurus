@@ -36,10 +36,81 @@ export function handleScanSubmit(e) {
       if (data.running_experiment) {
         showScanModal(repoName, data.running_experiment, repoPath);
       } else {
+        // Check for modules before starting scan
+        detectAndPromptForModules(repoPath);
+      }
+    })
+    .catch(() => detectAndPromptForModules(repoPath));
+}
+
+// ── Module detection ───────────────────────────────────────────────────────────
+
+export function detectAndPromptForModules(repoPath) {
+  // Show status while detecting modules
+  window._triage.setStatus('Detecting external modules…', '');
+
+  fetch('/api/detect-modules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo_path: repoPath })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        window._triage.setStatus(`Module detection failed: ${data.error}`, 'error');
+        // Continue with scan anyway
+        startScan(repoPath);
+        return;
+      }
+
+      // If modules detected, show modal; otherwise start scan directly
+      if (data.modules && data.modules.length > 0) {
+        showModuleModal(repoPath, data.modules);
+      } else {
+        window._triage.setStatus('No external modules detected', '');
         startScan(repoPath);
       }
     })
-    .catch(() => startScan(repoPath));
+    .catch(err => {
+      console.warn('Module detection error:', err);
+      // On error, continue with scan anyway
+      window._triage.setStatus('Proceeding without module detection', '');
+      startScan(repoPath);
+    });
+}
+
+export function showModuleModal(repoPath, modules) {
+  // Use Alpine store if available
+  if (window.triagePipeline?.showModuleModal) {
+    window.triagePipeline.showModuleModal(
+      modules,
+      (selectedModules) => {
+        if (selectedModules.length > 0) {
+          scanModulesThenProceed(repoPath, selectedModules);
+        } else {
+          startScan(repoPath);
+        }
+      },
+      () => startScan(repoPath) // Skip modules
+    );
+    return;
+  }
+
+  // Fallback (Alpine not yet loaded) — just proceed with main scan
+  startScan(repoPath);
+}
+
+export function scanModulesThenProceed(repoPath, selectedModules) {
+  // TODO: Implement actual module scanning via API
+  // For now, just log and proceed
+  console.log('Selected modules to scan:', selectedModules.map(m => m.name));
+  window._triage.setStatus(`Scanning ${selectedModules.length} module(s) before main scan…`, '');
+  
+  // TODO: Call /api/scan-modules endpoint when implemented
+  // For now, just proceed after a short delay
+  setTimeout(() => {
+    startScan(repoPath);
+  }, 1000);
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
@@ -56,7 +127,7 @@ export function showScanModal(repoName, experimentId, repoPath) {
         if (state.logOutput?.innerHTML.includes('Scan output will appear here')) state.logOutput.innerHTML = '';
         checkForRunningScan(repoPath);
       },
-      () => startScan(repoPath)
+      () => detectAndPromptForModules(repoPath)
     );
     return;
   }
@@ -73,7 +144,7 @@ export function showScanModal(repoName, experimentId, repoPath) {
     if (state.logOutput?.innerHTML.includes('Scan output will appear here')) state.logOutput.innerHTML = '';
     checkForRunningScan(repoPath);
   };
-  document.getElementById('modal-new').onclick    = () => { modal.style.display = 'none'; startScan(repoPath); };
+  document.getElementById('modal-new').onclick    = () => { modal.style.display = 'none'; detectAndPromptForModules(repoPath); };
   document.getElementById('modal-cancel').onclick = () => { modal.style.display = 'none'; };
 }
 

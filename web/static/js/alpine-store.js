@@ -26,6 +26,12 @@ document.addEventListener('alpine:init', () => {
     _watchCb:  null,
     _newScanCb: null,
 
+    // Module modal
+    moduleModalVisible: false,
+    detectedModules: [],
+    _moduleScanCb: null,
+    _moduleSkipCb: null,
+
     // Pipeline actions
     startPipeline() {
       this.pipelineVisible = true;
@@ -67,6 +73,26 @@ document.addEventListener('alpine:init', () => {
     startNew()     { this.modalVisible = false; if (this._newScanCb) this._newScanCb(); },
     cancelModal()  { this.modalVisible = false; },
 
+    // Module modal actions
+    showModuleModal(modules, onScan, onSkip) {
+      this.detectedModules = modules.map(m => ({ ...m, selected: !m.already_scanned }));
+      this._moduleScanCb = onScan;
+      this._moduleSkipCb = onSkip;
+      this.moduleModalVisible = true;
+    },
+    proceedWithModuleScan() {
+      this.moduleModalVisible = false;
+      const selected = this.detectedModules.filter(m => m.selected);
+      if (this._moduleScanCb) this._moduleScanCb(selected);
+    },
+    skipModuleScan() {
+      this.moduleModalVisible = false;
+      if (this._moduleSkipCb) this._moduleSkipCb();
+    },
+    closeModuleModal() {
+      this.moduleModalVisible = false;
+    },
+
     // CSS helper for each pipeline bar
     phaseClass(phase) {
       if (phase.state === 'done')   return 'pipeline-phase flex-1 h-2 rounded-full bg-emerald-700 transition-all duration-500';
@@ -81,5 +107,6 @@ document.addEventListener('alpine:init', () => {
     onScanLine:     (text) => Alpine.store('scan').updatePhase(text),
     onScanComplete: () => Alpine.store('scan').completePipeline(),
     showModal:      (msg, onWatch, onNew) => Alpine.store('scan').showModal(msg, onWatch, onNew),
+    showModuleModal: (modules, onScan, onSkip) => Alpine.store('scan').showModuleModal(modules, onScan, onSkip),
   };
 });

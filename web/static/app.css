@@ -2507,6 +2507,60 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   color: #fff;
 }
 
+/* Module list and items */
+.module-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.module-item {
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid #1f2937;
+  border-radius: 3px;
+  background: #0f1419;
+  font-size: 0.875rem;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.module-item:hover {
+  background: #111827;
+  border-color: #374151;
+}
+
+.module-item label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.module-item input[type="checkbox"] {
+  margin-top: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.module-item strong {
+  display: block;
+  color: #e5e7eb;
+  margin-bottom: 4px;
+}
+
+.module-item span {
+  display: block;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.module-item span[style*="color: #6b7280"] {
+  color: #6b7280;
+}
+
 /* Technology Stack Styles */
 .tech-stack-items {
   display: flex;

@@ -2210,6 +2210,88 @@ def api_scans(repo_name: str):
     return jsonify(result)
 
 
+@app.route("/api/detect-modules", methods=["POST"])
+def api_detect_modules():
+    """Detect external Terraform modules in a repo and check if they've been scanned.
+    
+    Request body: {"repo_path": "/path/to/repo"}
+    Response: {
+        "modules": [
+            {
+                "name": "aks_cluster",
+                "source": "git::https://dev.azure.com/...",
+                "inferred_type": "aks_module",
+                "source_file": "terraform/aks.tf",
+                "source_line": 42,
+                "already_scanned": true
+            },
+            ...
+        ],
+        "total": 1,
+        "scanned_count": 1,
+        "error": null
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        repo_path = data.get("repo_path", "").strip()
+        
+        if not repo_path:
+            return jsonify({"error": "repo_path is required", "modules": []}), 400
+        
+        repo_path = Path(repo_path).expanduser().resolve()
+        if not repo_path.is_dir():
+            return jsonify({"error": f"Path not found: {repo_path}", "modules": []}), 400
+        
+        # Import the module detection script
+        sys.path.insert(0, str(SCRIPTS / "Context"))
+        from detect_module_sources import detect_modules
+        
+        # Detect modules in the repo
+        detection = detect_modules(str(repo_path))
+        modules = detection.get("modules", [])
+        
+        # Check cozo.db to see which modules have been scanned
+        conn = _get_db()
+        scanned_module_names = set()
+        
+        if conn:
+            try:
+                # Query repositories table for any repo that looks like it's a module
+                rows = conn.execute(
+                    "SELECT DISTINCT repo_name FROM repositories WHERE repo_name LIKE '%module%' OR repo_name LIKE '%terraform%'",
+                ).fetchall()
+                for row in rows:
+                    scanned_module_names.add((row["repo_name"] or "").lower())
+            except Exception:
+                pass
+            finally:
+                conn.close()
+        
+        # Enhance each module with scan status
+        for mod in modules:
+            mod_name_lower = mod["name"].lower()
+            mod["already_scanned"] = (
+                mod_name_lower in scanned_module_names or
+                any(mod_name_lower in sn for sn in scanned_module_names)
+            )
+        
+        scanned_count = sum(1 for m in modules if m.get("already_scanned", False))
+        
+        return jsonify({
+            "modules": modules,
+            "total": len(modules),
+            "scanned_count": scanned_count,
+            "error": None
+        })
+    
+    except Exception as exc:
+        return jsonify({
+            "error": f"Module detection failed: {str(exc)}",
+            "modules": []
+        }), 500
+
+
 @app.route("/api/experiment/<experiment_id>/repo")
 def api_experiment_repo(experiment_id: str):
     """Resolve repo name/path for deep links that only include experiment ID."""
