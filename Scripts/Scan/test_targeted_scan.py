@@ -87,3 +87,15 @@ def test_huaweicloud_detection_rules_are_mapped():
         "Kubernetes/Ingress",
         "Kubernetes/Service",
     ]
+
+
+def test_chunk_progress_log_is_compact():
+    msg = targeted_scan._format_chunk_progress(
+        ["a.tf", "b.tf", "c.tf", "d.tf", "e.tf"], idx=1, total=3
+    )
+    assert msg == "  [chunk 1/3] scanning 5 paths: a.tf, b.tf, c.tf, +2 more"
+
+
+def test_chunk_progress_log_handles_repo_root():
+    msg = targeted_scan._format_chunk_progress(["."], idx=2, total=2)
+    assert msg == "  [chunk 2/2] scanning repository root (.)"

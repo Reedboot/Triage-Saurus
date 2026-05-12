@@ -896,17 +896,17 @@ See `Agents/LearningAgent.md` for full process. Typical flow:
   - ✅ Simple fan-out patterns (e.g., "APIM → 7 backends") can remain text-based lists
   - ❌ Long text arrow chains (`A → B → C → D → E → F`) are hard to scan - use Mermaid instead
 - **Colored borders (REQUIRED for traffic flows, RECOMMENDED elsewhere):**
-  - 🔴 Critical/ERROR (red): `#ff0000` stroke-width:4px - Critical vulnerabilities, public exposure
-  - 🟠 WARNING (orange): `#ff6600` stroke-width:3px - High-risk findings, broad access
-  - 🔴 Security (red): `#ff6b6b` stroke-width:3px - Firewalls, WAF, auth services, security controls
-  - 🔵 Network (blue): `#1971c2` stroke-width:2px - VNets, subnets, gateways, load balancers, routing
-  - 🟠 Identity (orange): `#f59f00` stroke-width:2px - Key Vault, AAD, managed identities, secrets
-  - 🟢 Secure/OK (green): `#40c057` stroke-width:2px - Verified secure configurations
-  - 🔵 Data (teal): `#96f2d7` stroke-width:3px - Databases, storage accounts, data services
-  - **Always include a legend** in diagrams explaining what the border colors mean
+  - 🔴 Internet Edge (red): `#cc0000` stroke-width:2px - Internet/public ingress boundary
+  - 🟣 Network boundary (purple): `#8b5cf6` stroke-width:2px - VNets, subnets, NSGs, firewalls
+  - 🟢 Compute (green): `#5a9e5a` stroke-width:2px - App Service, AKS, VM, Functions
+  - 🔵 Data Services (blue): `#4a90d9` stroke-width:2px - SQL, Storage, Redis, Cosmos DB
+  - 🟠 Identity & Secrets (orange): `#e07b00` stroke-width:2px - Key Vault, AAD, managed identity
+  - 🩵 Monitoring & Alerts (teal): `#2ab7a9` stroke-width:2px - Defender, logging, alerting
+  - Use thicker or dashed borders only as an overlay for vulnerabilities/assumptions; base color still reflects resource category.
+  - **Always include a legend** in diagrams explaining resource category border colors
   - **Legend format (inline, one line):** Place immediately after the Mermaid code block:
     ```markdown
-    **Legend:** 🔵 Blue = Network | 🟢 Green = Secure | 🟠 Orange = WARNING | 🔴 Red = Security
+    **Legend:** 🔴 Red = Internet Edge | 🟣 Purple = Network Boundary | 🟢 Green = Compute | 🔵 Blue = Data Services | 🟠 Orange = Identity & Secrets | 🩵 Teal = Monitoring
     ```
 - **UTF-8 handling:** Emojis are acceptable in Mermaid diagrams (node labels AND subgraph labels)
   - ✅ **ALWAYS use edit/create tools** for files with emojis or Unicode characters

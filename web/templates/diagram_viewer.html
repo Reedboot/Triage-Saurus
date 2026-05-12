@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ diagram_title }} | Triage-Saurus</title>
     <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
-    <link rel="stylesheet" href="/static/tailwind.css?v=1">
-    <script src="/static/vendor/mermaid.min.js"></script>
-    <script src="/static/js/mermaid-icon-injector.js" defer></script>
+    <link rel="stylesheet" href="/static/tailwind.css?v=2">
+    <script src="/static/vendor/mermaid.min.js?v=2"></script>
+    <script src="/static/js/mermaid-icon-injector.js?v=4" defer></script>
     <style>
         /* ── Tab bar: mobile scroll + fade gradient masks ─────────────────── */
         .tab-scroll {
@@ -61,19 +61,39 @@
         }
         #diagram-container svg foreignObject div,
         #diagram-container svg foreignObject span,
-        #diagram-container svg foreignObject p {
+        #diagram-container svg foreignObject p,
+        #diagram-container svg .nodeLabel,
+        #diagram-container svg .edgeLabel,
+        #diagram-container svg .cluster-label text {
             color: #e2e8f0 !important;
             fill: #e2e8f0 !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            line-height: 1.2 !important;
+        }
+        #diagram-container svg foreignObject div,
+        #diagram-container svg foreignObject span,
+        #diagram-container svg foreignObject p {
+            display: block !important;
+        }
+        #diagram-container svg .fo-fallback-label {
+            fill: #e2e8f0 !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif !important;
+            font-size: 13px !important;
+            font-weight: 500 !important;
+            pointer-events: none !important;
         }
         /* Ensure text elements are visible */
         #diagram-container svg text {
             fill: #e2e8f0 !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
-            font-size: 14px !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif !important;
+            font-size: 15px !important;
+            font-weight: 500 !important;
             pointer-events: auto !important;
             user-select: none !important;
             visibility: visible !important;
+            opacity: 1 !important;
         }
         /* Ensure node groups are visible and interactive */
         #diagram-container svg g[class*="node"],
@@ -274,15 +294,12 @@
     <footer class="flex-shrink-0 bg-[#0d1117] border-t border-[#21262d] px-6 py-2">
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
 
-            {# — Connections group — #}
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-[#7d8590]">Connections</span>
-
             <span class="flex items-center gap-1.5 text-xs text-red-300">
                 <svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true">
                     <line x1="0" y1="5" x2="20" y2="5" stroke="#ef4444" stroke-width="2" stroke-dasharray="4 2"/>
                     <polygon points="20,2 27,5 20,8" fill="#ef4444"/>
                 </svg>
-                Critical — direct internet exposure
+                Direct internet exposure
             </span>
 
             <span class="flex items-center gap-1.5 text-xs text-yellow-300">
@@ -290,13 +307,10 @@
                     <line x1="0" y1="5" x2="20" y2="5" stroke="#f97316" stroke-width="2" stroke-dasharray="4 2"/>
                     <polygon points="20,2 27,5 20,8" fill="#f97316"/>
                 </svg>
-                Warning — internet-reachable
+                Internet-reachable
             </span>
 
             <span class="text-[#30363d] select-none">│</span>
-
-            {# — Node borders group — #}
-            <span class="text-[10px] font-semibold uppercase tracking-wider text-[#7d8590]">Node borders (asset type)</span>
 
             <span class="flex items-center gap-1.5 text-xs text-blue-300">
                 <span style="display:inline-block;width:16px;height:12px;border:2.5px solid #0066cc;border-radius:3px;flex-shrink:0"></span>
@@ -367,20 +381,10 @@
             startOnLoad: false,
             theme: 'dark',
             securityLevel: 'loose',
-            themeVariables: {
-                primaryColor:       '#1e293b',
-                primaryTextColor:   '#e2e8f0',
-                primaryBorderColor: '#334155',
-                lineColor:          '#475569',
-                secondaryColor:     '#0f172a',
-                tertiaryColor:      '#111827',
-                background:         '#111827',
-                mainBkg:            '#1e293b',
-                nodeBorder:         '#334155',
-            },
             flowchart: {
                 useMaxWidth: false,
-                htmlLabels:  true,
+                // Render labels as native SVG text for better cross-browser readability.
+                htmlLabels:  false,
                 padding:     16,
                 nodeSpacing: 60,
                 rankSpacing: 80,
@@ -429,6 +433,111 @@
             applyScale(fitScale);
             scrollEl.scrollLeft = 0;
             scrollEl.scrollTop  = 0;
+        }
+
+        // Some browsers keep foreignObject labels in DOM but fail to paint them reliably.
+        // Create SVG text fallbacks for all foreignObject labels and hide the FO labels.
+        function patchForeignObjectLabels(svgEl) {
+            if (!svgEl) return;
+            const ns = 'http://www.w3.org/2000/svg';
+            const fos = Array.from(svgEl.querySelectorAll('foreignObject'));
+
+            fos.forEach((fo, idx) => {
+                const text = (fo.textContent || '').trim();
+                if (!text) return;
+
+                const x = parseFloat(fo.getAttribute('x') || '0');
+                const y = parseFloat(fo.getAttribute('y') || '0');
+                const w = parseFloat(fo.getAttribute('width') || '0');
+                const hAttr = parseFloat(fo.getAttribute('height') || '0');
+                const h = Number.isFinite(hAttr) && hAttr > 0 ? hAttr : 18;
+
+                fo.setAttribute('height', String(h));
+                fo.style.height = `${h}px`;
+
+                // Avoid duplicate fallback text on re-renders/retries.
+                if (fo.parentNode?.querySelector(`.fo-fallback-label[data-fo-fallback="${idx}"]`)) return;
+
+                const fallback = document.createElementNS(ns, 'text');
+                fallback.setAttribute('class', 'fo-fallback-label');
+                fallback.setAttribute('data-fo-fallback', String(idx));
+                fallback.setAttribute('x', String(x + (w > 0 ? (w / 2) : 0)));
+                fallback.setAttribute('y', String(y + 10));
+                fallback.setAttribute('text-anchor', 'middle');
+                fallback.setAttribute('dominant-baseline', 'middle');
+                fallback.textContent = text;
+                fo.parentNode?.appendChild(fallback);
+
+                // Keep layout contribution but avoid double-render/overlap.
+                fo.style.opacity = '0';
+                fo.style.pointerEvents = 'none';
+            });
+        }
+
+        function iconEmojiForClassString(classString) {
+            const cls = (classString || '').toLowerCase();
+            if (!cls.includes('icon-') && !cls.includes('icon_')) return '';
+            if (cls.includes('cluster')) return '☸️';
+            if (cls.includes('namespace')) return '🧭';
+            if (cls.includes('deployment')) return '📦';
+            if (cls.includes('service')) return '🔌';
+            if (cls.includes('pod')) return '🧩';
+            if (cls.includes('ingress')) return '🌐';
+            return '🔷';
+        }
+
+        // Last-resort icon fallback: prefix node labels with emoji when SVG icons fail.
+        function applyEmojiIconFallback(svgEl) {
+            if (!svgEl) return;
+            const nodes = Array.from(svgEl.querySelectorAll('g.node, g.cluster'));
+            for (const node of nodes) {
+                const classParts = [];
+                const ownClass = node.getAttribute('class') || '';
+                if (ownClass) classParts.push(ownClass);
+                node.querySelectorAll('[class]').forEach((el) => {
+                    const c = el.getAttribute('class');
+                    if (c) classParts.push(c);
+                });
+                const emoji = iconEmojiForClassString(classParts.join(' '));
+                if (!emoji) continue;
+
+                const label = node.querySelector('text.fo-fallback-label, text.nodeLabel, text');
+                if (!label) continue;
+                const current = (label.textContent || '').trim();
+                if (!current) continue;
+                if (current.startsWith('☸️') || current.startsWith('🧭') || current.startsWith('📦') ||
+                    current.startsWith('🔌') || current.startsWith('🧩') || current.startsWith('🌐') ||
+                    current.startsWith('🔷')) {
+                    continue;
+                }
+                label.textContent = `${emoji} ${current}`;
+            }
+        }
+
+        // Replace opaque Mermaid placeholder glyphs ("S", "NS") with meaningful icons.
+        function enhancePlaceholderGlyphs(svgEl) {
+            if (!svgEl) return;
+            const nodes = Array.from(svgEl.querySelectorAll('g.node'));
+            for (const node of nodes) {
+                node.querySelectorAll('text').forEach((textEl) => {
+                    const val = (textEl.textContent || '').trim();
+                    if (val !== 'S' && val !== 'NS') return;
+
+                    const descriptor = ((node.querySelector('text.fo-fallback-label')?.textContent || '') + ' ' + (node.textContent || '')).toLowerCase();
+                    let icon = '🔹';
+                    if (val === 'NS' || descriptor.includes('namespace')) icon = '🧭';
+                    else if (descriptor.includes('(service')) icon = '🔌';
+                    else if (descriptor.includes('(deployment')) icon = '📦';
+                    else if (descriptor.includes('(pod')) icon = '🧩';
+                    else if (descriptor.includes('internet')) icon = '🌐';
+
+                    if (val !== icon) {
+                        textEl.textContent = icon;
+                        textEl.style.fontSize = '16px';
+                        textEl.style.fontWeight = '600';
+                    }
+                });
+            }
         }
 
         // ── Update header icon for the active provider ───────────────────────
@@ -488,6 +597,8 @@
                         svgEl.setAttribute('height', `${vb.height}px`);
                         svgEl.style.removeProperty('max-width');
                     }
+                    patchForeignObjectLabels(svgEl);
+                    enhancePlaceholderGlyphs(svgEl);
                 }
 
                 // Auto-fit: retry until SVG has non-zero dimensions (layout may take >2 rAFs)
@@ -506,6 +617,19 @@
                                     window.MermaidIconInjector.processAllDiagrams({ iconDataUrl });
                                 }, delay);
                             });
+                            // Self-heal for stale-cache/race cases where icons still don't appear.
+                            setTimeout(() => {
+                                const iconCount = container.querySelectorAll('g.mermaid-icon').length;
+                                if (iconCount === 0 && typeof window.MermaidIconInjector._clearCache === 'function') {
+                                    window.MermaidIconInjector._clearCache();
+                                    window.MermaidIconInjector.processAllDiagrams({ iconDataUrl });
+                                }
+                                const finalIconCount = container.querySelectorAll('g.mermaid-icon').length;
+                                if (finalIconCount === 0) {
+                                    applyEmojiIconFallback(container.querySelector('svg'));
+                                }
+                                enhancePlaceholderGlyphs(container.querySelector('svg'));
+                            }, 1400);
                         }
                     } else {
                         requestAnimationFrame(_tryFit);

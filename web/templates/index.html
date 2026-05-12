@@ -75,7 +75,7 @@
          style="display:none">
       <div class="flex items-center gap-2 mb-2">
         <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Scan pipeline</span>
-        <span x-text="$store.scan.phaseLabel" class="text-xs text-emerald-400 ml-auto"></span>
+        <span x-text="$store.scan.phaseLabel" :class="$store.scan.phaseLabelClass()"></span>
       </div>
       <div class="flex items-center gap-1">
         <template x-for="phase in $store.scan.phases" :key="phase.id">
@@ -203,30 +203,44 @@
               </div>
             </div>
             <footer class="diagram-legend" id="inline-diagram-legend">
-              <span class="diagram-legend-title">Connections</span>
               <span class="diagram-legend-item critical">
                 <svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true">
                   <line x1="0" y1="5" x2="20" y2="5" stroke="#ef4444" stroke-width="2" stroke-dasharray="4 2" />
                   <polygon points="20,2 27,5 20,8" fill="#ef4444" />
                 </svg>
-                Critical - direct internet exposure
+                Direct internet exposure
               </span>
               <span class="diagram-legend-item warning">
                 <svg width="28" height="10" viewBox="0 0 28 10" fill="none" aria-hidden="true">
                   <line x1="0" y1="5" x2="20" y2="5" stroke="#f97316" stroke-width="2" stroke-dasharray="4 2" />
                   <polygon points="20,2 27,5 20,8" fill="#f97316" />
                 </svg>
-                Warning - internet-reachable
+                Internet-reachable
               </span>
               <span class="diagram-legend-sep" aria-hidden="true">|</span>
-              <span class="diagram-legend-title">Node borders</span>
-              <span class="diagram-legend-item public">
-                <span class="diagram-legend-swatch public"></span>
-                Public resource
+              <span class="diagram-legend-item compute">
+                <span class="diagram-legend-swatch compute"></span>
+                Compute
               </span>
-              <span class="diagram-legend-item potential">
-                <span class="diagram-legend-swatch potential"></span>
-                Potentially accessible
+              <span class="diagram-legend-item data">
+                <span class="diagram-legend-swatch data"></span>
+                Database / Storage
+              </span>
+              <span class="diagram-legend-item network">
+                <span class="diagram-legend-swatch network"></span>
+                Network
+              </span>
+              <span class="diagram-legend-item security">
+                <span class="diagram-legend-swatch security"></span>
+                Security
+              </span>
+              <span class="diagram-legend-item identity">
+                <span class="diagram-legend-swatch identity"></span>
+                Identity
+              </span>
+              <span class="diagram-legend-item api">
+                <span class="diagram-legend-swatch api"></span>
+                API
               </span>
             </footer>
           </div>

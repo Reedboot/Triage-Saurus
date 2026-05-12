@@ -115,9 +115,16 @@ document.addEventListener('alpine:init', () => {
 
     // CSS helper for each pipeline bar
     phaseClass(phase) {
-      if (phase.state === 'done')   return 'pipeline-phase flex-1 h-2 rounded-full bg-emerald-700 transition-all duration-500';
-      if (phase.state === 'active') return 'pipeline-phase flex-1 h-2 rounded-full bg-emerald-500 transition-all duration-500';
-      return 'pipeline-phase flex-1 h-2 rounded-full bg-gray-700 transition-all duration-500';
+      if (phase.state === 'done')   return 'pipeline-phase pipeline-phase--done';
+      if (phase.state === 'active') return 'pipeline-phase pipeline-phase--active';
+      return 'pipeline-phase pipeline-phase--idle';
+    },
+
+    phaseLabelClass() {
+      const isComplete = this.phases.every(p => p.state === 'done');
+      if (isComplete) return 'text-xs text-emerald-400 ml-auto';
+      if (this.phaseIdx >= 0) return 'text-xs text-amber-300 ml-auto';
+      return 'text-xs text-gray-400 ml-auto';
     },
   });
 

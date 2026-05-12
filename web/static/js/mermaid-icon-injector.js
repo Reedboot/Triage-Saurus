@@ -323,9 +323,10 @@ const MermaidIconInjector = (() => {
     titleElement.textContent = resourceType;
     groupElement.appendChild(titleElement);
 
-    // Insert icon: before <text> if present, else prepend to node group
-    if (textElement) {
-      node.insertBefore(groupElement, textElement);
+    // Insert icon near the text label. In some Mermaid layouts the <text> element
+    // is nested, so insert relative to its parent when needed.
+    if (textElement && textElement.parentNode) {
+      textElement.parentNode.insertBefore(groupElement, textElement);
     } else {
       node.insertBefore(groupElement, node.firstChild);
     }
@@ -340,9 +341,10 @@ const MermaidIconInjector = (() => {
   async function _getIconMap(iconDataUrl = '/api/icon-mappings') {
     if (_iconMapCache) return _iconMapCache;
     try {
-      // Add cache-buster to force fresh icon mappings on page load
-      const url = `${iconDataUrl}?v=${Date.now()}`;
-      const response = await fetch(url);
+      // Add cache-buster while preserving existing query params (e.g. provider=azure).
+      const url = new URL(iconDataUrl, window.location.origin);
+      url.searchParams.set('v', String(Date.now()));
+      const response = await fetch(url.toString());
       if (!response.ok) {
         console.warn(`[MermaidIconInjector] Failed to fetch icon mappings: ${response.status}`);
         return {};

@@ -307,6 +307,43 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── Pipeline progress states ── */
+.pipeline-phase {
+  flex: 1 1 0;
+  height: 0.5rem;
+  border-radius: 9999px;
+  transition: all 0.45s ease;
+}
+
+.pipeline-phase--idle {
+  background: #374151;
+}
+
+.pipeline-phase--done {
+  background: #047857;
+}
+
+.pipeline-phase--active {
+  background-color: #d29922;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.28) 0 10px,
+    rgba(255, 255, 255, 0.08) 10px 20px
+  );
+  background-size: 28px 28px;
+  animation: pipeline-stripes 0.85s linear infinite;
+  box-shadow: inset 0 0 0 1px rgba(255, 238, 186, 0.35);
+}
+
+@keyframes pipeline-stripes {
+  from { background-position: 0 0; }
+  to   { background-position: 28px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-phase--active { animation: none; }
+}
+
 /* ── Workspace ── */
 .workspace {
   display: grid;
@@ -901,8 +938,12 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   flex-shrink: 0;
 }
 
-.diagram-legend-swatch.public { border: 2.5px solid #00aa00; }
-.diagram-legend-swatch.potential { border: 2.5px solid #0066cc; }
+.diagram-legend-swatch.compute { border: 2.5px solid #0066cc; }
+.diagram-legend-swatch.data { border: 2.5px solid #00aa00; }
+.diagram-legend-swatch.network { border: 2.5px solid #7e57c2; }
+.diagram-legend-swatch.security { border: 2.5px solid #ff6b6b; }
+.diagram-legend-swatch.identity { border: 2.5px solid #f59f00; }
+.diagram-legend-swatch.api { border: 2.5px solid #00b4d8; }
 
 .diagram-legend-sep { color: #4b5563; }
 

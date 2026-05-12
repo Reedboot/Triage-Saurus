@@ -296,16 +296,13 @@ flowchart TB
 - **Mermaid:** Prefer `flowchart TB` (internet at top → internal services below) and standard emoji from Settings/Styling.md.
 - **Line breaks:** Use `<br/>` not `\n` in node labels for proper rendering.
 - **Colored borders (RECOMMENDED):** Use colored stroke styling to visually distinguish component types:
-  - **Security components** (red): `style Security stroke:#ff6b6b,stroke-width:3px` - Firewalls, WAF, DDoS, security groups
-  - **Vulnerable components** (red/orange): Use red/orange borders to highlight security issues:
-    - 🔴 **CRITICAL vulnerabilities** (red): `style VulnerableResource stroke:#ff0000,stroke-width:4px` - Public access, no auth, exposed credentials
-    - 🟠 **HIGH vulnerabilities** (orange): `style VulnerableResource stroke:#ff6600,stroke-width:3px` - Broad network access, missing controls
-    - Add ⚠️ emoji and explicit security labels in node text (e.g., "Container: pallas<br/>⚠️ PUBLIC ACCESS")
-    - **BEST PRACTICE:** Show security vulnerabilities in diagrams, don't hide them - this makes diagrams actionable for security reviews
-  - **Network components** (blue): `style Network stroke:#1971c2,stroke-width:2px` - VNets, subnets, routing, load balancers
-  - **Identity/secrets** (orange): `style Identity stroke:#f59f00,stroke-width:2px` - Key Vault, managed identities, AAD, secrets
-  - **Platform/core** (orange bold): `style Platform stroke:#f59f00,stroke-width:3px` - Critical infrastructure, hub resources
-  - Use `stroke-width:3px` for critical/primary components, `stroke-width:2px` for secondary
+  - **Internet edge** (red): `style Edge stroke:#cc0000,stroke-width:2px` - Internet/public ingress boundary
+  - **Network boundary** (purple): `style Network stroke:#8b5cf6,stroke-width:2px` - VNets, subnets, NSGs, firewalls
+  - **Compute** (green): `style Compute stroke:#5a9e5a,stroke-width:2px` - App Service, AKS, VM, Functions
+  - **Data services** (blue): `style Data stroke:#4a90d9,stroke-width:2px` - SQL, Storage, Redis, Cosmos DB
+  - **Identity & secrets** (orange): `style Identity stroke:#e07b00,stroke-width:2px` - Key Vault, managed identities, AAD, secrets
+  - **Monitoring & alerts** (teal): `style Monitor stroke:#2ab7a9,stroke-width:2px` - Defender, Log Analytics, alerts
+  - **Vulnerabilities/assumptions are overlays, not categories:** keep category color and add stronger width or dashes (for example `stroke-width:4px` + ⚠️ for critical risk, `stroke-dasharray:5 5` for assumptions)
 - **Mermaid styling for confirmed components:** use the Mermaid default (solid)
   or explicitly set it, e.g.
   ```mermaid
@@ -651,8 +648,10 @@ This ensures no `fill:` attributes slipped through and Mermaid syntax is valid.
 - ❌ Any use of `fill:` attribute → ✅ Remove entirely, use stroke styling instead
 
 **Good patterns (colored borders for visual hierarchy):**
-- ✅ Security: `style Security stroke:#ff6b6b,stroke-width:3px` (red, bold)
-- ✅ Network: `style Network stroke:#1971c2,stroke-width:2px` (blue)
-- ✅ Identity: `style Identity stroke:#f59f00,stroke-width:2px` (orange)
-- ✅ Platform: `style Platform stroke:#f59f00,stroke-width:3px` (orange, bold)
+- ✅ Internet edge: `style Edge stroke:#cc0000,stroke-width:2px` (red)
+- ✅ Network boundary: `style Network stroke:#8b5cf6,stroke-width:2px` (purple)
+- ✅ Compute: `style Compute stroke:#5a9e5a,stroke-width:2px` (green)
+- ✅ Data services: `style Data stroke:#4a90d9,stroke-width:2px` (blue)
+- ✅ Identity/secrets: `style Identity stroke:#e07b00,stroke-width:2px` (orange)
+- ✅ Monitoring: `style Monitor stroke:#2ab7a9,stroke-width:2px` (teal)
 - ✅ Assumptions: `style Assumed stroke:#999,stroke-dasharray:5 5` (gray, dashed)

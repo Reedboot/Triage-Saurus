@@ -5896,10 +5896,10 @@ def api_view_tldr(experiment_id: str, repo_name: str):
                         line("Discovery & inventory", stage_counts["p1"]),
                         line("Exposure mapping", stage_counts["p2"]),
                         line("Findings correlation", stage_counts["p3"]),
-                        _agent_status_line("context_extraction", "🔍 Context extraction"),
-                        _agent_status_line("security_review",    "🔒 Security review"),
-                        _agent_status_line("dev_review",         "💻 Dev skeptic"),
-                        _agent_status_line("platform_review",    "☁️ Platform skeptic"),
+                        _agent_status_line("context_extraction", "🔍 Context extraction (AI)"),
+                        _agent_status_line("security_review",    "🔒 Security review (AI)"),
+                        _agent_status_line("dev_review",         "💻 Dev skeptic (AI)"),
+                        _agent_status_line("platform_review",    "☁️ Platform skeptic (AI)"),
                     ]
                 )
                 add_row("Scan status", status_html)

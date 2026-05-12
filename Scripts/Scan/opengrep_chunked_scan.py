@@ -105,6 +105,19 @@ def build_chunks(
     return chunks or [["."]]
 
 
+def format_chunk_progress(chunk: List[str], index: int, total: int, preview_limit: int = 3) -> str:
+    """Return compact chunk progress output for terminal UX."""
+    if not chunk:
+        return f"[chunk {index}/{total}] scanning 0 paths"
+    if chunk == ["."]:
+        return f"[chunk {index}/{total}] scanning repository root (.)"
+    preview = ", ".join(chunk[:preview_limit])
+    remaining = len(chunk) - preview_limit
+    if remaining > 0:
+        preview += f", +{remaining} more"
+    return f"[chunk {index}/{total}] scanning {len(chunk)} paths: {preview}"
+
+
 def run_chunk(
     chunk: List[str], args: argparse.Namespace, cwd: Path, index: int, total: int
 ) -> int:
@@ -112,7 +125,9 @@ def run_chunk(
     for pat in getattr(args, "exclude", None) or []:
         exclude_flags += ["--exclude", pat]
     cmd = [args.opengrep, "scan", "--config", args.config, *exclude_flags, *chunk]
-    print(f"[chunk {index}/{total}] {' '.join(cmd)}")
+    print(format_chunk_progress(chunk, index, total))
+    if os.environ.get("TS_VERBOSE_CHUNK_COMMANDS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print(f"  cmd: {' '.join(cmd)}")
     if args.dry_run:
         return 0
     process = subprocess.run(cmd, cwd=cwd)

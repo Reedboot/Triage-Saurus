@@ -350,6 +350,20 @@ def _build_scan_chunks(target: Path, max_files: int = 800, max_paths: int = 8) -
     return [files[idx : idx + size] for idx in range(0, len(files), size)]
 
 
+def _format_chunk_progress(chunk: list[str], idx: int, total: int, preview_limit: int = 3) -> str:
+    """Return a compact, user-friendly chunk progress line for scan logs."""
+    if not chunk:
+        return f"  [chunk {idx}/{total}] scanning 0 paths"
+    if chunk == ["."]:
+        return f"  [chunk {idx}/{total}] scanning repository root (.)"
+
+    preview = ", ".join(chunk[:preview_limit])
+    remaining = len(chunk) - preview_limit
+    if remaining > 0:
+        preview += f", +{remaining} more"
+    return f"  [chunk {idx}/{total}] scanning {len(chunk)} paths: {preview}"
+
+
 def _parse_opengrep_json(result: subprocess.CompletedProcess[str]) -> dict:
     stdout = (result.stdout or "").strip()
     if not stdout:
@@ -523,7 +537,9 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
         for config_path in config_paths:
             chunk_cmd += ["--config", str(config_path)]
         chunk_cmd += [*chunk, "--json", "--quiet"]
-        print(f"  [chunk {idx}/{len(chunks)}] {' '.join(chunk_cmd)}")
+        print(_format_chunk_progress(chunk, idx, len(chunks)))
+        if os.environ.get("TS_VERBOSE_CHUNK_COMMANDS", "").strip().lower() in {"1", "true", "yes", "on"}:
+            print(f"    cmd: {' '.join(chunk_cmd)}")
         try:
             res = subprocess.run(
                 chunk_cmd,
