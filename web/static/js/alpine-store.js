@@ -75,10 +75,30 @@ document.addEventListener('alpine:init', () => {
 
     // Module modal actions
     showModuleModal(modules, onScan, onSkip) {
-      this.detectedModules = modules.map(m => ({ ...m, selected: !m.already_scanned }));
+      this.detectedModules = modules.map(m => ({ 
+        ...m, 
+        selected: m.found_in_repos && !m.already_scanned,  // Auto-select not-yet-scanned modules
+        userProvidedPath: null,
+        pathInputVisible: true,
+        editingPath: false,  // For editing auto-resolved paths
+        pathValidated: false
+      }));
       this._moduleScanCb = onScan;
       this._moduleSkipCb = onSkip;
       this.moduleModalVisible = true;
+    },
+    canProceedWithModules() {
+      // Can proceed if:
+      // - At least one module is selected AND
+      // - All selected modules have either a path or userProvidedPath
+      const hasSelected = this.detectedModules.some(m => m.selected);
+      if (!hasSelected) return false;
+      
+      return this.detectedModules.every(m => {
+        if (!m.selected) return true;  // Unselected modules don't need a path
+        // Selected modules need either module_repo_path or userProvidedPath
+        return m.module_repo_path || (m.userProvidedPath && m.userProvidedPath.trim());
+      });
     },
     proceedWithModuleScan() {
       this.moduleModalVisible = false;

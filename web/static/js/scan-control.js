@@ -101,13 +101,41 @@ export function showModuleModal(repoPath, modules) {
 }
 
 export function scanModulesThenProceed(repoPath, selectedModules) {
-  // TODO: Implement actual module scanning via API
-  // For now, just log and proceed
-  console.log('Selected modules to scan:', selectedModules.map(m => m.name));
-  window._triage.setStatus(`Scanning ${selectedModules.length} module(s) before main scan…`, '');
+  // Validate user-provided paths
+  const modulesToScan = [];
+  const missingPaths = [];
   
-  // TODO: Call /api/scan-modules endpoint when implemented
-  // For now, just proceed after a short delay
+  for (const mod of selectedModules) {
+    const resolvedPath = mod.module_repo_path || (mod.userProvidedPath && mod.userProvidedPath.trim());
+    
+    if (!resolvedPath) {
+      missingPaths.push(mod.name);
+    } else {
+      modulesToScan.push({
+        name: mod.name,
+        module_repo_name: mod.module_repo_name,
+        module_repo_path: resolvedPath,
+        source: mod.source,
+        inferred_type: mod.inferred_type
+      });
+    }
+  }
+  
+  if (missingPaths.length > 0) {
+    window._triage.setStatus(`Error: Missing paths for modules: ${missingPaths.join(', ')}`, 'error');
+    return;
+  }
+  
+  console.log('Selected modules to scan:', modulesToScan);
+  window._triage.setStatus(`Scanning ${modulesToScan.length} module(s) before main scan…`, '');
+  
+  // TODO: Call /api/scan-modules endpoint to actually scan the modules
+  // For now, just log the modules and proceed
+  // In the future, this should:
+  // 1. Call scan_remote_modules.py for each selected module
+  // 2. Store results in cozo.db
+  // 3. Then proceed with main scan
+  
   setTimeout(() => {
     startScan(repoPath);
   }, 1000);

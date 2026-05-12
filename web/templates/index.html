@@ -275,36 +275,96 @@
          x-transition:enter-end="opacity-100 scale-100">
       <h3 id="module-modal-title">External Terraform Modules Detected</h3>
       <p id="module-modal-intro" class="text-sm text-gray-400 mb-3">
-        Found <span id="module-count" x-text="$store.scan.detectedModules.length">0</span> external module(s) in this repository.
-        Select which ones to scan before proceeding with the main scan.
+        Found <span id="module-count" x-text="$store.scan.detectedModules.length">0</span> external module(s).
+        Select which ones to scan or provide paths for not-found modules.
       </p>
       
-      <div id="module-list" class="module-list" style="max-height: 300px; overflow-y: auto; margin: 12px 0; padding: 8px; border: 1px solid #374151; border-radius: 4px; background: #111827;">
+      <div id="module-list" class="module-list" style="max-height: 400px; overflow-y: auto; margin: 12px 0; padding: 8px; border: 1px solid #374151; border-radius: 4px; background: #111827;">
         <template x-for="mod in $store.scan.detectedModules" :key="mod.name">
-          <div class="module-item" style="padding: 8px; margin-bottom: 8px; border: 1px solid #1f2937; border-radius: 3px; background: #0f1419; font-size: 0.875rem;">
-            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-              <input type="checkbox" :checked="mod.selected" @change="mod.selected = !mod.selected" style="margin-top: 4px; cursor: pointer;">
-              <div style="flex: 1; min-width: 0;">
-                <strong x-text="mod.name" style="display: block;"></strong>
-                <span x-text="'Type: ' + mod.inferred_type" style="display: block; font-size: 0.8rem; color: #9ca3af; margin-top: 2px;"></span>
-                <span x-text="'Source: ' + mod.source.substring(0, 60) + (mod.source.length > 60 ? '...' : '')" 
-                      style="display: block; font-size: 0.8rem; color: #6b7280; margin-top: 2px; word-break: break-all;"></span>
-                <span x-show="mod.already_scanned" 
-                      style="display: inline-block; margin-top: 4px; padding: 2px 6px; font-size: 0.75rem; background: #065f46; color: #d1fae5; border-radius: 3px;">
-                  ✓ Already scanned
-                </span>
+          <div class="module-item" style="padding: 8px; margin-bottom: 8px; border: 1px solid #1f2937; border-radius: 3px; background: #0f1419;">
+            
+            <!-- Found in ReposToScan.txt -->
+            <template x-if="mod.found_in_repos">
+              <div>
+                <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" :checked="mod.selected" @change="mod.selected = !mod.selected" style="margin-top: 4px; cursor: pointer;">
+                  <div style="flex: 1; min-width: 0;">
+                    <strong x-text="mod.name" style="display: block;"></strong>
+                    <span x-text="'Module Repo: ' + mod.module_repo_name" style="display: block; font-size: 0.8rem; color: #10b981; margin-top: 2px; font-weight: 500;"></span>
+                    
+                    <!-- Path display or edit mode -->
+                    <template x-if="!mod.editingPath">
+                      <div>
+                        <span x-show="mod.module_repo_path" x-text="'Path: ' + mod.module_repo_path" style="display: block; font-size: 0.75rem; color: #6b7280; margin-top: 2px; word-break: break-all;"></span>
+                        <span x-show="!mod.module_repo_path" style="display: block; font-size: 0.75rem; color: #f87171; margin-top: 2px;">⚠ Repo found but not on disk</span>
+                        <button @click="mod.editingPath = true"
+                                style="display: inline-block; margin-top: 4px; padding: 2px 6px; font-size: 0.75rem; background: transparent; border: 1px solid #4b5563; color: #8b949e; border-radius: 3px; cursor: pointer; transition: all 0.2s;">
+                          ✎ Edit path
+                        </button>
+                      </div>
+                    </template>
+                    
+                    <!-- Edit path input -->
+                    <template x-if="mod.editingPath">
+                      <div style="display: flex; gap: 6px; margin-top: 6px;">
+                        <input type="text" 
+                               @input="mod.module_repo_path = $event.target.value; mod.pathValidated = false"
+                               :value="mod.module_repo_path || ''"
+                               placeholder="Enter path to module repo"
+                               style="flex: 1; padding: 6px; background: #0f1419; border: 1px solid #374151; border-radius: 3px; color: #c9d1d9; font-size: 0.85rem;">
+                        <button @click="mod.editingPath = false"
+                                style="padding: 6px 12px; background: #238636; border: 1px solid #2ea043; color: #fff; border-radius: 3px; cursor: pointer; font-size: 0.85rem;">
+                          Done
+                        </button>
+                      </div>
+                    </template>
+                    
+                    <span x-show="mod.already_scanned" 
+                          style="display: inline-block; margin-top: 4px; padding: 2px 6px; font-size: 0.75rem; background: #065f46; color: #d1fae5; border-radius: 3px;">
+                      ✓ Already scanned
+                    </span>
+                  </div>
+                </label>
               </div>
-            </label>
+            </template>
+            
+            <!-- Not found - ask for path -->
+            <template x-if="!mod.found_in_repos">
+              <div>
+                <div style="margin-bottom: 6px;">
+                  <strong x-text="mod.name" style="display: block;"></strong>
+                  <span x-text="'Type: ' + mod.inferred_type" style="display: block; font-size: 0.8rem; color: #9ca3af; margin-top: 2px;"></span>
+                  <span style="display: block; font-size: 0.8rem; color: #f87171; margin-top: 2px; font-weight: 500;">⚠ Not found in ReposToScan.txt</span>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                  <input type="text" 
+                         :placeholder="'e.g., /home/user/repos/' + mod.name"
+                         @input="mod.userProvidedPath = $event.target.value"
+                         :value="mod.userProvidedPath || ''"
+                         style="flex: 1; padding: 6px; background: #0f1419; border: 1px solid #374151; border-radius: 3px; color: #c9d1d9; font-size: 0.85rem;">
+                  <button @click="mod.pathInputVisible = false"
+                          style="padding: 6px 12px; background: #238636; border: 1px solid #2ea043; color: #fff; border-radius: 3px; cursor: pointer; font-size: 0.85rem;">
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </template>
           </div>
         </template>
       </div>
       
       <p id="module-note" class="text-xs text-gray-500 mb-3">
-        Modules marked "Already scanned" are in the database and will not be re-scanned.
+        ✓ Green = Found in ReposToScan.txt | ⚠ Red = Not found, please provide path
+        <br/>All paths can be edited by clicking "✎ Edit path" — incorrect paths can be corrected.
       </p>
       
       <div class="modal-buttons">
-        <button id="module-scan" class="modal-btn primary" @click="$store.scan.proceedWithModuleScan()" x-text="'📦 Scan ' + ($store.scan.detectedModules.filter(m => m.selected).length) + ' Module(s)'">📦 Scan Modules</button>
+        <button id="module-scan" class="modal-btn primary" 
+                @click="$store.scan.proceedWithModuleScan()" 
+                :disabled="!$store.scan.canProceedWithModules()"
+                style="cursor: pointer;">
+          📦 Scan Selected Modules
+        </button>
         <button id="module-skip" class="modal-btn" @click="$store.scan.skipModuleScan()">⊘ Skip Modules</button>
         <button id="module-cancel" class="modal-btn cancel" @click="$store.scan.closeModuleModal()">✕ Cancel Scan</button>
       </div>

@@ -2212,23 +2212,27 @@ def api_scans(repo_name: str):
 
 @app.route("/api/detect-modules", methods=["POST"])
 def api_detect_modules():
-    """Detect external Terraform modules in a repo and check if they've been scanned.
+    """Detect external Terraform modules and resolve their repo paths.
     
     Request body: {"repo_path": "/path/to/repo"}
     Response: {
         "modules": [
             {
                 "name": "aks_cluster",
+                "module_repo_name": "terraform-aks",
+                "module_repo_path": "/path/to/terraform-aks" or null,
                 "source": "git::https://dev.azure.com/...",
                 "inferred_type": "aks_module",
                 "source_file": "terraform/aks.tf",
                 "source_line": 42,
+                "found_in_repos": true,
                 "already_scanned": true
             },
             ...
         ],
         "total": 1,
-        "scanned_count": 1,
+        "found_count": 1,
+        "not_found": 0,
         "error": null
     }
     """
@@ -2251,15 +2255,26 @@ def api_detect_modules():
         detection = detect_modules(str(repo_path))
         modules = detection.get("modules", [])
         
+        # Load ReposToScan.txt to match module names
+        intake_repos = {}
+        try:
+            repos_file = REPO_ROOT / "Intake" / "ReposToScan.txt"
+            if repos_file.exists():
+                for line in repos_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        intake_repos[line.lower()] = line
+        except Exception:
+            pass
+        
         # Check cozo.db to see which modules have been scanned
         conn = _get_db()
         scanned_module_names = set()
         
         if conn:
             try:
-                # Query repositories table for any repo that looks like it's a module
                 rows = conn.execute(
-                    "SELECT DISTINCT repo_name FROM repositories WHERE repo_name LIKE '%module%' OR repo_name LIKE '%terraform%'",
+                    "SELECT DISTINCT repo_name FROM repositories",
                 ).fetchall()
                 for row in rows:
                     scanned_module_names.add((row["repo_name"] or "").lower())
@@ -2268,20 +2283,64 @@ def api_detect_modules():
             finally:
                 conn.close()
         
-        # Enhance each module with scan status
-        for mod in modules:
-            mod_name_lower = mod["name"].lower()
-            mod["already_scanned"] = (
-                mod_name_lower in scanned_module_names or
-                any(mod_name_lower in sn for sn in scanned_module_names)
-            )
+        # Enhance each module with resolved path and scan status
+        found_count = 0
+        not_found_count = 0
         
-        scanned_count = sum(1 for m in modules if m.get("already_scanned", False))
+        for mod in modules:
+            # Extract likely module repo name from source or module name
+            module_repo_name = None
+            module_repo_path = None
+            found_in_repos = False
+            
+            # Try to match module name in intake repos
+            mod_name_lower = mod["name"].lower()
+            if mod_name_lower in intake_repos:
+                module_repo_name = intake_repos[mod_name_lower]
+                found_in_repos = True
+                found_count += 1
+            else:
+                # Try to extract from source URL (e.g., terraform-aks from git::https://...terraform-aks//...)
+                source = mod.get("source", "").lower()
+                for repo_key, repo_name in intake_repos.items():
+                    if repo_key in source or repo_name.lower() in source:
+                        module_repo_name = repo_name
+                        found_in_repos = True
+                        found_count += 1
+                        break
+            
+            if not found_in_repos:
+                not_found_count += 1
+                # Try to infer repo name from source
+                source = mod.get("source", "")
+                if source:
+                    # Extract last part of path: terraform-aks from git::https://...terraform-aks
+                    parts = source.split("/")
+                    for part in reversed(parts):
+                        part = part.strip().rstrip("//")
+                        if part and not part.startswith("git"):
+                            module_repo_name = part
+                            break
+            
+            # Try to resolve path for found repos
+            if module_repo_name:
+                resolved_path = _resolve_repo_path(module_repo_name)
+                if resolved_path:
+                    module_repo_path = str(resolved_path)
+            
+            mod["module_repo_name"] = module_repo_name
+            mod["module_repo_path"] = module_repo_path
+            mod["found_in_repos"] = found_in_repos
+            mod["already_scanned"] = (
+                (module_repo_name.lower() in scanned_module_names) if module_repo_name
+                else (mod_name_lower in scanned_module_names)
+            )
         
         return jsonify({
             "modules": modules,
             "total": len(modules),
-            "scanned_count": scanned_count,
+            "found_count": found_count,
+            "not_found": not_found_count,
             "error": None
         })
     
