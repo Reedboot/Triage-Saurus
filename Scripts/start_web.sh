@@ -189,5 +189,29 @@ else
   fi
 fi
 
+echo -e "  ${CYAN}Checking Node.js dependencies in web/ folder...${RESET}"
+if [ -f "$ROOT/web/package.json" ]; then
+  if [ ! -d "$ROOT/web/node_modules" ]; then
+    echo -e "  ${CYAN}Installing npm dependencies...${RESET}"
+    if command -v npm &>/dev/null; then
+      cd "$ROOT/web" || exit 1
+      if npm install; then
+        echo -e "  ${GREEN}✅ npm dependencies installed.${RESET}"
+      else
+        echo -e "  ${RED}❌ npm install failed.${RESET}"
+        exit 1
+      fi
+      cd "$ROOT" || exit 1
+    else
+      echo -e "  ${RED}❌ npm not found in PATH. Install Node.js first.${RESET}"
+      exit 1
+    fi
+  else
+    echo -e "  ${GREEN}✅ Node.js dependencies already installed.${RESET}"
+  fi
+else
+  echo -e "  ${YELLOW}ℹ No package.json found in web/ — skipping npm install.${RESET}"
+fi
+
 echo -e "  ${CYAN}Launching web app with: ${BOLD}${PY_EXEC}${RESET}"
 exec "$PY_EXEC" "$ROOT/web/app.py"

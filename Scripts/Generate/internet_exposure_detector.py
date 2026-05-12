@@ -55,8 +55,8 @@ class InternetExposureDetector:
     COLORS = {
         'finding': '#ff0000',           # Red - explicit security finding
         'firewall_rule': '#ff9900',     # Orange - open firewall rule
-        'property': '#ffff00',          # Yellow - public property
-        'heuristic': '#ffff00',         # Yellow - resource type heuristic
+        'property': '#ff9900',          # Orange - public property
+        'heuristic': '#ff9900',         # Orange - resource type heuristic
     }
 
     # Public-by-design resource types (per provider)
@@ -263,34 +263,69 @@ class InternetExposureDetector:
         resources: List[Dict],
         findings: List[Dict],
     ) -> Dict[str, ExposureDetail]:
-        """Detect resources with explicit internet_exposure findings."""
+        """Detect resources with explicit/public-exposure findings."""
         exposed = {}
 
         # Build resource_id → resource map
         resource_by_id = {r['id']: r for r in resources}
+        resources_by_type = [(r, (r.get('resource_type') or '').lower()) for r in resources]
 
-        for finding in findings:
-            resource_id = finding.get('resource_id')
-            if not resource_id or resource_id not in resource_by_id:
-                continue
+        def _finding_text(finding: Dict) -> str:
+            parts = [
+                finding.get('rule_id') or '',
+                finding.get('title') or '',
+                finding.get('description') or '',
+                finding.get('reason') or '',
+                finding.get('finding_type') or '',
+            ]
+            return ' '.join(str(p) for p in parts if p).lower()
 
-            # Check for internet_exposure context
-            context = finding.get('context', [])
-            if not isinstance(context, list):
-                context = []
-
-            is_exposed = False
+        def _context_marks_exposed(context: List[Dict]) -> bool:
             for ctx in context:
                 if (ctx.get('context_key') == 'internet_exposure' and
                     ctx.get('context_value') == 'true'):
-                    is_exposed = True
-                    break
+                    return True
+            return False
 
-            if is_exposed:
+        def _text_marks_exposed(text: str) -> bool:
+            public_markers = (
+                'public access',
+                'publicly accessible',
+                'internet-exposed',
+                'internet exposed',
+                'open to internet',
+                'open to the internet',
+                '0.0.0.0',
+                'unauthenticated',
+            )
+            return any(m in text for m in public_markers)
+
+        def _inferred_candidate_types(text: str) -> List[str]:
+            candidate_tokens: List[str] = []
+            if any(tok in text for tok in ('oss', 'bucket', 'object storage', 's3', 'blob')):
+                candidate_tokens.extend(['oss_bucket', 'storage_bucket', 's3_bucket', 'blob'])
+            if any(tok in text for tok in ('rds', 'db instance', 'database instance')):
+                candidate_tokens.extend(['db_instance', 'rds_instance'])
+            if any(tok in text for tok in ('load balancer', 'application gateway', 'api gateway', 'gateway')):
+                candidate_tokens.extend(['load_balancer', 'api_gateway', 'gateway'])
+            return candidate_tokens
+
+        for finding in findings:
+            resource_id = finding.get('resource_id')
+            context = finding.get('context', [])
+            if not isinstance(context, list):
+                context = []
+            text = _finding_text(finding)
+            is_exposed = _context_marks_exposed(context) or _text_marks_exposed(text)
+            if not is_exposed:
+                continue
+
+            if resource_id and resource_id in resource_by_id:
                 resource = resource_by_id[resource_id]
                 resource_name = resource.get('resource_name')
                 if resource_name:
-                    exposed[resource_name] = ExposureDetail(
+                    dict_key = resource_name if resource_name not in exposed else f"__id_{resource_id}"
+                    exposed[dict_key] = ExposureDetail(
                         resource_name=resource_name,
                         resource_id=resource_id,
                         exposure_type='finding',
@@ -299,6 +334,37 @@ class InternetExposureDetector:
                         color=self.COLORS['finding'],
                         detection_methods=['Finding'],
                     )
+                continue
+
+            # Best-effort fallback for findings missing resource_id:
+            # infer likely asset type from finding text/rule id and map matching resources.
+            candidate_tokens = _inferred_candidate_types(text)
+            if not candidate_tokens:
+                continue
+            provider_hint = None
+            for prov in ('aws', 'azure', 'gcp', 'alicloud', 'oci', 'huaweicloud', 'tencentcloud'):
+                if prov in text:
+                    provider_hint = prov
+                    break
+            for resource, rtype in resources_by_type:
+                if provider_hint and not rtype.startswith(f"{provider_hint}_"):
+                    continue
+                if not any(tok in rtype for tok in candidate_tokens):
+                    continue
+                rname = resource.get('resource_name')
+                rid = resource.get('id')
+                if not rname:
+                    continue
+                dict_key = rname if rname not in exposed else f"__id_{rid}"
+                exposed[dict_key] = ExposureDetail(
+                    resource_name=rname,
+                    resource_id=rid,
+                    exposure_type='finding',
+                    confidence='medium',
+                    reason='Public exposure inferred from finding text with missing resource mapping',
+                    color=self.COLORS['finding'],
+                    detection_methods=['Finding (fallback mapping)'],
+                )
 
         return exposed
 

@@ -2728,27 +2728,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                         if row and row["path"]:
                             p = Path(row["path"]).expanduser().resolve()
                             if p.exists() and p.is_dir():
-                                # Create a temporary copy inside the server's Output/WorkingCopies folder
-                                wc_root = REPO_ROOT / "Output" / "WorkingCopies"
-                                wc_root.mkdir(parents=True, exist_ok=True)
-                                dest = wc_root / f"{resolved_exp_id}_{repo_name}"
-                                # Remove any stale copy first
-                                if dest.exists():
-                                    try:
-                                        import shutil
-
-                                        shutil.rmtree(dest)
-                                    except Exception:
-                                        pass
-                                try:
-                                    import shutil
-
-                                    shutil.copytree(p, dest, dirs_exist_ok=True)
-                                    temp_copy_dir = dest
-                                    repo_cwd = str(dest)
-                                except Exception:
-                                    # Fall back to original repo path if copy fails
-                                    repo_cwd = str(p)
+                                # Use original repo path directly — changes to Rules/Scripts go directly to source
+                                repo_cwd = str(p)
                     finally:
                         conn2.close()
             except Exception:
@@ -4088,7 +4069,7 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
         out_dir = wc_root / f"{resolved_exp_id}_{repo_name}"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / "generated_rules.txt"
-        rules_out_dir = REPO_ROOT / "Rules" / "Generated" / f"{resolved_exp_id}_{repo_name}"
+        rules_out_dir = REPO_ROOT / "Rules"
 
         copilot_cmd, copilot_err = _resolve_copilot_command()
         if copilot_err:
@@ -4169,7 +4150,7 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
                 except Exception as parse_err:
                     _append_ai_job_log(key_local, f"Rule parsing warning: {parse_err}")
 
-            _append_ai_job_log(key_local, f"Rule generation completed — {saved_count} rule(s) saved to Rules/Generated/")
+            _append_ai_job_log(key_local, f"Rule generation completed — {saved_count} rule(s) saved to Rules/")
             with _AI_ANALYSIS_LOCK:
                 job = _AI_ANALYSIS_JOBS.get(key_local, {})
                 job["status"] = "completed" if popen.returncode == 0 else "failed"

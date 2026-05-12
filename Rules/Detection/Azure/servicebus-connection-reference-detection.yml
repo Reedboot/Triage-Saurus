@@ -1,0 +1,33 @@
+rules:
+  - id: context-terraform-servicebus-connection-config
+    message: |
+      Service Bus connection configuration detected in Terraform module.
+      This indicates a workload is configured to communicate with Service Bus
+      for message-based communication (pub/sub, queue operations).
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-regex: 'ServiceBus__FullyQualifiedNamespace\s*=\s*'
+      - patterns:
+          - pattern-regex: '\.servicebus\.windows\.net'
+      - patterns:
+          - pattern-regex: 'service_bus\s*=\s*\{'
+    metadata:
+      finding_kind: Connection
+      connection_type: resource_reference
+      asset_provider: azure
+      rule_type: connection_discovery
+      category: infrastructure
+      subcategory: messaging
+      technology: [terraform, azure, service-bus]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        connection_type: ServiceBusConnection
+        connection_target: Service Bus Namespace
+        namespace_reference: $VALUE
+      description: |
+        Detects Service Bus connection configuration in Terraform modules and resources.
+        When found in AKS module config blocks, indicates the deployed workload depends on
+        or communicates with Service Bus for message processing (topics, queues, subscriptions).
+        Used to infer data flow edges between workloads and messaging infrastructure.

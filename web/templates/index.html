@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Triage-Saurus — Repo Scanner</title>
+  <title>Triage-Saurus</title>
   <link rel="stylesheet" href="/static/tailwind.css?v=1" />
   <script src="/static/js/alpine-store.js?v=1" defer></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
@@ -24,9 +24,8 @@
   <header>
     <form id="scan-form" action="/scan" method="POST" class="header-scan-form">
       <div class="header-left-controls">
-        <label for="repo-select" class="header-field-label">Repository</label>
         <select id="repo-select" name="repo_path" required>
-          <option value="" disabled selected>— select a repository —</option>
+          <option value="" disabled selected>— choose a repo —</option>
           {% for repo in repos %}
           {% if repo.found %}
           <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
@@ -41,7 +40,7 @@
       <div class="header-brand">
         <span class="dino">🦖</span>
         <h1>Triage-Saurus</h1>
-        <span class="badge">Repo Scanner</span>
+        <span class="dino">🦖</span>
       </div>
 
       <div class="header-right-controls">
@@ -229,7 +228,6 @@
                 <span class="diagram-legend-swatch potential"></span>
                 Potentially accessible
               </span>
-              <span class="diagram-legend-help">Scroll to pan · Ctrl+scroll to zoom · F to fit · Esc to exit fullscreen</span>
             </footer>
           </div>
 

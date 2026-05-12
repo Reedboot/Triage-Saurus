@@ -54,6 +54,30 @@ class TestInternetExposureDetector:
         assert exposed['webapp-001'].exposure_type == 'finding'
         assert exposed['webapp-001'].confidence == 'high'
         assert exposed['webapp-001'].color == '#ff0000'  # Red
+
+    def test_detect_by_findings_without_resource_id_uses_text_fallback(self):
+        """Findings without resource_id should still map obvious public bucket findings."""
+        detector = InternetExposureDetector('alicloud')
+        resources = [
+            {'id': 1, 'resource_name': 'bad_bucket', 'resource_type': 'alicloud_oss_bucket'},
+            {'id': 2, 'resource_name': 'trail', 'resource_type': 'alicloud_oss_bucket'},
+        ]
+        findings = [
+            {
+                'resource_id': None,
+                'rule_id': 'alicloud-oss-bucket-public-access',
+                'title': 'Alicloud Oss Bucket Public Access',
+                'description': 'Public access allows unauthenticated internet reads',
+                'context': [],
+            }
+        ]
+
+        exposed = detector.detect_exposed_resources(resources, [], findings=findings, properties=None)
+
+        assert 'bad_bucket' in exposed
+        assert 'trail' in exposed
+        assert exposed['bad_bucket'].exposure_type == 'finding'
+        assert exposed['bad_bucket'].color == '#ff0000'
     
     def test_detect_by_firewall_rules(self):
         """Test detection via firewall rules open to 0.0.0.0."""
@@ -97,7 +121,7 @@ class TestInternetExposureDetector:
         assert 'storage-001' in exposed
         assert exposed['storage-001'].exposure_type == 'property'
         assert exposed['storage-001'].confidence == 'medium'
-        assert exposed['storage-001'].color == '#ffff00'  # Yellow
+        assert exposed['storage-001'].color == '#ff9900'  # Orange
         
         assert 'sql-002' in exposed
         assert exposed['sql-002'].exposure_type == 'property'
@@ -240,8 +264,8 @@ class TestInternetExposureDetector:
         """Test that color codes are assigned correctly."""
         assert InternetExposureDetector.COLORS['finding'] == '#ff0000'       # Red
         assert InternetExposureDetector.COLORS['firewall_rule'] == '#ff9900' # Orange
-        assert InternetExposureDetector.COLORS['property'] == '#ffff00'      # Yellow
-        assert InternetExposureDetector.COLORS['heuristic'] == '#ffff00'     # Yellow
+        assert InternetExposureDetector.COLORS['property'] == '#ff9900'      # Orange
+        assert InternetExposureDetector.COLORS['heuristic'] == '#ff9900'     # Orange
     
     def test_multiple_providers_independent(self):
         """Test that detectors are independent per provider."""
@@ -307,7 +331,7 @@ class TestMergeExposureDetections:
             'resource-1': ExposureDetail('resource-1', 1, 'finding', 'high', 'Test 1', '#ff0000')
         }
         dict2 = {
-            'resource-2': ExposureDetail('resource-2', 2, 'property', 'medium', 'Test 2', '#ffff00')
+            'resource-2': ExposureDetail('resource-2', 2, 'property', 'medium', 'Test 2', '#ff9900')
         }
         
         merged = merge_exposure_detections([dict1, dict2])
@@ -319,7 +343,7 @@ class TestMergeExposureDetections:
     def test_merge_with_duplicates_keeps_highest_confidence(self):
         """Test that duplicate resources keep highest confidence."""
         dict1 = {
-            'resource-1': ExposureDetail('resource-1', 1, 'heuristic', 'low', 'Test', '#ffff00')
+            'resource-1': ExposureDetail('resource-1', 1, 'heuristic', 'low', 'Test', '#ff9900')
         }
         dict2 = {
             'resource-1': ExposureDetail('resource-1', 1, 'finding', 'high', 'Test', '#ff0000')

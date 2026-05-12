@@ -6,6 +6,7 @@ Workflow:
 2. Start scans with bounded concurrency (default: 6).
 3. Process results as each repo completes (timeouts fail fast and move on).
 4. Retry failed repositories once after the primary pass.
+   - Optional strict mode: retry immediately per-repo before continuing.
 5. Capture provider-tab screenshots for each completed experiment.
 6. Detect disconnected/orphan nodes in Mermaid diagrams.
 7. Enrich orphan findings with repo evidence hints and provider-default references.
@@ -20,6 +21,8 @@ import argparse
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -182,7 +185,10 @@ class ScanResult:
     orphan_issues: list[dict[str, Any]] | None = None
     connection_issues: list[dict[str, Any]] | None = None
     parity_issues: list[dict[str, Any]] | None = None
+    resource_value_assessments: list[dict[str, Any]] | None = None
     rule_candidates: list[dict[str, Any]] | None = None
+    detection_rules: list[dict[str, Any]] | None = None
+    rule_validations: list[dict[str, Any]] | None = None
 
 
 def _result_repo_key(repo_name: str, repo_path: str) -> tuple[str, str]:
@@ -200,7 +206,10 @@ def scan_result_to_dict(result: ScanResult) -> dict[str, Any]:
         "orphan_issues": result.orphan_issues or [],
         "connection_issues": result.connection_issues or [],
         "parity_issues": result.parity_issues or [],
+        "resource_value_assessments": result.resource_value_assessments or [],
         "rule_candidates": result.rule_candidates or [],
+        "detection_rules": result.detection_rules or [],
+        "rule_validations": result.rule_validations or [],
     }
 
 
@@ -253,7 +262,10 @@ def make_failed_result(repo: RepoOption, error: str) -> ScanResult:
         orphan_issues=[],
         connection_issues=[],
         parity_issues=[],
+        resource_value_assessments=[],
         rule_candidates=[],
+        detection_rules=[],
+        rule_validations=[],
     )
 
 
@@ -409,6 +421,9 @@ def _extract_node_ids(code: str) -> set[str]:
         lower = s.lower()
         if lower.startswith(("flowchart", "subgraph", "classdef", "class ", "style ", "linkstyle", "end")):
             continue
+        service_match = re.match(r"service\s+([A-Za-z][A-Za-z0-9_]*)\b", s)
+        if service_match:
+            node_ids.add(service_match.group(1))
         for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9_]*)\s*[\[\(\{]", s):
             node_ids.add(m.group(1))
     return node_ids
@@ -416,7 +431,9 @@ def _extract_node_ids(code: str) -> set[str]:
 
 def _extract_edges(code: str) -> list[tuple[str, str]]:
     edges: list[tuple[str, str]] = []
-    edge_re = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*(?:-->|-\.->|==>)\s*([A-Za-z][A-Za-z0-9_]*)")
+    edge_re = re.compile(
+        r"([A-Za-z][A-Za-z0-9_]*)(?::[LTRB])?\s*(?:-->|-\.->|==>)\s*(?:[LTRB]:)?\s*([A-Za-z][A-Za-z0-9_]*)"
+    )
     for line in code.splitlines():
         s = line.strip()
         if not s or s.startswith("%%"):
@@ -431,6 +448,14 @@ def _extract_edges(code: str) -> list[tuple[str, str]]:
 
 def _extract_node_label_map(code: str) -> dict[str, str]:
     labels: dict[str, str] = {}
+    architecture_service_re = re.compile(
+        r"service\s+([A-Za-z][A-Za-z0-9_]*)\s*(?:\([^\)]*\))?\s*\[([^\]]{1,200})\]"
+    )
+    for m in architecture_service_re.finditer(code):
+        node_id = m.group(1)
+        label = m.group(2).strip().strip('"').strip("'").strip()
+        if label:
+            labels[node_id] = label
     pattern = re.compile(
         r"\b([A-Za-z][A-Za-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)([^\]\)\}\n]{1,200})",
     )
@@ -445,6 +470,86 @@ def _extract_node_label_map(code: str) -> dict[str, str]:
 def _extract_diagram_text(code: str) -> str:
     labels = _extract_node_label_map(code)
     return " ".join(labels.values()).lower()
+
+
+LOW_VALUE_TERMS = (
+    "legend",
+    "note",
+    "notes",
+    "example",
+    "placeholder",
+)
+
+HIGH_VALUE_TERMS = (
+    "internet",
+    "public",
+    "gateway",
+    "ingress",
+    "egress",
+    "identity",
+    "auth",
+    "token",
+    "key vault",
+    "kms",
+    "secret",
+    "database",
+    "storage",
+    "bucket",
+    "queue",
+    "topic",
+    "message",
+)
+
+CONTEXTUAL_TERMS = (
+    "service",
+    "backend",
+    "frontend",
+    "api",
+    "app",
+    "function",
+    "lambda",
+    "worker",
+    "container",
+    "cluster",
+)
+
+
+def classify_resource_value(resource_hint: str) -> dict[str, str]:
+    text = (resource_hint or "").lower()
+    if any(term in text for term in LOW_VALUE_TERMS):
+        return {
+            "classification": "low_value",
+            "rationale": "Looks like non-architectural noise/annotation rather than a threat-path component.",
+        }
+    if any(term in text for term in HIGH_VALUE_TERMS):
+        return {
+            "classification": "high_value",
+            "rationale": "Directly impacts exposure, trust boundaries, identity, or data-path threat analysis.",
+        }
+    if any(term in text for term in CONTEXTUAL_TERMS):
+        return {
+            "classification": "contextual",
+            "rationale": "Provides service-flow context even if not a primary exposure/data boundary node.",
+        }
+    # Broad default selected by user: include most resources unless obvious noise.
+    return {
+        "classification": "contextual",
+        "rationale": "Broad default: keep likely architecture context unless clearly noisy.",
+    }
+
+
+def annotate_issue_with_value(issue: dict[str, Any]) -> dict[str, Any]:
+    hint = " ".join(
+        [
+            str(issue.get("node_id") or ""),
+            str(issue.get("expected_asset") or ""),
+            str(issue.get("description") or ""),
+            str(issue.get("diagram_title") or ""),
+        ]
+    )
+    value = classify_resource_value(hint)
+    issue["value_assessment"] = value
+    return issue
 
 
 def _path_exists(edges: list[tuple[str, str]], sources: set[str], targets: set[str]) -> bool:
@@ -679,6 +784,114 @@ def write_rule_candidate_stubs(
     return written
 
 
+def write_detection_rules(
+    repo: RepoOption,
+    issues: list[dict[str, Any]],
+    rules_dir: Path = REPO_ROOT / "Rules" / "Detection",
+) -> list[dict[str, Any]]:
+    """Write concrete detection rules for evidence-backed diagram coverage gaps."""
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    written: list[dict[str, Any]] = []
+    for issue in issues:
+        evidence_files = issue.get("repo_evidence_files") or []
+        if not evidence_files:
+            continue
+        provider = issue.get("provider") or "unknown"
+        issue_type = issue.get("issue_type") or "coverage_gap"
+        issue_key = issue.get("node_id") or issue.get("expected_asset") or issue_type
+        clean_node = _slug(str(issue_key).lower())
+        rule_id = f"diagram-gap-{provider}-{clean_node}-detection"
+        pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
+        rule_file = rules_dir / f"{rule_id}.yml"
+        content = "\n".join(
+            [
+                "rules:",
+                f"  - id: {rule_id}",
+                "    message: |",
+                f"      Diagram coverage gap detected for '{issue_key}' in repo '{repo.name}'.",
+                "      Resource appears in repo evidence but diagram is missing a required connection or representation.",
+                "    severity: WARNING",
+                "    languages: [regex]",
+                "    patterns:",
+                f"      - pattern-regex: '{pattern_regex}'",
+                "    metadata:",
+                "      category: security",
+                "      subcategory: [asset-discovery-gap]",
+                f"      technology: [{provider}]",
+                "      finding_kind: asset_detection",
+                "      generated_by: web_parallel_scan_validator",
+            ]
+        ) + "\n"
+        rule_file.write_text(content, encoding="utf-8")
+        written.append(
+            {
+                "rule_id": rule_id,
+                "rule_file": str(rule_file),
+                "issue_type": issue_type,
+                "source_issue_key": str(issue_key),
+                "repo_name": repo.name,
+                "validate_command": f"opengrep scan --config {rule_file} {repo.path}",
+            }
+        )
+    return written
+
+
+def validate_rules_with_opengrep(
+    rules: list[dict[str, Any]],
+    repo_path: str,
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    """Validate generated rules with opengrep scan --config <rule> <repo>."""
+    validations: list[dict[str, Any]] = []
+    opengrep_bin = shutil.which("opengrep")
+    for rule in rules:
+        rule_file = rule.get("rule_file")
+        command = ["opengrep", "scan", "--config", str(rule_file), str(repo_path)]
+        if not opengrep_bin:
+            validations.append(
+                {
+                    "rule_id": rule.get("rule_id"),
+                    "rule_file": rule_file,
+                    "status": "failed",
+                    "exit_code": None,
+                    "error": "opengrep binary not found on PATH",
+                    "command": " ".join(command),
+                }
+            )
+            continue
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+            validations.append(
+                {
+                    "rule_id": rule.get("rule_id"),
+                    "rule_file": rule_file,
+                    "status": "passed" if proc.returncode == 0 else "failed",
+                    "exit_code": proc.returncode,
+                    "command": " ".join(command),
+                    "stdout_tail": (proc.stdout or "")[-1000:],
+                    "stderr_tail": (proc.stderr or "")[-1000:],
+                }
+            )
+        except subprocess.TimeoutExpired:
+            validations.append(
+                {
+                    "rule_id": rule.get("rule_id"),
+                    "rule_file": rule_file,
+                    "status": "failed",
+                    "exit_code": None,
+                    "error": f"opengrep validation timed out after {timeout_sec}s",
+                    "command": " ".join(command),
+                }
+            )
+    return validations
+
+
 async def discover_repos(page) -> list[RepoOption]:
     await page.goto("/", wait_until="domcontentloaded")
     await page.wait_for_selector("#repo-select")
@@ -823,7 +1036,7 @@ async def collect_diagram_validation_issues(
     repo: RepoOption,
     experiment_id: str,
     logger: ProgressLogger,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     escaped_repo = quote(repo.api_key, safe="")
     response = await page.request.get(f"/api/diagrams/{experiment_id}?repo_name={escaped_repo}")
     if not response.ok:
@@ -833,6 +1046,7 @@ async def collect_diagram_validation_issues(
     orphan_issues: list[dict[str, Any]] = []
     connection_issues: list[dict[str, Any]] = []
     parity_issues: list[dict[str, Any]] = []
+    resource_value_assessments: list[dict[str, Any]] = []
     repo_root = Path(repo.path)
     expected_assets = infer_expected_assets(repo_root) if repo_root.is_dir() else {}
     for d in diagrams:
@@ -851,13 +1065,32 @@ async def collect_diagram_validation_issues(
                 "repo_evidence_files": evidence,
                 "provider_default_refs": refs,
             }
-            orphan_issues.append(issue)
+            orphan_issues.append(annotate_issue_with_value(issue))
+            resource_value_assessments.append(
+                {
+                    "issue_type": "orphan_node",
+                    "resource_hint": orphan,
+                    "diagram_title": title,
+                    "provider": provider,
+                    "value_assessment": orphan_issues[-1]["value_assessment"],
+                }
+            )
             await logger.warn(
                 f"{repo.name}: orphan node '{orphan}' in '{title}' "
                 f"(evidence_files={len(evidence)}, provider_refs={len(refs)})"
             )
         missing_connections = detect_missing_connections(code, provider, title)
-        connection_issues.extend(missing_connections)
+        for issue in missing_connections:
+            connection_issues.append(annotate_issue_with_value(issue))
+            resource_value_assessments.append(
+                {
+                    "issue_type": issue.get("issue_type"),
+                    "resource_hint": issue.get("issue_type"),
+                    "diagram_title": title,
+                    "provider": provider,
+                    "value_assessment": connection_issues[-1]["value_assessment"],
+                }
+            )
         for issue in missing_connections:
             await logger.warn(f"{repo.name}: {issue['issue_type']} in '{title}'")
 
@@ -867,13 +1100,23 @@ async def collect_diagram_validation_issues(
             diagram_title=title,
             expected_assets=expected_assets,
         )
-        parity_issues.extend(parity)
+        for issue in parity:
+            parity_issues.append(annotate_issue_with_value(issue))
+            resource_value_assessments.append(
+                {
+                    "issue_type": issue.get("issue_type"),
+                    "resource_hint": issue.get("expected_asset"),
+                    "diagram_title": title,
+                    "provider": provider,
+                    "value_assessment": parity_issues[-1]["value_assessment"],
+                }
+            )
         for issue in parity:
             await logger.warn(
                 f"{repo.name}: docs+IaC parity gap '{issue.get('expected_asset', 'unknown')}' in '{title}' "
                 f"(evidence_files={len(issue.get('repo_evidence_files') or [])})"
             )
-    return orphan_issues, connection_issues, parity_issues
+    return orphan_issues, connection_issues, parity_issues, resource_value_assessments
 
 
 async def scan_repo_worker(
@@ -883,6 +1126,9 @@ async def scan_repo_worker(
     screenshots_dir: Path,
     candidate_rules_dir: Path,
     write_rule_candidates: bool,
+    write_detection_rules_enabled: bool,
+    validate_detection_rules_enabled: bool,
+    opengrep_timeout_sec: int,
     scan_complete_timeout_sec: int,
     logger: ProgressLogger,
 ) -> ScanResult:
@@ -909,19 +1155,38 @@ async def scan_repo_worker(
             output_dir=screenshots_dir,
             logger=logger,
         )
-        orphan_issues, connection_issues, parity_issues = await collect_diagram_validation_issues(
+        orphan_issues, connection_issues, parity_issues, resource_value_assessments = await collect_diagram_validation_issues(
             page,
             repo,
             experiment_id,
             logger,
         )
         rule_candidates: list[dict[str, Any]] = []
+        detection_rules: list[dict[str, Any]] = []
+        rule_validations: list[dict[str, Any]] = []
         candidate_input = [*orphan_issues, *connection_issues, *parity_issues]
         if write_rule_candidates and candidate_input:
             rule_candidates = write_rule_candidate_stubs(repo, candidate_input, candidate_rules_dir)
             if rule_candidates:
                 await logger.improvement(
                     f"{repo.name}: wrote {len(rule_candidates)} candidate detection rules"
+                )
+        if write_detection_rules_enabled and candidate_input:
+            detection_rules = write_detection_rules(repo, candidate_input)
+            if detection_rules:
+                await logger.improvement(
+                    f"{repo.name}: wrote {len(detection_rules)} detection rule(s) to Rules/Detection"
+                )
+            if validate_detection_rules_enabled and detection_rules:
+                rule_validations = validate_rules_with_opengrep(
+                    detection_rules,
+                    repo.path,
+                    timeout_sec=opengrep_timeout_sec,
+                )
+                passed = sum(1 for r in rule_validations if r.get("status") == "passed")
+                failed = len(rule_validations) - passed
+                await logger.improvement(
+                    f"{repo.name}: opengrep validation complete for generated rules (passed={passed}, failed={failed})"
                 )
 
         if candidate_input:
@@ -938,7 +1203,10 @@ async def scan_repo_worker(
             orphan_issues=orphan_issues,
             connection_issues=connection_issues,
             parity_issues=parity_issues,
+            resource_value_assessments=resource_value_assessments,
             rule_candidates=rule_candidates,
+            detection_rules=detection_rules,
+            rule_validations=rule_validations,
         )
     except TimeoutError as exc:
         await logger.warn(
@@ -954,7 +1222,10 @@ async def scan_repo_worker(
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            resource_value_assessments=[],
             rule_candidates=[],
+            detection_rules=[],
+            rule_validations=[],
         )
     except Exception as exc:  # explicit surface, no silent failure
         await logger.error(f"{repo.name}: failed with error: {exc}")
@@ -968,7 +1239,10 @@ async def scan_repo_worker(
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            resource_value_assessments=[],
             rule_candidates=[],
+            detection_rules=[],
+            rule_validations=[],
         )
     finally:
         await context.close()
@@ -994,8 +1268,9 @@ async def run(args: argparse.Namespace) -> int:
     logger = ProgressLogger(run_dir / "improvements.log")
     await logger.info("Starting headless web scan validator")
     await logger.info(f"Base URL: {args.base_url}")
-    worker_concurrency = effective_concurrency(args.mode, args.concurrency)
+    worker_concurrency = 1 if args.repo_at_a_time else effective_concurrency(args.mode, args.concurrency)
     await logger.info(f"Mode: {args.mode}")
+    await logger.info(f"Repo-at-a-time: {bool(args.repo_at_a_time)}")
     await logger.info(f"Concurrency: {worker_concurrency} (requested={args.concurrency})")
     await logger.info(f"Per-repo completion timeout: {args.scan_complete_timeout_sec}s")
 
@@ -1054,51 +1329,59 @@ async def run(args: argparse.Namespace) -> int:
                 semaphore = asyncio.Semaphore(worker_concurrency)
                 worker_timeout_sec = args.scan_complete_timeout_sec + WORKER_TIMEOUT_GRACE_SEC
 
+                async def _run_one(repo: RepoOption, pass_name: str) -> ScanResult:
+                    async with semaphore:
+                        try:
+                            result = await asyncio.wait_for(
+                                scan_repo_worker(
+                                    browser=browser,
+                                    base_url=args.base_url,
+                                    repo=repo,
+                                    screenshots_dir=screenshots_dir,
+                                    candidate_rules_dir=candidates_dir,
+                                    write_rule_candidates=bool(args.write_rule_candidates),
+                                    write_detection_rules_enabled=bool(args.write_detection_rules),
+                                    validate_detection_rules_enabled=bool(args.validate_detection_rules),
+                                    opengrep_timeout_sec=args.opengrep_timeout_sec,
+                                    scan_complete_timeout_sec=args.scan_complete_timeout_sec,
+                                    logger=logger,
+                                ),
+                                timeout=worker_timeout_sec,
+                            )
+                        except TimeoutError:
+                            msg = (
+                                f"{repo.name}: worker lifecycle timeout after {worker_timeout_sec}s; "
+                                "marking failed and continuing"
+                            )
+                            await logger.warn(msg)
+                            result = make_failed_result(repo, msg)
+                        except Exception as exc:
+                            await logger.error(f"{repo.name}: worker crashed unexpectedly: {exc}")
+                            result = make_failed_result(repo, str(exc))
+                        if result.status == "completed":
+                            await logger.info(f"{repo.name}: {pass_name} pass ended with status=completed")
+                        else:
+                            await logger.warn(
+                                f"{repo.name}: {pass_name} pass ended with status=failed; "
+                                "batch will continue without stalling"
+                            )
+                        return result
+
                 async def execute_pass(pass_name: str, target_repos: list[RepoOption]) -> list[ScanResult]:
                     await logger.info(f"Starting {pass_name} pass for {len(target_repos)} repo(s)")
                     pass_results: list[ScanResult] = []
-
-                    async def _run_one(repo: RepoOption):
-                        async with semaphore:
-                            try:
-                                result = await asyncio.wait_for(
-                                    scan_repo_worker(
-                                        browser=browser,
-                                        base_url=args.base_url,
-                                        repo=repo,
-                                        screenshots_dir=screenshots_dir,
-                                        candidate_rules_dir=candidates_dir,
-                                        write_rule_candidates=bool(args.write_rule_candidates),
-                                        scan_complete_timeout_sec=args.scan_complete_timeout_sec,
-                                        logger=logger,
-                                    ),
-                                    timeout=worker_timeout_sec,
-                                )
-                            except TimeoutError:
-                                msg = (
-                                    f"{repo.name}: worker lifecycle timeout after {worker_timeout_sec}s; "
-                                    "marking failed and continuing"
-                                )
-                                await logger.warn(msg)
-                                result = make_failed_result(repo, msg)
-                            except Exception as exc:
-                                await logger.error(f"{repo.name}: worker crashed unexpectedly: {exc}")
-                                result = make_failed_result(repo, str(exc))
-                            pass_results.append(result)
-                            if result.status == "completed":
-                                await logger.info(f"{repo.name}: {pass_name} pass ended with status=completed")
-                            else:
-                                await logger.warn(
-                                    f"{repo.name}: {pass_name} pass ended with status=failed; "
-                                    "batch will continue without stalling"
-                                )
-
                     if args.mode == "serial":
                         for repo in target_repos:
-                            await _run_one(repo)
+                            pass_results.append(await _run_one(repo, pass_name))
                     else:
-                        tasks = [asyncio.create_task(_run_one(repo)) for repo in target_repos]
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        tasks = [asyncio.create_task(_run_one(repo, pass_name)) for repo in target_repos]
+                        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+                        for repo, outcome in zip(target_repos, outcomes):
+                            if isinstance(outcome, Exception):
+                                await logger.error(f"{repo.name}: worker crashed unexpectedly: {outcome}")
+                                pass_results.append(make_failed_result(repo, str(outcome)))
+                            else:
+                                pass_results.append(outcome)
                         pending_tasks = [task for task in tasks if not task.done()]
                         for task in pending_tasks:
                             task.cancel()
@@ -1111,24 +1394,33 @@ async def run(args: argparse.Namespace) -> int:
                     )
                     return pass_results
 
-                primary_results = await execute_pass("primary", repos)
-                primary_failed_keys = {
-                    _result_repo_key(result.repo_name, result.repo_path)
-                    for result in primary_results
-                    if result.status != "completed"
-                }
-                retry_repos = [
-                    repo for repo in repos if _result_repo_key(repo.name, repo.path) in primary_failed_keys
-                ]
-                if retry_repos:
-                    await logger.warn(
-                        f"Primary pass complete; retrying failed repos once at end: "
-                        f"{[repo.name for repo in retry_repos]}"
-                    )
-                    retry_results = await execute_pass("retry", retry_repos)
-                    await logger.info("Retry pass complete")
+                if args.repo_at_a_time:
+                    await logger.info("Repo-at-a-time mode enabled: strict serial execution with immediate retry")
+                    for repo in repos:
+                        primary_result = await _run_one(repo, "primary")
+                        primary_results.append(primary_result)
+                        if primary_result.status != "completed":
+                            await logger.warn(f"{repo.name}: retrying immediately before continuing to next repo")
+                            retry_results.append(await _run_one(repo, "retry"))
                 else:
-                    await logger.info("Primary pass complete with no failed repos; retry pass skipped")
+                    primary_results = await execute_pass("primary", repos)
+                    primary_failed_keys = {
+                        _result_repo_key(result.repo_name, result.repo_path)
+                        for result in primary_results
+                        if result.status != "completed"
+                    }
+                    retry_repos = [
+                        repo for repo in repos if _result_repo_key(repo.name, repo.path) in primary_failed_keys
+                    ]
+                    if retry_repos:
+                        await logger.warn(
+                            f"Primary pass complete; retrying failed repos once at end: "
+                            f"{[repo.name for repo in retry_repos]}"
+                        )
+                        retry_results = await execute_pass("retry", retry_repos)
+                        await logger.info("Retry pass complete")
+                    else:
+                        await logger.info("Primary pass complete with no failed repos; retry pass skipped")
 
                 final_results = merge_final_results(primary_results, retry_results)
     except Exception as exc:
@@ -1163,9 +1455,13 @@ async def run(args: argparse.Namespace) -> int:
         "run_timestamp": run_stamp,
         "base_url": args.base_url,
         "mode": args.mode,
+        "repo_at_a_time": bool(args.repo_at_a_time),
         "concurrency": args.concurrency,
         "effective_concurrency": worker_concurrency,
         "scan_complete_timeout_sec": args.scan_complete_timeout_sec,
+        "write_detection_rules": bool(args.write_detection_rules),
+        "validate_detection_rules": bool(args.validate_detection_rules),
+        "opengrep_timeout_sec": args.opengrep_timeout_sec,
         "partition_count": args.partition_count,
         "partition_index": args.partition_index,
         "repos_discovered_from_dropdown": len(dropdown_repos),
@@ -1179,6 +1475,14 @@ async def run(args: argparse.Namespace) -> int:
         "primary_failed": sum(1 for r in primary_results if r.status != "completed"),
         "retry_attempted": len(retry_results),
         "retry_recovered": sum(1 for r in retry_results if r.status == "completed"),
+        "detection_rules_written": sum(len(r.detection_rules or []) for r in final_results),
+        "detection_rules_validated": sum(len(r.rule_validations or []) for r in final_results),
+        "detection_rule_validation_failed": sum(
+            1
+            for r in final_results
+            for v in (r.rule_validations or [])
+            if v.get("status") != "passed"
+        ),
         "retried_repos": retry_metadata,
         "completed": sum(1 for r in final_results if r.status == "completed"),
         "failed": sum(1 for r in final_results if r.status != "completed"),
@@ -1207,6 +1511,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Web UI base URL (default: http://127.0.0.1:9000)")
     parser.add_argument("--concurrency", type=int, default=6, help="Maximum concurrent scans (default: 6)")
     parser.add_argument(
+        "--repo-at-a-time",
+        action="store_true",
+        help="Force strict one-repo-at-a-time execution with immediate retry on failure.",
+    )
+    parser.add_argument(
         "--mode",
         choices=("parallel", "serial"),
         default="parallel",
@@ -1228,6 +1537,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Write candidate detection rules for orphan nodes with repo evidence",
     )
+    parser.add_argument(
+        "--write-detection-rules",
+        action="store_true",
+        help="Write evidence-backed detection rules under Rules/Detection/ for confirmed diagram gaps.",
+    )
+    parser.add_argument(
+        "--validate-detection-rules",
+        action="store_true",
+        help="Validate generated Rules/Detection rules with opengrep scan --config <rule> <repo>.",
+    )
+    parser.add_argument(
+        "--opengrep-timeout-sec",
+        type=int,
+        default=120,
+        help="Timeout in seconds for each generated rule opengrep validation run (default: 120).",
+    )
     return parser.parse_args(argv)
 
 
@@ -1238,6 +1563,12 @@ def main() -> int:
         return 2
     if args.scan_complete_timeout_sec < 1:
         print("--scan-complete-timeout-sec must be >= 1", flush=True)
+        return 2
+    if args.opengrep_timeout_sec < 1:
+        print("--opengrep-timeout-sec must be >= 1", flush=True)
+        return 2
+    if args.validate_detection_rules and not args.write_detection_rules:
+        print("--validate-detection-rules requires --write-detection-rules", flush=True)
         return 2
     try:
         args.partition_count, args.partition_index = validate_partition_args(

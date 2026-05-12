@@ -436,6 +436,116 @@ def infer_data_flows(experiment_id: str, db_path=None) -> int:
         conn.close()
 
 
+def infer_module_to_servicebus_connections(experiment_id: str, db_path=None) -> int:
+    """
+    Infer connections between AKS module deployments and Service Bus.
+    This function looks for:
+    - Findings from terraform-aks-module-deployment-detection (indicates AKS workload)
+    - Findings from servicebus-connection-reference-detection (indicates SB connection)
+    Within the same module/file context, creates a data_access connection.
+    
+    Returns count of connections added.
+    """
+    db = db_path or db_helpers.DB_PATH
+    conn = sqlite3.connect(str(db), timeout=30)
+    conn.row_factory = sqlite3.Row
+    
+    try:
+        experiment_id = str(experiment_id)
+        
+        # Fetch findings related to AKS modules and Service Bus connections
+        cursor = conn.cursor()
+        
+        # Get all module deployments from the new rule
+        module_findings = cursor.execute(
+            """SELECT DISTINCT 
+                   f.source_file, f.source_line_start, f.source_line_end,
+                   f.rule_id, f.title
+              FROM findings f
+              WHERE f.experiment_id = ?
+                AND f.rule_id = 'context-terraform-aks-module-deployment'""",
+            (experiment_id,)
+        ).fetchall()
+        
+        if not module_findings:
+            return 0  # No AKS modules found
+        
+        # Get all Service Bus connection findings
+        sb_findings = cursor.execute(
+            """SELECT DISTINCT 
+                   f.source_file, f.source_line_start, f.source_line_end,
+                   f.rule_id, f.title
+              FROM findings f
+              WHERE f.experiment_id = ?
+                AND f.rule_id = 'context-terraform-servicebus-connection-config'""",
+            (experiment_id,)
+        ).fetchall()
+        
+        if not sb_findings:
+            return 0  # No SB connections found
+        
+        new_connections = []
+        existing_pairs = set()
+        
+        # For each module, look for service bus references in nearby files/modules
+        for mod_finding in module_findings:
+            mod_file = mod_finding["source_file"]
+            
+            # Look for SB findings in the same file (indicates module uses SB)
+            for sb_finding in sb_findings:
+                sb_file = sb_finding["source_file"]
+                
+                # Same file or same directory = likely connection
+                if mod_file == sb_file or (mod_file and sb_file and 
+                    str(mod_file).rsplit('/', 1)[0] == str(sb_file).rsplit('/', 1)[0]):
+                    
+                    # Try to find corresponding resources
+                    # Look for terraform_aks_module_deployment resources
+                    src_resources = cursor.execute(
+                        """SELECT id, resource_name, resource_type 
+                           FROM resources
+                           WHERE experiment_id = ?
+                             AND resource_type = 'terraform_aks_module_deployment'
+                             AND source_file = ?
+                             LIMIT 1""",
+                        (experiment_id, mod_file)
+                    ).fetchall()
+                    
+                    # Look for Service Bus resources
+                    tgt_resources = cursor.execute(
+                        """SELECT id, resource_name, resource_type
+                           FROM resources
+                           WHERE experiment_id = ?
+                             AND resource_type IN ('azurerm_servicebus_namespace', 'azurerm_servicebus_queue', 
+                                                   'azurerm_servicebus_topic')
+                           LIMIT 1""",
+                        (experiment_id,)
+                    ).fetchall()
+                    
+                    if src_resources and tgt_resources:
+                        src = src_resources[0]
+                        tgt = tgt_resources[0]
+                        if (src["id"], tgt["id"]) not in existing_pairs:
+                            new_connections.append((src["id"], tgt["id"], "data_access", experiment_id))
+                            existing_pairs.add((src["id"], tgt["id"]))
+        
+        # Persist new connections
+        if new_connections:
+            cursor.executemany(
+                """INSERT OR IGNORE INTO resource_connections
+                   (source_resource_id, target_resource_id, connection_type, experiment_id)
+                   VALUES (?, ?, ?, ?)""",
+                new_connections
+            )
+            conn.commit()
+            return len(new_connections)
+        
+        return 0
+    
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Infer semantic resource connections")
     parser.add_argument("--experiment", required=True)
@@ -446,6 +556,10 @@ def main():
         print(f"[*] Inferring semantic connections for experiment {args.experiment}", flush=True)
         count = infer_connections(args.experiment, args.db_path)
         print(f"[+] Added {count} semantic connections", flush=True)
+        
+        print("[*] Inferring module-to-service-bus connections...", flush=True)
+        sb_count = infer_module_to_servicebus_connections(args.experiment, args.db_path)
+        print(f"[+] Added {sb_count} module-to-service-bus connections", flush=True)
 
         print("[*] Storing data flows...", flush=True)
         flow_count = infer_data_flows(args.experiment, args.db_path)

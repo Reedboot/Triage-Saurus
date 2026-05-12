@@ -20,7 +20,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram
+from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram, get_repo_context
 import resource_type_db as _rtdb
 from internet_exposure_detector import InternetExposureDetector, ExposureDetail
 from icon_resolver import get_icon_data_uri, get_icon_class, get_fallback_icon_data_uri, get_icon_path
@@ -201,6 +201,7 @@ class HierarchicalDiagramBuilder:
         self.children_by_parent = defaultdict(list)
         self.emitted_nodes = set()
         self.connected_resource_names: Set[str] = set()
+        self.connected_resource_ids: Set[int] = set()
         # Maps resource_name → Mermaid node ID; populated by render_* methods so that
         # render_connections can use the correct (potentially prefixed) ID for edges.
         self.node_id_override: Dict[str, str] = {}
@@ -253,7 +254,33 @@ class HierarchicalDiagramBuilder:
         rt = (resource_type or "").lower()
         return rt not in _ARCHITECTURE_DIAGRAM_EXCLUSIONS
 
-
+    def _apply_repository_context(self) -> Optional[Dict]:
+        """Look up and apply repository context if available.
+        
+        Returns context dict if found, None otherwise.
+        Logs warning if context not yet confirmed.
+        """
+        if not self.repo_name:
+            return None
+        
+        try:
+            context = get_repo_context(self.repo_name)
+            if context:
+                if not context.get('confirmed_by'):
+                    print(f"  ⓘ Repository context for '{self.repo_name}' not yet confirmed by user.", 
+                          file=sys.stderr)
+                else:
+                    arch_type = context.get('architecture_type', 'unknown')
+                    services = context.get('services_produced', [])
+                    print(f"  ✓ Using confirmed context: {arch_type} ({len(services)} services)", 
+                          file=sys.stderr)
+                return context
+            else:
+                # Context not stored yet - this is OK for backward compatibility
+                return None
+        except Exception as e:
+            print(f"  ⚠ Error loading repository context: {e}", file=sys.stderr)
+            return None
 
     def _is_connected_name(self, name: str) -> bool:
         """Return True when a resource should be rendered based on connection participation.
@@ -263,6 +290,25 @@ class HierarchicalDiagramBuilder:
         if not self.connected_resource_names:
             return True
         return name in self.connected_resource_names
+
+    def _is_connected_resource(self, resource: Optional[dict]) -> bool:
+        """Return True when a resource participates in at least one rendered connection."""
+        if not resource:
+            return False
+        rid = resource.get('id')
+        if self.connected_resource_ids:
+            return rid in self.connected_resource_ids
+        return self._is_connected_name(resource.get('resource_name', ''))
+
+    def _is_exposed_resource(self, resource: Optional[dict]) -> bool:
+        """Return True when a resource is internet-exposed in detector output."""
+        if not resource:
+            return False
+        rid = resource.get('id')
+        if rid is not None:
+            return any(detail.resource_id == rid for detail in self.exposed_resources.values())
+        name = resource.get('resource_name')
+        return bool(name and name in self.exposed_resources)
 
     def _is_architecturally_significant(self, resource: dict) -> bool:
         """Return True for resources important enough to show even without connections.
@@ -783,7 +829,7 @@ class HierarchicalDiagramBuilder:
             findings = []
             with get_db_connection() as conn:
                 rows = conn.execute("""
-                    SELECT f.id, f.resource_id, f.category
+                    SELECT f.id, f.resource_id, f.category, f.rule_id, f.title, f.description, f.reason
                     FROM findings f
                     WHERE f.experiment_id = ?
                 """, [self.experiment_id]).fetchall()
@@ -793,6 +839,10 @@ class HierarchicalDiagramBuilder:
                         'id': row['id'],
                         'resource_id': row['resource_id'],
                         'finding_type': row['category'],
+                        'rule_id': row['rule_id'],
+                        'title': row['title'],
+                        'description': row['description'],
+                        'reason': row['reason'],
                         'context': [],
                     }
                     findings.append(finding)
@@ -3361,11 +3411,11 @@ class HierarchicalDiagramBuilder:
             
             res_type = (r.get('resource_type') or '').lower()
             is_workload_type = any(res_type == wt or res_type.endswith('_' + wt) for wt in _WORKLOAD_TYPES)
-            is_connected = self._is_connected_name(r.get('resource_name', ''))
-            is_significant = self._is_architecturally_significant(r)
+            is_connected = self._is_connected_resource(r)
+            is_exposed = self._is_exposed_resource(r)
             
-            # Include if: (1) is a workload type (always shown), (2) is connected, or (3) is architecturally significant
-            if is_workload_type or is_connected or is_significant:
+            # Include if: (1) is a workload type, (2) is connected, or (3) is explicitly internet-exposed
+            if is_workload_type or is_connected or is_exposed:
                 workload_ids_seen.add(r['id'])
                 workload_resources.append(r)
 
@@ -4210,8 +4260,13 @@ class HierarchicalDiagramBuilder:
                     target_name = target_resource.get('resource_name')
                     if target_name not in self.emitted_nodes:
                         continue
-                    
-                    tgt_id = _resolve_node_id(target_name)
+
+                    # Resolve by concrete resource object/ID to avoid collapsing
+                    # duplicate Terraform names (e.g., many resources named "example").
+                    if target_resource.get('id') is not None:
+                        tgt_id = self._get_node_id(target_resource)
+                    else:
+                        tgt_id = _resolve_node_id(target_name)
 
                     # Deduplicate: don't emit the same Internet→target edge twice
                     if ('internet', tgt_id) in {(e[1], e[2]) for e in edge_list}:
@@ -4756,6 +4811,9 @@ class HierarchicalDiagramBuilder:
         if not self.resources:
             self.load_data()
 
+        # Apply repository context if available
+        repo_context = self._apply_repository_context()
+        
         # Decide whether to include API operations (from DB or OpenAPI spec files).
         if self.include_api_operations is None:
             # Auto: show operations when there are few of them (avoids clutter on large APIs)
@@ -4793,6 +4851,12 @@ class HierarchicalDiagramBuilder:
             if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES
             for n in (c.get('source'), c.get('target'))
             if n and n != 'Internet'
+        }
+        self.connected_resource_ids = {
+            rid for c in self.connections
+            if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES
+            for rid in (c.get('source_id'), c.get('target_id'))
+            if isinstance(rid, int)
         }
         
         # Filter out children that will be rendered inside their parent subgraph.
@@ -5194,6 +5258,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in all_children
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
+            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
         ]
         app_related_ids = {r['id'] for r in app_resources}
         for app in app_resources:
@@ -5217,6 +5282,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in app_related_ids
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
+            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
         ]
         _sql_resource_ids_first = {r['id'] for r in sql_resources}
 
@@ -5232,6 +5298,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in _sql_resource_ids_first
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
+            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
         ]
 
         data_related_ids = {r['id'] for r in sql_resources}
@@ -5295,6 +5362,7 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in data_related_ids
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
+            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
         ]
 
         # Note: Compute and K8s resources are already rendered in network hierarchy above
@@ -5312,6 +5380,12 @@ class HierarchicalDiagramBuilder:
             if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES_REFRESH
             for n in (c.get('source'), c.get('target'))
             if n and n != 'Internet'
+        }
+        self.connected_resource_ids = {
+            rid for c in self.connections
+            if (c.get('connection_type') or '').lower() not in _ADMIN_EDGE_TYPES_REFRESH
+            for rid in (c.get('source_id'), c.get('target_id'))
+            if isinstance(rid, int)
         }
 
         other_resources = [
@@ -5347,9 +5421,8 @@ class HierarchicalDiagramBuilder:
                 and not self.children_by_parent.get(r.get('id'))
             )
             and (
-                self._is_connected_name(r.get('resource_name', ''))
-                or self._is_architecturally_significant(r)
-                or r.get('resource_name', '') in self.exposed_resources  # Include internet-exposed resources
+                self._is_connected_resource(r)
+                or self._is_exposed_resource(r)
             )
         ]
         
@@ -5565,7 +5638,7 @@ class HierarchicalDiagramBuilder:
             
             # Check if resource is publicly exposed
             # Note: Exposure risk is conveyed by yellow dotted arrows from internet node, not by node borders
-            if resource_name in self.exposed_resources:
+            if self._is_exposed_resource(resource):
                 continue
             
             # Get category

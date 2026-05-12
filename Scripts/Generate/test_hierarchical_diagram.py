@@ -407,6 +407,35 @@ def test_internet_node_absent_when_no_internet_connections(monkeypatch):
     assert 'internet[' not in diagram
 
 
+def test_unconnected_sql_node_not_rendered_when_graph_has_other_connections(monkeypatch):
+    """Standalone SQL nodes should be pruned instead of floating without edges."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {'id': 1, 'resource_name': 'svc-a', 'resource_type': 'custom_service', 'provider': 'azure', 'repo_name': 'repo'},
+            {'id': 2, 'resource_name': 'svc-b', 'resource_type': 'custom_service', 'provider': 'azure', 'repo_name': 'repo'},
+            {'id': 3, 'resource_name': 'lonely-sql', 'resource_type': 'azurerm_mssql_server', 'provider': 'azure', 'repo_name': 'repo'},
+        ]
+        builder.connections = [
+            {'source': 'svc-a', 'target': 'svc-b', 'connection_type': 'calls', 'confirmed': True},
+        ]
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r['id']: r for r in builder.resources}
+        builder.resource_by_name = {r['resource_name']: r for r in builder.resources}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+
+    diagram = builder.generate()
+
+    assert 'svc-a' in diagram or 'svc_a' in diagram
+    assert 'svc-b' in diagram or 'svc_b' in diagram
+    assert 'lonely-sql' not in diagram
+    assert 'lonely_sql' not in diagram
+
+
 def test_pipe_chars_in_edge_labels_are_escaped(monkeypatch):
     """Labels containing | characters should be escaped to preserve Mermaid syntax."""
     builder = HierarchicalDiagramBuilder("exp-1")

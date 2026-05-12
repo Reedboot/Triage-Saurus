@@ -65,11 +65,12 @@ This creates a new experiment and runs:
 ```
 Output/Learning/experiments/<id>_<name>/
 ├── Summary/
-│   ├── Cloud/Architecture_AWS.md      ← layered architecture diagram
-│   └── Repos/<repo-name>.md           ← languages, frameworks, K8s context
+│   └── Cloud/Architecture_AWS.md      ← layered architecture diagram
 └── Findings/<repo-name>/
     └── finding_<id>.md                ← one MD per finding
 ```
+
+Repo summary content is rendered from Cozo DB in the web portal; no separate repo-summary markdown file is written.
 
 ### Options
 
@@ -117,9 +118,9 @@ To simplify batch scans, `Scripts/run_cozo_repos.sh` reads `Intake/ReposToScan.t
 - **Classifies findings by rule metadata** (`finding_kind`, `rule_type`) — 🔍 green for asset-detection rules, 🔥 orange for misconfigurations, with `confidence`/`impact`/`subcategory` badges inline.
 - **Skips recently scanned repos** — tracks scans via the `repo_scans` table (skip within one hour unless you pass `--force`).
 - **Writes a timestamped audit log** to `Output/Audit/CozoScan_<timestamp>.md`.
-- **Generates a repo-level Markdown summary** under `Output/Summary/Repos/` for each scan.
+- **Renders repo summary content from Cozo DB** for the web portal.
 
-Use `Scripts/Generate/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id> --output-dir Output/Summary/Repos` directly if you only need to regenerate the report for a particular scan or re-run summaries after editing templates.
+Use `Scripts/Generate/generate_repo_summary_from_cozo.py --repo <repo> --scan-id <scan-id>` directly if you want the summary printed to stdout.
 
 ---
 
@@ -289,12 +290,22 @@ Parallel headless validation (dropdown repos, bounded concurrency):
 python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --concurrency 6 --write-rule-candidates
 ```
 
+Strict repo-by-repo validation (one repo at a time with immediate retry on failure):
+
+```bash
+python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --repo-at-a-time
+```
+
 - Discovers all repos from `#repo-select`, starts scans in parallel (6 at a time by default), and consumes results as they complete.
 - Uses a hard per-repo completion safeguard timeout (default: 600s) so stalled scans do not block the batch.
 - Use `--scan-complete-timeout-sec <seconds>` to override the per-repo completion wait time.
 - Automatically retries failed/time-out repos once after the primary pass.
+- In `--repo-at-a-time` mode, retries happen immediately per repo before moving to the next repo.
 - Captures per-provider diagram screenshots and writes run artifacts to `Output/Audit/WebScanValidation_<timestamp>/`.
-- Produces `summary.json` (including retry metadata) plus `improvements.log` with orphan-node findings, repo evidence hints, and provider-default reference links.
+- Produces `summary.json` (including retry metadata) plus `improvements.log` with orphan-node findings, missing-connection checks, repo evidence hints, and provider-default reference links.
+- Optional rule generation and validation for confirmed diagram coverage gaps:
+  - `--write-detection-rules` writes evidence-backed rules to `Rules/Detection/`
+  - `--validate-detection-rules` runs `opengrep scan --config <rule-file.yml> <target-repo>` for each generated rule
 
 Security warning
 

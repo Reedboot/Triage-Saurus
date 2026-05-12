@@ -4,21 +4,10 @@ rules:
       Alibaba Cloud RDS Instance detected in infrastructure.
     severity: INFO
     languages: [terraform, hcl]
-    pattern-either:
-      - pattern: |
-          resource "alicloud_db_instance" $NAME {
-            ...
-          }
-      - patterns:
-          - pattern: |
-              module $MOD {
-                ...
-                source = $SRC
-                ...
-              }
-          - metavariable-regex:
-              metavariable: $SRC
-              regex: "(?i).*rds[_-]?instance.*"
+    pattern: |
+      resource "alicloud_db_instance" $NAME {
+        ...
+      }
     metadata:
       finding_kind: Asset
       asset_provider: alicloud

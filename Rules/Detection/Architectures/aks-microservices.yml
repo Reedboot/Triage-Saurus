@@ -1,0 +1,95 @@
+rules:
+  - id: arch-aks-microservices-module-detection
+    message: |
+      AKS Microservices Architecture: Terraform module-based AKS workload deployment detected.
+      This rule is specifically for repositories confirmed as "aks_microservices" architecture type.
+      Detects module invocations from the terraform-aks registry that deploy containerized workloads.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      module $MODULE_NAME {
+        source = "git::https://dev.azure.com/cbinfrastructure/cbi/_git/terraform-aks//modules/azure"
+        ...
+        app_name = $APP_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: container-deployment
+      technology: [terraform, azure, kubernetes, aks, module]
+      target_files: ["*.tf", "**/*.tf"]
+      architecture_type: aks_microservices
+      extracts:
+        service_type: AKS Microservice Workload
+        resource_type: terraform_aks_module_deployment
+        resource_name: $MODULE_NAME
+        module_app_name: $APP_NAME
+      description: |
+        Detects module-based AKS workloads in repositories confirmed as aks_microservices type.
+        These modules represent containerized microservices deployed to AKS.
+        Used to construct topology diagrams showing workload→storage, workload→database,
+        and workload→messaging connections.
+
+  - id: arch-aks-microservices-servicebus-config
+    message: |
+      AKS Microservices Architecture: Service Bus connection configuration detected.
+      This workload is configured for message-based integration via Azure Service Bus.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-regex: 'ServiceBus__FullyQualifiedNamespace\s*=\s*'
+      - patterns:
+          - pattern-regex: '\.servicebus\.windows\.net'
+      - patterns:
+          - pattern-regex: 'service_bus\s*=\s*\{'
+    metadata:
+      finding_kind: Connection
+      connection_type: resource_reference
+      asset_provider: azure
+      rule_type: connection_discovery
+      category: infrastructure
+      subcategory: messaging
+      technology: [terraform, azure, service-bus]
+      target_files: ["*.tf", "**/*.tf"]
+      architecture_type: aks_microservices
+      extracts:
+        connection_type: ServiceBusConnection
+        connection_target: Service Bus Namespace
+      description: |
+        Detects Service Bus connection configuration in AKS microservices.
+        When found in module config blocks, indicates the workload depends on
+        Service Bus for pub/sub and queue-based communication.
+
+  - id: arch-aks-microservices-database-config
+    message: |
+      AKS Microservices Architecture: Database connection detected.
+      This workload is configured to access a database.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern-either:
+      - patterns:
+          - pattern-regex: 'ConnectionStrings__.*Db\s*=\s*'
+      - patterns:
+          - pattern-regex: '(Server|Database|Host)=(tcp:)?[^\s,]*'
+      - patterns:
+          - pattern-regex: 'database_url\s*=\s*'
+    metadata:
+      finding_kind: Connection
+      connection_type: resource_reference
+      asset_provider: azure
+      rule_type: connection_discovery
+      category: infrastructure
+      subcategory: data
+      technology: [terraform, azure, sql, cosmos]
+      target_files: ["*.tf", "**/*.tf"]
+      architecture_type: aks_microservices
+      extracts:
+        connection_type: DatabaseConnection
+        connection_target: Database
+      description: |
+        Detects database connection strings in AKS microservices.
+        Used to infer data-access edges between workloads and data stores.

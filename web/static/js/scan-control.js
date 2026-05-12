@@ -24,7 +24,7 @@ export function handleScanSubmit(e) {
   if (!form) return;
 
   const repoPath = (document.getElementById('repo-select')?.value || '').trim();
-  if (!repoPath) { window._triage.setStatus('Please select a repository', 'error'); return; }
+  if (!repoPath) { window._triage.setStatus('Choose a repo to run a scan', 'error'); return; }
 
   const repoSelect = document.getElementById('repo-select');
   const repoOpt    = repoSelect?.querySelector('option:checked');

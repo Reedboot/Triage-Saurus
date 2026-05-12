@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a lightweight repo summary markdown from Cozo scan data.
-
-This enhanced summary will embed relevant Mermaid architecture diagrams
-from Output/Summary/Cloud/Architecture_<PROVIDER>.md when available. The
-generator selects diagrams for providers detected in the findings. If the
-findings are labelled with `terraform` the generator will attempt to include
-all available architecture diagrams.
-"""
+"""Render a lightweight repo summary from Cozo scan data."""
 
 from __future__ import annotations
 
@@ -31,11 +24,6 @@ PROVIDER_TO_ARCH = {
     "oracle": "Architecture_OCI.md",
     "alicloud": "Architecture_Alicloud.md",
 }
-
-
-def _sanitize_repo_name(name: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)
-    return cleaned or "repo_summary"
 
 
 def _context_summary(contexts: List[Dict[str, str]], limit: int = 2) -> str:
@@ -216,16 +204,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="Repository name (used for summary filename).")
     parser.add_argument("--scan-id", required=True, help="Scan identifier stored in Cozo.")
-    parser.add_argument(
-        "--write-md",
-        action="store_true",
-        help="Also write a markdown file to disk for debugging/back-compat.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="Output/Summary/Repos",
-        help="Directory where markdown will be written when --write-md is set.",
-    )
     args = parser.parse_args()
 
     findings, context_map = fetch_findings_with_context(scan_id=args.scan_id)
@@ -235,14 +213,7 @@ def main() -> int:
 
     summary = build_summary_markdown(args.repo, args.scan_id, findings, context_map)
 
-    print("Repo summary materialization skipped: UI renders dynamically from DB data")
-
-    if args.write_md:
-        out_dir = Path(args.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{_sanitize_repo_name(args.repo)}.md"
-        out_path.write_text(summary, encoding="utf-8")
-        print(f"Repo summary markdown export: {out_path}")
+    print(summary, end="")
 
     return 0
 

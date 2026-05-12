@@ -91,21 +91,21 @@ def home(page: Page, live_server: str) -> Page:
 class TestPageLoad:
     def test_title(self, home: Page):
         """Browser tab title must include 'Triage-Saurus'."""
-        expect(home).to_have_title("Triage-Saurus — Repo Scanner")
+        expect(home).to_have_title("Triage-Saurus")
 
-    def test_header_dino(self, home: Page):
-        """Dino emoji is visible in the header."""
-        dino = home.locator("header .dino")
-        expect(dino).to_be_visible()
-        assert "🦖" in dino.inner_text()
+    def test_header_dinos(self, home: Page):
+        """Dino emoji appears on both sides of the title."""
+        dinos = home.locator("header .header-brand .dino")
+        expect(dinos).to_have_count(2)
+        assert all("🦖" in d for d in dinos.all_inner_texts())
 
     def test_header_h1(self, home: Page):
         """<h1> says Triage-Saurus."""
         expect(home.locator("header h1")).to_have_text("Triage-Saurus")
 
-    def test_header_badge(self, home: Page):
-        """Badge shows 'Repo Scanner'."""
-        expect(home.locator("header .badge")).to_have_text("Repo Scanner")
+    def test_header_has_no_badge(self, home: Page):
+        """Legacy badge should not be present."""
+        expect(home.locator("header .badge")).to_have_count(0)
 
 
 class TestScanForm:
@@ -117,7 +117,7 @@ class TestScanForm:
         """Dropdown placeholder option is present."""
         opts = home.locator("#repo-select option").all()
         texts = [o.inner_text() for o in opts]
-        assert any("select a repository" in t.lower() for t in texts), (
+        assert any("choose a repo" in t.lower() for t in texts), (
             f"No placeholder option found; options: {texts}"
         )
 

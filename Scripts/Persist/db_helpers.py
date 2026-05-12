@@ -479,6 +479,25 @@ _BASE_TABLES_SQL = """
       computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(experiment_id, resource_id)
     );
+
+    CREATE TABLE IF NOT EXISTS repository_context (
+      id INTEGER PRIMARY KEY,
+      repo_name TEXT NOT NULL UNIQUE,
+      local_path TEXT,
+      repo_url TEXT,
+      architecture_type TEXT,
+      services_produced TEXT,
+      remote_modules_scanned BOOLEAN DEFAULT 0,
+      remote_modules_data TEXT,
+      confirmed_by TEXT,
+      confirmed_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_repo_context_repo_name ON repository_context(repo_name);
+    CREATE INDEX IF NOT EXISTS idx_repo_context_local_path ON repository_context(local_path);
 """
 
 # Setup logging for database operations
@@ -2724,6 +2743,8 @@ def get_connections_for_diagram(experiment_id: str, repo_name: Optional[str] = N
     with get_db_connection() as conn:
         query = """
             SELECT 
+              rc.source_resource_id as source_id,
+              rc.target_resource_id as target_id,
               r_src.resource_name as source,
               r_src.resource_type as source_type,
               r_tgt.resource_name as target,
@@ -3820,3 +3841,168 @@ def fix_nested_resource_providers(experiment_id: str, repo_id: Optional[int] = N
              results["errors"] += 1
      
      return results
+
+
+# ── repository_context helpers ────────────────────────────────────────────────
+def get_repo_context(repo_name: str, db_path=None) -> Optional[Dict[str, Any]]:
+    """Retrieve repository context by repo name.
+    
+    Returns dict with keys: id, repo_name, local_path, repo_url, architecture_type,
+    services_produced (parsed JSON), remote_modules_scanned, confirmed_by, confirmed_at, notes
+    or None if not found.
+    """
+    db = db_path or DB_PATH
+    try:
+        with get_db_connection(db) as conn:
+            row = conn.execute(
+                "SELECT * FROM repository_context WHERE repo_name = ?",
+                (repo_name,)
+            ).fetchone()
+            
+            if not row:
+                return None
+            
+            result = dict(row)
+            # Parse services_produced JSON if present
+            if result.get('services_produced'):
+                try:
+                    result['services_produced'] = json.loads(result['services_produced'])
+                except (json.JSONDecodeError, TypeError):
+                    result['services_produced'] = []
+            
+            # Parse remote_modules_data JSON if present
+            if result.get('remote_modules_data'):
+                try:
+                    result['remote_modules_data'] = json.loads(result['remote_modules_data'])
+                except (json.JSONDecodeError, TypeError):
+                    result['remote_modules_data'] = {}
+            
+            return result
+    except Exception as e:
+        _logger.error(f"Error retrieving repo context for {repo_name}: {e}")
+        return None
+
+
+def store_repo_context(repo_name: str, local_path: Optional[str] = None, 
+                      repo_url: Optional[str] = None, architecture_type: Optional[str] = None,
+                      services_produced: Optional[List[str]] = None, 
+                      remote_modules_scanned: bool = False,
+                      remote_modules_data: Optional[Dict] = None,
+                      confirmed_by: Optional[str] = None, notes: Optional[str] = None,
+                      db_path=None) -> bool:
+    """Store or update repository context.
+    
+    Args:
+        repo_name: Unique repository name
+        local_path: Local filesystem path where repo was scanned
+        repo_url: Git URL of repository
+        architecture_type: e.g., 'aks_microservices', 'serverless', 'messaging_infrastructure'
+        services_produced: List of service names produced by this repo
+        remote_modules_scanned: Whether remote modules were scanned for context
+        remote_modules_data: Dict with details of remote modules scanned
+        confirmed_by: Username/email of who confirmed this context
+        notes: Additional notes
+        db_path: Optional custom database path
+    
+    Returns True if successful, False otherwise.
+    """
+    db = db_path or DB_PATH
+    try:
+        with get_db_connection(db) as conn:
+            # Serialize services_produced as JSON
+            services_json = json.dumps(services_produced) if services_produced else None
+            modules_json = json.dumps(remote_modules_data) if remote_modules_data else None
+            
+            # Use INSERT OR REPLACE to update if exists
+            conn.execute(
+                """INSERT OR REPLACE INTO repository_context 
+                   (repo_name, local_path, repo_url, architecture_type, services_produced, 
+                    remote_modules_scanned, remote_modules_data, confirmed_by, notes, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                (repo_name, local_path, repo_url, architecture_type, services_json,
+                 remote_modules_scanned, modules_json, confirmed_by, notes)
+            )
+            conn.commit()
+            _logger.info(f"Stored context for repo {repo_name}: {architecture_type}")
+            return True
+    except Exception as e:
+        _logger.error(f"Error storing repo context for {repo_name}: {e}")
+        return False
+
+
+def list_repo_contexts(architecture_type: Optional[str] = None, db_path=None) -> List[Dict[str, Any]]:
+    """List all repository contexts, optionally filtered by architecture type.
+    
+    Returns list of context dicts with services_produced parsed as JSON.
+    """
+    db = db_path or DB_PATH
+    try:
+        with get_db_connection(db) as conn:
+            if architecture_type:
+                rows = conn.execute(
+                    "SELECT * FROM repository_context WHERE architecture_type = ? ORDER BY repo_name",
+                    (architecture_type,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM repository_context ORDER BY repo_name"
+                ).fetchall()
+            
+            results = []
+            for row in rows:
+                result = dict(row)
+                # Parse JSON fields
+                if result.get('services_produced'):
+                    try:
+                        result['services_produced'] = json.loads(result['services_produced'])
+                    except (json.JSONDecodeError, TypeError):
+                        result['services_produced'] = []
+                
+                if result.get('remote_modules_data'):
+                    try:
+                        result['remote_modules_data'] = json.loads(result['remote_modules_data'])
+                    except (json.JSONDecodeError, TypeError):
+                        result['remote_modules_data'] = {}
+                
+                results.append(result)
+            
+            return results
+    except Exception as e:
+        _logger.error(f"Error listing repo contexts: {e}")
+        return []
+
+
+def get_context_by_path(local_path: str, db_path=None) -> Optional[Dict[str, Any]]:
+    """Retrieve repository context by local filesystem path.
+    
+    Returns context dict or None if not found.
+    """
+    db = db_path or DB_PATH
+    try:
+        with get_db_connection(db) as conn:
+            row = conn.execute(
+                "SELECT * FROM repository_context WHERE local_path = ?",
+                (local_path,)
+            ).fetchone()
+            
+            if not row:
+                return None
+            
+            result = dict(row)
+            # Parse JSON fields
+            if result.get('services_produced'):
+                try:
+                    result['services_produced'] = json.loads(result['services_produced'])
+                except (json.JSONDecodeError, TypeError):
+                    result['services_produced'] = []
+            
+            if result.get('remote_modules_data'):
+                try:
+                    result['remote_modules_data'] = json.loads(result['remote_modules_data'])
+                except (json.JSONDecodeError, TypeError):
+                    result['remote_modules_data'] = {}
+            
+            return result
+    except Exception as e:
+        _logger.error(f"Error retrieving repo context by path {local_path}: {e}")
+        return None

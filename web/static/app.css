@@ -91,13 +91,6 @@ header {
   justify-content: flex-end;
 }
 
-.header-field-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
 .header-left-controls select {
   flex: 1 1 auto;
   min-width: 220px;
@@ -118,15 +111,6 @@ header {
 }
 
 .header-brand .dino { font-size: 1.5rem; line-height: 1; }
-
-.header-brand .badge {
-  background: var(--accent-dim);
-  color: var(--accent);
-  border: 1px solid var(--accent-border);
-  border-radius: 12px;
-  font-size: 0.7rem;
-  padding: 2px 8px;
-}
 
 @media (max-width: 1280px) {
   .header-scan-form {
@@ -877,7 +861,7 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 
 .diagram-legend {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px 12px;
   padding: 6px 12px;
@@ -886,6 +870,7 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   color: var(--text-subtle);
   font-size: 0.75rem;
   flex: 0 0 auto;
+  overflow-x: auto;
 }
 
 .diagram-legend-title {
@@ -920,17 +905,6 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 .diagram-legend-swatch.potential { border: 2.5px solid #0066cc; }
 
 .diagram-legend-sep { color: #4b5563; }
-
-.diagram-legend-help {
-  margin-left: auto;
-  color: var(--text-faint);
-}
-
-@media (max-width: 920px) {
-  .diagram-legend-help {
-    display: none;
-  }
-}
 
 .split-left { min-width: 0; }
 /* ── Section tabs (left panel) ── */
