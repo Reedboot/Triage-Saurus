@@ -3535,28 +3535,28 @@ class HierarchicalDiagramBuilder:
             for dep in deployments:
                 dep_id = self._get_node_id(dep)
                 dep_label = _render_workload_label(dep, "Deployment")
-                lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
-                
-                # Add pods as children (if present in DB)
                 dep_children = self.children_by_parent.get(dep['id'], [])
                 pods = [c for c in dep_children if 'pod' in (c.get('resource_type') or '').lower()]
-                
+                dep_child_lines: list[str] = []
+
                 if pods:
                     for pod in pods:
                         pod_id = self._get_node_id(pod)
                         pod_label = self._wrap_mermaid_label(self._get_node_label(pod))
-                        lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
+                        dep_child_lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
                     # If no pods found, show container templates
                     container_lines = self._render_containers_for_workload(dep, indent="        ")
                     if container_lines:
-                        for line in container_lines:
-                            lines.append(line)
-                    else:
-                        # If no containers either, show pod template placeholder
-                        lines.append(f'        k8s_dep_pod_tpl_{dep_id}["📦 Pod Template"]')
-                
-                lines.append("      end")
+                        dep_child_lines.extend(container_lines)
+
+                if dep_child_lines:
+                    lines.append(f"      subgraph {dep_id}[{self._quote_mermaid_label(dep_label)}]")
+                    lines.extend(dep_child_lines)
+                    lines.append("      end")
+                else:
+                    # Keep architecture view concise: show deployment only (no Pod Template placeholder).
+                    lines.append(f"      {dep_id}[{self._quote_mermaid_label(dep_label)}]")
                 lines.append(f"      class {dep_id} icon-kubernetes-deployment")
                 self._emitted_mermaid_ids.add(dep_id)
                 self.emitted_nodes.add(dep['resource_name'])
@@ -3566,27 +3566,28 @@ class HierarchicalDiagramBuilder:
             for ss in statefulsets:
                 ss_id = self._get_node_id(ss)
                 ss_label = _render_workload_label(ss, "StatefulSet")
-                lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
-                
                 ss_children = self.children_by_parent.get(ss['id'], [])
                 pods = [c for c in ss_children if 'pod' in (c.get('resource_type') or '').lower()]
-                
+                ss_child_lines: list[str] = []
+
                 if pods:
                     for pod in pods:
                         pod_id = self._get_node_id(pod)
                         pod_label = self._wrap_mermaid_label(self._get_node_label(pod))
-                        lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
+                        ss_child_lines.append(f"        {pod_id}[{self._quote_mermaid_label(pod_label)}]")
                 else:
                     # If no pods found, show container templates
                     container_lines = self._render_containers_for_workload(ss, indent="        ")
                     if container_lines:
-                        for line in container_lines:
-                            lines.append(line)
-                    else:
-                        # If no containers either, show pod template placeholder
-                        lines.append(f'        k8s_ss_pod_tpl_{ss_id}["📦 Pod Template"]')
-                
-                lines.append("      end")
+                        ss_child_lines.extend(container_lines)
+
+                if ss_child_lines:
+                    lines.append(f"      subgraph {ss_id}[{self._quote_mermaid_label(ss_label)}]")
+                    lines.extend(ss_child_lines)
+                    lines.append("      end")
+                else:
+                    # Keep architecture view concise: show statefulset only (no Pod Template placeholder).
+                    lines.append(f"      {ss_id}[{self._quote_mermaid_label(ss_label)}]")
                 lines.append(f"      class {ss_id} icon-kubernetes-statefulset")
                 self._emitted_mermaid_ids.add(ss_id)
                 self.emitted_nodes.add(ss['resource_name'])
@@ -4119,6 +4120,10 @@ class HierarchicalDiagramBuilder:
             edge_list.append((conn, src_id, tgt_id))
 
         # Add red styling for direct Internet connections using the tracked edge list
+        tracked_link_offset = max(
+            0,
+            sum(1 for ln in lines if ("-->" in ln or "-.->" in ln)) - len(edge_list),
+        )
         style_lines = []
         for link_index, (conn, src_id, tgt_id) in enumerate(edge_list):
             src = conn.get('source')
@@ -4126,7 +4131,7 @@ class HierarchicalDiagramBuilder:
             
             # Color direct Internet→service connections red
             if _is_internet(src) and (tgt and not _is_internet(tgt)):
-                style_lines.append(f"  linkStyle {link_index} stroke:red,stroke-width:2px")
+                style_lines.append(f"  linkStyle {tracked_link_offset + link_index} stroke:red,stroke-width:2px")
         
         # Add Internet connections for detected exposed resources
         # Build set of resource names whose parent is ALSO in exposed_resources.
@@ -4209,7 +4214,7 @@ class HierarchicalDiagramBuilder:
                     if ('internet', igw_id) not in {(e[1], e[2]) for e in edge_list}:
                         has_internet = True
                         lines.append(f"  internet -.->|Internet entry| {igw_id}")
-                        current_link_idx = len(edge_list)
+                        current_link_idx = sum(1 for ln in lines if ("-->" in ln or "-.->" in ln)) - 1
                         edge_list.append((None, 'internet', igw_id))
                         style_lines.append(f"  linkStyle {current_link_idx} stroke:red,stroke-width:2px")
                     # Add IGW→downstream edges for public resources in the same VPC
@@ -4283,7 +4288,7 @@ class HierarchicalDiagramBuilder:
                     lines.append(f'  {src_id} -.->|"{label}"| {tgt_id}')
                     
                     # Track the link index for this new connection (link_index = len(edge_list))
-                    current_link_idx = len(edge_list)
+                    current_link_idx = sum(1 for ln in lines if ("-->" in ln or "-.->" in ln)) - 1
                     
                     # Add placeholder to edge_list so subsequent indices increment correctly
                     edge_list.append((None, src_id, tgt_id))
@@ -4295,7 +4300,7 @@ class HierarchicalDiagramBuilder:
         if self._k8s_internet_services:
             for svc_id, svc_label in self._k8s_internet_services:
                 lines.append(f"  internet -.->|\"{svc_label}\"| {svc_id}")
-                current_link_idx = len(edge_list)
+                current_link_idx = sum(1 for ln in lines if ("-->" in ln or "-.->" in ln)) - 1
                 edge_list.append((None, 'internet', svc_id))
                 style_lines.append(f"  linkStyle {current_link_idx} stroke:#ffff00,stroke-width:2px")
                 has_internet = True
@@ -5449,7 +5454,9 @@ class HierarchicalDiagramBuilder:
             lines.append("")
         
         # Render connections
+        pre_connection_edge_count = sum(1 for ln in lines if ("-->" in ln or "-.->" in ln))
         conn_lines = self.render_connections()
+        conn_lines = self._offset_linkstyle_indices(conn_lines, pre_connection_edge_count)
         lines.extend(conn_lines)
         
         # Add styling for resource categories
@@ -5510,6 +5517,31 @@ class HierarchicalDiagramBuilder:
                 frames[-1]["lines"].append("end")
 
         return frames[0]["lines"]
+
+    @staticmethod
+    def _offset_linkstyle_indices(lines: List[str], offset: int) -> List[str]:
+        """Shift Mermaid linkStyle indices by offset for diagrams with pre-existing edges."""
+        if offset <= 0:
+            return lines
+
+        adjusted: List[str] = []
+        linkstyle_re = re.compile(r'^(\s*linkStyle\s+)([0-9,\s]+)(\s+.*)$', re.IGNORECASE)
+        for line in lines:
+            m = linkstyle_re.match(line)
+            if not m:
+                adjusted.append(line)
+                continue
+
+            prefix, idx_blob, suffix = m.groups()
+            idx_parts = [p.strip() for p in idx_blob.split(',') if p.strip()]
+            shifted_parts: List[str] = []
+            for part in idx_parts:
+                try:
+                    shifted_parts.append(str(int(part) + offset))
+                except ValueError:
+                    shifted_parts.append(part)
+            adjusted.append(f"{prefix}{','.join(shifted_parts)}{suffix}")
+        return adjusted
 
     
     def _validate_diagram_syntax(self, diagram_text: str) -> None:

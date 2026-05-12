@@ -111,6 +111,7 @@ export function renderDiagrams(diagrams) {
 
   const diagramViews = document.getElementById('diagram-views');
   const diagramTabs  = document.getElementById('diagram-tabs');
+  const zoomInner = document.getElementById('diagram-zoom-inner');
 
   if (!diagramViews || !diagramTabs) {
     console.error('[renderDiagrams] Missing required elements!');
@@ -118,6 +119,7 @@ export function renderDiagrams(diagrams) {
   }
 
   setDiagramLoadingVisible(true, 'Rendering architecture diagram…');
+  if (zoomInner) zoomInner.classList.add('is-rendering');
 
   // Reset per-diagram zoom state
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
@@ -190,6 +192,7 @@ export function renderDiagrams(diagrams) {
           initPanZoom();
           state.currentDiagramIndex = 0;
           scheduleDiagramFit();
+          if (zoomInner) zoomInner.classList.remove('is-rendering');
           setDiagramLoadingVisible(false);
         }, 150);
         setTimeout(() => {
@@ -197,23 +200,25 @@ export function renderDiagrams(diagrams) {
         }, 400);
       })
       .catch(() => {
+        if (zoomInner) zoomInner.classList.remove('is-rendering');
         setDiagramLoadingVisible(false);
       });
   };
 
   if (window.mermaid) {
-    try { doRender(); } catch (e) { console.error('[Diagrams] Mermaid render error:', e); }
+    try { doRender(); } catch (e) { if (zoomInner) zoomInner.classList.remove('is-rendering'); console.error('[Diagrams] Mermaid render error:', e); }
   } else {
     const wait = setInterval(() => {
       if (window.mermaid) {
         clearInterval(wait);
-        try { doRender(); } catch (e) { console.error('[Diagrams] Mermaid render error:', e); }
+        try { doRender(); } catch (e) { if (zoomInner) zoomInner.classList.remove('is-rendering'); console.error('[Diagrams] Mermaid render error:', e); }
       }
     }, 300);
     setTimeout(() => {
       clearInterval(wait);
       if (!window.mermaid) {
         // Never leave the loading overlay stuck if Mermaid fails to initialize.
+        if (zoomInner) zoomInner.classList.remove('is-rendering');
         setDiagramLoadingVisible(false);
       }
     }, 10000);

@@ -1489,8 +1489,41 @@ def _sanitize_mermaid(code: str) -> str:
         code,
     )
 
-    # 5. Remove linkStyle directives which can reference out-of-range indices
-    code = re.sub(r'^\s*linkStyle\s+\d+[^\n]*\n', '', code, flags=re.M)
+    # 5. Keep valid linkStyle directives and drop only out-of-range indices.
+    # Mermaid linkStyle indices are zero-based over rendered edges in declaration order.
+    edge_count = sum(1 for ln in code.splitlines() if ("-->" in ln or "-.->" in ln))
+
+    def _filter_linkstyle_line(match: re.Match[str]) -> str:
+        if edge_count <= 0:
+            return ""
+        line = match.group(0)
+        idx_match = re.match(r'^(\s*linkStyle\s+)([0-9,\s]+)(.*)$', line)
+        if not idx_match:
+            return line
+        prefix, raw_indices, suffix = idx_match.groups()
+        valid_indices: list[str] = []
+        for token in re.split(r'[,\s]+', raw_indices.strip()):
+            if not token:
+                continue
+            try:
+                idx = int(token)
+            except ValueError:
+                continue
+            if 0 <= idx < edge_count:
+                valid_indices.append(str(idx))
+        if not valid_indices:
+            return ""
+        normalized_suffix = suffix.lstrip()
+        if normalized_suffix:
+            return f"{prefix}{','.join(valid_indices)} {normalized_suffix}"
+        return f"{prefix}{','.join(valid_indices)}"
+
+    code = re.sub(
+        r'^\s*linkStyle\s+[0-9,\s]+[^\n]*$',
+        _filter_linkstyle_line,
+        code,
+        flags=re.M,
+    )
 
     # 6. Collapse newlines inside bracketed labels across the whole document
     # This handles cases where the opening '[' and closing ']' are on different lines

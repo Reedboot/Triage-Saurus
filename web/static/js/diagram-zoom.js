@@ -197,6 +197,11 @@ export function initPanZoom() {
   const diagramViews = document.getElementById('diagram-views');
   if (!zoomWrap || !diagramViews) return;
 
+   // If a previous gesture was interrupted by a re-render, clear stale pan state
+   // so fresh SVG listeners can start a new drag.
+  state.isPanning = false;
+  state.activePanPointerId = null;
+
   diagramViews.querySelectorAll('.mermaid svg').forEach(svg => {
     if (svg.__panZoomInitialized) return;
     svg.__panZoomInitialized = true;

@@ -4,12 +4,13 @@
  */
 
 const PHASE_MAP = [
-  { id: 'pp-1',  title: 'opengrep scan',      patterns: ['opengrep', 'greping', 'grep scan', 'phase 1', 'running scan'],    label: 'Phase 1: opengrep scan' },
-  { id: 'pp-2',  title: 'context extraction',  patterns: ['context extract', 'extracting context', 'phase 2'],               label: 'Phase 2: context extraction' },
-  { id: 'pp-3a', title: 'findings relink',     patterns: ['relink', 'findings relink', 'phase 3a'],                          label: 'Phase 3a: findings relink' },
-  { id: 'pp-3b', title: 'semantic connections', patterns: ['semantic', 'phase 3b'],                                          label: 'Phase 3b: semantic connections' },
-  { id: 'pp-3c', title: 'diagram generation',  patterns: ['diagram gen', 'generating diagram', 'phase 3c'],                  label: 'Phase 3c: diagram generation' },
-  { id: 'pp-4',  title: 'complete',            patterns: ['complete', 'scan complete', 'phase 4', 'finished', 'done'],       label: 'Phase 4: complete' },
+  { id: 'pp-1',  title: 'Detection',            patterns: ['phase 1', 'detection scan', 'detection'],                                             label: 'Step 1: Detection' },
+  { id: 'pp-2',  title: 'OpenGrep',             patterns: ['opengrep', 'greping', 'grep scan', 'chunked opengrep', 'large repo detected'],       label: 'Step 2: OpenGrep' },
+  { id: 'pp-3',  title: 'Context',              patterns: ['context extract', 'extracting context', 'phase 2', 'code context discovery'],         label: 'Step 3: Context' },
+  { id: 'pp-4',  title: 'Relink',               patterns: ['relink', 'findings relink', 'phase 3b'],                                               label: 'Step 4: Relink' },
+  { id: 'pp-5',  title: 'Semantic',             patterns: ['semantic', 'phase 3c', 'infer semantic'],                                               label: 'Step 5: Semantic' },
+  { id: 'pp-6',  title: 'Diagrams',             patterns: ['phase 3d', 'diagram gen', 'generating diagram', 'generate architecture diagrams'],      label: 'Step 6: Diagrams' },
+  { id: 'pp-7',  title: 'Complete',             patterns: ['complete', 'scan complete', 'phase 4', 'finished', 'done'],                            label: 'Step 7: Complete' },
 ];
 
 document.addEventListener('alpine:init', () => {
@@ -58,7 +59,7 @@ document.addEventListener('alpine:init', () => {
 
     completePipeline() {
       this.phases.forEach(p => { p.state = 'done'; });
-      this.phaseLabel = 'Phase 4: complete ✓';
+      this.phaseLabel = 'Step 7: Complete ✓';
       setTimeout(() => { this.pipelineVisible = false; }, 3000);
     },
 

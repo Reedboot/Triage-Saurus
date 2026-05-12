@@ -1890,6 +1890,10 @@ details[open] > summary .details-arrow { transform: rotate(90deg); display:inlin
   will-change: transform;
 }
 
+.diagram-zoom-inner.is-rendering {
+  opacity: 0;
+}
+
 .diagram-zoom-wrap .mermaid svg {
   display: block;
   /* Natural size — JS transform handles fit/pan/zoom, no CSS scaling */
