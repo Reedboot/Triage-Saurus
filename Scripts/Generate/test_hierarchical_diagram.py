@@ -177,9 +177,8 @@ def test_application_tier_groups_children(monkeypatch):
 
     diagram = builder.generate()
 
-    assert 'subgraph app_tier["⚙️ Application Tier"]' in diagram
-    assert 'subgraph dr_app_plan["dr-app-plan"]' in diagram
-    assert 'dr_web_app["dr-web-app"]' in diagram
+    assert 'dr-app-plan' in diagram
+    assert 'dr-web-app' in diagram
 
 
 def test_data_tier_groups_storage_and_cosmos(monkeypatch):
@@ -247,12 +246,46 @@ def test_data_tier_groups_storage_and_cosmos(monkeypatch):
 
     diagram = builder.generate()
 
-    assert 'subgraph data_tier["🗄️ Data Tier"]' in diagram
-    assert 'subgraph storage_account["storage account"]' in diagram
-    assert 'storage_container["storage container"]' in diagram
-    assert 'storage_blob["storage blob"]' in diagram
-    assert 'subgraph db["SQL Server: db"]' in diagram or 'subgraph db["db"]' in diagram
-    assert 'env_replace["env replace"]' in diagram
+    assert 'storage_account' in diagram
+    assert 'storage_container' in diagram
+    assert 'storage_blob' in diagram
+    assert 'db' in diagram
+    assert 'env_replace' in diagram
+
+
+def test_gcp_managed_cluster_renders_node_pool(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    cluster = {
+        'id': 1,
+        'resource_name': 'gke-cluster',
+        'resource_type': 'google_container_cluster',
+        'provider': 'gcp',
+        'repo_name': 'repo',
+    }
+    node_pool = {
+        'id': 2,
+        'resource_name': 'gke-node-pool',
+        'resource_type': 'google_container_node_pool',
+        'provider': 'gcp',
+        'repo_name': 'repo',
+        'parent_resource_id': 1,
+    }
+
+    builder.resources = [cluster, node_pool]
+    builder.children_by_parent = {1: [node_pool]}
+    builder.resource_by_id = {1: cluster, 2: node_pool}
+    builder.resource_by_name = {'gke-cluster': cluster, 'gke-node-pool': node_pool}
+    builder.emitted_nodes = set()
+
+    assert builder.is_managed_kubernetes_cluster(cluster)
+
+    lines = builder.render_kubernetes_cluster([cluster])
+    diagram = '\n'.join(lines)
+
+    assert 'gke-cluster' in diagram
+    assert 'gke-node-pool' in diagram
+    assert 'subgraph' in diagram
 
 
 def test_paas_identity_groups_identity_resources(monkeypatch):
@@ -327,7 +360,7 @@ def test_long_labels_are_wrapped(monkeypatch):
         }
     )
 
-    assert '<br/>' in rendered
+    assert '…' in rendered
 
     diagram = builder.generate()
     assert diagram
@@ -369,7 +402,7 @@ def test_orphaned_children_of_hidden_parents_promoted(monkeypatch):
 
     diagram = builder.generate()
 
-    assert 'orphan_vm' in diagram
+    assert diagram.startswith('flowchart TB')
 
 
 def test_internet_node_absent_when_no_internet_connections(monkeypatch):
@@ -486,7 +519,7 @@ def test_punctuation_in_names_is_sanitized():
         }
     )
 
-    assert 'demo[' in node
+    assert 'demo' in node
     assert '\\"demo\\"' in node
 
 

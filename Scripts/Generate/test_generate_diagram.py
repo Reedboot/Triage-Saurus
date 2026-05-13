@@ -9,6 +9,7 @@ for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
     sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
 from generate_diagram import HierarchicalDiagramBuilder
+from icon_resolver import get_icon_path
 
 
 def test_internal_zone_skipped_without_children(monkeypatch):
@@ -755,4 +756,60 @@ def test_diagram_validation_passes_valid_diagrams(monkeypatch):
     assert isinstance(diagram, str)
     assert diagram.startswith("flowchart TB")
     assert "app-gateway" in diagram
+
+
+class _FakeEmptyConn:
+    def execute(self, *args, **kwargs):
+        class _Result:
+            def fetchall(self):
+                return []
+
+        return _Result()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_google_storage_bucket_iam_binding_is_kept_by_load_data(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    monkeypatch.setattr(
+        "generate_diagram.get_resources_for_diagram",
+        lambda experiment_id: [
+            {
+                "id": 1,
+                "resource_name": "bucket",
+                "resource_type": "google_storage_bucket",
+                "provider": "gcp",
+                "repo_name": "repo",
+            },
+            {
+                "id": 2,
+                "resource_name": "bucket_binding",
+                "resource_type": "google_storage_bucket_iam_binding",
+                "provider": "gcp",
+                "repo_name": "repo",
+                "parent_resource_id": 1,
+            },
+        ],
+    )
+    monkeypatch.setattr("generate_diagram.get_connections_for_diagram", lambda *args, **kwargs: [])
+    monkeypatch.setattr("generate_diagram.get_db_connection", lambda: _FakeEmptyConn())
+
+    builder.load_data()
+
+    assert any(r["resource_type"] == "google_storage_bucket_iam_binding" for r in builder.resources)
+
+
+def test_azure_mssql_icons_resolve_to_sql_assets():
+    server_path = get_icon_path("azurerm_mssql_server", "azure")
+    database_path = get_icon_path("azurerm_mssql_database", "azure")
+
+    assert server_path is not None
+    assert database_path is not None
+    assert server_path.as_posix().endswith("/azure/databases/sql-server.svg")
+    assert database_path.as_posix().endswith("/azure/databases/sql-database.svg")
 

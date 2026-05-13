@@ -469,6 +469,41 @@ class HierarchicalDiagramBuilder:
                 if child_id in self.resource_by_id:
                     child_resource = self.resource_by_id[child_id]
                     self.children_by_parent[parent_id].append(child_resource)
+
+        # Also treat structural connection edges as hierarchy hints.
+        # Some providers persist containment via resource_connections instead of parent_resource_id,
+        # and those nodes would otherwise be pruned from the diagram.
+        structural_parent_types = {
+            'contains',
+            'parent_of',
+            'resource_group_member',
+            'member_of',
+        }
+        inverse_parent_types = {
+            'child_of',
+        }
+        for conn in self.connections:
+            conn_type = (conn.get('connection_type') or '').lower().strip()
+            if conn_type in structural_parent_types:
+                parent_name = conn.get('source')
+                child_name = conn.get('target')
+            elif conn_type in inverse_parent_types:
+                parent_name = conn.get('target')
+                child_name = conn.get('source')
+            else:
+                continue
+
+            parent = self._get_primary_resource(parent_name) if parent_name else None
+            child = self._get_primary_resource(child_name) if child_name else None
+            if not parent or not child:
+                continue
+
+            parent_id = parent.get('id')
+            child_id = child.get('id')
+            if parent_id is None or child_id is None:
+                continue
+            if child not in self.children_by_parent[parent_id]:
+                self.children_by_parent[parent_id].append(child)
         
         # Apply rendering transformation: security group rules as filtering layers
         # For diagram purposes (NOT database semantics), nest resources that use a SG
@@ -1427,7 +1462,21 @@ class HierarchicalDiagramBuilder:
         """
         rtype = (resource.get('resource_type') or '').lower()
         provider = (resource.get('provider') or '').lower()
-        return provider == 'kubernetes' or 'kubernetes' in rtype or 'aks' in rtype
+        return (
+            provider == 'kubernetes'
+            or 'kubernetes' in rtype
+            or 'aks' in rtype
+            or 'node_pool' in rtype
+        )
+
+    def is_managed_kubernetes_cluster(self, resource: dict) -> bool:
+        """Detect cloud-managed Kubernetes cluster resources."""
+        rtype = (resource.get('resource_type') or '').lower()
+        return any(tok in rtype for tok in (
+            'kubernetes_cluster',
+            'container_cluster',
+            'eks_cluster',
+        ))
 
     def get_kubernetes_namespace(self, resource: dict) -> str:
         """Resolve Kubernetes namespace from resource properties with sane fallbacks."""
@@ -1610,7 +1659,8 @@ class HierarchicalDiagramBuilder:
         net_tokens = ['vpc', 'vnet', 'subnet', 'network', 'network_interface', 'security_group', 
                       'security_group_rule', 'internet_gateway', 'nat_gateway', 'route_table', 
                       'network_acl', 'load_balancer', 'firewall', 'availability_zone',
-                      'eks_cluster', 'eks_node_group', 'eks_fargate']
+                      'eks_cluster', 'eks_node_group', 'eks_fargate',
+                      'kubernetes_cluster', 'container_cluster']
         return any(tok in rtype for tok in net_tokens)
     
     def is_security_group_or_rule(self, resource: dict) -> bool:
@@ -2354,12 +2404,10 @@ class HierarchicalDiagramBuilder:
                         if matched:
                             subnet_computes.append(comp)
 
-                # Collect EKS/GKE/AKS managed-K8s cluster resources that are children of this subnet.
-                # These are network-tier resources but need special subgraph treatment with K8s nested inside.
-                _cluster_tokens = ('eks_cluster', 'container_cluster', 'kubernetes_cluster')
+                # Collect managed Kubernetes cluster resources that are children of this subnet.
                 subnet_clusters = [
                     c for c in subnet_children
-                    if any(tok in (c.get('resource_type') or '').lower() for tok in _cluster_tokens)
+                    if self.is_managed_kubernetes_cluster(c)
                 ]
 
                 # Find SGs whose resources live in this subnet (SGs are VPC-level in AWS,
@@ -2505,6 +2553,22 @@ class HierarchicalDiagramBuilder:
                         lines.append(self.render_node(subnet, indent=i1))
 
                 self.emitted_nodes.add(subnet['resource_name'])
+
+            direct_clusters = [
+                c for c in vpc_children_raw
+                if self.is_managed_kubernetes_cluster(c)
+                and c.get('id') not in {s.get('id') for s in subnet_clusters}
+            ]
+            for cluster in direct_clusters:
+                if cluster['resource_name'] in self.emitted_nodes:
+                    continue
+                cluster_lines = self.render_kubernetes_cluster([cluster], parent_context=vpc_node_id)
+                if cluster_lines:
+                    for kl in cluster_lines:
+                        lines.append(i1 + kl)
+                else:
+                    lines.append(self.render_node(cluster, indent=i1))
+                self.emitted_nodes.add(cluster['resource_name'])
 
             # SGs that weren't placed inside a subnet — render at VPC level
             for sg in vpc_sgs:
@@ -3381,7 +3445,7 @@ class HierarchicalDiagramBuilder:
         # namespace-bucketed workload nodes inside it.
         cluster_resources = [
             r for r in k8s_resources
-            if (r.get('resource_type') or '').lower() == 'kubernetes_cluster'
+            if self.is_managed_kubernetes_cluster(r) or (r.get('resource_type') or '').lower() == 'kubernetes_cluster'
         ]
 
         # Collect workloads via parent-child DB links (primary source).
@@ -3481,7 +3545,6 @@ class HierarchicalDiagramBuilder:
             # Global dedup: skip resources already rendered in a previous K8s cluster call
             if node_id in self._emitted_mermaid_ids:
                 continue
-            self._emitted_mermaid_ids.add(node_id)
             namespace = self.get_kubernetes_namespace(res)
             resources_by_namespace[namespace].append(res)
 
@@ -4554,7 +4617,10 @@ class HierarchicalDiagramBuilder:
                 connected_pairs.add(pair_key)
         
         # Add unconfirmed Internet → AKS cluster connections when visibility is unknown
-        k8s_clusters = [r for r in self.resources if 'kubernetes_cluster' in (r.get('resource_type') or '').lower()]
+        k8s_clusters = [
+            r for r in self.resources
+            if self.is_managed_kubernetes_cluster(r) or 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
+        ]
         for cluster in k8s_clusters:
             cluster_name = cluster['resource_name']
             pair_key = ('Internet', cluster_name)
