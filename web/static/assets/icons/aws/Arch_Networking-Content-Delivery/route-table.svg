@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <!-- Route Table -->
+  <rect x="5" y="8" width="30" height="24" fill="#146EB4" rx="2"/>
+  <line x1="10" y1="16" x2="30" y2="16" stroke="white" stroke-width="1"/>
+  <line x1="10" y1="22" x2="30" y2="22" stroke="white" stroke-width="1"/>
+  <text x="20" y="35" font-size="8" text-anchor="middle" fill="#146EB4">Route</text>
+</svg>

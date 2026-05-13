@@ -37,3 +37,51 @@ If children appear flat while parent context exists, flag as hierarchy smell.
 
 ## Noise Reduction Guidance
 Call out resource types that likely should not appear on architecture diagrams when they do not contribute to threat modeling (e.g., pure metadata/config scaffolding). Keep rationale explicit and evidence-backed.
+
+## Enhanced Security Architecture Review (NEW)
+
+### Resource Type Classification
+For **each diagram element**, verify:
+- ✓ **Has proper icon/classification** (can identify resource type)
+- ✓ **Missing icon = detection gap** (resource type detection rule missing or incomplete)
+- ✓ **Examples:** Route Tables, Security Groups, EC2 Instances should have icons representing their type
+
+### Connection Validity
+Verify **all diagram edges** (connections) represent actual data flows:
+- ✓ **Cross-reference with IaC** (does dependency exist in Terraform/CloudFormation?)
+- ✓ **Flag high-fan-out resources** (>5 connections: are they all justified?)
+- ✓ **Examples to investigate:**
+  - Lambda functions connecting to many S3 buckets/DynamoDB tables
+  - API Gateways connecting to multiple Lambdas
+  - RDS instances accessed by multiple application services
+- ⚠ **Suspicious pattern:** High connectivity without clear architectural role
+
+### Security Posture Analysis
+Identify **security-relevant resource states**:
+
+#### Storage Buckets
+- ✓ **Check bucket policies** (who can access?)
+- ✓ **Classify as private or internet-accessible**
+- ✓ **Flag public ACLs or open policies** (PublicRead, PublicReadWrite)
+- ✓ **Check public access block settings**
+- ✓ **Note:** Bucket policy + internet-accessible ingress = high-risk
+
+#### Lambda Functions
+- ✓ **Trace IAM role permissions** (what can Lambda access?)
+- ✓ **Check if role allows S3, DynamoDB, RDS, Secrets Manager access**
+- ✓ **Note:** High-connectivity Lambdas need scrutiny → verify permissions are least-privilege
+- ✓ **Example:** If Lambda connects to 5 S3 buckets, verify role only allows needed buckets
+
+#### Network Exposure
+- ✓ **Security Groups:** Check ingress rules (0.0.0.0/0 = world-accessible)
+- ✓ **Route Tables:** Identify routes to Internet Gateway (what's internet-facing?)
+- ✓ **EC2 Instances:** Check if in public subnet + has public IP
+- ✓ **API Gateways/Load Balancers:** Assume internet-facing, verify they're protected
+
+### Investigation Checklist
+When diagram shows unexplained or suspicious connectivity:
+1. **Locate IaC definition** (Terraform resource block)
+2. **Trace depends_on** (Terraform dependencies)
+3. **Check IAM/policies** (permissions allowing access)
+4. **Verify threat model relevance** (does connection serve security-relevant purpose?)
+5. **Document finding** (why it exists, risk assessment, recommendation)

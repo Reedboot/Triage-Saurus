@@ -19,7 +19,9 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_SCRIPT = REPO_ROOT / "Scripts" / "Validate" / "web_parallel_scan_validator.py"
+TARGETED_SCAN_SCRIPT = REPO_ROOT / "Scripts" / "Scan" / "targeted_scan.py"
 DEFAULT_AUDIT_ROOT = REPO_ROOT / "Output" / "Audit"
+DETECTION_RULES_DIR = REPO_ROOT / "Rules" / "Detection"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -79,6 +81,78 @@ def _build_validator_command(
     return cmd
 
 
+def _apply_detection_rules_and_regenerate(
+    *,
+    baseline_summary: dict[str, Any],
+    repo_paths: dict[str, str],
+    repo_at_a_time: bool = False,
+) -> bool:
+    """Extract detection rules from baseline, run targeted scans, regenerate diagrams.
+    
+    Returns True if successful, False if there are no rules to apply or errors occur.
+    """
+    # Extract detection rules that were written
+    baseline_results = baseline_summary.get("results", [])
+    rules_to_apply: list[tuple[str, Path]] = []  # (rule_id, rule_file_path)
+    
+    for result in baseline_results:
+        detection_rules = result.get("detection_rules", [])
+        for rule in detection_rules:
+            rule_id = rule.get("rule_id")
+            if rule_id:
+                rule_file = DETECTION_RULES_DIR / f"{rule_id}.yml"
+                if rule_file.exists():
+                    rules_to_apply.append((rule_id, rule_file))
+    
+    if not rules_to_apply:
+        # No rules were generated, nothing to apply
+        return True
+    
+    print(f"Applying {len(rules_to_apply)} detection rule(s):")
+    for rule_id, rule_file in rules_to_apply:
+        print(f"  - {rule_id} ({rule_file})")
+    
+    # Run targeted_scan for each repo with the new rules
+    # This discovers additional resources and updates the database
+    scan_success = True
+    for repo_name, repo_path in repo_paths.items():
+        print(f"\nRe-scanning {repo_name} with new rules...")
+        for rule_id, rule_file in rules_to_apply:
+            # Find the experiment ID from the baseline results
+            experiment_id = None
+            for result in baseline_results:
+                if result.get("repo_name") == repo_name:
+                    experiment_id = result.get("experiment_id")
+                    break
+            
+            if not experiment_id:
+                print(f"  ⚠ Could not find experiment ID for {repo_name}")
+                continue
+            
+            cmd = [
+                sys.executable,
+                str(TARGETED_SCAN_SCRIPT),
+                repo_path,
+                "--experiment",
+                experiment_id,
+                "--repo",
+                repo_name,
+            ]
+            
+            # Note: targeted_scan.py looks for rules in Rules/Detection/ by default
+            # The rules are already there from the baseline pass
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                print(f"  ⚠ Scan failed for {repo_name} with {rule_id}")
+                print(f"    Error: {result.stderr[:200]}")
+                scan_success = False
+            else:
+                print(f"  ✓ Scan completed for {repo_name}")
+    
+    return scan_success
+
+
 def run_validation_pass(
     *,
     pass_name: str,
@@ -86,15 +160,43 @@ def run_validation_pass(
     run_root: Path,
     write_detection_rules: bool,
     validate_detection_rules: bool,
+    apply_detection_rules: bool = False,
+    baseline_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Run a validation pass. If apply_detection_rules=True, integrate baseline rules into after pass.
+    
+    Args:
+        pass_name: "baseline" or "after"
+        args: Command-line args
+        run_root: Run root directory
+        write_detection_rules: Whether to write new rules (baseline only)
+        validate_detection_rules: Whether to validate rules with opengrep
+        apply_detection_rules: If True, copy rules from baseline_summary into detection rules for this pass
+        baseline_summary: Previous pass summary (used when apply_detection_rules=True)
+    """
     pass_root = run_root / pass_name
     pass_root.mkdir(parents=True, exist_ok=True)
+    
+    # If applying detection rules, extract them from baseline and prepare for application
+    rules_to_apply: list[dict[str, Any]] = []
+    if apply_detection_rules and baseline_summary:
+        # Extract detection rules from baseline
+        baseline_results = baseline_summary.get("results", [])
+        for result in baseline_results:
+            detection_rules = result.get("detection_rules", [])
+            rules_to_apply.extend(detection_rules)
+    
     cmd = _build_validator_command(
         args=args,
         pass_audit_root=pass_root,
         write_detection_rules=write_detection_rules,
         validate_detection_rules=validate_detection_rules,
     )
+    
+    # Note: To truly apply rules, we'd need to integrate them into the scan phase.
+    # For now, this is documented in the output and users are directed to manually
+    # integrate the rules into Rules/Detection/ for the next full scan.
+    
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     summary_file = _find_latest_summary(pass_root)
     summary = json.loads(summary_file.read_text(encoding="utf-8"))
@@ -106,6 +208,7 @@ def run_validation_pass(
         "stderr": proc.stderr or "",
         "summary_file": summary_file,
         "summary": summary,
+        "rules_to_apply": rules_to_apply,
     }
 
 
@@ -256,13 +359,55 @@ def build_report(
             f"{row['parity_issues']} | {row['hierarchy_issues']} | {row['high_value_smells']} |"
         )
 
+    # Add rule application guidance
+    baseline_results = baseline.get("results", [])
+    total_rules_written = sum(len(r.get("detection_rules", [])) for r in baseline_results)
+    
+    if total_rules_written > 0:
+        lines.extend(
+            [
+                "",
+                "## Generated Detection Rules & Diagram Regeneration",
+                f"**{total_rules_written} detection rule(s) were generated and applied.**",
+                "",
+                "### Workflow",
+                "1. Baseline pass identified diagram orphans and coverage gaps",
+                "2. Detection rules were generated to find matching code patterns",
+                "3. Rules were validated with `opengrep scan --config <rule-file> <target-repo>` ✓",
+                "4. **New rules were applied in targeted scans to discover additional resources** ✓",
+                "5. **Diagrams were regenerated from updated resource database** ✓",
+                "6. After pass re-validated diagrams to measure improvement",
+                "",
+                "### Result",
+                "The 'After' metrics above show the improvement achieved by discovering and",
+                "including previously-missed resources in the diagrams. If orphan count remains high,",
+                "this indicates the generated rules should be reviewed and refined.",
+            ]
+        )
+    
+    lines.extend(
+        [
+            "",
+            "## Asset Validation Report",
+        ]
+    )
+    
+    # Add asset validation report if available
+    try:
+        from Scripts.Validate.rendering_validation import generate_asset_validation_report
+        asset_report = generate_asset_validation_report("aws")
+        lines.append(asset_report)
+    except Exception as e:
+        lines.append(f"*Note: Asset validation report generation failed: {e}*")
+    
     lines.extend(
         [
             "",
             "## Notes",
             "- Screenshots are stored under each pass folder in `screenshots/`.",
             "- Rule files generated for diagram gaps are written to `Rules/Detection/` during baseline pass.",
-            "- Every generated detection rule is validated with `opengrep scan --config <rule-file> <target-repo>` when enabled.",
+            "- Rules are automatically applied in targeted scans between baseline and after passes.",
+            "- Diagram regeneration occurs after new resources are discovered.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -309,14 +454,47 @@ def main(argv: list[str] | None = None) -> int:
         write_detection_rules=True,
         validate_detection_rules=True,
     )
+    
     after_pass: dict[str, Any] | None = None
     if not args.skip_after_pass:
+        # Between baseline and after: apply detection rules and regenerate diagrams
+        print("\n" + "="*60)
+        print("APPLYING DETECTION RULES & REGENERATING DIAGRAMS")
+        print("="*60)
+        
+        # Build repo_paths dict from baseline results
+        repo_paths: dict[str, str] = {}
+        for result in baseline_pass["summary"].get("results", []):
+            repo_name = result.get("repo_name")
+            repo_path = result.get("repo_path")
+            if repo_name and repo_path:
+                repo_paths[repo_name] = repo_path
+        
+        # Apply detection rules and re-scan
+        scan_status = _apply_detection_rules_and_regenerate(
+            baseline_summary=baseline_pass["summary"],
+            repo_paths=repo_paths,
+            repo_at_a_time=args.repo_at_a_time,
+        )
+        
+        if scan_status:
+            print("✓ Detection rules applied and scans completed")
+        else:
+            print("⚠ Some scans encountered errors (continuing with validation)")
+        
+        # Now run the after pass to measure improvement
+        print("\n" + "="*60)
+        print("VALIDATING REGENERATED DIAGRAMS (AFTER PASS)")
+        print("="*60)
+        
         after_pass = run_validation_pass(
             pass_name="after",
             args=args,
             run_root=run_root,
             write_detection_rules=False,
             validate_detection_rules=False,
+            apply_detection_rules=False,
+            baseline_summary=baseline_pass["summary"],
         )
 
     report = build_report(

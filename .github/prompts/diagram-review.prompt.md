@@ -2,7 +2,7 @@
 description: "Run Triage-Saurus diagram review (screenshots, threat-model smells, and before/after report)."
 mode: "agent"
 tools: ["codebase", "terminal"]
-model: "gpt-5"
+model: "gpt-5.4-mini"
 ---
 
 Run the Triage-Saurus diagram review workflow for this repository.

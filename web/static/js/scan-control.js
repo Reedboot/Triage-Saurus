@@ -19,9 +19,6 @@ function setScanButtonsVisible(visible) {
 function handleScanStageEvent(message) {
   if (!message || typeof message !== 'object') return;
   window.triagePipeline?.onScanStage?.(message);
-  if (message.label && message.state !== 'complete' && message.state !== 'failed') {
-    window._triage.setStatus(message.label, '');
-  }
   if (message.state === 'failed') {
     window._triage.setStatus(message.label || 'Scan failed', 'error');
   }

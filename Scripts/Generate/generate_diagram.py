@@ -2630,6 +2630,7 @@ class HierarchicalDiagramBuilder:
             if gw['resource_name'] not in self.emitted_nodes:
                 lines.append(self.render_node(gw, indent="    "))
                 self.emitted_nodes.add(gw['resource_name'])
+                self._tier_nodes['network_tier'].append(gw['resource_name'])
         
         for res in network_resources:
             if res['resource_name'] not in self.emitted_nodes:
@@ -5796,7 +5797,12 @@ class HierarchicalDiagramBuilder:
             return 'Identity'
         if any(t in rtype for t in ['keyvault', 'secret', 'kms']):
             return 'Security'
-        if any(t in rtype for t in ['network', 'vpc', 'vnet', 'subnet', 'nsg', 'security_group']):
+        if any(t in rtype for t in [
+            'network', 'vpc', 'vnet', 'subnet', 'nsg', 'security_group',
+            'load_balancer', 'lb_listener', 'lb_target_group', 'alb', 'elb', 'nlb',
+            'nat_gateway', 'internet_gateway', 'route_table', 'firewall',
+            'vpn_gateway', 'network_acl',
+        ]):
             return 'Network'
         if any(t in rtype for t in ['monitor', 'alert', 'metric', 'log']):
             return 'Monitoring'

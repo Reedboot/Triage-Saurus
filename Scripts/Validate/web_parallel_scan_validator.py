@@ -30,6 +30,23 @@ from typing import Any
 from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Import rendering validation module
+try:
+    import sys
+    sys.path.insert(0, str(REPO_ROOT / "Scripts" / "Validate"))
+    from rendering_validation import (
+        validate_icon_availability,
+        validate_icon_mapping_semantics,
+        validate_rendering_pipeline,
+        generate_asset_validation_report,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import rendering_validation: {e}")
+    validate_icon_availability = None
+    validate_icon_mapping_semantics = None
+    validate_rendering_pipeline = None
+    generate_asset_validation_report = None
 DEFAULT_BASE_URL = "http://127.0.0.1:9000"
 DEFAULT_AUDIT_ROOT = REPO_ROOT / "Output" / "Audit"
 SETTINGS_PATH = REPO_ROOT / "Settings" / "paths.json"
@@ -930,9 +947,21 @@ def write_detection_rules(
     issues: list[dict[str, Any]],
     rules_dir: Path = REPO_ROOT / "Rules" / "Detection",
 ) -> list[dict[str, Any]]:
-    """Write concrete detection rules for evidence-backed diagram coverage gaps."""
+    """Write concrete detection rules for evidence-backed diagram coverage gaps.
+    
+    Prefers existing proper context-* rules over generating simple pattern rules.
+    """
     rules_dir.mkdir(parents=True, exist_ok=True)
     written: list[dict[str, Any]] = []
+    
+    # Map asset types to existing context detection rules
+    # Format: "asset-name" -> ("provider", "rule-file-name-in-provider-folder")
+    ASSET_TO_CONTEXT_RULE: dict[str, tuple[str, str]] = {
+        "queue": ("AWS", "sqs-queue-detection"),
+        "sqs": ("AWS", "sqs-queue-detection"),
+        "sqs-queue": ("AWS", "sqs-queue-detection"),
+    }
+    
     for issue in issues:
         evidence_files = issue.get("repo_evidence_files") or []
         if not evidence_files:
@@ -941,6 +970,36 @@ def write_detection_rules(
         issue_type = issue.get("issue_type") or "coverage_gap"
         issue_key = issue.get("node_id") or issue.get("expected_asset") or issue_type
         clean_node = _slug(str(issue_key).lower())
+        
+        # Check if a proper context rule exists for this asset
+        if clean_node in ASSET_TO_CONTEXT_RULE:
+            provider_name, rule_filename = ASSET_TO_CONTEXT_RULE[clean_node]
+            context_rule_file = rules_dir / provider_name / f"{rule_filename}.yml"
+            if context_rule_file.exists():
+                # Extract rule_id from the file
+                try:
+                    content = context_rule_file.read_text()
+                    # Parse YAML to get rule ID (simple regex for now)
+                    import re
+                    match = re.search(r'id:\s*([^\n]+)', content)
+                    context_rule_id = match.group(1).strip() if match else rule_filename
+                except Exception:
+                    context_rule_id = rule_filename
+                
+                written.append(
+                    {
+                        "rule_id": context_rule_id,
+                        "rule_file": str(context_rule_file),
+                        "issue_type": issue_type,
+                        "source_issue_key": str(issue_key),
+                        "repo_name": repo.name,
+                        "validate_command": f"opengrep scan --config {context_rule_file} {repo.path}",
+                        "note": "Using existing context-detection rule instead of generated placeholder",
+                    }
+                )
+                continue
+        
+        # Fall back to generating a simple pattern rule (for unmapped assets)
         rule_id = f"diagram-gap-{provider}-{clean_node}-detection"
         pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
         rule_file = rules_dir / f"{rule_id}.yml"
@@ -961,6 +1020,7 @@ def write_detection_rules(
                 f"      technology: [{provider}]",
                 "      finding_kind: asset_detection",
                 "      generated_by: web_parallel_scan_validator",
+                "      note: placeholder_rule - consider mapping to existing context-detection rule",
             ]
         ) + "\n"
         rule_file.write_text(content, encoding="utf-8")
@@ -972,6 +1032,7 @@ def write_detection_rules(
                 "source_issue_key": str(issue_key),
                 "repo_name": repo.name,
                 "validate_command": f"opengrep scan --config {rule_file} {repo.path}",
+                "note": "Generated placeholder rule (consider adding to ASSET_TO_CONTEXT_RULE mapping)",
             }
         )
     return written
@@ -1196,14 +1257,35 @@ async def collect_diagram_validation_issues(
         provider = _parse_provider_from_title(title)
         code = d.get("code") or ""
         orphans = find_orphan_nodes(code)
+        
+        # Add rendering validation if available
+        rendering_gaps = {}
+        mapping_errors = {}
+        if validate_rendering_pipeline:
+            orphan_diagnosis = validate_rendering_pipeline(orphans, code, provider)
+            for node_id, diagnosis in orphan_diagnosis.items():
+                if diagnosis.root_cause == "RENDERING_GAP":
+                    rendering_gaps[node_id] = diagnosis
+                elif diagnosis.root_cause == "MAPPING_ERROR":
+                    mapping_errors[node_id] = diagnosis
+        
         for orphan in orphans:
             evidence = gather_repo_evidence(repo_root, orphan) if repo_root.is_dir() else []
             refs = PROVIDER_DEFAULT_REFERENCES.get(provider, [])
+            
+            # Determine if orphan is rendering gap or mapping error
+            root_cause = "REAL_ORPHAN"
+            if orphan in rendering_gaps:
+                root_cause = "RENDERING_GAP"
+            elif orphan in mapping_errors:
+                root_cause = "MAPPING_ERROR"
+            
             issue = {
                 "issue_type": "orphan_node",
                 "diagram_title": title,
                 "provider": provider,
                 "node_id": orphan,
+                "root_cause": root_cause,
                 "repo_evidence_files": evidence,
                 "provider_default_refs": refs,
             }

@@ -2472,9 +2472,32 @@ def api_detect_modules():
                 else (mod_name_lower in scanned_module_names)
             )
         
+        # Deduplicate by module_repo_name — multiple module instances can reference
+        # the same repo; only one entry per unique repo is needed for scanning.
+        seen_repos: dict = {}
+        deduped_modules = []
+        for mod in modules:
+            repo_key = (mod.get("module_repo_name") or "").lower() or mod["name"].lower()
+            if repo_key not in seen_repos:
+                # Use the repo name as the display name when available
+                if mod.get("module_repo_name"):
+                    mod = dict(mod)  # copy so we don't mutate the original
+                    mod["instances"] = [mod["name"]]
+                    mod["name"] = mod["module_repo_name"]
+                seen_repos[repo_key] = mod
+                deduped_modules.append(mod)
+            else:
+                # Accumulate instance names onto the first-seen entry
+                seen_repos[repo_key].setdefault("instances", [seen_repos[repo_key]["name"]])
+                seen_repos[repo_key]["instances"].append(mod["name"])
+
+        # Recalculate counts from deduplicated list
+        found_count = sum(1 for m in deduped_modules if m.get("found_in_repos"))
+        not_found_count = sum(1 for m in deduped_modules if not m.get("found_in_repos"))
+
         return jsonify({
-            "modules": modules,
-            "total": len(modules),
+            "modules": deduped_modules,
+            "total": len(deduped_modules),
             "found_count": found_count,
             "not_found": not_found_count,
             "error": None
@@ -10857,6 +10880,9 @@ def index():
                 FROM experiments e
                 LEFT JOIN resources r ON r.experiment_id = e.id
                 LEFT JOIN findings f ON f.experiment_id = e.id
+                WHERE e.id = (
+                    SELECT MAX(e2.id) FROM experiments e2 WHERE e2.name = e.name
+                )
                 GROUP BY e.id, e.name, e.repos
                 ORDER BY e.id DESC
                 LIMIT 10

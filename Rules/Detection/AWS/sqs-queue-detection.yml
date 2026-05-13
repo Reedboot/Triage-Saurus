@@ -1,0 +1,36 @@
+rules:
+  - id: context-aws-sqs-queue
+    message: |
+      AWS SQS Queue detected in infrastructure.
+      This rule extracts SQS queue configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl, json, yaml]
+    patterns:
+      - pattern: |
+          resource "aws_sqs_queue" $NAME {
+            ...
+          }
+      - pattern-regex: '(?i)(sqs.*queue|queue.*sqs|aws_sqs_queue)'
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: messaging
+      technology: [terraform, aws, sqs]
+      target_files: ["*.tf", "*.tfvars", "*.json", "*.yaml", "*.yml", "**/*.tf"]
+      extracts:
+        service_type: SQS Queue
+        resource_type: aws_sqs_queue
+        resource_name: $NAME
+        properties:
+          - name: queue_name
+            pattern: name = "$NAME"
+          - name: delay_seconds
+            pattern: delay_seconds = $DELAY
+          - name: visibility_timeout_seconds
+            pattern: visibility_timeout_seconds = $TIMEOUT
+          - name: message_retention_seconds
+            pattern: message_retention_seconds = $RETENTION
+      description: |
+        Detects AWS SQS Queue resources in Terraform, JSON, and YAML to inform messaging and event-driven architecture analysis.

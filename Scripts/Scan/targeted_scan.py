@@ -96,6 +96,7 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-aws-rds-instance":                ["AWS/RDS"],
     "context-aws-dynamodb-table":              ["AWS/IAM"],
     "context-aws-s3-bucket":                   ["AWS/S3", "Secrets"],
+    "context-aws-sqs-queue":                   ["AWS/SQS"],
 
     # AWS — Identity & Secrets
     "context-aws-iam-role":                    ["AWS/IAM"],

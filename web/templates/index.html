@@ -75,7 +75,6 @@
          style="display:none">
       <div class="flex items-center gap-2 mb-2">
         <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Scan pipeline</span>
-        <span x-text="$store.scan.phaseLabel" :class="$store.scan.phaseLabelClass()"></span>
       </div>
       <div class="flex items-center gap-1">
         <template x-for="phase in $store.scan.phases" :key="phase.id">
@@ -308,7 +307,12 @@
                   <input type="checkbox" :checked="mod.selected" @change="mod.selected = !mod.selected" style="margin-top: 4px; cursor: pointer;">
                   <div style="flex: 1; min-width: 0;">
                     <strong x-text="mod.name" style="display: block;"></strong>
-                    <span x-text="'Module Repo: ' + mod.module_repo_name" style="display: block; font-size: 0.8rem; color: #10b981; margin-top: 2px; font-weight: 500;"></span>
+                    <template x-if="mod.instances && mod.instances.length > 1">
+                      <span x-text="'Used by: ' + mod.instances.join(', ')" style="display: block; font-size: 0.75rem; color: #6b7280; margin-top: 2px;"></span>
+                    </template>
+                    <template x-if="!mod.instances || mod.instances.length <= 1">
+                      <span x-show="mod.module_repo_name && mod.module_repo_name !== mod.name" x-text="'Module Repo: ' + mod.module_repo_name" style="display: block; font-size: 0.8rem; color: #10b981; margin-top: 2px; font-weight: 500;"></span>
+                    </template>
                     
                     <!-- Path display or edit mode -->
                     <template x-if="!mod.editingPath">

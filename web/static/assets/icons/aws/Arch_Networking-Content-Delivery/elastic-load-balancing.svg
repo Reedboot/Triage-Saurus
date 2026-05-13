@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <!-- Load Balancer -->
+  <rect x="8" y="10" width="24" height="20" fill="#9D5025" rx="2"/>
+  <circle cx="15" cy="15" r="3" fill="white"/>
+  <circle cx="15" cy="25" r="3" fill="white"/>
+  <circle cx="25" cy="15" r="3" fill="white"/>
+  <circle cx="25" cy="25" r="3" fill="white"/>
+</svg>

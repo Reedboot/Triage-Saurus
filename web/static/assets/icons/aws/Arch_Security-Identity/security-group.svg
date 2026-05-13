@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <!-- Security Group -->
+  <path d="M 20 5 L 35 12 L 35 28 L 20 35 L 5 28 L 5 12 Z" fill="#DD344C" stroke="white" stroke-width="1"/>
+  <text x="20" y="24" font-size="9" font-weight="bold" text-anchor="middle" fill="white">SG</text>
+</svg>
