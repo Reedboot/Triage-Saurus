@@ -10,12 +10,10 @@
   // Load from CDN
   loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () { console.info('mermaid loaded from CDN'); }, function () {
     console.warn('Mermaid library failed to load from CDN. Diagrams will not render.');
+    var message = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access.';
+    window.__triageMermaidLoadError = message;
     try {
-      var b = document.createElement('div');
-      b.className = 'mermaid-error';
-      b.textContent = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access.';
-      b.style.cssText = 'position:fixed;bottom:8px;right:8px;background:#f44336;color:white;padding:8px;border-radius:6px;z-index:9999;font-size:12px;max-width:400px';
-      document.body.appendChild(b);
+      window.dispatchEvent(new CustomEvent('triage:mermaid-load-error', { detail: { message: message } }));
     } catch (e) { }
   });
 })();

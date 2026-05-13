@@ -16,6 +16,17 @@ function setScanButtonsVisible(visible) {
   if (logBtn)     logBtn.style.visibility     = visible ? 'visible' : 'hidden';
 }
 
+function handleScanStageEvent(message) {
+  if (!message || typeof message !== 'object') return;
+  window.triagePipeline?.onScanStage?.(message);
+  if (message.label && message.state !== 'complete' && message.state !== 'failed') {
+    window._triage.setStatus(message.label, '');
+  }
+  if (message.state === 'failed') {
+    window._triage.setStatus(message.label || 'Scan failed', 'error');
+  }
+}
+
 // ── Form submit ───────────────────────────────────────────────────────────────
 
 export function handleScanSubmit(e) {
@@ -186,7 +197,7 @@ export function startScan(repoPath) {
 
   if (state.statusBar) state.statusBar.style.display = 'flex';
   if (state.spinner)   state.spinner.style.display   = 'block';
-  window._triage.setStatus('Connecting to scan stream…', '');
+  window._triage.setStatus('Scan pipeline…', '');
   if (state.scanBtn) state.scanBtn.disabled = true;
 
   // Notify Alpine pipeline component
@@ -210,7 +221,7 @@ export function startScan(repoPath) {
         return;
       }
 
-      addLogLine('[Info] 🔌 Connected to scan stream', 'info');
+      addLogLine('[Info] 🔌 Scan pipeline connected', 'info');
 
       if (!response.body) {
         addLogLine('Error: Response body not available', 'error');
@@ -223,21 +234,23 @@ export function startScan(repoPath) {
       let buffer       = '';
       let currentEvent = null;
       let chunkCount   = 0;
+      let sawDoneEvent = false;
 
       function processChunk() {
         reader.read().then(({ done, value }) => {
           if (done) {
-            addLogLine('[Info] 🔒 Stream closed', 'info');
-            window._triage.setStatus('Scan complete', 'success');
-            window.triagePipeline?.onScanComplete?.();
+            addLogLine('[Info] 🔒 Scan pipeline closed', 'info');
             setScanButtonsVisible(true);
             if (state.scanBtn) state.scanBtn.disabled = false;
             if (state.spinner) state.spinner.style.display = 'none';
+            if (!sawDoneEvent) {
+              window._triage.setStatus('Scan pipeline closed before completion', 'warn');
+            }
             return;
           }
 
           chunkCount++;
-          if (chunkCount === 1) addLogLine('[Info] 📡 Receiving data...', 'info');
+          if (chunkCount === 1) addLogLine('[Info] 📡 Receiving pipeline data...', 'info');
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -255,20 +268,31 @@ export function startScan(repoPath) {
                 } else if (message && typeof message === 'object') {
                   if (message.message) addLogLine(message.message, message.level || currentEvent || '');
                   if (currentEvent === 'done') {
-                    window._triage.setStatus('Scan complete', 'success');
-                    window.triagePipeline?.onScanComplete?.();
+                    sawDoneEvent = true;
+                    const isFailed = Number(message.exit_code || 0) !== 0 || message.status === 'failed';
+                    if (isFailed) {
+                      window._triage.setStatus('Scan failed', 'error');
+                    } else {
+                      window._triage.setStatus('Scan ready', 'success');
+                      window.triagePipeline?.onScanComplete?.();
+                    }
                     setScanButtonsVisible(true);
                     const expId = message.experiment_id || state.currentExperimentId;
-                    if (expId) buildSectionTabs(expId, getCurrentRepoName());
+                    if (!isFailed && expId) buildSectionTabs(expId, getCurrentRepoName());
                   }
                 }
                 if (currentEvent === 'experiment' && typeof message === 'string' && message) {
                   state.currentExperimentId = message;
                 }
+                if (currentEvent === 'scan_stage' && message && typeof message === 'object') {
+                  handleScanStageEvent(message);
+                }
                 if (currentEvent === 'diagrams' && Array.isArray(message)) {
                   renderDiagrams(message);
                 }
-                if (message?.status) window._triage.setStatus(message.status, '');
+                if (message?.status && currentEvent !== 'scan_stage' && currentEvent !== 'done') {
+                  window._triage.setStatus(message.status, '');
+                }
               } catch (_) {
                 addLogLine(dataStr, currentEvent || '');
               }
@@ -280,7 +304,6 @@ export function startScan(repoPath) {
         });
       }
 
-      window._triage.setStatus('Scan running…', '');
       processChunk();
     })
     .catch(error => {
@@ -368,12 +391,11 @@ export function reconnectToRunningExperiment(repoPath, experimentId, createdAt) 
     })
     .catch(() => {})
     .finally(() => {
-      addLogLine('[Info] ⏳ Waiting for scan to complete...', 'info');
+      addLogLine('[Info] ⏳ Waiting for scan to be ready...', 'info');
       addLogLine('[Info] 📡 Polling server every 5 seconds...', 'info');
       _startReconnectPoll(repoName, experimentId, createdAt);
     });
 
-  window._triage.setStatus('Scan in progress…', '');
   if (state.statusBar) state.statusBar.style.display = 'flex';
 }
 
@@ -414,8 +436,8 @@ export function _startReconnectPoll(repoName, experimentId, createdAt) {
         if (!data.running_experiment) {
           clearInterval(state.currentPollInterval);
           state.currentPollInterval = null;
-          addLogLine('[Info] ✅ Scan complete!', 'info');
-          window._triage.setStatus('Scan complete', 'success');
+          addLogLine('[Info] ✅ Scan ready!', 'info');
+          window._triage.setStatus('Scan ready', 'success');
           if (state.spinner) state.spinner.style.display = 'none';
           if (state.scanBtn) state.scanBtn.disabled = false;
           addLogLine(m > 0 ? `[Info] ⏱️ Total time: ${m}m ${s}s` : `[Info] ⏱️ Total time: ${elapsed}s`, 'info');

@@ -939,6 +939,7 @@ AWS_RESOURCE_TYPE_TO_ICON = {
     'aws_s3_bucket_policy':           ('Arch_Storage', 's3'),
     'aws_s3_object':                  ('Arch_Storage', 's3'),
     'aws_s3_bucket_object':           ('Arch_Storage', 's3'),
+    'aws_ebs_volume':                 ('Arch_Storage', 'elastic-block-store'),
     'aws_db_instance':                ('Arch_Databases', 'rds'),
     'aws_rds_cluster':                ('Arch_Databases', 'aurora'),
     'aws_ecr_repository':             ('Arch_Security-Identity', 'ecr'),
@@ -998,6 +999,9 @@ GCP_RESOURCE_TYPE_TO_ICON = {
     'google_compute_subnetwork':         ('Compute_Engine', 'compute-engine'),
     'google_storage_bucket':             ('Cloud_Storage', 'cloud-storage'),
     'google_storage_bucket_object':      ('Cloud_Storage', 'cloud-storage'),
+    'google_compute_disk':               ('Hyperdisk', 'hyperdisk'),
+    'google_compute_region_disk':        ('Hyperdisk', 'hyperdisk'),
+    'google_compute_attached_disk':      ('Hyperdisk', 'hyperdisk'),
     'google_cloudfunctions_function':    ('Cloud_Run', 'cloud-run'),
     'google_cloudfunctions2_function':   ('Cloud_Run', 'cloud-run'),
     'google_app_engine_application':     ('Cloud_Run', 'cloud-run'),
@@ -1317,7 +1321,7 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
     since it walks the directory tree once instead of repeatedly.
     
     Args:
-        provider: Cloud provider ('azure', 'aws', 'gcp', 'kubernetes', 'other')
+        provider: Cloud provider ('azure', 'aws', 'gcp', 'kubernetes', 'alicloud', 'oci', 'other')
     
     Returns:
         Dict mapping resource_type -> icon_url (e.g., '/static/assets/icons/azure/web/app-service/app-service.svg')
@@ -1362,6 +1366,11 @@ def build_icon_map_bulk(provider: str = 'azure') -> dict:
     web_root = ICONS_ROOT.parent.parent.parent
     
     for resource_type, (category, icon_name) in resource_mapping.items():
+        # Keep Alicloud/OCI provider caches pure: OTHER_RESOURCE_TYPE_TO_ICON
+        # contains both providers and synthetic keys, so filter by key prefix.
+        if provider in {"alicloud", "oci"} and not resource_type.startswith(f"{provider}_"):
+            continue
+
         icon_name_lower = icon_name.lower()
         if '/' in icon_name_lower:
             category_part, icon_part = icon_name_lower.split('/', 1)
@@ -1444,40 +1453,82 @@ KUBERNETES_RESOURCE_TYPE_TO_ICON = {
 # Format: (provider_dir, 'Category/icon-name') — _find_icon_file handles provider-specific layouts.
 OTHER_RESOURCE_TYPE_TO_ICON: dict = {
     # ── Alicloud ─────────────────────────────────────────────────────────────
+    'alicloud_actiontrail_trail':     ('alicloud', 'monitoring/actiontrail'),
+    'alicloud_api_gateway_api':       ('alicloud', 'api/api-gateway'),
+    'alicloud_api_gateway_group':     ('alicloud', 'api/api-group'),
+    'alicloud_api_gateway_app':       ('alicloud', 'security/access-key'),
+    'alicloud_alb_load_balancer':     ('alicloud', 'networking/load-balancer'),
+    'alicloud_cs_managed_kubernetes': ('alicloud', 'containers/kubernetes-cluster'),
+    'alicloud_cs_kubernetes':         ('alicloud', 'containers/kubernetes-cluster'),
+    'alicloud_cs_kubernetes_node_pool': ('alicloud', 'containers/node-pool'),
     'alicloud_db_instance':           ('alicloud', 'database/db-instance'),
     'alicloud_polardb_cluster':       ('alicloud', 'database/db-instance'),
     'alicloud_mongodb_instance':      ('alicloud', 'database/db-instance'),
     'alicloud_redis_instance':        ('alicloud', 'database/db-instance'),
+    'alicloud_kvstore_instance':      ('alicloud', 'cache/kvstore'),
     'alicloud_oss_bucket':            ('alicloud', 'storage/oss-bucket'),
+    'alicloud_oss_bucket_object':     ('alicloud', 'storage/oss-bucket'),
     'alicloud_nas_file_system':       ('alicloud', 'storage/oss-bucket'),
     'alicloud_instance':              ('alicloud', 'compute/ecs-instance'),
     'alicloud_ecs_instance':          ('alicloud', 'compute/ecs-instance'),
     'alicloud_vpc':                   ('alicloud', 'networking/vpc'),
     'alicloud_vswitch':               ('alicloud', 'networking/vswitch'),
+    'alicloud_slb_load_balancer':     ('alicloud', 'networking/load-balancer'),
     'alicloud_security_group':        ('alicloud', 'security/security-group'),
     'alicloud_security_group_rule':   ('alicloud', 'security/security-group'),
+    'alicloud_kms_key':               ('alicloud', 'security/kms-key'),
+    'alicloud_kms_secret':            ('alicloud', 'security/kms-key'),
+    'alicloud_ram_access_key':        ('alicloud', 'security/access-key'),
     'alicloud_ram_role':              ('alicloud', 'security/ram-role'),
     'alicloud_ram_policy':            ('alicloud', 'security/ram-policy'),
+    'alicloud_ram_role_attachment':   ('alicloud', 'security/ram-role'),
+    'alicloud_ram_role_policy_attachment': ('alicloud', 'security/ram-policy'),
     'alicloud_slb':                   ('alicloud', 'networking/load-balancer'),
     'alicloud_eip':                   ('alicloud', 'networking/eip'),
-    'alicloud_cs_kubernetes':         ('alicloud', 'containers/kubernetes-cluster'),
     'alicloud_fc_function':           ('alicloud', 'compute/function'),
+    'alicloud_log_project':           ('alicloud', 'storage/log-project'),
     'alicloud_log_store':             ('alicloud', 'storage/log-store'),
     # ── Oracle Cloud Infrastructure ──────────────────────────────────────────
     'oci_objectstorage_bucket':       ('oci', 'storage/object-storage'),
+    'oci_file_storage_file_system':   ('oci', 'storage/file-storage'),
     'oci_core_instance':              ('oci', 'compute/compute-instance'),
+    'oci_core_instance_pool':         ('oci', 'compute/instance-pool'),
+    'oci_core_volume':                ('oci', 'compute/block-volume'),
+    'oci_core_boot_volume':           ('oci', 'compute/boot-volume'),
     'oci_core_vcn':                   ('oci', 'networking/vcn'),
     'oci_core_subnet':                ('oci', 'networking/subnet'),
+    'oci_core_internet_gateway':      ('oci', 'networking/internet-gateway'),
+    'oci_core_nat_gateway':           ('oci', 'networking/nat-gateway'),
+    'oci_core_service_gateway':       ('oci', 'networking/service-gateway'),
+    'oci_core_route_table':           ('oci', 'networking/route-table'),
+    'oci_core_default_route_table':   ('oci', 'networking/route-table'),
+    'oci_core_drg':                   ('oci', 'networking/drg'),
+    'oci_core_local_peering_gateway': ('oci', 'networking/local-peering-gateway'),
     'oci_core_security_list':         ('oci', 'security/security-list'),
+    'oci_core_default_security_list': ('oci', 'security/security-list'),
     'oci_core_network_security_group':('oci', 'security/network-security-group'),
+    'oci_core_network_security_group_security_rule': ('oci', 'security/network-security-group'),
+    'oci_core_security_list_security_rule': ('oci', 'security/security-list'),
     'oci_database_db_system':         ('oci', 'database/db-system'),
     'oci_database_autonomous_database':('oci', 'database/autonomous-database'),
+    'oci_mysql_mysql_db_system':      ('oci', 'database/mysql-db-system'),
     'oci_load_balancer':              ('oci', 'networking/load-balancer'),
+    'oci_load_balancer_load_balancer':('oci', 'networking/load-balancer'),
+    'oci_network_load_balancer':      ('oci', 'networking/network-load-balancer'),
+    'oci_network_load_balancer_network_load_balancer': ('oci', 'networking/network-load-balancer'),
+    'oci_apigateway_gateway':         ('oci', 'networking/api-gateway'),
+    'oci_apigateway_deployment':      ('oci', 'networking/api-gateway'),
     'oci_identity_policy':            ('oci', 'security/policy'),
+    'oci_identity_compartment':       ('oci', 'security/compartment'),
+    'oci_vault_vault':                ('oci', 'security/vault'),
     'oci_vault_secret':               ('oci', 'security/secret'),
+    'oci_kms_vault':                  ('oci', 'security/vault'),
     'oci_kms_key':                    ('oci', 'security/kms-key'),
     'oci_functions_function':         ('oci', 'compute/function'),
+    'oci_functions_application':      ('oci', 'compute/function'),
     'oci_oke_cluster':                ('oci', 'containers/kubernetes-cluster'),
+    'oci_containerengine_cluster':    ('oci', 'containers/kubernetes-cluster'),
+    'oci_containerengine_node_pool':  ('oci', 'containers/node-pool'),
     # ── Synthetic/inferred nodes (created by diagram generator) ──────────────
     'synthetic_sql_server':           ('gcp', 'Cloud_SQL/cloud-sql'),
     'synthetic_database':             ('gcp', 'Cloud_SQL/cloud-sql'),

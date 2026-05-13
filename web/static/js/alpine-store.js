@@ -4,14 +4,31 @@
  */
 
 const PHASE_MAP = [
-  { id: 'pp-1',  title: 'Detection',            patterns: ['phase 1', 'detection scan', 'detection'],                                             label: 'Step 1: Detection' },
-  { id: 'pp-2',  title: 'OpenGrep',             patterns: ['opengrep', 'greping', 'grep scan', 'chunked opengrep', 'large repo detected'],       label: 'Step 2: OpenGrep' },
-  { id: 'pp-3',  title: 'Context',              patterns: ['context extract', 'extracting context', 'phase 2', 'code context discovery'],         label: 'Step 3: Context' },
-  { id: 'pp-4',  title: 'Relink',               patterns: ['relink', 'findings relink', 'phase 3b'],                                               label: 'Step 4: Relink' },
-  { id: 'pp-5',  title: 'Semantic',             patterns: ['semantic', 'phase 3c', 'infer semantic'],                                               label: 'Step 5: Semantic' },
-  { id: 'pp-6',  title: 'Diagrams',             patterns: ['phase 3d', 'diagram gen', 'generating diagram', 'generate architecture diagrams'],      label: 'Step 6: Diagrams' },
-  { id: 'pp-7',  title: 'Complete',             patterns: ['complete', 'scan complete', 'phase 4', 'finished', 'done'],                            label: 'Step 7: Complete' },
+  { id: 'pp-1',  title: 'Detection',           patterns: ['phase 1', 'detection scan', 'detection'],                                                             label: 'Step 1: Detection' },
+  { id: 'pp-2',  title: 'Misconfig Scan',      patterns: ['phase 2 — targeted misconfigurations', 'misconfigurations', 'storing findings in db'],                label: 'Step 2: Misconfig Scan' },
+  { id: 'pp-3a', title: 'Context - Patterns',  patterns: ['context phase 3.1', 'scanning patterns', 'opengrep detection'],                                       label: 'Step 3: Scanning patterns' },
+  { id: 'pp-3b', title: 'Context - Manifests', patterns: ['context phase 3.2', 'parsing manifests', 'package.json', 'kubernetes manifests'],                     label: 'Step 4: Parsing manifests' },
+  { id: 'pp-3c', title: 'Context - Topology',  patterns: ['context phase 3.3', 'service topology', 'extracting service', 'persisting'],                         label: 'Step 5: Service topology' },
+  { id: 'pp-4',  title: 'Analysis',            patterns: ['phase 3a', 'phase 3c', 'internet exposure', 'semantic', 'extract sg rules', 'extract ci/cd artifacts'], label: 'Step 6: Analysis' },
+  { id: 'pp-5',  title: 'Persistence',         patterns: ['phase 3b', 'relink findings', 'provider inheritance', 'populate resource_id'],                           label: 'Step 7: Persistence' },
+  { id: 'pp-6',  title: 'Diagrams',            patterns: ['phase 3d', 'diagram gen', 'generate architecture diagrams', 'loading diagrams'],                          label: 'Step 8: Diagrams' },
+  { id: 'pp-7',  title: 'Finalizing',          patterns: ['finalizing'],                                                                                           label: 'Step 9: Finalizing' },
+  { id: 'pp-8',  title: 'Ready',               patterns: ['step 8: ready', 'scan ready', 'pipeline ready'],                                                        label: 'Step 10: Ready' },
 ];
+
+const STAGE_TO_PHASE_INDEX = {
+  'phase1-detection': 0,
+  'phase1-misconfig': 1,
+  'phase2-context-patterns': 2,
+  'phase2-context-manifests': 3,
+  'phase2-context-topology': 4,
+  'phase2-context': 2, // fallback for old stage ID
+  'phase3-analysis': 5,
+  'phase3-persistence': 6,
+  'phase3-diagrams': 7,
+  finalizing: 8,
+  ready: 9,
+};
 
 document.addEventListener('alpine:init', () => {
   Alpine.store('scan', {
@@ -41,25 +58,61 @@ document.addEventListener('alpine:init', () => {
       this.phases.forEach(p => { p.state = 'idle'; });
     },
 
+    _activatePhase(index, label) {
+      if (index < 0 || index >= this.phases.length) return;
+      for (let i = 0; i < index; i++) this.phases[i].state = 'done';
+      this.phases[index].state = 'active';
+      this.phaseIdx = index;
+      this.phaseLabel = label || PHASE_MAP[index]?.label || this.phaseLabel;
+    },
+
     updatePhase(text) {
       const lower = text.toLowerCase();
       for (let i = PHASE_MAP.length - 1; i >= 0; i--) {
         const phase = PHASE_MAP[i];
         const matched = phase.patterns.some(pat => lower.includes(pat));
         if (matched && i > this.phaseIdx) {
-          // Mark all prior phases done
-          for (let j = 0; j < i; j++) this.phases[j].state = 'done';
-          this.phases[i].state = 'active';
-          this.phaseIdx  = i;
-          this.phaseLabel = phase.label;
+          this._activatePhase(i, phase.label);
           break;
         }
       }
     },
 
+    updatePhaseFromStage(stage) {
+      if (!stage || typeof stage !== 'object') return;
+      this.pipelineVisible = true;
+
+      if (stage.state === 'complete' || stage.id === 'ready') {
+        this.completePipeline();
+        return;
+      }
+      if (stage.state === 'failed') {
+        this.phaseLabel = stage.label || 'Scan failed';
+        return;
+      }
+
+      const index = STAGE_TO_PHASE_INDEX[stage.id];
+      if (typeof index !== 'number') {
+        if (stage.label) this.phaseLabel = stage.label;
+        return;
+      }
+
+      if (index < this.phaseIdx) {
+        if (stage.label) this.phaseLabel = stage.label;
+        return;
+      }
+
+      if (index === this.phaseIdx) {
+        if (stage.label) this.phaseLabel = stage.label;
+        return;
+      }
+
+      this._activatePhase(index, stage.label);
+    },
+
     completePipeline() {
       this.phases.forEach(p => { p.state = 'done'; });
-      this.phaseLabel = 'Step 7: Complete ✓';
+      this.phaseLabel = 'Step 10: Ready ✓';
       setTimeout(() => { this.pipelineVisible = false; }, 3000);
     },
 
@@ -78,6 +131,9 @@ document.addEventListener('alpine:init', () => {
     showModuleModal(modules, onScan, onSkip) {
       this.detectedModules = modules.map(m => ({ 
         ...m, 
+        source: m.source || '',
+        source_file: m.source_file || '',
+        source_line: Number.isFinite(Number(m.source_line)) ? Number(m.source_line) : null,
         selected: m.found_in_repos && !m.already_scanned,  // Auto-select not-yet-scanned modules
         userProvidedPath: null,
         pathInputVisible: true,
@@ -133,6 +189,7 @@ document.addEventListener('alpine:init', () => {
   window.triagePipeline = {
     onScanStart:    () => Alpine.store('scan').startPipeline(),
     onScanLine:     (text) => Alpine.store('scan').updatePhase(text),
+    onScanStage:    (stage) => Alpine.store('scan').updatePhaseFromStage(stage),
     onScanComplete: () => Alpine.store('scan').completePipeline(),
     showModal:      (msg, onWatch, onNew) => Alpine.store('scan').showModal(msg, onWatch, onNew),
     showModuleModal: (modules, onScan, onSkip) => Alpine.store('scan').showModuleModal(modules, onScan, onSkip),

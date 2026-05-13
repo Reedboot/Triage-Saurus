@@ -313,6 +313,7 @@
   "aws_s3_bucket_policy": "/aws/Arch_Storage/64/s3.svg",
   "aws_s3_object": "/aws/Arch_Storage/64/s3.svg",
   "aws_s3_bucket_object": "/aws/Arch_Storage/64/s3.svg",
+  "aws_ebs_volume": "/aws/Arch_Storage/64/elastic-block-store.svg",
   "aws_db_instance": "/aws/Arch_Databases/64/rds.svg",
   "aws_rds_cluster": "/aws/Arch_Databases/64/aurora.svg",
   "aws_ecr_repository": "/aws/Arch_Security-Identity/64/ecr.svg",

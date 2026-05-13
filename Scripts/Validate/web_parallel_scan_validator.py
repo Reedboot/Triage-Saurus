@@ -185,6 +185,7 @@ class ScanResult:
     orphan_issues: list[dict[str, Any]] | None = None
     connection_issues: list[dict[str, Any]] | None = None
     parity_issues: list[dict[str, Any]] | None = None
+    hierarchy_issues: list[dict[str, Any]] | None = None
     resource_value_assessments: list[dict[str, Any]] | None = None
     rule_candidates: list[dict[str, Any]] | None = None
     detection_rules: list[dict[str, Any]] | None = None
@@ -206,6 +207,7 @@ def scan_result_to_dict(result: ScanResult) -> dict[str, Any]:
         "orphan_issues": result.orphan_issues or [],
         "connection_issues": result.connection_issues or [],
         "parity_issues": result.parity_issues or [],
+        "hierarchy_issues": result.hierarchy_issues or [],
         "resource_value_assessments": result.resource_value_assessments or [],
         "rule_candidates": result.rule_candidates or [],
         "detection_rules": result.detection_rules or [],
@@ -262,6 +264,7 @@ def make_failed_result(repo: RepoOption, error: str) -> ScanResult:
         orphan_issues=[],
         connection_issues=[],
         parity_issues=[],
+        hierarchy_issues=[],
         resource_value_assessments=[],
         rule_candidates=[],
         detection_rules=[],
@@ -549,7 +552,145 @@ def annotate_issue_with_value(issue: dict[str, Any]) -> dict[str, Any]:
     )
     value = classify_resource_value(hint)
     issue["value_assessment"] = value
+    issue["element_rationale"] = build_element_rationale(issue, value)
     return issue
+
+
+def build_element_rationale(issue: dict[str, Any], value: dict[str, str]) -> dict[str, str]:
+    """Attach security-architect rationale for why an element should exist."""
+    issue_type = str(issue.get("issue_type") or "unknown")
+    resource_hint = (
+        str(issue.get("node_id") or issue.get("expected_asset") or issue_type).replace("_", " ").strip()
+        or "element"
+    )
+    classification = value.get("classification", "contextual")
+    contribution_map = {
+        "high_value": "Directly participates in threat-model boundaries (ingress, identity, data, or trust).",
+        "contextual": "Provides architectural path context needed to reason about attacker movement.",
+        "low_value": "Likely non-security noise unless evidence proves it affects a real attack path.",
+    }
+    smell_map = {
+        "orphan_node": "Unconnected nodes are a strong smell that detection logic is incomplete or relationships are missing.",
+        "flat_hierarchy_smell": "Flat child resources weaken threat-model accuracy because parent controls are obscured.",
+        "missing_internet_to_ingress": "Missing ingress linkage hides internet attack surface and entry point controls.",
+        "missing_ingress_to_service": "Missing gateway-to-service linkage hides enforcement boundaries and bypass risk.",
+        "missing_service_to_data": "Missing service-to-data linkage hides data-exfiltration and privilege escalation paths.",
+        "docs_iac_parity_gap": "Parity gaps imply detection rules missed evidence-backed architecture elements.",
+    }
+    return {
+        "why_present_question": f"Why is '{resource_hint}' present, and what threat-model boundary or path does it represent?",
+        "security_contribution": contribution_map.get(
+            classification,
+            "Contributes context for threat-model completeness and attack-path reasoning.",
+        ),
+        "smell_if_unconnected": smell_map.get(
+            issue_type,
+            "Missing or unconnected representation indicates possible detection-rule or parsing coverage gaps.",
+        ),
+    }
+
+
+def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Parse Mermaid subgraph context for simple hierarchy checks.
+
+    Returns:
+        node_to_subgraphs: node_id -> list of current subgraph labels (inner-most last)
+        subgraph_labels: subgraph_id -> normalized label text
+    """
+    node_to_subgraphs: dict[str, list[str]] = {}
+    subgraph_labels: dict[str, str] = {}
+    stack: list[str] = []
+
+    subgraph_with_label_re = re.compile(r'^\s*subgraph\s+([A-Za-z][A-Za-z0-9_]*)\s*\["([^"]+)"\]\s*$')
+    subgraph_plain_re = re.compile(r'^\s*subgraph\s+([A-Za-z][A-Za-z0-9_]*)\s*$')
+    node_decl_re = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)")
+
+    for raw_line in code.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+
+        with_label = subgraph_with_label_re.match(line)
+        if with_label:
+            subgraph_id = with_label.group(1)
+            label = with_label.group(2).strip().lower()
+            subgraph_labels[subgraph_id] = label
+            stack.append(label)
+            continue
+
+        plain = subgraph_plain_re.match(line)
+        if plain:
+            subgraph_id = plain.group(1)
+            label = subgraph_id.strip().lower()
+            subgraph_labels[subgraph_id] = label
+            stack.append(label)
+            continue
+
+        if line.lower() == "end":
+            if stack:
+                stack.pop()
+            continue
+
+        if line.lower().startswith(("flowchart", "architecture-beta", "classdef", "class ", "style ", "linkstyle")):
+            continue
+        if "-->" in line or "-.->" in line or "==>" in line:
+            continue
+
+        for m in node_decl_re.finditer(line):
+            node_id = m.group(1)
+            node_to_subgraphs[node_id] = list(stack)
+
+    return node_to_subgraphs, subgraph_labels
+
+
+def detect_hierarchy_issues(code: str, provider: str, diagram_title: str) -> list[dict[str, Any]]:
+    """Detect likely flat child resources that should be nested under parent subgraphs."""
+    labels = _extract_node_label_map(code)
+    node_to_subgraphs, _subgraph_labels = _extract_subgraph_hierarchy(code)
+    all_label_text = " ".join((label or "").lower() for label in labels.values())
+    all_subgraph_text = " ".join(" ".join(v) for v in node_to_subgraphs.values()).lower()
+    searchable = f"{all_label_text} {all_subgraph_text}"
+
+    # child_terms -> parent_terms
+    hierarchy_rules = [
+        (("container", "bucket object", "blob"), ("storage account", "bucket", "storage")),
+        (("database", "sql database"), ("sql server", "postgres server", "mysql server", "database instance", "cosmos")),
+        (("api", "operation"), ("api management", "apim", "api gateway")),
+        (("queue", "subscription"), ("service bus", "topic", "namespace", "pubsub")),
+    ]
+
+    issues: list[dict[str, Any]] = []
+    for node_id, label in labels.items():
+        label_l = (label or "").lower()
+        if not label_l:
+            continue
+
+        for child_terms, parent_terms in hierarchy_rules:
+            if not any(term in label_l for term in child_terms):
+                continue
+            if not any(term in searchable for term in parent_terms):
+                continue
+
+            enclosing = " ".join(node_to_subgraphs.get(node_id, [])).lower()
+            if any(term in enclosing for term in parent_terms):
+                continue
+
+            issues.append(
+                {
+                    "issue_type": "flat_hierarchy_smell",
+                    "diagram_title": diagram_title,
+                    "provider": provider,
+                    "node_id": node_id,
+                    "description": (
+                        f"Node '{node_id}' looks like a child resource but is not nested under an expected parent subgraph."
+                    ),
+                    "repo_evidence_files": [],
+                    "provider_default_refs": PROVIDER_DEFAULT_REFERENCES.get(provider, []),
+                }
+            )
+            break
+
+    return issues
 
 
 def _path_exists(edges: list[tuple[str, str]], sources: set[str], targets: set[str]) -> bool:
@@ -1036,7 +1177,7 @@ async def collect_diagram_validation_issues(
     repo: RepoOption,
     experiment_id: str,
     logger: ProgressLogger,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     escaped_repo = quote(repo.api_key, safe="")
     response = await page.request.get(f"/api/diagrams/{experiment_id}?repo_name={escaped_repo}")
     if not response.ok:
@@ -1046,6 +1187,7 @@ async def collect_diagram_validation_issues(
     orphan_issues: list[dict[str, Any]] = []
     connection_issues: list[dict[str, Any]] = []
     parity_issues: list[dict[str, Any]] = []
+    hierarchy_issues: list[dict[str, Any]] = []
     resource_value_assessments: list[dict[str, Any]] = []
     repo_root = Path(repo.path)
     expected_assets = infer_expected_assets(repo_root) if repo_root.is_dir() else {}
@@ -1116,7 +1258,24 @@ async def collect_diagram_validation_issues(
                 f"{repo.name}: docs+IaC parity gap '{issue.get('expected_asset', 'unknown')}' in '{title}' "
                 f"(evidence_files={len(issue.get('repo_evidence_files') or [])})"
             )
-    return orphan_issues, connection_issues, parity_issues, resource_value_assessments
+        hierarchy = detect_hierarchy_issues(code=code, provider=provider, diagram_title=title)
+        for issue in hierarchy:
+            hierarchy_issues.append(annotate_issue_with_value(issue))
+            resource_value_assessments.append(
+                {
+                    "issue_type": issue.get("issue_type"),
+                    "resource_hint": issue.get("node_id"),
+                    "diagram_title": title,
+                    "provider": provider,
+                    "value_assessment": hierarchy_issues[-1]["value_assessment"],
+                }
+            )
+        for issue in hierarchy:
+            await logger.warn(
+                f"{repo.name}: hierarchy smell '{issue.get('node_id', 'unknown')}' in '{title}' "
+                "(child appears unnested)"
+            )
+    return orphan_issues, connection_issues, parity_issues, hierarchy_issues, resource_value_assessments
 
 
 async def scan_repo_worker(
@@ -1155,7 +1314,7 @@ async def scan_repo_worker(
             output_dir=screenshots_dir,
             logger=logger,
         )
-        orphan_issues, connection_issues, parity_issues, resource_value_assessments = await collect_diagram_validation_issues(
+        orphan_issues, connection_issues, parity_issues, hierarchy_issues, resource_value_assessments = await collect_diagram_validation_issues(
             page,
             repo,
             experiment_id,
@@ -1164,7 +1323,7 @@ async def scan_repo_worker(
         rule_candidates: list[dict[str, Any]] = []
         detection_rules: list[dict[str, Any]] = []
         rule_validations: list[dict[str, Any]] = []
-        candidate_input = [*orphan_issues, *connection_issues, *parity_issues]
+        candidate_input = [*orphan_issues, *connection_issues, *parity_issues, *hierarchy_issues]
         if write_rule_candidates and candidate_input:
             rule_candidates = write_rule_candidate_stubs(repo, candidate_input, candidate_rules_dir)
             if rule_candidates:
@@ -1203,6 +1362,7 @@ async def scan_repo_worker(
             orphan_issues=orphan_issues,
             connection_issues=connection_issues,
             parity_issues=parity_issues,
+            hierarchy_issues=hierarchy_issues,
             resource_value_assessments=resource_value_assessments,
             rule_candidates=rule_candidates,
             detection_rules=detection_rules,
@@ -1222,6 +1382,7 @@ async def scan_repo_worker(
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            hierarchy_issues=[],
             resource_value_assessments=[],
             rule_candidates=[],
             detection_rules=[],
@@ -1239,6 +1400,7 @@ async def scan_repo_worker(
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            hierarchy_issues=[],
             resource_value_assessments=[],
             rule_candidates=[],
             detection_rules=[],
@@ -1483,6 +1645,7 @@ async def run(args: argparse.Namespace) -> int:
             for v in (r.rule_validations or [])
             if v.get("status") != "passed"
         ),
+        "hierarchy_issues_total": sum(len(r.hierarchy_issues or []) for r in final_results),
         "retried_repos": retry_metadata,
         "completed": sum(1 for r in final_results if r.status == "completed"),
         "failed": sum(1 for r in final_results if r.status != "completed"),

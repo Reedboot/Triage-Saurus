@@ -296,6 +296,18 @@ Strict repo-by-repo validation (one repo at a time with immediate retry on failu
 python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --repo-at-a-time
 ```
 
+Diagram Review Skill (baseline + after with screenshots and rule validation report):
+
+```bash
+python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000
+```
+
+Repo slash command (in Copilot Chat):
+
+```text
+/diagram-review
+```
+
 - Discovers all repos from `#repo-select`, starts scans in parallel (6 at a time by default), and consumes results as they complete.
 - Uses a hard per-repo completion safeguard timeout (default: 600s) so stalled scans do not block the batch.
 - Use `--scan-complete-timeout-sec <seconds>` to override the per-repo completion wait time.
@@ -306,6 +318,8 @@ python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.
 - Optional rule generation and validation for confirmed diagram coverage gaps:
   - `--write-detection-rules` writes evidence-backed rules to `Rules/Detection/`
   - `--validate-detection-rules` runs `opengrep scan --config <rule-file.yml> <target-repo>` for each generated rule
+- `review_generated_diagrams.py` wraps this flow into a two-pass (before/after) security-architect report under `Output/Audit/DiagramReviewSkill_<timestamp>/diagram_review_report.md`.
+- `/diagram-review` is defined by `.github/prompts/diagram-review.prompt.md` and is available when working in this repository.
 
 Security warning
 

@@ -44,6 +44,9 @@ repository.
 - **Path:** Agents/ArchitectureAgent.md
   - **Purpose:** Create and update cloud architecture diagrams based on knowledge. Creates multi-diagram views with hyperlinks (🔗 visual indicators) between services for interactive navigation.
   - **Approach:** Multiple focused diagrams (Ingress, Routing, Backend, Network) instead of single monolithic diagram for clarity.
+- **Path:** Agents/DiagramReviewSkill.md
+  - **Purpose:** Review generated diagrams via Playwright screenshots and structural analysis from a security-architect threat-model perspective.
+  - **Capabilities:** Provider-tab screenshot capture, element-level rationale ("why is it there"), orphan/hierarchy smell detection, detection-rule gap identification, OpenGrep rule validation, and before/after reporting.
 - **Path:** Agents/CloudSummaryAgent.md
   - **Purpose:** Guidance for summarising cloud findings.
 - **Path:** Agents/RepoSummaryAgent.md

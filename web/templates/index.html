@@ -84,12 +84,15 @@
       </div>
       <div class="flex justify-between mt-1">
         <span class="text-[10px] text-gray-600">detection</span>
-        <span class="text-[10px] text-gray-600">opengrep</span>
-        <span class="text-[10px] text-gray-600">context</span>
-        <span class="text-[10px] text-gray-600">relink</span>
-        <span class="text-[10px] text-gray-600">semantic</span>
+        <span class="text-[10px] text-gray-600">misconfig</span>
+        <span class="text-[10px] text-gray-600">patterns</span>
+        <span class="text-[10px] text-gray-600">manifests</span>
+        <span class="text-[10px] text-gray-600">topology</span>
+        <span class="text-[10px] text-gray-600">analysis</span>
+        <span class="text-[10px] text-gray-600">persist</span>
         <span class="text-[10px] text-gray-600">diagrams</span>
-        <span class="text-[10px] text-gray-600">done</span>
+        <span class="text-[10px] text-gray-600">finalizing</span>
+        <span class="text-[10px] text-gray-600">ready</span>
       </div>
     </div>
 
@@ -364,6 +367,20 @@
                 </div>
               </div>
             </template>
+
+            <details style="margin-top: 8px; border-top: 1px solid #1f2937; padding-top: 8px;">
+              <summary style="cursor: pointer; color: #9ca3af; font-size: 0.8rem;">Module reference</summary>
+              <div style="margin-top: 6px; font-size: 0.8rem; line-height: 1.5;">
+                <div style="margin-bottom: 4px;">
+                  <span style="color: #9ca3af;">URL:</span>
+                  <code x-text="mod.source || 'Unknown URL'" style="display: block; margin-top: 2px; color: #93c5fd; word-break: break-all; white-space: pre-wrap;"></code>
+                </div>
+                <div>
+                  <span style="color: #9ca3af;">Reference:</span>
+                  <span x-text="mod.source_file || 'Unknown file'" style="margin-left: 4px; color: #d1d5db; word-break: break-all;"></span><span x-show="mod.source_line" x-text="':' + mod.source_line" style="color: #d1d5db;"></span>
+                </div>
+              </div>
+            </details>
           </div>
         </template>
       </div>
@@ -371,6 +388,7 @@
       <p id="module-note" class="text-xs text-gray-500 mb-3">
         ✓ Green = Found in ReposToScan.txt | ⚠ Red = Not found, please provide path
         <br/>All paths can be edited by clicking "✎ Edit path" — incorrect paths can be corrected.
+        <br/>Expand "Module reference" to see module URL and file/line location.
       </p>
       
       <div class="modal-buttons">

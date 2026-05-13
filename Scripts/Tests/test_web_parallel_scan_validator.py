@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "Scripts" / "Validate"))
 
 from web_parallel_scan_validator import (  # noqa: E402
     detect_docs_iac_parity_issues,
+    detect_hierarchy_issues,
     detect_missing_connections,
     effective_concurrency,
     RepoOption,
@@ -93,6 +94,17 @@ def test_detect_docs_iac_parity_issues_flags_missing_expected_asset():
     expected_assets = {issue["expected_asset"] for issue in issues}
     assert "internet_ingress" in expected_assets
     assert "database" in expected_assets
+
+
+def test_detect_hierarchy_issues_flags_flat_child_resource():
+    code = """
+    flowchart LR
+      storage_acc[Storage Account: data]
+      blob_data[Blob: private-data.csv]
+      storage_acc --> blob_data
+    """
+    issues = detect_hierarchy_issues(code=code, provider="azure", diagram_title="Azure diagram")
+    assert any(issue.get("issue_type") == "flat_hierarchy_smell" for issue in issues)
 
 
 def test_gather_repo_evidence_returns_matching_files(tmp_path: Path):
@@ -317,7 +329,7 @@ def test_scan_repo_worker_plumbs_scan_complete_timeout(monkeypatch, tmp_path: Pa
         return []
 
     async def fake_collect_diagram_validation_issues(*args, **kwargs):
-        return ([], [], [], [])
+        return ([], [], [], [], [])
 
     monkeypatch.setattr("web_parallel_scan_validator.start_scan_from_ui", fake_start_scan_from_ui)
     monkeypatch.setattr("web_parallel_scan_validator.wait_for_experiment", fake_wait_for_experiment)
@@ -504,6 +516,7 @@ def test_run_serial_mode_processes_repos_in_order(monkeypatch, tmp_path: Path):
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            hierarchy_issues=[],
             rule_candidates=[],
         )
 
@@ -602,6 +615,7 @@ def test_run_repo_at_a_time_retries_before_next_repo(monkeypatch, tmp_path: Path
             orphan_issues=[],
             connection_issues=[],
             parity_issues=[],
+            hierarchy_issues=[],
             resource_value_assessments=[],
             rule_candidates=[],
             detection_rules=[],

@@ -1066,7 +1066,9 @@ def main() -> int:
 
     raw: dict[str, Any] = {}
 
-    # ── 1. opengrep: Frameworks ──────────────────────────────────────────────
+    # ── CONTEXT SUB-STAGE 1: Scanning frameworks & code patterns ──────────────
+    print(f"{Color.BLUE}[Context Phase 3.1] Scanning frameworks & code patterns ...{Color.RESET}")
+    
     fired_framework_ids: set[str] = set()
     if not args.no_opengrep:
         print(f"{Color.YELLOW}🔎 Running opengrep Detection/Frameworks ...{Color.RESET}")
@@ -1076,7 +1078,6 @@ def main() -> int:
         for rule_id in fired_framework_ids:
             raw[f"opengrep.framework.{rule_id}"] = "detected"
 
-    # ── 2. opengrep: Code patterns ───────────────────────────────────────────
     fired_code_ids: set[str] = set()
     if not args.no_opengrep:
         print(f"{Color.YELLOW}🔎 Running opengrep Detection/Code ...{Color.RESET}")
@@ -1086,7 +1087,9 @@ def main() -> int:
         for rule_id in fired_code_ids:
             raw[f"opengrep.code.{rule_id}"] = "detected"
 
-    # ── 3. Manifest parsing ──────────────────────────────────────────────────
+    # ── CONTEXT SUB-STAGE 2: Parsing manifests & dependencies ────────────────
+    print(f"{Color.BLUE}[Context Phase 3.2] Parsing manifests & dependencies ...{Color.RESET}")
+    
     print(f"{Color.YELLOW}📦 Parsing manifest files ...{Color.RESET}")
     _merge(raw, _parse_package_json(target))
     _merge(raw, _parse_requirements_txt(target))
@@ -1110,15 +1113,15 @@ def main() -> int:
     except Exception:
         pass
 
-    # ── 4. Kubernetes manifests ──────────────────────────────────────────────
     print(f"{Color.YELLOW}☸️  Parsing Kubernetes manifests ...{Color.RESET}")
     _merge(raw, _parse_k8s_manifests(target))
 
-    # ── 5. CI/CD detection ───────────────────────────────────────────────────
     print(f"{Color.YELLOW}⚙️  Detecting CI/CD tooling ...{Color.RESET}")
     _merge(raw, _detect_cicd(target))
 
-    # ── 6. Persist to DB ─────────────────────────────────────────────────────
+    # ── CONTEXT SUB-STAGE 3: Extracting service topology & persisting ────────
+    print(f"{Color.BLUE}[Context Phase 3.3] Extracting service topology & persisting ...{Color.RESET}")
+    
     flat = _flatten_for_db(raw)
     print(f"{Color.CYAN}💾 Saving {len(flat)} metadata entries to database (clearing stale entries first)...{Color.RESET}")
 

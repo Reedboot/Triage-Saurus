@@ -686,7 +686,7 @@
     // Show status
     if (statusBar) statusBar.style.display = 'flex';
     if (spinner) spinner.style.display = 'block';
-    window._triage.setStatus('Connecting to scan stream…', '');
+    window._triage.setStatus('Scan pipeline…', '');
 
     // Disable submit button
     if (scanBtn) scanBtn.disabled = true;
@@ -715,7 +715,7 @@
             return;
           }
 
-          addLogLine('[Info] 🔌 Connected to scan stream', 'info');
+          addLogLine('[Info] 🔌 Scan pipeline connected', 'info');
 
           // Read the streaming response
           if (!response.body) {
@@ -743,7 +743,7 @@
 
               chunkCount++;
               if (chunkCount === 1) {
-                addLogLine('[Info] 📡 Receiving data...', 'info');
+                addLogLine('[Info] 📡 Receiving pipeline data...', 'info');
               }
 
               // Append to buffer and process lines

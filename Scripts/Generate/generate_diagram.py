@@ -1457,12 +1457,16 @@ class HierarchicalDiagramBuilder:
         """Heuristic for resources that can plausibly receive traffic from Internet."""
         rtype = (resource.get('resource_type') or '').lower()
         name = (resource.get('resource_name') or '').lower()
+        provider = (resource.get('provider') or '').lower()
 
         # API gateways are not always internet entry points (APIM can be internal/VNet/private).
         # Only treat as public edge when we have explicit internet_access=true evidence.
         if self.is_api_gateway(resource) or self.is_api_operation(resource):
             props = resource.get('properties') or {}
             return str(props.get('internet_access') or '').strip().lower() == 'true'
+
+        if InternetExposureDetector.is_relay_resource_type(rtype, provider):
+            return True
 
         # Common edge/service-entry resource types across clouds.
         edge_type_tokens = [
@@ -1497,6 +1501,14 @@ class HierarchicalDiagramBuilder:
             return False
 
         return False
+
+    def is_internet_relay_resource(self, resource: Optional[dict]) -> bool:
+        """Return True when resource likely relays internet traffic to downstream services."""
+        if not resource:
+            return False
+        rtype = (resource.get('resource_type') or '').lower()
+        provider = (resource.get('provider') or '').lower()
+        return InternetExposureDetector.is_relay_resource_type(rtype, provider)
 
     def is_identity_principal_like(self, resource: dict) -> bool:
         """Detect identity principal/group resources that are often unconnected noise in diagrams."""
@@ -3952,6 +3964,7 @@ class HierarchicalDiagramBuilder:
         SUPPRESS_LABEL_TYPES = frozenset({
             'data_access', 'data access', 'uses_database', 'depends_on', 'references',
         })
+        INDIRECT_REACHABLE_COLOR = '#f59e0b'
 
         lines = []
         lines.append("")
@@ -4063,6 +4076,13 @@ class HierarchicalDiagramBuilder:
             tgt_id = _resolve_node_id(tgt)
             if _is_internet(src):
                 has_internet = True
+            src_resource = self._get_primary_resource(src)
+            src_is_indirect_public_path = (
+                not _is_internet(src)
+                and not _is_internet(tgt)
+                and self._is_exposed_resource(src_resource)
+                and self.is_internet_relay_resource(src_resource)
+            )
             
             # Build label
             label_parts = []
@@ -4081,6 +4101,12 @@ class HierarchicalDiagramBuilder:
             if protocol:
                 # Only include protocol if it was actually detected on the connection record
                 label_parts.append(protocol)
+            elif src_is_indirect_public_path:
+                src_type = (src_resource.get('resource_type') or '').lower() if src_resource else ''
+                if any(tok in src_type for tok in ('load_balancer', 'alb', 'elb', 'apigateway', 'api_gateway', 'gateway', 'cloudfront', 'frontdoor')):
+                    label_parts.append('HTTP/HTTPS')
+                else:
+                    label_parts.append('TCP')
             
             port = conn.get('port')
             if port:
@@ -4128,10 +4154,21 @@ class HierarchicalDiagramBuilder:
         for link_index, (conn, src_id, tgt_id) in enumerate(edge_list):
             src = conn.get('source')
             tgt = conn.get('target')
-            
+            src_resource = self._get_primary_resource(src) if src else None
+             
             # Color direct Internet→service connections red
             if _is_internet(src) and (tgt and not _is_internet(tgt)):
                 style_lines.append(f"  linkStyle {tracked_link_offset + link_index} stroke:red,stroke-width:2px")
+            elif (
+                src_resource
+                and self._is_exposed_resource(src_resource)
+                and self.is_internet_relay_resource(src_resource)
+                and not _is_internet(src)
+                and not _is_internet(tgt)
+            ):
+                style_lines.append(
+                    f"  linkStyle {tracked_link_offset + link_index} stroke:{INDIRECT_REACHABLE_COLOR},stroke-width:2px,stroke-dasharray: 4 2"
+                )
         
         # Add Internet connections for detected exposed resources
         # Build set of resource names whose parent is ALSO in exposed_resources.
@@ -4230,14 +4267,23 @@ class HierarchicalDiagramBuilder:
                         other_type = (other_res.get('resource_type') or '').lower()
                         if 'internet_gateway' in other_type:
                             continue
+                        if any(tok in other_type for tok in _INFRA_ONLY_TOKENS):
+                            continue
                         # Only link IGW → resources in the same VPC (direct or via subnet parent)
                         other_vpc = other_res.get('parent_resource_id')
                         if igw_vpc_id and other_vpc != igw_vpc_id:
                             continue
                         other_id = _resolve_node_id(other_name)
                         if (igw_id, other_id) not in {(e[1], e[2]) for e in edge_list}:
-                            lines.append(f"  {igw_id} --> {other_id}")
+                            inferred_protocol = (other_detail.protocol or '').upper() or 'HTTP/HTTPS'
+                            inferred_port = str(other_detail.port).strip() if other_detail.port else ''
+                            inferred_label = f"{inferred_protocol} :{inferred_port}" if inferred_port else inferred_protocol
+                            lines.append(f"  {igw_id} -.->|{inferred_label}| {other_id}")
+                            current_link_idx = sum(1 for ln in lines if ("-->" in ln or "-.->" in ln)) - 1
                             edge_list.append((None, igw_id, other_id))
+                            style_lines.append(
+                                f"  linkStyle {current_link_idx} stroke:{INDIRECT_REACHABLE_COLOR},stroke-width:2px,stroke-dasharray: 4 2"
+                            )
                     continue  # IGW handled — skip the standard connection logic below
 
                 # Only expand to children for storage-container-type resources.
@@ -4293,8 +4339,8 @@ class HierarchicalDiagramBuilder:
                     # Add placeholder to edge_list so subsequent indices increment correctly
                     edge_list.append((None, src_id, tgt_id))
                     
-                    # Add color styling for this link
-                    style_lines.append(f"  linkStyle {current_link_idx} stroke:{exposure_detail.color},stroke-width:2px")
+                    # Direct Internet→entry edges are always red.
+                    style_lines.append(f"  linkStyle {current_link_idx} stroke:red,stroke-width:2px")
 
         # Add internet → K8s LoadBalancer/NodePort service edges (before style_lines so linkStyle indices are correct)
         if self._k8s_internet_services:

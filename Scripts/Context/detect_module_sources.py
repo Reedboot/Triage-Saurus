@@ -89,6 +89,9 @@ def detect_modules(repo_path: str, max_files: int = 500) -> Dict[str, Any]:
     modules = []
     inferred_architectures = {arch: [] for arch in MODULE_PATTERNS.keys()}
     
+    # Fast by design: only parse top-level *.tf files in common Terraform folders,
+    # with a file cap. This runs against the caller-provided repo_path and does
+    # not assume any specific repository (for example, it is not accounts-only).
     # Find all .tf files - look in common locations first
     tf_files = []
     common_paths = [repo / "terraform", repo / "terraform-aks", repo]

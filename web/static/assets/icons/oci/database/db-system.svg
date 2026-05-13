@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <ellipse cx="16" cy="8" rx="11" ry="4.5" fill="#F80000"/>
-  <path d="M5 8v16c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5V8" fill="#FF4040"/>
-  <ellipse cx="16" cy="24" rx="11" ry="4.5" fill="#F80000"/>
-  <text x="16" y="20.5" font-family="Arial" font-size="15" font-weight="bold" fill="white" text-anchor="middle">D</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <ellipse cx="32" cy="14" rx="22" ry="8" fill="#C74634"/>
+  <path d="M10 14v28c0 4.4 9.8 8 22 8s22-3.6 22-8V14" fill="#D85846"/>
+  <ellipse cx="32" cy="42" rx="22" ry="8" fill="#C74634"/>
+  <path d="M20 27h24M20 34h24" stroke="#FFF" stroke-width="2.8" stroke-linecap="round"/>
 </svg>

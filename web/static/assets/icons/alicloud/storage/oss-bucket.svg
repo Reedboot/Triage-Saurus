@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <circle cx="16" cy="16" r="13" fill="#FF6A00"/>
-  <text x="16" y="22" font-family="Arial" font-size="14" font-weight="bold" fill="white" text-anchor="middle">O</text>
+  <path d="M8.2 9.1h15.6l-1.8 13.8c-.2 2-1.9 3.6-4 3.6h-4c-2.1 0-3.8-1.6-4-3.6z" fill="#FF6A00"/>
+  <ellipse cx="16" cy="9" rx="8.4" ry="2.8" fill="#FF8A33"/>
+  <path d="M11.2 14.5h9.6M11.7 18.3h8.6" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round"/>
 </svg>

@@ -513,10 +513,14 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     
     # WSL/opengrep can hang on large repositories. Chunk scanning for large tracked sets.
     tracked_files = _tracked_file_count(target)
+    if label == "Detection":
+        print(f"{Header.DETECTION} Detection pre-scan inventory complete: {tracked_files} tracked file(s)")
     # Be conservative on WSL/network filesystems: chunk once repos are moderately sized.
     use_chunked = tracked_files >= 250
 
     if not use_chunked:
+        if label == "Detection":
+            print(f"{Header.DETECTION} Detection chunk prep: single-pass scan")
         result = subprocess.run(cmd, capture_output=True, text=True)
         # opengrep exits non-zero when findings exist — that's expected
         try:
@@ -530,6 +534,8 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     print(f"{Header.INFO} Large repo detected ({tracked_files} tracked files); using chunked opengrep.")
     chunk_size = 40
     chunks = _build_scan_chunks(target, max_files=chunk_size, max_paths=3)
+    if label == "Detection":
+        print(f"{Header.DETECTION} Detection chunk prep: {len(chunks)} chunk(s), up to {chunk_size} tracked files each")
     chunk_results: list[dict] = []
     chunk_timeout_seconds = 180
     for idx, chunk in enumerate(chunks, start=1):
@@ -537,6 +543,8 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
         for config_path in config_paths:
             chunk_cmd += ["--config", str(config_path)]
         chunk_cmd += [*chunk, "--json", "--quiet"]
+        if label == "Detection":
+            print(f"{Header.DETECTION} Detection chunk progress: {idx}/{len(chunks)}")
         print(_format_chunk_progress(chunk, idx, len(chunks)))
         if os.environ.get("TS_VERBOSE_CHUNK_COMMANDS", "").strip().lower() in {"1", "true", "yes", "on"}:
             print(f"    cmd: {' '.join(chunk_cmd)}")
@@ -643,6 +651,7 @@ def main() -> None:
     if resources_added:
         print(f"{Header.INFO} Persisted {resources_added} detected assets as resources.")
     fired_ids = extract_fired_rule_ids(detection_data)
+    print(f"{Header.DETECTION} Detection stage complete: {len(fired_ids)} rule(s) fired")
 
     misconfig_paths = resolve_misconfig_paths(fired_ids, target)
     print_detection_summary(fired_ids, misconfig_paths)

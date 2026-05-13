@@ -145,6 +145,45 @@ class InternetExposureDetector:
         },
     }
 
+    # Provider-specific resources that commonly relay/forward internet traffic inward.
+    # These are used for "indirect internet path" semantics (edge -> backend).
+    INTERNET_RELAY_BY_PROVIDER = {
+        'aws': {
+            'aws_lb', 'aws_alb', 'aws_nlb', 'aws_elb',
+            'aws_api_gateway_rest_api', 'aws_apigatewayv2_api', 'aws_api_gateway_stage', 'aws_apigatewayv2_stage',
+            'aws_cloudfront_distribution', 'aws_cloudfront',
+            'aws_networkfirewall_firewall',
+        },
+        'azure': {
+            'azurerm_application_gateway', 'azurerm_lb', 'azurerm_frontdoor', 'azurerm_front_door',
+            'azurerm_api_management', 'azurerm_api_management_gateway', 'azurerm_api_management_api',
+            'azurerm_azure_firewall',
+        },
+        'gcp': {
+            'google_compute_backend_service', 'google_compute_forwarding_rule', 'google_compute_global_forwarding_rule',
+            'google_compute_target_http_proxy', 'google_compute_target_https_proxy', 'google_compute_url_map',
+            'google_api_gateway_api', 'google_api_gateway_gateway',
+        },
+        'oci': {
+            'oci_load_balancer', 'oci_load_balancer_load_balancer',
+            'oci_network_load_balancer', 'oci_network_load_balancer_network_load_balancer',
+            'oci_apigateway_gateway',
+            'oci_waf_web_app_firewall',
+        },
+        'alicloud': {
+            'alicloud_slb', 'alicloud_slb_load_balancer', 'alicloud_alb_load_balancer',
+            'alicloud_api_gateway_api',
+            'alicloud_waf_domain',
+        },
+    }
+
+    INTERNET_RELAY_TOKEN_HINTS = (
+        'load_balancer', 'alb', 'elb', 'nlb',
+        'app_gateway', 'application_gateway', 'gateway', 'apigateway', 'api_gateway', 'api_management', 'apim',
+        'cloudfront', 'frontdoor', 'reverse_proxy', 'proxy',
+        'firewall', 'waf',
+    )
+
     # Resource types that should NOT be marked as public even if matched
     PRIVATE_OVERRIDE = {
         'azurerm_api_management': True,  # May not be public if behind APIM
@@ -185,6 +224,30 @@ class InternetExposureDetector:
         for types in cls.PUBLIC_BY_DESIGN.values():
             combined.update(t.lower() for t in types)
         return combined
+
+    @classmethod
+    def get_internet_relay_types(cls, provider: str | None = None) -> set[str]:
+        """Return resource types that relay internet traffic to downstream services."""
+        if provider:
+            return {t.lower() for t in cls.INTERNET_RELAY_BY_PROVIDER.get(provider.lower(), set())}
+        combined = set()
+        for types in cls.INTERNET_RELAY_BY_PROVIDER.values():
+            combined.update(t.lower() for t in types)
+        return combined
+
+    @classmethod
+    def is_relay_resource_type(cls, resource_type: str, provider: str | None = None) -> bool:
+        """True when a resource type behaves like an internet traffic relay/forwarder."""
+        rt = (resource_type or '').lower().strip()
+        if not rt:
+            return False
+
+        relay_types = cls.get_internet_relay_types(provider)
+        if rt in relay_types:
+            return True
+        if any(token in rt for token in relay_types):
+            return True
+        return any(tok in rt for tok in cls.INTERNET_RELAY_TOKEN_HINTS)
 
     def detect_exposed_resources(
         self,

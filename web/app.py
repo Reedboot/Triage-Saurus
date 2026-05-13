@@ -74,6 +74,7 @@ try:
         "ContextDiscoveryAgent": prompt_builder.load_agent_instruction("ContextDiscoveryAgent"),
         "ArchitectureAgent": prompt_builder.load_agent_instruction("ArchitectureAgent"),
         "ArchitectureValidationAgent": prompt_builder.load_agent_instruction("ArchitectureValidationAgent"),
+        "DiagramReviewSkill": prompt_builder.load_agent_instruction("DiagramReviewSkill"),
     }
     PROMPT_BUILDER_AVAILABLE = True
 except Exception as e:
@@ -1922,6 +1923,10 @@ def _stream_scan(repo_path: str, scan_name: str):
     except Exception:
         scan_log_fh = None
 
+    experiment_id: str | None = None
+    last_stage_id: str | None = None
+    last_stage_label: str | None = None
+
     def _write_scan_log(line: str) -> None:
         if scan_log_fh:
             try:
@@ -1934,13 +1939,73 @@ def _stream_scan(repo_path: str, scan_name: str):
         _write_scan_log(rendered)
         return _sse("log", rendered)
 
+    def _emit_scan_stage(stage_id: str, label: str, state: str = "active", progress: dict | None = None) -> str | None:
+        nonlocal last_stage_id, last_stage_label
+        if stage_id == last_stage_id and label == last_stage_label and progress is None:
+            return None
+        payload = {"id": stage_id, "label": label, "state": state}
+        if progress:
+            payload["progress"] = progress
+        if experiment_id:
+            payload["experiment_id"] = experiment_id
+        last_stage_id = stage_id
+        last_stage_label = label
+        return _sse("scan_stage", payload)
+
+    def _maybe_emit_stage_from_line(raw_scan_line: str) -> str | None:
+        clean = _strip_ansi(str(raw_scan_line or "")).strip()
+        if not clean:
+            return None
+        lower = clean.lower()
+
+        if "detection pre-scan inventory" in lower or "detection chunk prep" in lower:
+            return _emit_scan_stage("phase1-detection", "Step 1: Detection", "active")
+
+        chunk_match = re.search(r"\[chunk\s+(\d+)/(\d+)\]", lower)
+        if chunk_match:
+            current = int(chunk_match.group(1))
+            total = int(chunk_match.group(2))
+            return _emit_scan_stage(
+                "phase1-detection",
+                f"Step 1: Detection ({current}/{total})",
+                "active",
+                {"current": current, "total": total},
+            )
+
+        stage_patterns = [
+            ("phase 1 — detection", "phase1-detection", "Step 1: Detection"),
+            ("phase 2 — targeted misconfigurations", "phase1-misconfig", "Step 2: Misconfig Scan"),
+            ("phase 3 — storing findings in db", "phase1-misconfig", "Step 2: Misconfig Scan (persisting findings)"),
+            ("[context phase 3.1]", "phase2-context-patterns", "Step 3: Scanning patterns"),
+            ("[context phase 3.2]", "phase2-context-manifests", "Step 4: Parsing manifests"),
+            ("[context phase 3.3]", "phase2-context-topology", "Step 5: Service topology"),
+            ("phase 2 — script-based code context discovery", "phase2-context", "Step 3: Context"),
+            ("phase 3a — internet exposure analysis", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3b — relink findings to resources", "phase3-persistence", "Step 7: Persistence"),
+            ("phase 3c — infer semantic connections", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.1 — extract sg rules", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.2 — extract container definitions", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.2b — extract container definitions", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.3 — extract ci/cd artifacts", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.4 — link ci/cd artifacts", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.5 — analyze ci/cd artifacts", "phase3-analysis", "Step 6: Analysis"),
+            ("phase 3c.6 — fix provider inheritance", "phase3-persistence", "Step 7: Persistence"),
+            ("phase 3d — generate architecture diagrams", "phase3-diagrams", "Step 8: Diagrams"),
+        ]
+        for marker, stage_id, label in stage_patterns:
+            if marker in lower:
+                return _emit_scan_stage(stage_id, label, "active")
+        return None
+
     # Yield immediately to confirm connection
     first_line = f"[Web] Initializing scan for repository: {repo.name}"
     yield _emit_scan_log(first_line)
+    init_stage = _emit_scan_stage("init", "Initializing scan", "active")
+    if init_stage:
+        yield init_stage
 
     # Try to create an experiment up-front so the UI can receive a numeric experiment/scan id.
     # Use a short-lived lock file to avoid starting duplicate pipelines for the same repo.
-    experiment_id: str | None = None
     triage_script = SCRIPTS / "Experiments" / "triage_experiment.py"
 
     LOCK_DIR = REPO_ROOT / "Output" / "Learning" / "running_scans"
@@ -2023,6 +2088,9 @@ def _stream_scan(repo_path: str, scan_name: str):
         yield _emit_scan_log(f"[Web] Using experiment id: {experiment_id}")
         # Inform the UI immediately of the experiment id so it can bind sections/queries
         yield _sse("experiment", experiment_id)
+        init_stage = _emit_scan_stage("init", "Experiment created", "active")
+        if init_stage:
+            yield init_stage
 
     for msg in [
         f"▶  Starting scan: {repo}",
@@ -2033,6 +2101,9 @@ def _stream_scan(repo_path: str, scan_name: str):
         "",
     ]:
         yield _emit_scan_log(msg)
+    detect_stage = _emit_scan_stage("phase1-detection", "Step 1: Detection", "active")
+    if detect_stage:
+        yield detect_stage
 
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -2051,6 +2122,9 @@ def _stream_scan(repo_path: str, scan_name: str):
             start_new_session=True,  # Create new process group (Unix/Linux)
         )
     except Exception as exc:
+        failed_stage = _emit_scan_stage("failed", "Failed to start scan", "failed")
+        if failed_stage:
+            yield failed_stage
         yield _sse("error", f"Failed to start pipeline: {exc}")
         return
 
@@ -2067,6 +2141,9 @@ def _stream_scan(repo_path: str, scan_name: str):
                 if raw_line == '' and process.poll() is not None:
                     break
                 line = raw_line.rstrip()
+                stage_evt = _maybe_emit_stage_from_line(line)
+                if stage_evt:
+                    yield stage_evt
                 yield _emit_scan_log(line)
 
                 # Capture experiment ID printed by run_pipeline.py
@@ -2096,6 +2173,9 @@ def _stream_scan(repo_path: str, scan_name: str):
                 # Drain remaining output
                 for raw_line in process.stdout:
                     line = raw_line.rstrip()
+                    stage_evt = _maybe_emit_stage_from_line(line)
+                    if stage_evt:
+                        yield stage_evt
                     yield _emit_scan_log(line)
                     if experiment_id is None:
                         m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
@@ -2103,6 +2183,9 @@ def _stream_scan(repo_path: str, scan_name: str):
                             experiment_id = m.group(1)
                 break
     except Exception as exc:
+        failed_stage = _emit_scan_stage("failed", "Scan stream error", "failed")
+        if failed_stage:
+            yield failed_stage
         yield _sse("error", f"Stream error: {exc}")
     finally:
         if scan_log_fh:
@@ -2115,6 +2198,9 @@ def _stream_scan(repo_path: str, scan_name: str):
         # DB-only: read architecture diagrams from cloud_diagrams.
         diagrams = []
         try:
+            diagram_stage = _emit_scan_stage("phase3-diagrams", "Step 6: Loading diagrams", "active")
+            if diagram_stage:
+                yield diagram_stage
             sys.path.insert(0, str(REPO_ROOT))
             from Scripts.Persist.db_helpers import get_cloud_diagrams
             db_diags = get_cloud_diagrams(experiment_id)
@@ -2131,6 +2217,10 @@ def _stream_scan(repo_path: str, scan_name: str):
         else:
             yield _emit_scan_log("[Web] No architecture diagrams found in cloud_diagrams.")
 
+    finalizing_stage = _emit_scan_stage("finalizing", "Step 7: Finalizing", "active")
+    if finalizing_stage:
+        yield finalizing_stage
+
     # Remove lock file if it refers to this experiment so future scans can start.
     try:
         if lock_file.exists():
@@ -2140,9 +2230,20 @@ def _stream_scan(repo_path: str, scan_name: str):
     except Exception:
         pass
 
+    exit_code = process.returncode if process else -1
+    if exit_code == 0:
+        ready_stage = _emit_scan_stage("ready", "Step 8: Ready ✓", "complete")
+        if ready_stage:
+            yield ready_stage
+    else:
+        failed_stage = _emit_scan_stage("failed", "Scan failed", "failed")
+        if failed_stage:
+            yield failed_stage
+
     yield _sse("done", {
-        "exit_code": process.returncode if process else -1,
+        "exit_code": exit_code,
         "experiment_id": experiment_id,
+        "status": "ready" if exit_code == 0 else "failed",
     })
 
 
@@ -2284,6 +2385,8 @@ def api_detect_modules():
         sys.path.insert(0, str(SCRIPTS / "Context"))
         from detect_module_sources import detect_modules
         
+        # Detection is repo-path driven (selected repo), lightweight, and bounded by
+        # max_files in detect_module_sources.py; it is not hard-coded to one repo.
         # Detect modules in the repo
         detection = detect_modules(str(repo_path))
         modules = detection.get("modules", [])
@@ -3087,6 +3190,12 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     "checking resource relationships and dependencies",
                     "verifying security zones and boundaries",
                     "analyzing data flows and exposure paths",
+                ],
+                "DiagramReviewSkill": [
+                    "capturing per-provider screenshot evidence",
+                    "checking why each element supports threat modeling",
+                    "flagging orphaned or unnested resources as detection smells",
+                    "deriving rule-gap fixes and validation steps",
                 ],
                 "DevSkeptic": [
                     "reviewing code patterns and best practices",
@@ -9389,6 +9498,15 @@ def api_view_traffic(experiment_id: str, repo_name: str):
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ INGRESS DATA ━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Primary: exposure_analysis table (entry points and internet-facing resources)
         network_ingress = []
+        def _infer_ingress_path_defaults(resource_type: str, provider: str, is_entry_point: bool, is_relay: bool) -> tuple[str, str]:
+            rt = (resource_type or "").lower()
+            if "internet_gateway" in rt or "eip" in rt:
+                return ("IP", "*")
+            if is_relay:
+                return ("HTTP/HTTPS", "80/443")
+            if is_entry_point:
+                return ("HTTPS", "443")
+            return ("TCP", "*")
         try:
             ea_rows = conn.execute(
                 """
@@ -9399,7 +9517,13 @@ def api_view_traffic(experiment_id: str, repo_name: str):
                     r.provider,
                     r.region,
                     r.source_file,
-                    r.source_line_start
+                    r.source_line_start,
+                    ea.is_entry_point,
+                    ea.has_internet_path,
+                    ea.exposure_level,
+                    ea.protocol,
+                    ea.port,
+                    ea.auth_method
                 FROM exposure_analysis ea
                 JOIN resources r ON ea.resource_id = r.id
                 JOIN repositories repo ON r.repo_id = repo.id
@@ -9410,6 +9534,31 @@ def api_view_traffic(experiment_id: str, repo_name: str):
                 (repo_name, target_exp),
             ).fetchall()
             network_ingress = [dict(row) for row in ea_rows]
+            for row in network_ingress:
+                is_entry = bool(row.get("is_entry_point"))
+                has_internet_path = bool(row.get("has_internet_path"))
+                provider = (row.get("provider") or "").lower()
+                rtype = row.get("resource_type") or ""
+                is_relay = InternetExposureDetector.is_relay_resource_type(rtype, provider)
+                row["is_relay"] = is_relay
+                if is_entry and is_relay:
+                    row["internet_reachability"] = "direct_edge"
+                elif is_entry:
+                    row["internet_reachability"] = "direct_endpoint"
+                elif has_internet_path and is_relay:
+                    row["internet_reachability"] = "indirect_relay"
+                elif has_internet_path:
+                    row["internet_reachability"] = "indirect_endpoint"
+                else:
+                    row["internet_reachability"] = "unknown"
+                row["path_protocol"] = (row.get("protocol") or "").strip()
+                row["path_port"] = (str(row.get("port")).strip() if row.get("port") is not None else "")
+                if not row["path_protocol"] or not row["path_port"]:
+                    def_protocol, def_port = _infer_ingress_path_defaults(rtype, provider, is_entry, is_relay)
+                    if not row["path_protocol"]:
+                        row["path_protocol"] = def_protocol
+                    if not row["path_port"]:
+                        row["path_port"] = def_port
         except Exception as e:
             print(f"Warning: Could not fetch network_ingress from exposure_analysis: {e}")
         

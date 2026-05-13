@@ -18,6 +18,7 @@
         <th>Provider</th>
         <th>Source File</th>
         <th>Internet Access</th>
+        <th>Path</th>
       </tr>
     </thead>
     <tbody>
@@ -28,7 +29,15 @@
         <td><span class="provider-badge provider-{{ r.provider | lower }}">{{ r.provider | upper }}</span></td>
         <td><small class="muted">{{ r.source_file or '—' }}</small></td>
         <td>
-            {% if r.resource_type in ['aws_internet_gateway', 'aws_eip', 'aws_eip_association', 'aws_elb', 'aws_alb', 'aws_lb',
+            {% if r.internet_reachability == 'direct_edge' %}
+            <span class="finding-badge critical" title="Direct public edge that relays traffic inward">🔴 Direct internet edge</span>
+            {% elif r.internet_reachability == 'direct_endpoint' %}
+            <span class="finding-badge critical" title="Directly internet-reachable endpoint">🔴 Direct internet endpoint</span>
+            {% elif r.internet_reachability == 'indirect_relay' %}
+            <span class="finding-badge warning" title="Relay reachable from internet through another edge">🟠 Indirect relay path</span>
+            {% elif r.internet_reachability == 'indirect_endpoint' %}
+            <span class="finding-badge warning" title="Reachable from internet through an edge resource">🟠 Indirect via edge</span>
+            {% elif r.resource_type in ['aws_internet_gateway', 'aws_eip', 'aws_eip_association', 'aws_elb', 'aws_alb', 'aws_lb',
                'aws_apigatewayv2_api', 'aws_api_gateway_rest_api', 'azurerm_application_gateway',
                'azurerm_application_load_balancer', 'azurerm_frontdoor', 'azurerm_lb',
                'azurerm_public_ip', 'azurerm_public_ip_prefix', 'google_api_gateway_api',
@@ -39,9 +48,16 @@
                'alicloud_slb', 'alicloud_slb_load_balancer', 'oci_apigateway_gateway',
                'oci_core_internet_gateway', 'oci_load_balancer', 'oci_load_balancer_load_balancer',
                'oci_network_load_balancer', 'oci_network_load_balancer_network_load_balancer'] %}
-            <span class="finding-badge critical" title="Internet-facing by resource type">🌐 Internet-facing</span>
+            <span class="finding-badge critical" title="Internet-facing by resource type">🔴 Direct internet edge</span>
           {% else %}
             <span class="finding-badge warning">⚠️ Exposed (inferred)</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.path_protocol or r.path_port %}
+            <small><strong>{{ r.path_protocol or '—' }}</strong>{% if r.path_port %} :{{ r.path_port }}{% endif %}</small>
+          {% else %}
+            <small class="muted">—</small>
           {% endif %}
         </td>
       </tr>

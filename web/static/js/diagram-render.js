@@ -220,6 +220,20 @@ export function renderDiagrams(diagrams) {
         // Never leave the loading overlay stuck if Mermaid fails to initialize.
         if (zoomInner) zoomInner.classList.remove('is-rendering');
         setDiagramLoadingVisible(false);
+        const diagramViewsEl = document.getElementById('diagram-views');
+        const placeholder = diagramViewsEl?.querySelector('#diagram-placeholder, .diagram-placeholder, .empty-state');
+        if (placeholder) {
+          const message = window.__triageMermaidLoadError || 'Mermaid failed to initialize, so diagrams could not render.';
+          placeholder.innerHTML = `
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+            <p>${message}</p>
+          `;
+        }
+        setDiagramPlaceholderVisible(true);
       }
     }, 10000);
   }
