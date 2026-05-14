@@ -15,6 +15,7 @@ from web_parallel_scan_validator import (  # noqa: E402
     detect_hierarchy_issues,
     detect_missing_connections,
     effective_concurrency,
+    infer_expected_assets,
     RepoOption,
     ScanResult,
     build_retry_metadata,
@@ -80,6 +81,19 @@ def test_find_orphan_nodes_handles_architecture_beta_directional_edges():
     assert find_orphan_nodes(code) == []
 
 
+def test_find_orphan_nodes_treats_subgraph_children_as_connected_when_parent_connected():
+    code = """
+    flowchart TB
+      subgraph data_tier["Data Tier"]
+        subgraph db["db"]
+          request_identifiers[request-identifiers]
+        end
+      end
+      app[app service] --> db
+    """
+    assert find_orphan_nodes(code) == []
+
+
 def test_detect_docs_iac_parity_issues_flags_missing_expected_asset():
     code = """
     flowchart LR
@@ -105,6 +119,36 @@ def test_detect_hierarchy_issues_flags_flat_child_resource():
     """
     issues = detect_hierarchy_issues(code=code, provider="azure", diagram_title="Azure diagram")
     assert any(issue.get("issue_type") == "flat_hierarchy_smell" for issue in issues)
+
+
+def test_detect_hierarchy_issues_does_not_flag_apim_parent_or_nested_api_subgraph():
+    code = """
+    flowchart TB
+      subgraph apim["API Management"]
+        subgraph fi_authentication_api["fi authentication api"]
+          authenticate_requests[authenticate-requests]
+        end
+      end
+      internet[Internet] --> authenticate_requests
+      internet -.-> apim
+      internet -.-> fi_authentication_api
+    """
+    issues = detect_hierarchy_issues(code=code, provider="azure", diagram_title="Azure diagram")
+    flagged_nodes = {issue.get("node_id") for issue in issues}
+    assert "apim" not in flagged_nodes
+    assert "fi_authentication_api" not in flagged_nodes
+
+
+def test_infer_expected_assets_does_not_treat_generic_queue_words_as_queue_infrastructure(tmp_path: Path):
+    (tmp_path / "terraform").mkdir()
+    (tmp_path / "terraform" / "variables.tf").write_text(
+        'variable "queue_name" { type = string }\n'
+        'variable "topic_name" { type = string }\n',
+        encoding="utf-8",
+    )
+
+    expected = infer_expected_assets(tmp_path)
+    assert "queue" not in expected
 
 
 def test_gather_repo_evidence_returns_matching_files(tmp_path: Path):

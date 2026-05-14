@@ -157,7 +157,7 @@ EXPECTED_ASSET_PATTERNS: dict[str, tuple[str, ...]] = {
         r"\b(storage\s+account|blob|bucket|s3|object\s+storage)\b",
     ),
     "queue": (
-        r"\b(queue|service\s+bus|sqs|pubsub|topic|event\s*hub|kafka)\b",
+        r"\b(azurerm_servicebus_(namespace|queue|topic|subscription)|aws_sqs_queue|aws_sns_topic|google_pubsub_(topic|subscription)|servicebus|eventhub|kafka)\b",
     ),
 }
 
@@ -607,7 +607,7 @@ def build_element_rationale(issue: dict[str, Any], value: dict[str, str]) -> dic
     }
 
 
-def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, str], dict[str, list[str]]]:
+def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Parse Mermaid subgraph context for simple hierarchy checks.
 
     Returns:
@@ -632,6 +632,7 @@ def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, str], dict[str, li
             subgraph_id = with_label.group(1)
             label = with_label.group(2).strip().lower()
             subgraph_labels[subgraph_id] = label
+            node_to_subgraphs[subgraph_id] = list(stack)
             stack.append(label)
             continue
 
@@ -640,6 +641,7 @@ def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, str], dict[str, li
             subgraph_id = plain.group(1)
             label = subgraph_id.strip().lower()
             subgraph_labels[subgraph_id] = label
+            node_to_subgraphs[subgraph_id] = list(stack)
             stack.append(label)
             continue
 
@@ -658,6 +660,49 @@ def _extract_subgraph_hierarchy(code: str) -> tuple[dict[str, str], dict[str, li
             node_to_subgraphs[node_id] = list(stack)
 
     return node_to_subgraphs, subgraph_labels
+
+
+def _extract_node_to_subgraph_ids(code: str) -> dict[str, list[str]]:
+    """Parse Mermaid node -> enclosing subgraph IDs (inner-most last)."""
+    node_to_subgraph_ids: dict[str, list[str]] = {}
+    stack: list[str] = []
+    subgraph_with_label_re = re.compile(r'^\s*subgraph\s+([A-Za-z][A-Za-z0-9_]*)\s*\["([^"]+)"\]\s*$')
+    subgraph_plain_re = re.compile(r'^\s*subgraph\s+([A-Za-z][A-Za-z0-9_]*)\s*$')
+    node_decl_re = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)\s*(?:\[\[|\[\(|\[|\(\[|\(\"|\(\(|\{)")
+
+    for raw_line in code.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+
+        with_label = subgraph_with_label_re.match(line)
+        if with_label:
+            subgraph_id = with_label.group(1)
+            node_to_subgraph_ids[subgraph_id] = list(stack)
+            stack.append(subgraph_id)
+            continue
+
+        plain = subgraph_plain_re.match(line)
+        if plain:
+            subgraph_id = plain.group(1)
+            node_to_subgraph_ids[subgraph_id] = list(stack)
+            stack.append(subgraph_id)
+            continue
+
+        if line.lower() == "end":
+            if stack:
+                stack.pop()
+            continue
+
+        if line.lower().startswith(("flowchart", "architecture-beta", "classdef", "class ", "style ", "linkstyle")):
+            continue
+        if "-->" in line or "-.->" in line or "==>" in line:
+            continue
+
+        for m in node_decl_re.finditer(line):
+            node_id = m.group(1)
+            node_to_subgraph_ids[node_id] = list(stack)
+    return node_to_subgraph_ids
 
 
 def detect_hierarchy_issues(code: str, provider: str, diagram_title: str) -> list[dict[str, Any]]:
@@ -686,6 +731,8 @@ def detect_hierarchy_issues(code: str, provider: str, diagram_title: str) -> lis
             if not any(term in label_l for term in child_terms):
                 continue
             if not any(term in searchable for term in parent_terms):
+                continue
+            if any(term in label_l for term in parent_terms):
                 continue
 
             enclosing = " ".join(node_to_subgraphs.get(node_id, [])).lower()
@@ -747,7 +794,7 @@ def detect_missing_connections(code: str, provider: str, diagram_title: str) -> 
     service_nodes = {
         node_id
         for node_id, text in id_to_text.items()
-        if any(term in text for term in ("service", "backend", "api", "function", "lambda", "container", "app"))
+        if any(term in text for term in ("service", "backend", "application", "function", "lambda", "container", "app"))
         and not any(term in text for term in ("gateway", "ingress", "load balancer", "front door", "apim"))
     }
     data_nodes = {
@@ -796,9 +843,11 @@ def detect_missing_connections(code: str, provider: str, diagram_title: str) -> 
 def find_orphan_nodes(code: str) -> list[str]:
     nodes = _extract_node_ids(code)
     edges = _extract_edges(code)
+    node_to_subgraph_ids = _extract_node_to_subgraph_ids(code)
+    all_nodes = set(nodes) | set(node_to_subgraph_ids.keys())
     if not nodes:
         return []
-    degree: dict[str, int] = {n: 0 for n in nodes}
+    degree: dict[str, int] = {n: 0 for n in all_nodes}
     for src, dst in edges:
         if src in degree:
             degree[src] += 1
@@ -807,7 +856,10 @@ def find_orphan_nodes(code: str) -> list[str]:
     orphans = [
         node
         for node, d in degree.items()
-        if d == 0 and node.lower() not in IGNORED_ORPHAN_NODE_IDS
+        if node in nodes
+        and d == 0
+        and not any(degree.get(parent, 0) > 0 for parent in node_to_subgraph_ids.get(node, []))
+        and node.lower() not in IGNORED_ORPHAN_NODE_IDS
     ]
     return sorted(orphans)
 

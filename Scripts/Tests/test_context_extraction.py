@@ -96,6 +96,34 @@ def test_is_valid_azure_resource_name_rejects_new_provider_prefixes():
     assert context_extraction.is_valid_azure_resource_name("app-service-prod")
 
 
+def test_is_valid_azure_resource_name_rejects_expression_like_values():
+    assert not context_extraction.is_valid_azure_resource_name("startswith(each.key,")
+
+
+def test_extract_context_skips_expression_like_resource_labels(tmp_path, monkeypatch):
+    _stub_heavy_detectors(monkeypatch)
+    (tmp_path / "main.tf").write_text(
+        dedent(
+            """
+            resource "azurerm_public_ip" "startswith(each.key," {
+              name     = "bad-pip"
+              location = "eastus"
+            }
+
+            resource "azurerm_service_plan" "plan" {
+              name     = "plan"
+              location = "eastus"
+            }
+            """
+        ).strip()
+    )
+
+    context = context_extraction.extract_context(str(tmp_path))
+
+    assert not any(r.resource_type == "azurerm_public_ip" for r in context.resources)
+    assert any(r.resource_type == "azurerm_service_plan" for r in context.resources)
+
+
 def test_meta_resources_infer_provider_for_new_prefixes(tmp_path, monkeypatch):
     _stub_heavy_detectors(monkeypatch)
 

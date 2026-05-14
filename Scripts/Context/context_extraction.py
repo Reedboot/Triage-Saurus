@@ -228,19 +228,38 @@ def is_valid_azure_resource_name(name: str) -> bool:
     Returns False if the name contains:
     - Dots (.) which indicate Terraform interpolation like azurerm_public_ip.VM_PublicIP.name
     - Resource type prefixes (azurerm_, aws_, etc.) which indicate it's a reference
-    - Interpolation syntax ($, {, }) which indicate dynamic values
+    - Interpolation or expression syntax that indicates a dynamic value
     """
     if not name:
+        return False
+    if any(ch.isspace() for ch in name):
         return False
     # Check for Terraform reference syntax
     if "." in name:
         return False
     # Check for resource type prefixes (indicates a reference like "azurerm_public_ip")
-    for prefix in ["azurerm_", "aws_", "google_", "azuread_", "alicloud_", "oci_", "tencentcloud_", "huaweicloud_", "data."]:
+    for prefix in [
+        "azurerm_",
+        "aws_",
+        "google_",
+        "azuread_",
+        "alicloud_",
+        "oci_",
+        "tencentcloud_",
+        "huaweicloud_",
+        "data.",
+        "local.",
+        "var.",
+        "module.",
+        "each.",
+        "count.",
+        "path.",
+        "terraform.",
+    ]:
         if name.startswith(prefix):
             return False
     # Check for interpolation syntax
-    if any(c in name for c in "${}"):
+    if any(c in name for c in "${}[](),"):
         return False
     return True
 
