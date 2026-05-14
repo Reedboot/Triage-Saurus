@@ -1806,7 +1806,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         "Azure/network/azurerm":                   ["azurerm_virtual_network", "azurerm_subnet"],
     }
 
-    def _resolve_module_source(file: "Path", source: str, module_name: str) -> list[Resource]:
+    def _resolve_module_source(file: "Path", source: str, module_name: str, module_line: int) -> list[Resource]:
         """Resolve a module source to concrete Resource objects.
 
         For local modules (source starts with ./ or ../) the module directory
@@ -1823,14 +1823,15 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                         inner_content = tf_file.read_text(errors="ignore")
                     except Exception:
                         continue
-                    for line in inner_content.splitlines():
+                    for inner_line_number, line in enumerate(inner_content.splitlines(), start=1):
                         im = inner_re.match(line)
                         if im:
                             rtype, rname = im.groups()
                             resolved.append(Resource(
                                 name=rname,
                                 resource_type=rtype,
-                                file_path=str(tf_file),
+                                file_path=_relative_repo_path(repo_path, tf_file),
+                                line_number=inner_line_number,
                                 properties={
                                     "terraform_block": "resource",
                                     "via_module": module_name,
@@ -1846,7 +1847,8 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                         resolved.append(Resource(
                             name=f"{module_name}_{rtype.split('_', 1)[-1]}",
                             resource_type=rtype,
-                            file_path=str(file),
+                            file_path=rel,
+                            line_number=module_line,
                             properties={
                                 "terraform_block": "resource",
                                 "via_module": module_name,
@@ -1896,7 +1898,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 mod_text = "\n".join(mod_lines)
                 src_m = re.search(r'source\s*=\s*"([^"]+)"', mod_text)
                 if src_m:
-                    module_resources = _resolve_module_source(file, src_m.group(1), module_name)
+                    module_resources = _resolve_module_source(file, src_m.group(1), module_name, i + 1)
                     for mr in module_resources:
                         key = (mr.resource_type, mr.name)
                         if key not in known_resource_keys:

@@ -281,6 +281,7 @@ _BASE_TABLES_SQL = """
       attack_tools TEXT,
       attack_chain_steps TEXT,
       attack_impact TEXT,
+      inherited_from_module TEXT,  -- module_source if inherited from a module scan
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -498,6 +499,33 @@ _BASE_TABLES_SQL = """
 
     CREATE INDEX IF NOT EXISTS idx_repo_context_repo_name ON repository_context(repo_name);
     CREATE INDEX IF NOT EXISTS idx_repo_context_local_path ON repository_context(local_path);
+
+    -- Module registry: what resources and findings does each shared Terraform module produce?
+    CREATE TABLE IF NOT EXISTS module_registry (
+        id            INTEGER PRIMARY KEY,
+        module_source TEXT UNIQUE NOT NULL,
+        module_name   TEXT NOT NULL,
+        resource_types TEXT NOT NULL,
+        outputs       TEXT,
+        variables     TEXT,
+        findings      TEXT,  -- JSON: security findings from the module's own scan
+        description   TEXT,
+        scanned_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Module usage: which repos invoke which modules (and what resources were inferred)
+    CREATE TABLE IF NOT EXISTS module_usage (
+        id                      INTEGER PRIMARY KEY,
+        experiment_id           TEXT NOT NULL,
+        repo_id                 INTEGER NOT NULL,
+        module_instance_name    TEXT NOT NULL,
+        module_source           TEXT NOT NULL,
+        source_file             TEXT NOT NULL,
+        source_line             INTEGER,
+        resolved_resource_types TEXT,
+        FOREIGN KEY (module_source) REFERENCES module_registry(module_source),
+        FOREIGN KEY (repo_id)       REFERENCES repositories(id)
+    );
 """
 
 # Setup logging for database operations
@@ -2679,9 +2707,10 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.execute("""
             SELECT r.id, r.resource_name, r.resource_type, r.provider, repo.repo_name,
-                   r.source_file,
+                   r.source_file, r.discovered_by, r.discovery_method,
                    parent.id AS parent_resource_id, parent.resource_name AS parent_resource_name, parent.resource_type AS parent_resource_type,
-                   COALESCE(MAX(f.severity_score), 0) as max_finding_score
+                   COALESCE(MAX(f.severity_score), 0) as max_finding_score,
+                   COALESCE(SUM(CASE WHEN f.inherited_from_module IS NOT NULL AND f.inherited_from_module != '' THEN 1 ELSE 0 END), 0) as inherited_finding_count
             FROM resources r
             JOIN repositories repo ON r.repo_id = repo.id
             LEFT JOIN resources parent ON r.parent_resource_id = parent.id
@@ -2708,6 +2737,9 @@ def get_resources_for_diagram(experiment_id: str) -> List[Dict]:
                 'parent_resource_name': r.get('parent_resource_name'),
                 'parent_resource_type': r.get('parent_resource_type'),
                 'max_finding_score': r['max_finding_score'],
+                'inherited_finding_count': r.get('inherited_finding_count', 0),
+                'discovered_by': r.get('discovered_by') or '',
+                'discovery_method': r.get('discovery_method') or '',
                 'properties': prop_dict,
                 'public': _prop_bool(prop_dict.get('public') or prop_dict.get('public_access') or prop_dict.get('public', False)),
                 'public_reason': prop_dict.get('public_reason') or prop_dict.get('notes') or '',

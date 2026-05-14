@@ -2158,14 +2158,22 @@ def _stream_scan(repo_path: str, scan_name: str):
                 now = time.time()
                 if now - last_hb >= 5:
                     elapsed = int(now - start_time)
-                    # Dynamic estimate: if elapsed > 5.5 min, assume scan has issues and just report elapsed time
-                    if elapsed < 330:  # 5.5 minutes
-                        est_total = 330
+                    # Dynamic estimate based on elapsed time to account for scans of varying sizes
+                    # Scanning external modules can take 3-10+ minutes depending on repo size/complexity
+                    if elapsed < 180:  # < 3 minutes
+                        est_total = 300  # Expect ~5 minutes for typical repos
                         est_remaining = max(0, est_total - elapsed)
-                        hb = f"[Web] Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
+                        hb = f"[Web] 🕵️ Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
+                    elif elapsed < 420:  # 3-7 minutes
+                        est_total = 600  # Expect ~10 minutes for medium/complex repos
+                        est_remaining = max(0, est_total - elapsed)
+                        hb = f"[Web] 🕵️ Scan in progress — elapsed {elapsed}s (est. {est_remaining}s remaining)"
+                    elif elapsed < 900:  # 7-15 minutes
+                        # Likely scanning multiple external modules — just report elapsed time
+                        hb = f"[Web] 🕵️ Scan in progress — elapsed {elapsed}s (processing complex repo)"
                     else:
-                        # Scan has exceeded expected time — may be hung or processing large repo
-                        hb = f"[Web] ⚠️ Scan in progress — elapsed {elapsed}s (taking longer than expected)"
+                        # Scan has been running for 15+ minutes — may be hung or very large repo
+                        hb = f"[Web] 🕵️ ⚠️ Scan in progress — elapsed {elapsed}s (taking longer than expected)"
                     yield _emit_scan_log(hb)
                     last_hb = now
 
@@ -2508,6 +2516,75 @@ def api_detect_modules():
             "error": f"Module detection failed: {str(exc)}",
             "modules": []
         }), 500
+
+
+@app.route("/api/modules/register-scan", methods=["POST"])
+def api_register_module_scan():
+    """Register a successfully scanned module into module_registry.
+
+    Request body:
+      {
+        "module_repo_path": "/path/to/module/repo",
+        "module_source": "git::https://...",
+        "experiment_id": "123"
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    module_repo_path = str(data.get("module_repo_path", "")).strip()
+    module_source = str(data.get("module_source", "")).strip()
+    experiment_id = str(data.get("experiment_id", "")).strip()
+
+    if not module_repo_path or not module_source:
+        return jsonify({
+            "ok": False,
+            "error": "module_repo_path and module_source are required",
+        }), 400
+
+    module_path = Path(module_repo_path).expanduser().resolve()
+    if not module_path.is_dir():
+        return jsonify({
+            "ok": False,
+            "error": f"Module path not found: {module_path}",
+        }), 400
+
+    register_script = SCRIPTS / "Context" / "register_scanned_module.py"
+    if not register_script.exists():
+        return jsonify({
+            "ok": False,
+            "error": f"Missing script: {register_script}",
+        }), 500
+
+    cmd = [
+        sys.executable,
+        str(register_script),
+        str(module_path),
+        module_source,
+    ]
+    if experiment_id:
+        cmd.extend(["--experiment-id", experiment_id])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to register module scan: {exc}"}), 500
+
+    if result.returncode != 0:
+        return jsonify({
+            "ok": False,
+            "error": (result.stderr or result.stdout or "module registration failed").strip(),
+        }), 500
+
+    return jsonify({
+        "ok": True,
+        "message": "Module scan registered",
+        "details": (result.stdout or "").strip(),
+    })
 
 
 @app.route("/api/experiment/<experiment_id>/repo")

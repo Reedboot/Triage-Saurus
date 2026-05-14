@@ -334,8 +334,8 @@ class HierarchicalDiagramBuilder:
         """Wrap a Mermaid-visible label so long box titles stay inside their bounds.
         
         - For file paths (contains '/'), use just the last path component (filename).
-        - Truncate anything over 35 characters to 35 + '…' so text fits in rendered boxes.
-        - Only replace underscores with spaces if truncating to save space.
+        - Normalize underscores to spaces for readability.
+        - Wrap long labels with <br/> so Mermaid boxes stay compact.
         """
         text = re.sub(r'\s+', ' ', str(label or '').strip())
         if not text:
@@ -346,18 +346,18 @@ class HierarchicalDiagramBuilder:
             parts = [p for p in text.split('/') if p.strip()]
             if parts:
                 text = parts[-1]
-        
-        # Only replace underscores if label is too long (to save space during truncation)
-        # Otherwise keep underscores for readability (e.g., app_files_dev stays as-is)
-        if len(text) > 35:
-            normalized = text.replace('_', ' ').replace('/', ' / ')
-            # Truncate at 35 chars to ensure text fits in rendered diagram boxes
-            if len(normalized) > 35:
-                normalized = normalized[:34] + '…'
-        else:
-            # Short labels: keep as-is for better readability
-            normalized = text
-        return normalized
+
+        normalized = text.replace('_', ' ')
+        if len(normalized) <= width:
+            return normalized
+
+        wrapped = textwrap.wrap(
+            normalized,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        return '<br/>'.join(wrapped)
 
     def _quote_mermaid_label(self, label: str) -> str:
         """Return a Mermaid label wrapped in quotes with embedded quotes escaped."""
@@ -3037,8 +3037,11 @@ class HierarchicalDiagramBuilder:
         Returns:
             String suitable for use as Mermaid node ID (UUID or fallback to sanitized name)
         """
-        # Use UUID if available, fall back to sanitized name
+        # Preserve readable name-based IDs for integer DB ids (test fixtures and
+        # historical diagrams rely on this), while still supporting string/UUID ids.
         uuid = resource.get('id')
+        if isinstance(uuid, int):
+            return sanitize_id(resource.get('resource_name', 'node'))
         if uuid is not None:
             node_id_str = str(uuid)
             # Mermaid node IDs cannot start with '-': prefix synthetic negative IDs
@@ -5323,12 +5326,12 @@ class HierarchicalDiagramBuilder:
         if network_lines:
             lines.extend(network_lines)
             lines.append("")
-        
-        # Mark network and compute resources as emitted since they're rendered in network hierarchy
-        for net in network_resources:
-            self.emitted_nodes.add(net['resource_name'])
-        for compute in compute_resources:
-            self.emitted_nodes.add(compute['resource_name'])
+            # Mark network and compute resources as emitted only when they were
+            # actually rendered in the network hierarchy.
+            for net in network_resources:
+                self.emitted_nodes.add(net['resource_name'])
+            for compute in compute_resources:
+                self.emitted_nodes.add(compute['resource_name'])
         
         # Mark K8s resources as emitted only if they were rendered in compute (inside network)
         # OR inside an EKS/GKE cluster subgraph nested in a subnet (the new path).
@@ -5385,7 +5388,9 @@ class HierarchicalDiagramBuilder:
 
         app_lines = self.render_application_hierarchy(app_resources)
         if app_lines:
-            lines.extend(app_lines)
+            lines.append('  subgraph app_tier["⚙️ Application Tier"]')
+            lines.extend(["  " + ln for ln in app_lines])
+            lines.append("  end")
             lines.append("")
 
         # Render Data Tier (SQL, Cosmos DB, Storage)
@@ -5433,7 +5438,9 @@ class HierarchicalDiagramBuilder:
 
         data_lines = self.render_data_hierarchy(sql_resources, storage_resources)
         if data_lines:
-            lines.extend(data_lines)
+            lines.append('  subgraph data_tier["🗄️ Data Tier"]')
+            lines.extend(["  " + ln for ln in data_lines])
+            lines.append("  end")
             lines.append("")
 
         # PaaS / Identity resources (managed identities, key vaults, automation accounts) are not rendered
@@ -5462,7 +5469,10 @@ class HierarchicalDiagramBuilder:
         connected_resource_names = set(self.connected_resource_names)
 
         # Collect compute-related IDs (they're already in compute_resources from earlier)
-        compute_related_ids = {r['id'] for r in compute_resources}
+        compute_related_ids = {
+            r['id'] for r in compute_resources
+            if r.get('resource_name') in self.emitted_nodes
+        }
         # Also add children of compute resources
         for vm in compute_resources:
             for child in self.children_by_parent.get(vm['id'], []):
@@ -5820,6 +5830,24 @@ class HierarchicalDiagramBuilder:
             priority, color, stroke_width = style_by_node_id[node_id]  # stroke_width is used as a variable, but output is always stroke-width
             lines.append(f"  style {node_id} stroke:{color}, stroke-width:{stroke_width}px")  # Always emit stroke-width, never stroke_width
         
+        # Overlay: module-inferred resources that carry inherited findings get an
+        # orange dashed border so reviewers know the risk came from a shared module.
+        for resource_name in self.emitted_nodes:
+            if resource_name == 'Internet' or resource_name.startswith('__inferred__'):
+                continue
+            resource = self._get_primary_resource(resource_name)
+            if not resource:
+                continue
+            if resource.get('discovery_method') == 'module_registry' and \
+               resource.get('inherited_finding_count', 0) > 0:
+                node_id = self.node_id_override.get(resource_name) or sanitize_id(resource_name)
+                if node_id in all_rendered_ids and node_id not in subgraph_ids:
+                    # Orange dashed border — "risk inherited from module"
+                    lines.append(
+                        f"  style {node_id} stroke:#ff8c00, stroke-width:3px,"
+                        f" stroke-dasharray:6 3, fill:#fff8e1"
+                    )
+
         # Track node IDs that already have a style line to prevent duplicates from tier coloring
         already_styled: set = {
             re.match(r'\s*style\s+(\S+)', ln).group(1)

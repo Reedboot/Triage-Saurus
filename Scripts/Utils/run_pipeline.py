@@ -39,6 +39,7 @@ sys.path.insert(0, str(SCRIPTS / "Utils"))
 
 _EXPERIMENTS   = SCRIPTS / "Experiments" / "triage_experiment.py"
 _DISCOVER      = SCRIPTS / "Context"     / "discover_code_context.py"
+_INFER_MODULES = SCRIPTS / "Context"     / "infer_module_resources.py"
 _ANALYZE_EXPOSURE = SCRIPTS / "Analyze"  / "exposure_analyzer.py"
 _INFER_SEMANTIC   = SCRIPTS / "Analyze"  / "infer_semantic_connections.py"
 _RELINK        = SCRIPTS / "Persist"    / "relink_findings_to_resources.py"
@@ -50,7 +51,7 @@ _LINK_CICD_TO_IAC = SCRIPTS / "Enrich" / "link_cicd_to_iac.py"
 _ANALYZE_CICD_ARTIFACTS = SCRIPTS / "Analyze" / "analyze_cicd_artifacts.py"
 _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 
-from db_helpers import get_db_connection, fix_nested_resource_providers
+from db_helpers import get_db_connection, fix_nested_resource_providers, get_repository_id
 
 
 def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
@@ -238,6 +239,27 @@ def main() -> int:
         rc = _run(phase2_cmd, "Phase 2 — Script-based code context discovery")
         if rc != 0:
             print("[WARN] Phase 2 exited non-zero — metadata may be partial.", file=sys.stderr)
+
+        # Phase 2.1: Resolve external module calls from module_registry and
+        # persist inferred resources/findings into this experiment's repo scope.
+        repo_id = get_repository_id(experiment_id, repo_name)
+        if repo_id is None:
+            print(
+                f"[WARN] Could not resolve repo_id for {repo_name} in experiment {experiment_id}; "
+                "skipping module registry inference.",
+                file=sys.stderr,
+            )
+        else:
+            rc = _run(
+                [
+                    sys.executable, str(_INFER_MODULES), str(repo_path),
+                    "--experiment-id", experiment_id,
+                    "--repo-id", str(repo_id),
+                ],
+                "Phase 2.1 — Infer resources/findings from module registry",
+            )
+            if rc != 0:
+                print("[WARN] Phase 2.1 exited non-zero — module inference may be partial.", file=sys.stderr)
     else:
         print("\n[Pipeline] Skipping Phase 2 (--skip-phase2)")
 

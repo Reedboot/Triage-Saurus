@@ -3,107 +3,81 @@
 detect_module_sources.py
 
 Detect external module sources in Terraform/HCL files.
-Extracts module names and sources for user confirmation.
+Extracts module names and sources that use REMOTE sources (git::, http://, etc).
+Skips local module references.
 
 Returns JSON with structure:
 {
   "modules": [
     {
-      "name": "aks_accounts_api",
-      "source": "git::https://dev.azure.com/cbinfrastructure/cbi/_git/terraform-aks//modules/azure",
-      "source_file": "terraform/aks.tf",
+      "name": "my_module",
+      "source": "git::https://github.com/myorg/terraform-module//path",
+      "source_file": "terraform/main.tf",
       "source_line": 1,
-      "inferred_type": "aks_module"
+      "inferred_type": "external_git"
     },
     ...
-  ],
-  "inferred_architectures": {
-    "aks_module": ["aks_accounts_api", "aks_event_ingestion", ...],
-    "helm": [],
-    "serverless": []
-  }
+  ]
 }
 """
 
 import re
 import json
+import sys
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any
 
-# Module source patterns to recognize
-MODULE_PATTERNS = {
-    "aks_module": {
-        "patterns": [
-            r"terraform-aks//modules",
-            r"cbi/_git/terraform-aks"
-        ],
-        "label": "Azure Kubernetes Service (AKS) modules"
-    },
-    "helm": {
-        "patterns": [
-            r"source.*=.*['\"]helm",
-            r"helm_release",
-            r"artifacthub\.io"
-        ],
-        "label": "Helm charts"
-    },
-    "serverless": {
-        "patterns": [
-            r"aws.*lambda",
-            r"google.*cloud.*function",
-            r"azure.*function"
-        ],
-        "label": "Serverless/Function modules"
-    },
-    "kubernetes": {
-        "patterns": [
-            r"kubernetes-provider",
-            r"helm-provider"
-        ],
-        "label": "Kubernetes provider modules"
-    },
-    "remote_git": {
-        "patterns": [
-            r"source.*=.*['\"]git::"
-        ],
-        "label": "External Git repositories"
-    }
-}
+# Simple classification for module types based on source
+def classify_module_type(source: str) -> str:
+    """Classify module type based on source URL."""
+    source_lower = source.lower()
+    
+    # Check for remote sources
+    if 'git::' in source_lower or source_lower.startswith('git@'):
+        return 'external_git'
+    elif 'http://' in source_lower or 'https://' in source_lower:
+        return 'external_http'
+    elif source_lower.startswith('registry.terraform.io'):
+        return 'terraform_registry'
+    else:
+        # Local paths like "./modules/vpc" or "../other-module"
+        return 'local'
 
 
 def detect_modules(repo_path: str, max_files: int = 500) -> Dict[str, Any]:
-    """Detect all module sources in Terraform files within a repository.
+    """Detect all EXTERNAL module sources in Terraform files within a repository.
+    
+    Looks for ANY module "name" { source = "..." } block where the source is
+    a remote reference (git::, http://, https://, etc.), not local paths.
     
     Args:
         repo_path: Path to repository root
         max_files: Maximum number of .tf files to scan (safety limit)
     
     Returns:
-        Dict with 'modules' list and 'inferred_architectures' mapping
+        Dict with 'modules' list (external modules only)
     """
     repo = Path(repo_path)
     if not repo.exists():
-        return {"error": f"Path does not exist: {repo_path}", "modules": [], "inferred_architectures": {}}
+        return {"error": f"Path does not exist: {repo_path}", "modules": []}
     
     modules = []
-    inferred_architectures = {arch: [] for arch in MODULE_PATTERNS.keys()}
     
-    # Fast by design: only parse top-level *.tf files in common Terraform folders,
-    # with a file cap. This runs against the caller-provided repo_path and does
-    # not assume any specific repository (for example, it is not accounts-only).
-    # Find all .tf files - look in common locations first
+    # Fast by design: only parse *.tf files with a file cap.
+    # Recursively search all .tf files in the repo
     tf_files = []
-    common_paths = [repo / "terraform", repo / "terraform-aks", repo]
+    seen_files = set()
     
-    for search_path in common_paths:
-        if search_path.exists():
-            try:
-                for tf_file in search_path.glob("*.tf"):
-                    if len(tf_files) < max_files:
-                        tf_files.append(tf_file)
-            except Exception:
-                pass
+    try:
+        # Recursively find all .tf files
+        for tf_file in repo.glob("**/*.tf"):
+            file_key = tf_file.resolve()
+            if file_key not in seen_files and len(tf_files) < max_files:
+                tf_files.append(tf_file)
+                seen_files.add(file_key)
+    except Exception:
+        pass
     
     for tf_file in tf_files:
         try:
@@ -123,48 +97,35 @@ def detect_modules(repo_path: str, max_files: int = 500) -> Dict[str, Any]:
                     module_name = match.group(1)
                     # Look for source in following lines (usually within next 10 lines)
                     source = None
-                    source_line_offset = 0
                     
                     for i in range(current_line, min(current_line + 10, len(lines))):
                         source_match = source_pattern.search(lines[i])
                         if source_match:
                             source = source_match.group(1)
-                            source_line_offset = i - current_line
                             break
                     
                     if source:
-                        # Infer architecture type from source
-                        inferred_type = "unknown"
-                        for arch_type, arch_def in MODULE_PATTERNS.items():
-                            for pattern in arch_def["patterns"]:
-                                if re.search(pattern, source, re.IGNORECASE):
-                                    inferred_type = arch_type
-                                    break
-                            if inferred_type != "unknown":
-                                break
+                        # Only record EXTERNAL modules (remote sources), skip local paths
+                        module_type = classify_module_type(source)
                         
-                        # Record module
-                        module_info = {
-                            "name": module_name,
-                            "source": source,
-                            "source_file": str(tf_file.relative_to(repo)),
-                            "source_line": current_line + 1,
-                            "inferred_type": inferred_type
-                        }
-                        modules.append(module_info)
-                        
-                        # Add to inferred architectures
-                        if inferred_type != "unknown":
-                            inferred_architectures[inferred_type].append(module_name)
+                        if module_type != 'local':
+                            # Record external module
+                            module_info = {
+                                "name": module_name,
+                                "source": source,
+                                "source_file": str(tf_file.relative_to(repo)),
+                                "source_line": current_line + 1,
+                                "inferred_type": module_type
+                            }
+                            modules.append(module_info)
                 
                 current_line += 1
         
         except Exception as e:
-            print(f"Warning: Error reading {tf_file}: {e}")
+            print(f"Warning: Error reading {tf_file}: {e}", file=sys.stderr)
     
     return {
-        "modules": modules,
-        "inferred_architectures": {k: v for k, v in inferred_architectures.items() if v}
+        "modules": modules
     }
 
 
@@ -187,8 +148,7 @@ def format_output(detection: Dict[str, Any]) -> str:
         by_type[mtype].append(module)
     
     for mtype, mods in sorted(by_type.items()):
-        label = MODULE_PATTERNS.get(mtype, {}).get("label", mtype)
-        lines.append(f"\n{label} ({len(mods)}):")
+        lines.append(f"\n{mtype.replace('_', ' ').title()} ({len(mods)}):")
         
         for mod in mods:
             lines.append(f"  • {mod['name']}")
