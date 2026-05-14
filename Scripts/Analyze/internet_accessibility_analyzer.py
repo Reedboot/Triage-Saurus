@@ -342,6 +342,8 @@ class InternetAccessibilityAnalyzer:
         
         if not auth and not auth_method:
             return "none"
+        if any(token in auth or token in auth_method for token in ("password", "token", "bearer", "oauth", "jwt", "basic", "credentials", "credential")):
+            return "credential"
         if "key" in auth or "sas" in auth or "key" in auth_method:
             return "key"
         if "identity" in auth or "managed" in auth or "identity" in auth_method:

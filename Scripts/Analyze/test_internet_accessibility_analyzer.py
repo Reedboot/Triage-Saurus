@@ -288,6 +288,11 @@ class TestInternetAccessibilityAnalyzer:
         conn = {"authentication": "", "auth_method": "ManagedIdentity"}
         assert analyzer._determine_auth_level(conn) == "identity"
 
+    def test_determine_auth_level_credential(self, analyzer):
+        """Test auth level detection - credential/token based auth."""
+        conn = {"authentication": "Bearer token", "auth_method": "Credentials"}
+        assert analyzer._determine_auth_level(conn) == "credential"
+
     def test_no_accessible_resources(self, analyzer):
         """Test case with no internet-accessible resources."""
         # Create resources without any entry points

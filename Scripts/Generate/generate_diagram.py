@@ -218,6 +218,8 @@ class HierarchicalDiagramBuilder:
         self._node_id_first_owner: Dict[str, str] = {}
         # Internet exposure detection: map of resource_name → ExposureDetail
         self.exposed_resources: Dict[str, ExposureDetail] = {}
+        # Internet accessibility posture loaded from resource_internet_accessibility.
+        self._accessibility_by_id: Dict[int, dict] = {}
         # Track resources rendered as subgraphs (cannot be connection endpoints in Mermaid)
         self.subgraph_nodes: Set[str] = set()
         # Track resource IDs that have been rendered as subgraphs to prevent duplicate subgraph
@@ -852,6 +854,7 @@ class HierarchicalDiagramBuilder:
                     )
                     combined_exposed.update(prov_exposed)
                 self.exposed_resources = combined_exposed
+                self._apply_accessibility_posture()
             except Exception as e:
                 print(f"Warning: Multi-provider exposure detection failed: {e}", file=sys.stderr)
                 self.exposed_resources = {}
@@ -904,10 +907,79 @@ class HierarchicalDiagramBuilder:
                 findings=findings,
                 properties=properties if properties else None,
             )
+            self._apply_accessibility_posture()
         except Exception as e:
             # Graceful degradation - log but don't crash
             print(f"Warning: Internet exposure detection failed: {e}", file=sys.stderr)
             self.exposed_resources = {}
+
+    def _load_internet_accessibility(self) -> Dict[int, dict]:
+        """Load precomputed internet accessibility posture for the current experiment."""
+        if self._accessibility_by_id:
+            return self._accessibility_by_id
+
+        access_by_id: Dict[int, dict] = {}
+        try:
+            with get_db_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT resource_id, via_public_ip, via_public_endpoint, via_managed_identity, auth_level
+                    FROM resource_internet_accessibility
+                    WHERE experiment_id = ?
+                    """,
+                    [self.experiment_id],
+                ).fetchall()
+        except Exception:
+            self._accessibility_by_id = {}
+            return self._accessibility_by_id
+
+        for row in rows:
+            access_by_id[int(row["resource_id"])] = {
+                "via_public_ip": bool(row["via_public_ip"]),
+                "via_public_endpoint": bool(row["via_public_endpoint"]),
+                "via_managed_identity": bool(row["via_managed_identity"]),
+                "auth_level": (row["auth_level"] or "").strip().lower(),
+            }
+
+        self._accessibility_by_id = access_by_id
+        return self._accessibility_by_id
+
+    def _apply_accessibility_posture(self) -> None:
+        """Downgrade public-but-authenticated resources based on accessibility analysis."""
+        if not self.exposed_resources:
+            return
+
+        access_by_id = self._load_internet_accessibility()
+        if not access_by_id:
+            return
+
+        for detail in self.exposed_resources.values():
+            access = access_by_id.get(detail.resource_id)
+            if not access:
+                continue
+
+            auth_level = access.get("auth_level", "")
+            via_public_ip = bool(access.get("via_public_ip"))
+            via_public_endpoint = bool(access.get("via_public_endpoint"))
+            via_managed_identity = bool(access.get("via_managed_identity")) or auth_level == "identity"
+
+            detail.auth_required = auth_level not in {"", "none"}
+
+            if via_public_ip:
+                continue
+
+            if via_managed_identity:
+                detail.confidence = "low"
+                detail.color = "#ffcc00"
+                if "managed identity" not in detail.reason.lower():
+                    detail.reason = f"{detail.reason} (managed identity required)"
+                continue
+
+            if via_public_endpoint and auth_level not in {"", "none"}:
+                detail.confidence = "medium"
+                detail.color = "#ff9900"
+                if "authenticated" not in detail.reason.lower():
+                    detail.reason = f"{detail.reason} (authenticated public endpoint)"
     
     def _load_openapi_operations(self) -> None:
         """Discover OpenAPI spec files in the repo and inject synthetic operation resources

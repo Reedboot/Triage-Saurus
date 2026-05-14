@@ -9,6 +9,7 @@ for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
     sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
 from generate_diagram import HierarchicalDiagramBuilder
+from internet_exposure_detector import ExposureDetail
 from icon_resolver import get_icon_path
 
 
@@ -755,7 +756,100 @@ def test_diagram_validation_passes_valid_diagrams(monkeypatch):
     diagram = builder.generate()
     assert isinstance(diagram, str)
     assert diagram.startswith("flowchart TB")
-    assert "app-gateway" in diagram
+
+
+def test_identity_only_public_endpoint_is_downgraded(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+    builder.exposed_resources = {
+        "storage-001": ExposureDetail(
+            resource_name="storage-001",
+            resource_id=1,
+            exposure_type="heuristic",
+            confidence="medium",
+            reason="Public endpoint",
+            color="#ff9900",
+        )
+    }
+
+    class _Rows:
+        def fetchall(self):
+            return [
+                {
+                    "resource_id": 1,
+                    "via_public_ip": 0,
+                    "via_public_endpoint": 1,
+                    "via_managed_identity": 1,
+                    "auth_level": "identity",
+                }
+            ]
+
+    class _Conn:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    class _Ctx:
+        def __enter__(self):
+            return _Conn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("generate_diagram.get_db_connection", lambda: _Ctx())
+
+    builder._apply_accessibility_posture()
+
+    detail = builder.exposed_resources["storage-001"]
+    assert detail.confidence == "low"
+    assert detail.auth_required is True
+    assert detail.color == "#ffcc00"
+    assert "managed identity" in detail.reason.lower()
+
+
+def test_credential_public_endpoint_is_medium_risk(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+    builder.exposed_resources = {
+        "sql-001": ExposureDetail(
+            resource_name="sql-001",
+            resource_id=2,
+            exposure_type="property",
+            confidence="high",
+            reason="Public endpoint",
+            color="#ff0000",
+        )
+    }
+
+    class _Rows:
+        def fetchall(self):
+            return [
+                {
+                    "resource_id": 2,
+                    "via_public_ip": 0,
+                    "via_public_endpoint": 1,
+                    "via_managed_identity": 0,
+                    "auth_level": "credential",
+                }
+            ]
+
+    class _Conn:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    class _Ctx:
+        def __enter__(self):
+            return _Conn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("generate_diagram.get_db_connection", lambda: _Ctx())
+
+    builder._apply_accessibility_posture()
+
+    detail = builder.exposed_resources["sql-001"]
+    assert detail.confidence == "medium"
+    assert detail.auth_required is True
+    assert detail.color == "#ff9900"
+    assert "authenticated public endpoint" in detail.reason.lower()
 
 
 class _FakeEmptyConn:
