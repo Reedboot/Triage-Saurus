@@ -980,6 +980,33 @@ class HierarchicalDiagramBuilder:
                 detail.color = "#ff9900"
                 if "authenticated" not in detail.reason.lower():
                     detail.reason = f"{detail.reason} (authenticated public endpoint)"
+
+    def _internet_edge_annotation(self, detail: Optional[ExposureDetail]) -> Tuple[str, str]:
+        """Return the label and color for an Internet exposure edge."""
+        if not detail:
+            return "Public", "red"
+
+        access = self._load_internet_accessibility().get(detail.resource_id, {})
+        auth_level = str(access.get("auth_level") or "").strip().lower()
+        reason = str(detail.reason or "").lower()
+
+        if auth_level == "identity" or "managed identity" in reason:
+            return "Managed Identity", detail.color or "#ffcc00"
+        if auth_level == "credential":
+            if "password" in reason:
+                return "Password", detail.color or "#ff9900"
+            if "token" in reason or "bearer" in reason or "jwt" in reason or "oauth" in reason:
+                return "Token", detail.color or "#ff9900"
+            if "key" in reason:
+                return "Key", detail.color or "#ff9900"
+            return "Credentials", detail.color or "#ff9900"
+        if auth_level == "key":
+            return "Key", detail.color or "#ff9900"
+        if auth_level == "certificate":
+            return "Certificate", detail.color or "#ff9900"
+        if detail.auth_required:
+            return "Authenticated", detail.color or "#ff9900"
+        return "Public", "red"
     
     def _load_openapi_operations(self) -> None:
         """Discover OpenAPI spec files in the repo and inject synthetic operation resources
@@ -4465,9 +4492,8 @@ class HierarchicalDiagramBuilder:
                     has_internet = True
                     src_id = 'internet'
                     
-                    # Build label from exposure detail — just show "Public" without resource name
-                    # (the arrow itself shows which resource is public)
-                    label = "Public"
+                    # Surface the countermeasure/auth posture on the edge label.
+                    label, edge_color = self._internet_edge_annotation(exposure_detail)
                     
                     # Create the connection line
                     lines.append(f'  {src_id} -.->|"{label}"| {tgt_id}')
@@ -4478,8 +4504,8 @@ class HierarchicalDiagramBuilder:
                     # Add placeholder to edge_list so subsequent indices increment correctly
                     edge_list.append((None, src_id, tgt_id))
                     
-                    # Direct Internet→entry edges are always red.
-                    style_lines.append(f"  linkStyle {current_link_idx} stroke:red,stroke-width:2px")
+                    # Authenticated exposure uses the amber posture color; anonymous exposure stays red.
+                    style_lines.append(f"  linkStyle {current_link_idx} stroke:{edge_color},stroke-width:2px")
 
         # Add internet → K8s LoadBalancer/NodePort service edges (before style_lines so linkStyle indices are correct)
         if self._k8s_internet_services:

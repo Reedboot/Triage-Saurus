@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
     sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
-from generate_diagram import HierarchicalDiagramBuilder
+from generate_diagram import HierarchicalDiagramBuilder, sanitize_id
 from internet_exposure_detector import ExposureDetail
 from icon_resolver import get_icon_path
 
@@ -850,6 +850,82 @@ def test_credential_public_endpoint_is_medium_risk(monkeypatch):
     assert detail.auth_required is True
     assert detail.color == "#ff9900"
     assert "authenticated public endpoint" in detail.reason.lower()
+
+
+def test_managed_identity_internet_edge_uses_amber_label(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+    resource = {
+        "id": 3,
+        "resource_name": "storage",
+        "resource_type": "azurerm_storage_account",
+        "provider": "azure",
+        "repo_name": "repo",
+    }
+    builder.resources = [resource]
+    builder.resource_by_id = {3: resource}
+    builder.resource_by_name = {"storage": resource}
+    builder.emitted_nodes = {"storage"}
+    builder._emitted_mermaid_ids = {sanitize_id("storage")}
+    builder.exposed_resources = {
+        "storage": ExposureDetail(
+            resource_name="storage",
+            resource_id=3,
+            exposure_type="property",
+            confidence="low",
+            reason="Public endpoint (managed identity required)",
+            color="#ffcc00",
+        )
+    }
+    builder._accessibility_by_id = {
+        3: {
+            "via_public_ip": 0,
+            "via_public_endpoint": 1,
+            "via_managed_identity": 1,
+            "auth_level": "identity",
+        }
+    }
+
+    lines = builder.render_connections()
+    assert any('internet -.->|"Managed Identity"| storage' in line for line in lines)
+    assert any("stroke:#ffcc00" in line for line in lines)
+
+
+def test_credential_internet_edge_uses_amber_label(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+    resource = {
+        "id": 4,
+        "resource_name": "sql",
+        "resource_type": "azurerm_mssql_server",
+        "provider": "azure",
+        "repo_name": "repo",
+    }
+    builder.resources = [resource]
+    builder.resource_by_id = {4: resource}
+    builder.resource_by_name = {"sql": resource}
+    builder.emitted_nodes = {"sql"}
+    builder._emitted_mermaid_ids = {sanitize_id("sql")}
+    builder.exposed_resources = {
+        "sql": ExposureDetail(
+            resource_name="sql",
+            resource_id=4,
+            exposure_type="property",
+            confidence="medium",
+            reason="Public endpoint (authenticated public endpoint)",
+            color="#ff9900",
+        )
+    }
+    builder._accessibility_by_id = {
+        4: {
+            "via_public_ip": 0,
+            "via_public_endpoint": 1,
+            "via_managed_identity": 0,
+            "auth_level": "credential",
+        }
+    }
+
+    lines = builder.render_connections()
+    assert any('internet -.->|"Credentials"| sql' in line for line in lines)
+    assert any("stroke:#ff9900" in line for line in lines)
 
 
 class _FakeEmptyConn:
