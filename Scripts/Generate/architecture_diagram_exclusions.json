@@ -73,16 +73,11 @@
     "aws_lambda_permission",
     "aws_autoscaling_lifecycle_hook",
     "aws_main_route_table_association",
-    "azurerm_route_table",
-    "azurerm_route",
-    "azurerm_subnet_route_table_association",
     "google_compute_route",
     "aws_network_acl",
     "aws_network_acl_rule",
     "aws_vpc_dhcp_options",
     "aws_vpc_dhcp_options_association",
-    "azurerm_network_security_rule",
-    "azurerm_subnet_network_security_group_association",
     "azurerm_mssql_server_security_alert_policy",
     "azurerm_sql_server_security_alert_policy",
     "azurerm_network_watcher_flow_log",
@@ -115,8 +110,7 @@
     "azurerm_managed_disk_sas_token",
     "aws_ebs_volume",
     "aws_ebs_snapshot",
-    "aws_volume_attachment",
-    "azurerm_network_security_group"
+    "aws_volume_attachment"
   ],
   "notes": [
     "These are typically configuration objects, metadata, or data sources",

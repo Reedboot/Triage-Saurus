@@ -57,6 +57,33 @@ EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
 
+
+def _feature_flag_enabled(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _feature_flag_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _scan_feature_flags() -> dict[str, object]:
+    return {
+        "module_scan_concurrency": _feature_flag_int("TRIAGE_MODULE_SCAN_CONCURRENCY", default=2, minimum=1),
+        "single_writer_queue_enabled": _feature_flag_enabled("TRIAGE_SINGLE_WRITER_QUEUE_ENABLED", default=True),
+        "pipeline_parallel_mode_enabled": _feature_flag_enabled("TRIAGE_PIPELINE_PARALLEL_MODE", default=True),
+    }
+
+
 # DB helpers are used to persist Copilot-generated overview metadata.
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS / "Utils"))
@@ -1926,6 +1953,31 @@ def _stream_scan(repo_path: str, scan_name: str):
     experiment_id: str | None = None
     last_stage_id: str | None = None
     last_stage_label: str | None = None
+    last_live_diagram_emit_at = 0.0
+    last_live_diagram_signature: str | None = None
+    scan_flags = _scan_feature_flags()
+    queue_metrics = {
+        "running": 0,
+        "completed": 0,
+        "total": 0,
+        "failed": 0,
+    }
+    stage_metrics = {
+        "stage_updates": 0,
+        "log_lines": 0,
+    }
+
+    def _build_metrics_payload() -> dict:
+        return {
+            "log_lines": int(stage_metrics["log_lines"]),
+            "stage_updates": int(stage_metrics["stage_updates"]),
+            "queue": {
+                "running": int(queue_metrics["running"]),
+                "completed": int(queue_metrics["completed"]),
+                "total": int(queue_metrics["total"]),
+                "failed": int(queue_metrics["failed"]),
+            },
+        }
 
     def _write_scan_log(line: str) -> None:
         if scan_log_fh:
@@ -1937,15 +1989,18 @@ def _stream_scan(repo_path: str, scan_name: str):
     def _emit_scan_log(line: str) -> str:
         rendered = _decorate_scan_log_line(line)
         _write_scan_log(rendered)
+        stage_metrics["log_lines"] += 1
         return _sse("log", rendered)
 
     def _emit_scan_stage(stage_id: str, label: str, state: str = "active", progress: dict | None = None) -> str | None:
         nonlocal last_stage_id, last_stage_label
         if stage_id == last_stage_id and label == last_stage_label and progress is None:
             return None
+        stage_metrics["stage_updates"] += 1
         payload = {"id": stage_id, "label": label, "state": state}
         if progress:
             payload["progress"] = progress
+        payload["metrics"] = _build_metrics_payload()
         if experiment_id:
             payload["experiment_id"] = experiment_id
         last_stage_id = stage_id
@@ -1957,6 +2012,30 @@ def _stream_scan(repo_path: str, scan_name: str):
         if not clean:
             return None
         lower = clean.lower()
+
+        queue_match = re.search(
+            r"\[pipelinemetrics\]\s+queue\s+phase3c\s+running=(\d+)\s+completed=(\d+)\s+total=(\d+)\s+failed=(\d+)",
+            lower,
+        )
+        if queue_match:
+            queue_metrics["running"] = int(queue_match.group(1))
+            queue_metrics["completed"] = int(queue_match.group(2))
+            queue_metrics["total"] = int(queue_match.group(3))
+            queue_metrics["failed"] = int(queue_match.group(4))
+            total = queue_metrics["total"]
+            completed = queue_metrics["completed"]
+            label = f"Step 6: Analysis (queue {completed}/{total})" if total else "Step 6: Analysis (queue)"
+            return _emit_scan_stage(
+                "phase3-analysis",
+                label,
+                "active",
+                {
+                    "current": completed,
+                    "total": total,
+                    "running": queue_metrics["running"],
+                    "failed": queue_metrics["failed"],
+                },
+            )
 
         if "detection pre-scan inventory" in lower or "detection chunk prep" in lower:
             return _emit_scan_stage("phase1-detection", "Step 1: Detection", "active")
@@ -1996,6 +2075,95 @@ def _stream_scan(repo_path: str, scan_name: str):
             if marker in lower:
                 return _emit_scan_stage(stage_id, label, "active")
         return None
+
+    def _live_node_id(resource_id: int) -> str:
+        return f"R{resource_id}"
+
+    def _live_node_label(resource: dict) -> str:
+        name = str(resource.get("resource_name") or "unknown").strip()
+        rtype = str(resource.get("resource_type") or "resource").strip()
+        name = re.sub(r"\s+", " ", name)[:42]
+        rtype = re.sub(r"\s+", " ", rtype)[:34]
+        return f"{name}\\n{rtype}"
+
+    def _build_live_diagram_payload() -> tuple[list[dict], str] | tuple[None, None]:
+        if not experiment_id:
+            return None, None
+        try:
+            resources = db_helpers.get_resources_for_diagram(experiment_id)
+            if not resources:
+                return None, None
+            connections = db_helpers.get_connections_for_diagram(experiment_id)
+        except Exception:
+            return None, None
+
+        # Keep the live preview lightweight so updates can stream during scan.
+        max_nodes = 28
+        max_edges = 56
+        ranked = sorted(
+            resources,
+            key=lambda r: (
+                int(r.get("max_finding_score") or 0),
+                str(r.get("resource_type") or ""),
+                str(r.get("resource_name") or ""),
+            ),
+            reverse=True,
+        )
+        selected = ranked[:max_nodes]
+        selected_ids = {int(r["id"]) for r in selected if r.get("id") is not None}
+        if not selected_ids:
+            return None, None
+
+        lines = [
+            "flowchart LR",
+            "%% Live scan preview (updates while scan is running)",
+        ]
+        for resource in selected:
+            rid = int(resource["id"])
+            label = _live_node_label(resource).replace('"', '\\"')
+            lines.append(f'{_live_node_id(rid)}["{label}"]')
+
+        edge_count = 0
+        connection_count = 0
+        for conn in connections:
+            src_id = conn.get("source_id")
+            tgt_id = conn.get("target_id")
+            if src_id is None or tgt_id is None:
+                continue
+            connection_count += 1
+            if int(src_id) not in selected_ids or int(tgt_id) not in selected_ids:
+                continue
+            lines.append(f"{_live_node_id(int(src_id))} --> {_live_node_id(int(tgt_id))}")
+            edge_count += 1
+            if edge_count >= max_edges:
+                break
+
+        diagrams = [{
+            "title": f"Live Preview ({len(selected_ids)} resources)",
+            "code": "\n".join(lines),
+        }]
+        signature = f"{len(resources)}:{connection_count}:{edge_count}"
+        return diagrams, signature
+
+    def _maybe_emit_live_diagram(force: bool = False) -> str | None:
+        nonlocal last_live_diagram_emit_at, last_live_diagram_signature
+        if not experiment_id:
+            return None
+
+        now = time.time()
+        emit_interval_seconds = 20
+        if not force and (now - last_live_diagram_emit_at) < emit_interval_seconds:
+            return None
+
+        diagrams, signature = _build_live_diagram_payload()
+        if not diagrams or not signature:
+            return None
+        if not force and signature == last_live_diagram_signature:
+            return None
+
+        last_live_diagram_signature = signature
+        last_live_diagram_emit_at = now
+        return _sse("diagrams", diagrams)
 
     # Yield immediately to confirm connection
     first_line = f"[Web] Initializing scan for repository: {repo.name}"
@@ -2093,6 +2261,12 @@ def _stream_scan(repo_path: str, scan_name: str):
             yield init_stage
 
     for msg in [
+        (
+            "[Web] Feature flags — "
+            f"module_scan_concurrency={scan_flags['module_scan_concurrency']}, "
+            f"single_writer_queue_enabled={str(scan_flags['single_writer_queue_enabled']).lower()}, "
+            f"pipeline_parallel_mode_enabled={str(scan_flags['pipeline_parallel_mode_enabled']).lower()}"
+        ),
         f"▶  Starting scan: {repo}",
         f"   Command: {' '.join(cmd)}",
         "",
@@ -2145,12 +2319,18 @@ def _stream_scan(repo_path: str, scan_name: str):
                 if stage_evt:
                     yield stage_evt
                 yield _emit_scan_log(line)
+                live_evt = _maybe_emit_live_diagram(force=bool(stage_evt))
+                if live_evt:
+                    yield live_evt
 
                 # Capture experiment ID printed by run_pipeline.py
                 if experiment_id is None:
                     m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                     if m:
                         experiment_id = m.group(1)
+                        live_evt = _maybe_emit_live_diagram(force=True)
+                        if live_evt:
+                            yield live_evt
 
                 last_hb = time.time()
             else:
@@ -2175,6 +2355,9 @@ def _stream_scan(repo_path: str, scan_name: str):
                         # Scan has been running for 15+ minutes — may be hung or very large repo
                         hb = f"[Web] 🕵️ ⚠️ Scan in progress — elapsed {elapsed}s (taking longer than expected)"
                     yield _emit_scan_log(hb)
+                    live_evt = _maybe_emit_live_diagram(force=False)
+                    if live_evt:
+                        yield live_evt
                     last_hb = now
 
             if process.poll() is not None:
@@ -2185,10 +2368,16 @@ def _stream_scan(repo_path: str, scan_name: str):
                     if stage_evt:
                         yield stage_evt
                     yield _emit_scan_log(line)
+                    live_evt = _maybe_emit_live_diagram(force=bool(stage_evt))
+                    if live_evt:
+                        yield live_evt
                     if experiment_id is None:
                         m = re.search(r"Experiment(?:\sID)?\s*[:\s]+([0-9]+)", line)
                         if m:
                             experiment_id = m.group(1)
+                            live_evt = _maybe_emit_live_diagram(force=True)
+                            if live_evt:
+                                yield live_evt
                 break
     except Exception as exc:
         failed_stage = _emit_scan_stage("failed", "Scan stream error", "failed")
@@ -2252,6 +2441,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         "exit_code": exit_code,
         "experiment_id": experiment_id,
         "status": "ready" if exit_code == 0 else "failed",
+        "metrics": _build_metrics_payload(),
     })
 
 
@@ -10983,7 +11173,12 @@ def index():
                 experiments.append(exp)
     except Exception:
         pass
-    return render_template("index.html", repos=_resolve_repos(), experiments=experiments)
+    return render_template(
+        "index.html",
+        repos=_resolve_repos(),
+        experiments=experiments,
+        scan_flags=_scan_feature_flags(),
+    )
 
 
 @app.route("/experiment")

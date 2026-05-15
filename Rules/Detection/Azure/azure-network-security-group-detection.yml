@@ -1,0 +1,116 @@
+rules:
+  - id: context-azure-network-security-group
+    message: |
+      Azure Network Security Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_network_security_group" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Security Group
+        resource_type: azurerm_network_security_group
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: resource_group_name
+            pattern: resource_group_name = "$RG_NAME"
+      description: |
+        Detects Azure Network Security Groups (NSGs) in Terraform.
+        NSGs are stateful firewalls that control inbound and outbound traffic
+        at the subnet and NIC level. They are critical for network segmentation
+        and least-privilege access control. Each NSG contains security rules
+        that define Allow/Deny policies for specific traffic patterns.
+
+  - id: context-azure-network-security-rule
+    message: |
+      Azure Network Security Rule detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_network_security_rule" $NAME {
+        ...
+        network_security_group_name = $NSG_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Security Rule
+        resource_type: azurerm_network_security_rule
+        resource_name: $NAME
+        parent_resource: azurerm_network_security_group
+        properties:
+          - name: direction
+            pattern: direction = "(?P<direction>Inbound|Outbound)"
+          - name: access
+            pattern: access = "(?P<access>Allow|Deny)"
+          - name: protocol
+            pattern: protocol = "(?P<protocol>\*|TCP|UDP|Esp|Ah|Icmp|Tcp|Udp|Esp|Ah|Icmp)"
+          - name: source_address_prefix
+            pattern: source_address_prefix = "(?P<source>\*|0\.0\.0\.0/0|10\.\d+\.\d+\.\d+/\d+|[A-Za-z0-9:/\.]+)"
+          - name: destination_address_prefix
+            pattern: destination_address_prefix = "(?P<destination>\*|0\.0\.0\.0/0|10\.\d+\.\d+\.\d+/\d+|[A-Za-z0-9:/\.]+)"
+          - name: source_port_range
+            pattern: source_port_range = "(?P<sport>\*|[0-9\-]+)"
+          - name: destination_port_range
+            pattern: destination_port_range = "(?P<dport>\*|22|3389|445|1433|3306|5432|6379|27017|[0-9\-]+)"
+          - name: priority
+            pattern: priority = (?P<priority>\d+)
+      description: |
+        Detects individual NSG security rules in Terraform.
+        Each rule defines traffic policy: direction (inbound/outbound),
+        access (allow/deny), protocol, source/destination IP ranges, and ports.
+        Rules are critical for threat model analysis - they define the actual
+        access control boundaries for network traffic.
+
+  - id: context-azure-subnet-network-security-group-association
+    message: |
+      Azure Subnet-NSG Association detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_subnet_network_security_group_association" $NAME {
+        ...
+        network_security_group_id = $NSG_ID
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet NSG Association
+        resource_type: azurerm_subnet_network_security_group_association
+        resource_name: $NAME
+        properties:
+          - name: subnet_id
+            pattern: subnet_id = $SUBNET_ID
+          - name: network_security_group_id
+            pattern: network_security_group_id = $NSG_ID
+      description: |
+        Detects NSG-to-Subnet associations in Terraform.
+        This association applies the NSG rules to all traffic entering/leaving
+        the subnet, making it a key control point for network segmentation.

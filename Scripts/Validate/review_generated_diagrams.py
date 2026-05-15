@@ -85,6 +85,7 @@ def _apply_detection_rules_and_regenerate(
     *,
     baseline_summary: dict[str, Any],
     repo_paths: dict[str, str],
+    scan_timeout_sec: int,
     repo_at_a_time: bool = False,
 ) -> bool:
     """Extract detection rules from baseline, run targeted scans, regenerate diagrams.
@@ -142,7 +143,22 @@ def _apply_detection_rules_and_regenerate(
             # Note: targeted_scan.py looks for rules in Rules/Detection/ by default
             # The rules are already there from the baseline pass
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=scan_timeout_sec,
+                )
+            except subprocess.TimeoutExpired as exc:
+                print(f"  ⚠ Scan timed out for {repo_name} with {rule_id} after {scan_timeout_sec}s")
+                if exc.stdout:
+                    print(f"    stdout: {str(exc.stdout)[:200]}")
+                if exc.stderr:
+                    print(f"    stderr: {str(exc.stderr)[:200]}")
+                scan_success = False
+                continue
             if result.returncode != 0:
                 print(f"  ⚠ Scan failed for {repo_name} with {rule_id}")
                 print(f"    Error: {result.stderr[:200]}")
@@ -474,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         scan_status = _apply_detection_rules_and_regenerate(
             baseline_summary=baseline_pass["summary"],
             repo_paths=repo_paths,
+            scan_timeout_sec=args.scan_complete_timeout_sec + 90,
             repo_at_a_time=args.repo_at_a_time,
         )
         

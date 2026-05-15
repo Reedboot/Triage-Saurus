@@ -522,7 +522,15 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     if not use_chunked:
         if label == "Detection":
             print(f"{Header.DETECTION} Detection chunk prep: single-pass scan")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            print(
+                f"{Header.ERROR} Detection scan timed out after 180s; "
+                "aborting targeted scan to avoid hanging diagram regeneration.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         # opengrep exits non-zero when findings exist — that's expected
         try:
             return _parse_opengrep_json(result)

@@ -3,6 +3,9 @@
 
 from pathlib import Path
 import sys
+import subprocess
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
@@ -87,3 +90,21 @@ def test_huaweicloud_detection_rules_are_mapped():
         "Kubernetes/Ingress",
         "Kubernetes/Service",
     ]
+
+
+def test_run_opengrep_fails_fast_when_single_pass_detection_times_out(monkeypatch, tmp_path: Path):
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(targeted_scan, "_tracked_file_count", lambda _target: 1)
+
+    def fake_run(cmd, capture_output, text, timeout=None, **_kwargs):
+        seen["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(targeted_scan.subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit) as exc:
+        targeted_scan.run_opengrep([targeted_scan.DETECTION], tmp_path, "Detection")
+
+    assert exc.value.code == 1
+    assert seen["timeout"] == 180

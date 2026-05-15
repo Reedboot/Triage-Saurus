@@ -9,15 +9,16 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
-import db_helpers
-from shared_utils import _severity_score
-from log_formatter import format_finding, format_scan_complete, format_summary
+from . import db_helpers
+from .single_writer_service import SingleWriterService
+from .write_queue_contract import OperationKind, OperationOwner
 
 
 def _base_severity(severity: str) -> str:
@@ -27,6 +28,13 @@ def _base_severity(severity: str) -> str:
     if s == "INFO":
         return "Low"
     return "Medium"
+
+
+def _single_writer_queue_enabled() -> bool:
+    raw = os.environ.get("TRIAGE_SINGLE_WRITER_QUEUE_ENABLED")
+    if raw is None:
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _parse_attack_fields(message: str) -> dict:
@@ -428,13 +436,50 @@ def main():
                 (primary_lang, args.experiment, args.repo),
             )
         if all_langs:
-            db_helpers.upsert_context_metadata(
-                args.experiment, args.repo,
-                key="languages_detected",
-                value=", ".join(all_langs),
-                namespace="scan",
-                source="store_findings",
+            metadata_owner = OperationOwner(
+                owner_type="scan_pipeline",
+                owner_id=f"store_findings:{args.repo}",
+                experiment_id=args.experiment,
+                repo_name=args.repo,
             )
+            if _single_writer_queue_enabled():
+                writer = SingleWriterService(batch_size=32)
+                try:
+                    writer.submit(
+                        kind=OperationKind.METADATA_UPSERT,
+                        owner=metadata_owner,
+                        payload={
+                            "experiment_id": args.experiment,
+                            "repo_name": args.repo,
+                            "namespace": "scan",
+                            "key": "languages_detected",
+                            "value": ", ".join(all_langs),
+                            "source": "store_findings",
+                        },
+                    )
+                    queue_result = writer.flush()
+                    print(
+                        "[QueueMetrics] single_writer enabled=true "
+                        f"received={queue_result.received} persisted={queue_result.persisted} duplicates={queue_result.duplicates}"
+                    )
+                except Exception:
+                    db_helpers.upsert_context_metadata(
+                        args.experiment, args.repo,
+                        key="languages_detected",
+                        value=", ".join(all_langs),
+                        namespace="scan",
+                        source="store_findings",
+                    )
+                    print("[QueueMetrics] single_writer enabled=true fallback=direct-upsert")
+            else:
+                db_helpers.upsert_context_metadata(
+                    args.experiment, args.repo,
+                    key="languages_detected",
+                    value=", ".join(all_langs),
+                    namespace="scan",
+                    source="store_findings",
+                )
+                print("[QueueMetrics] single_writer enabled=false fallback=direct-upsert")
         print(f"  Primary language : {primary_lang or '(none)'}")
         print(f"  Languages detected: {', '.join(all_langs) or '(none)'}")
 

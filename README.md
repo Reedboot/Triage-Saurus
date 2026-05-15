@@ -283,6 +283,10 @@ What the web UI does:
 - Presents a pre-populated dropdown from `Intake/ReposToScan.txt` to select a repository (server-side paths are resolved).
 - Runs the same offline Phase 1–3 pipeline (Scripts/Utils/run_pipeline.py) as subprocesses on the machine where the web server runs.
 - Streams the pipeline stdout/stderr to the browser using Server-Sent Events and renders any generated Mermaid diagrams.
+- Feature flags (safe defaults):
+  - `TRIAGE_MODULE_SCAN_CONCURRENCY` (default `2`)
+  - `TRIAGE_SINGLE_WRITER_QUEUE_ENABLED` (default `true`)
+  - `TRIAGE_PIPELINE_PARALLEL_MODE` (default `true`)
 
 Parallel headless validation (dropdown repos, bounded concurrency):
 

@@ -758,6 +758,49 @@ def test_diagram_validation_passes_valid_diagrams(monkeypatch):
     assert diagram.startswith("flowchart TB")
 
 
+def test_tier_styles_skip_nodes_not_rendered(monkeypatch):
+    """Test that tier styling does not reference nodes missing from the diagram."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    rendered = {
+        "id": 1,
+        "resource_name": "aks",
+        "resource_type": "azurerm_kubernetes_cluster",
+        "provider": "azure",
+        "repo_name": "repo",
+    }
+    hidden = {
+        "id": 2,
+        "resource_name": "aks_private_endpoint",
+        "resource_type": "azurerm_private_endpoint",
+        "provider": "azure",
+        "repo_name": "repo",
+    }
+
+    builder.resources = [rendered, hidden]
+    builder.connections = []
+    builder.children_by_parent = {}
+    builder.exposed_resources = {}
+    builder.resource_by_id = {1: rendered, 2: hidden}
+    builder.resource_by_name = {"aks": rendered, "aks_private_endpoint": hidden}
+    builder.emitted_nodes = {"aks", "aks_private_endpoint"}
+    builder.node_id_override = {}
+    builder._tier_nodes = {
+        "app_tier": ["aks"],
+        "network_tier": ["aks_private_endpoint"],
+    }
+
+    diagram_lines = [
+        "flowchart TB",
+        "  aks[\"AKS\"]",
+    ]
+
+    styles = builder.render_styles(diagram_lines)
+
+    assert any("style aks " in line for line in styles)
+    assert not any("aks_private_endpoint" in line for line in styles)
+
+
 def test_identity_only_public_endpoint_is_downgraded(monkeypatch):
     builder = HierarchicalDiagramBuilder("exp-1")
     builder.exposed_resources = {

@@ -28,6 +28,8 @@ Architecture diagrams are persisted to DB table cloud_diagrams and rendered by t
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -54,7 +56,19 @@ _GEN_DIAGRAM   = SCRIPTS / "Generate"   / "generate_diagram.py"
 from db_helpers import get_db_connection, fix_nested_resource_providers, get_repository_id
 
 
-def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
+def _feature_flag_enabled(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _run(
+    cmd: list[str],
+    label: str,
+    timeout: int | None = None,
+    capture_output: bool = False,
+) -> int:
     """Run a subprocess, stream output, return exit code.
 
     Forces subprocesses to include the repo Scripts/ paths on PYTHONPATH and
@@ -85,14 +99,190 @@ def _run(cmd: list[str], label: str, timeout: int | None = None) -> int:
     env['PYTHONPATH'] = ':'.join(paths)
     env['PYTHONUNBUFFERED'] = '1'  # Ensure unbuffered output for real-time streaming
 
+    run_kwargs = {
+        "cwd": str(REPO_ROOT),
+        "env": env,
+        "timeout": timeout,
+    }
+    if capture_output:
+        run_kwargs.update({"capture_output": True, "text": True})
+
     try:
-        result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, timeout=timeout)
+        result = subprocess.run(cmd, **run_kwargs)
+        if capture_output:
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, file=sys.stderr, end="")
         if result.returncode != 0:
             print(f"\n[ERROR] {label} exited with code {result.returncode}", file=sys.stderr)
         return result.returncode
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        if capture_output:
+            if exc.stdout:
+                print(exc.stdout, end="")
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr, end="")
         print(f"\n[ERROR] {label} timed out after {timeout}s", file=sys.stderr)
         return 124  # Standard timeout exit code
+
+
+def _run_parallel_tasks(tasks: list[tuple[str, list[str], str]]) -> dict[str, int]:
+    """Run independent tasks in parallel and return exit codes keyed by phase ID."""
+    if not tasks:
+        return {}
+
+    print(f"\n{'─'*60}")
+    print("▶  Phase 3c — Running independent enrichment tasks in parallel")
+    print('─'*60)
+
+    results: dict[str, int] = {}
+    total = len(tasks)
+    running = total
+    completed = 0
+    failed = 0
+    print(f"[PipelineMetrics] queue phase3c running={running} completed={completed} total={total} failed={failed}")
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        future_map = {
+            pool.submit(_run, cmd, label, None, True): phase_id
+            for phase_id, cmd, label in tasks
+        }
+        for future in as_completed(future_map):
+            phase_id = future_map[future]
+            try:
+                rc = future.result()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                print(f"[WARN] {phase_id} failed with unexpected error: {exc}", file=sys.stderr)
+                rc = 1
+            results[phase_id] = rc
+            completed += 1
+            running = max(0, running - 1)
+            if rc != 0:
+                failed += 1
+            print(
+                f"[PipelineMetrics] queue phase3c running={running} completed={completed} total={total} failed={failed}"
+            )
+
+    return results
+
+
+def _run_tasks_sequentially(tasks: list[tuple[str, list[str], str]]) -> dict[str, int]:
+    """Run tasks serially while emitting queue progress metrics."""
+    results: dict[str, int] = {}
+    total = len(tasks)
+    running = total
+    completed = 0
+    failed = 0
+    print(f"[PipelineMetrics] queue phase3c running={running} completed={completed} total={total} failed={failed}")
+    for phase_id, cmd, label in tasks:
+        rc = _run(cmd, label, capture_output=True)
+        results[phase_id] = rc
+        completed += 1
+        running = max(0, running - 1)
+        if rc != 0:
+            failed += 1
+        print(
+            f"[PipelineMetrics] queue phase3c running={running} completed={completed} total={total} failed={failed}"
+        )
+    return results
+
+
+def _run_phase3c(experiment_id: str, repo_path: Path) -> None:
+    """Run Phase 3c with parallel independent tasks and dependency-gated tasks."""
+    _run(
+        [sys.executable, str(_INFER_SEMANTIC), "--experiment", experiment_id],
+        "Phase 3c — Infer semantic connections and data flows",
+    )
+
+    phase3c_tasks: list[tuple[str, list[str], str]] = [
+        (
+            "3c.1",
+            [sys.executable, str(_EXTRACT_SG_CONN), "--experiment", experiment_id],
+            "Phase 3c.1 — Extract SG rules and create Internet exposure connections",
+        ),
+        (
+            "3c.2",
+            [
+                sys.executable,
+                str(_EXTRACT_CONTAINERS),
+                "--experiment",
+                experiment_id,
+                "--repo",
+                str(repo_path),
+            ],
+            "Phase 3c.2 — Extract container definitions from user_data",
+        ),
+        (
+            "3c.2b",
+            [
+                sys.executable,
+                str(_EXTRACT_K8S_CONTAINERS),
+                "--experiment",
+                experiment_id,
+                "--repo",
+                str(repo_path),
+            ],
+            "Phase 3c.2b — Extract container definitions from K8s manifests",
+        ),
+        (
+            "3c.3",
+            [
+                sys.executable,
+                str(_EXTRACT_CICD_ARTIFACTS),
+                "--experiment",
+                experiment_id,
+                "--repo",
+                str(repo_path),
+            ],
+            "Phase 3c.3 — Extract CI/CD artifacts and deployment targets",
+        ),
+    ]
+    parallel_enabled = _feature_flag_enabled("TRIAGE_PIPELINE_PARALLEL_MODE", default=True)
+    print(f"[Pipeline] Feature flag pipeline_parallel_mode={'enabled' if parallel_enabled else 'disabled'}")
+    parallel_results = (
+        _run_parallel_tasks(phase3c_tasks)
+        if parallel_enabled
+        else _run_tasks_sequentially(phase3c_tasks)
+    )
+
+    rc_3c3 = parallel_results.get("3c.3", 1)
+    rc_3c4 = None
+
+    if rc_3c3 == 0:
+        rc_3c4 = _run(
+            [sys.executable, str(_LINK_CICD_TO_IAC), "--experiment", experiment_id],
+            "Phase 3c.4 — Link CI/CD artifacts to IaC deployment targets",
+        )
+    else:
+        print(
+            "[WARN] Skipping Phase 3c.4 — dependency Phase 3c.3 did not complete successfully.",
+            file=sys.stderr,
+        )
+
+    if rc_3c3 == 0 and rc_3c4 == 0:
+        _run(
+            [sys.executable, str(_ANALYZE_CICD_ARTIFACTS), "--experiment", experiment_id],
+            "Phase 3c.5 — Analyze CI/CD artifacts for security vulnerabilities",
+        )
+    else:
+        print(
+            "[WARN] Skipping Phase 3c.5 — dependencies Phase 3c.3/3c.4 did not complete successfully.",
+            file=sys.stderr,
+        )
+
+    # ── Phase 3c.6: Fix provider inheritance for nested resources ─────────────
+    # Docker containers should inherit from parent EC2, kubernetes resources should inherit from cloud provider
+    print(f"\n{'─'*60}")
+    print(f"▶  Phase 3c.6 — Fix provider inheritance for docker/kubernetes resources")
+    print('─'*60)
+    try:
+        fix_results = fix_nested_resource_providers(experiment_id)
+        print(f"  ✓ Docker containers fixed: {fix_results['docker_fixed']}")
+        print(f"  ✓ Kubernetes resources fixed: {fix_results['kubernetes_fixed']}")
+        if fix_results['errors']:
+            print(f"  ⚠ Errors encountered: {fix_results['errors']}")
+    except Exception as e:
+        print(f"  [WARN] Provider inheritance fix encountered error: {e}")
 
 
 def _get_experiment_findings(experiment_id: str) -> list[int]:
@@ -295,61 +485,7 @@ def main() -> int:
     finding_ids = _get_experiment_findings(experiment_id)
     print(f"\n[Pipeline] Phase 3b: {len(finding_ids)} finding(s) in DB.")
 
-    # ── Phase 3c: Infer semantic connections + data flows ────────────────────
-    _run(
-        [sys.executable, str(_INFER_SEMANTIC), "--experiment", experiment_id],
-        "Phase 3c — Infer semantic connections and data flows",
-    )
-
-    # ── Phase 3c.1: Extract security group connections (Internet exposure) ─────
-    _run(
-        [sys.executable, str(_EXTRACT_SG_CONN), "--experiment", experiment_id],
-        "Phase 3c.1 — Extract SG rules and create Internet exposure connections",
-    )
-
-    # ── Phase 3c.2: Extract container definitions from user_data ────────────────
-    _run(
-        [sys.executable, str(_EXTRACT_CONTAINERS), "--experiment", experiment_id, "--repo", str(repo_path)],
-        "Phase 3c.2 — Extract container definitions from user_data",
-    )
-
-    # ── Phase 3c.2b: Extract container definitions from K8s manifests ───────────
-    _run(
-        [sys.executable, str(_EXTRACT_K8S_CONTAINERS), "--experiment", experiment_id, "--repo", str(repo_path)],
-        "Phase 3c.2b — Extract container definitions from K8s manifests",
-    )
-
-    # ── Phase 3c.3: Extract CI/CD artifacts and deployment targets ──────────────
-    _run(
-        [sys.executable, str(_EXTRACT_CICD_ARTIFACTS), "--experiment", experiment_id, "--repo", str(repo_path)],
-        "Phase 3c.3 — Extract CI/CD artifacts and deployment targets",
-    )
-
-    # ── Phase 3c.4: Link CI/CD artifacts to IaC resources ──────────────────────
-    _run(
-        [sys.executable, str(_LINK_CICD_TO_IAC), "--experiment", experiment_id],
-        "Phase 3c.4 — Link CI/CD artifacts to IaC deployment targets",
-    )
-
-    # ── Phase 3c.5: Analyze CI/CD artifacts for security issues ────────────────
-    _run(
-        [sys.executable, str(_ANALYZE_CICD_ARTIFACTS), "--experiment", experiment_id],
-        "Phase 3c.5 — Analyze CI/CD artifacts for security vulnerabilities",
-    )
-
-    # ── Phase 3c.6: Fix provider inheritance for nested resources ─────────────
-    # Docker containers should inherit from parent EC2, kubernetes resources should inherit from cloud provider
-    print(f"\n{'─'*60}")
-    print(f"▶  Phase 3c.6 — Fix provider inheritance for docker/kubernetes resources")
-    print('─'*60)
-    try:
-        fix_results = fix_nested_resource_providers(experiment_id)
-        print(f"  ✓ Docker containers fixed: {fix_results['docker_fixed']}")
-        print(f"  ✓ Kubernetes resources fixed: {fix_results['kubernetes_fixed']}")
-        if fix_results['errors']:
-            print(f"  ⚠ Errors encountered: {fix_results['errors']}")
-    except Exception as e:
-        print(f"  [WARN] Provider inheritance fix encountered error: {e}")
+    _run_phase3c(experiment_id, repo_path)
 
     # ── Phase 3d: Architecture diagram ───────────────────────────────────────
     # Use improved generate_diagram.py with security zones, severity colours, and data flows.

@@ -37,7 +37,7 @@ document.addEventListener('alpine:init', () => {
     pipelineVisible: false,
     phaseIdx: -1,
     phaseLabel: '',
-    phases: PHASE_MAP.map(p => ({ id: p.id, title: p.title, state: 'idle' })), // idle | active | done
+    phases: PHASE_MAP.map(p => ({ id: p.id, title: p.title, label: p.label, state: 'idle' })), // idle | active | done
 
     // Modal
     modalVisible:  false,
@@ -163,6 +163,20 @@ document.addEventListener('alpine:init', () => {
         // Selected modules need either module_repo_path or userProvidedPath
         return m.module_repo_path || (m.userProvidedPath && m.userProvidedPath.trim());
       });
+    },
+    confirmModulePath(mod) {
+      if (!mod) return;
+      const resolvedPath = (mod.userProvidedPath || '').trim();
+      if (!resolvedPath) {
+        mod.pathValidated = false;
+        mod.selected = false;
+        return;
+      }
+      mod.userProvidedPath = resolvedPath;
+      mod.module_repo_path = resolvedPath;
+      mod.pathValidated = true;
+      mod.pathInputVisible = false;
+      mod.selected = true;
     },
     proceedWithModuleScan() {
       this.moduleModalVisible = false;

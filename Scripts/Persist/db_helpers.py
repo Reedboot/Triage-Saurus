@@ -234,6 +234,17 @@ _BASE_TABLES_SQL = """
       UNIQUE(experiment_id, repo_id, namespace, key)
     );
 
+    CREATE TABLE IF NOT EXISTS write_operation_log (
+      id INTEGER PRIMARY KEY,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      partition_key TEXT NOT NULL,
+      operation_kind TEXT NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS resource_nodes (
       id INTEGER PRIMARY KEY,
       resource_type TEXT NOT NULL,
@@ -1553,17 +1564,22 @@ def update_repository_stats(
 def ensure_repository_entry(experiment_id: str, repo_name: str) -> int:
     """Ensure a repository record exists for the experiment."""
     with get_db_connection() as conn:
-        cursor = conn.execute("""
-            INSERT OR IGNORE INTO repositories (experiment_id, repo_name)
-            VALUES (?, ?)
-        """, (experiment_id, repo_name))
-        if cursor.lastrowid:
-            return cursor.lastrowid
-        row = conn.execute("""
-            SELECT id FROM repositories
-            WHERE experiment_id = ? AND repo_name = ?
-        """, (experiment_id, repo_name)).fetchone()
-        return row[0]
+        return ensure_repository_entry_tx(conn, experiment_id, repo_name)
+
+
+def ensure_repository_entry_tx(conn, experiment_id: str, repo_name: str) -> int:
+    """Ensure repository exists using an existing transaction."""
+    cursor = conn.execute("""
+        INSERT OR IGNORE INTO repositories (experiment_id, repo_name)
+        VALUES (?, ?)
+    """, (experiment_id, repo_name))
+    if cursor.lastrowid:
+        return cursor.lastrowid
+    row = conn.execute("""
+        SELECT id FROM repositories
+        WHERE experiment_id = ? AND repo_name = ?
+    """, (experiment_id, repo_name)).fetchone()
+    return row[0]
 
 
 def get_repository_id(experiment_id: str, repo_name: str) -> Optional[int]:
@@ -1586,17 +1602,39 @@ def upsert_context_metadata(
     source: str = "phase2_context_summary"
 ):
     """Store structured context metadata for Phase 2 discoveries."""
-    repo_id = ensure_repository_entry(experiment_id, repo_name)
     with get_db_connection() as conn:
-        conn.execute("""
-            INSERT INTO context_metadata
-            (experiment_id, repo_id, namespace, key, value, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(experiment_id, repo_id, namespace, key) DO UPDATE SET
-              value = excluded.value,
-              source = excluded.source,
-              created_at = CURRENT_TIMESTAMP
-        """, (experiment_id, repo_id, namespace, key, value, source))
+        upsert_context_metadata_tx(
+            conn,
+            experiment_id=experiment_id,
+            repo_name=repo_name,
+            key=key,
+            value=value,
+            namespace=namespace,
+            source=source,
+        )
+
+
+def upsert_context_metadata_tx(
+    conn,
+    *,
+    experiment_id: str,
+    repo_name: str,
+    key: str,
+    value: str,
+    namespace: str = "phase2",
+    source: str = "phase2_context_summary",
+):
+    """Transactional variant of metadata upsert for batched writers."""
+    repo_id = ensure_repository_entry_tx(conn, experiment_id, repo_name)
+    conn.execute("""
+        INSERT INTO context_metadata
+        (experiment_id, repo_id, namespace, key, value, source)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(experiment_id, repo_id, namespace, key) DO UPDATE SET
+          value = excluded.value,
+          source = excluded.source,
+          created_at = CURRENT_TIMESTAMP
+    """, (experiment_id, repo_id, namespace, key, value, source))
 
 
 def get_context_metadata(

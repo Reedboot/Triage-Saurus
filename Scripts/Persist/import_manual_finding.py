@@ -23,7 +23,8 @@ from pathlib import Path
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
-import db_helpers
+from . import db_helpers
+
 
 
 def parse_markdown_frontmatter(content: str) -> dict:

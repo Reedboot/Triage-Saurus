@@ -159,6 +159,14 @@ export function scanModulesThenProceed(repoPath, selectedModules) {
   scanModulesSequentially(modulesToScan, repoPath);
 }
 
+const DEFAULT_MODULE_SCAN_CONCURRENCY = 2;
+
+function getModuleScanConcurrency() {
+  const configured = Number(window._triage?.moduleScanConcurrency ?? DEFAULT_MODULE_SCAN_CONCURRENCY);
+  if (!Number.isFinite(configured) || configured < 1) return DEFAULT_MODULE_SCAN_CONCURRENCY;
+  return Math.floor(configured);
+}
+
 function registerModuleScan(module, experimentId) {
   if (!module?.module_repo_path || !module?.source || !experimentId) {
     return Promise.resolve(false);
@@ -190,139 +198,182 @@ function registerModuleScan(module, experimentId) {
 }
 
 export function scanModulesSequentially(modulesToScan, originalRepoPath, index = 0, onComplete = null) {
-  if (index >= modulesToScan.length) {
-    // All modules in this sequence scanned
-    if (onComplete) {
-      // If there's a callback (nested module scenario), call it
-      onComplete();
-    } else {
-      // Otherwise scan the original repo
-      window._triage.setStatus(`All modules scanned. Now scanning original repo…`, '');
-      setTimeout(() => {
-        startScan(originalRepoPath);
-      }, 1000);
+  const pendingModules = modulesToScan.slice(index);
+  if (pendingModules.length === 0) {
+    if (onComplete) onComplete();
+    else {
+      window._triage.setStatus('All modules scanned. Now scanning original repo…', '');
+      setTimeout(() => startScan(originalRepoPath), 1000);
     }
     return;
   }
-  
-  const module = modulesToScan[index];
-  const nextIndex = index + 1;
-  const totalModules = modulesToScan.length;
-  
-  window._triage.setStatus(`Scanning module ${nextIndex} of ${totalModules}: ${module.name}…`, '');
-  console.log(`Starting scan for module: ${module.name} at ${module.module_repo_path}`);
-  
-  closeArchitectureAiStream();
-  closeEventSource();
-  clearLog();
-  showLogView();
 
-  if (state.scanBtn) state.scanBtn.disabled = true;
+  if (!onComplete) {
+    closeArchitectureAiStream();
+    closeEventSource();
+    clearLog();
+    showLogView();
+    if (state.scanBtn) state.scanBtn.disabled = true;
+    window.triagePipeline?.onScanStart?.();
+    setScanButtonsVisible(false);
+  }
 
-  window.triagePipeline?.onScanStart?.();
-  setScanButtonsVisible(false);
+  const totalModules = pendingModules.length;
+  const concurrency = Math.min(getModuleScanConcurrency(), totalModules);
+  let nextModuleIndex = 0;
+  let activeWorkers = 0;
+  let completedModules = 0;
+  let finished = false;
 
-  const moduleBaseName = module.module_repo_path.split('/').filter(Boolean).pop() || module.name;
-  const scanName = moduleBaseName.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_module_scan';
-  const formData = new FormData();
-  formData.append('repo_path', module.module_repo_path);
-  formData.append('scan_name', scanName);
+  const finishSequence = () => {
+    if (finished) return;
+    finished = true;
+    if (onComplete) {
+      onComplete();
+      return;
+    }
+    window._triage.setStatus('All modules scanned. Now scanning original repo…', '');
+    setTimeout(() => startScan(originalRepoPath), 1000);
+  };
 
-  fetch('/scan', { method: 'POST', body: formData })
-    .then(response => {
-      if (!response.ok) {
-        addLogLine(`Error: HTTP ${response.status}`, 'error');
-        window._triage.setStatus(`Failed to scan module: ${module.name}`, 'error');
-        if (state.scanBtn) state.scanBtn.disabled = false;
-        // Continue with next module anyway
-        setTimeout(() => scanModulesSequentially(modulesToScan, originalRepoPath, nextIndex), 1000);
-        return;
-      }
+  const maybeFinish = () => {
+    if (completedModules >= totalModules && activeWorkers === 0) {
+      finishSequence();
+      return;
+    }
+    launchWorkers();
+  };
 
-      addLogLine('[Info] 🔌 Module scan pipeline connected', 'info');
-
-      if (!response.body) {
-        addLogLine('Error: Response body not available', 'error');
-        if (state.scanBtn) state.scanBtn.disabled = false;
-        setTimeout(() => scanModulesSequentially(modulesToScan, originalRepoPath, nextIndex), 1000);
-        return;
-      }
-
-      const reader  = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer       = '';
-      let currentEvent = null;
-      let chunkCount   = 0;
-      let sawDoneEvent = false;
-
-      function processChunk() {
-        reader.read().then(({ done, value }) => {
-          if (done) {
-            addLogLine(`[Info] 🔒 Module scan pipeline closed`, 'info');
-            setScanButtonsVisible(true);
-            if (state.scanBtn) state.scanBtn.disabled = false;
-            if (!sawDoneEvent) {
-              window._triage.setStatus(`Module scan for ${module.name} closed before completion`, 'warn');
-            }
-            // Check if this module has nested modules before proceeding to next module
-            checkAndScanNestedModules(module.module_repo_path, modulesToScan, originalRepoPath, nextIndex);
-            return;
-          }
-
-          chunkCount++;
-          if (chunkCount === 1) addLogLine('[Info] 📡 Receiving module scan data...', 'info');
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          lines.forEach(line => {
-            if (line === '') { currentEvent = null; return; }
-            if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); return; }
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6);
-              try {
-                const message = JSON.parse(dataStr);
-                if (typeof message === 'string') {
-                  addLogLine(message, currentEvent || '');
-                } else if (message && typeof message === 'object') {
-                  if (message.message) addLogLine(message.message, message.level || currentEvent || '');
-                  if (currentEvent === 'done') {
-                    sawDoneEvent = true;
-                    const isFailed = Number(message.exit_code || 0) !== 0 || message.status === 'failed';
-                    if (isFailed) {
-                      addLogLine(`Module scan failed with exit code: ${message.exit_code}`, 'error');
-                    } else {
-                      addLogLine(`Module scan completed successfully`, 'success');
-                      const expId = message.experiment_id || state.currentExperimentId;
-                      // Persist module-level knowledge for reuse by future repo scans.
-                      registerModuleScan(module, expId);
-                    }
-                  }
-                }
-              } catch (e) {
-                console.warn('Failed to parse module scan message:', e);
-              }
-            }
-          });
-
-          processChunk();
+  const launchWorkers = () => {
+    while (activeWorkers < concurrency && nextModuleIndex < totalModules) {
+      const workerModule = pendingModules[nextModuleIndex];
+      const displayIndex = nextModuleIndex + 1;
+      nextModuleIndex += 1;
+      activeWorkers += 1;
+      scanSingleModule(workerModule, displayIndex, totalModules, originalRepoPath)
+        .finally(() => {
+          activeWorkers -= 1;
+          completedModules += 1;
+          maybeFinish();
         });
-      }
+    }
+  };
 
-      processChunk();
-    })
-    .catch(err => {
-      console.warn('Module scan error:', err);
-      addLogLine(`Error scanning module: ${err.message}`, 'error');
-      window._triage.setStatus(`Module scan failed: ${err.message}`, 'error');
-      if (state.scanBtn) state.scanBtn.disabled = false;
-      // Continue with next module anyway
-      setTimeout(() => scanModulesSequentially(modulesToScan, originalRepoPath, nextIndex), 1000);
-    });
+  launchWorkers();
 }
 
-export function checkAndScanNestedModules(modulePath, parentModules, originalRepoPath, nextIndex) {
+function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) {
+  return new Promise(resolve => {
+    const addModuleLog = (message, level) => addLogLine(`[${module.name}] ${message}`, level);
+    const continueAfterNested = () => {
+      checkAndScanNestedModules(module.module_repo_path, [], originalRepoPath, 0, () => {
+        setTimeout(resolve, 1000);
+      });
+    };
+
+    window._triage.setStatus(`Scanning module ${displayIndex} of ${totalModules}: ${module.name}…`, '');
+    console.log(`Starting scan for module: ${module.name} at ${module.module_repo_path}`);
+
+    const moduleBaseName = module.module_repo_path.split('/').filter(Boolean).pop() || module.name;
+    const scanName = moduleBaseName.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_module_scan';
+    const formData = new FormData();
+    formData.append('repo_path', module.module_repo_path);
+    formData.append('scan_name', scanName);
+
+    fetch('/scan', { method: 'POST', body: formData })
+      .then(response => {
+        if (!response.ok) {
+          addModuleLog(`Error: HTTP ${response.status}`, 'error');
+          window._triage.setStatus(`Failed to scan module: ${module.name}`, 'error');
+          continueAfterNested();
+          return;
+        }
+        addModuleLog('🔌 Module scan pipeline connected', 'info');
+
+        if (!response.body) {
+          addModuleLog('Error: Response body not available', 'error');
+          continueAfterNested();
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = null;
+        let chunkCount = 0;
+        let sawDoneEvent = false;
+
+        function processChunk() {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              addModuleLog('🔒 Module scan pipeline closed', 'info');
+              if (!sawDoneEvent) {
+                window._triage.setStatus(`Module scan for ${module.name} closed before completion`, 'warn');
+              }
+              continueAfterNested();
+              return;
+            }
+
+            chunkCount += 1;
+            if (chunkCount === 1) addModuleLog('📡 Receiving module scan data...', 'info');
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            lines.forEach(line => {
+              if (line === '') { currentEvent = null; return; }
+              if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); return; }
+              if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6);
+                try {
+                  const message = JSON.parse(dataStr);
+                  if (typeof message === 'string') {
+                    addModuleLog(message, currentEvent || '');
+                  } else if (message && typeof message === 'object') {
+                    if (message.message) addModuleLog(message.message, message.level || currentEvent || '');
+                    if (currentEvent === 'done') {
+                      sawDoneEvent = true;
+                      const isFailed = Number(message.exit_code || 0) !== 0 || message.status === 'failed';
+                      if (isFailed) {
+                        addModuleLog(`Module scan failed with exit code: ${message.exit_code}`, 'error');
+                      } else {
+                        addModuleLog('Module scan completed successfully', 'success');
+                        const expId = message.experiment_id || state.currentExperimentId;
+                        registerModuleScan(module, expId);
+                      }
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Failed to parse module scan message:', e);
+                }
+              }
+            });
+
+            processChunk();
+          });
+        }
+
+        processChunk();
+      })
+      .catch(err => {
+        console.warn('Module scan error:', err);
+        addModuleLog(`Error scanning module: ${err.message}`, 'error');
+        window._triage.setStatus(`Module scan failed: ${err.message}`, 'error');
+        continueAfterNested();
+      });
+  });
+}
+
+export function checkAndScanNestedModules(modulePath, parentModules, originalRepoPath, nextIndex, onComplete = null) {
+  const continueFlow = () => {
+    if (typeof onComplete === 'function') {
+      onComplete();
+      return;
+    }
+    setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+  };
+
   // Check if the scanned module has nested modules before proceeding to next module
   window._triage.setStatus('Checking for nested modules…', '');
   
@@ -335,8 +386,7 @@ export function checkAndScanNestedModules(modulePath, parentModules, originalRep
     .then(data => {
       if (data.error) {
         console.log('No nested modules detected or detection error:', data.error);
-        // Continue to next module
-        setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+        continueFlow();
         return;
       }
       
@@ -345,7 +395,7 @@ export function checkAndScanNestedModules(modulePath, parentModules, originalRep
         const nestedModulesNeedingScan = data.modules.filter(m => !m.already_scanned);
         if (nestedModulesNeedingScan.length === 0) {
           addLogLine('[Info] All nested modules already scanned — continuing', 'info');
-          setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+          continueFlow();
           return;
         }
         addLogLine(`[Info] Found ${nestedModulesNeedingScan.length} nested module(s) to scan`, 'info');
@@ -353,33 +403,32 @@ export function checkAndScanNestedModules(modulePath, parentModules, originalRep
           (selectedNested) => {
             if (selectedNested.length > 0) {
               // Scan nested modules, then continue with parent module sequence
-              scanNestedModulesThenContinue(selectedNested, modulePath, parentModules, originalRepoPath, nextIndex);
+              scanNestedModulesThenContinue(selectedNested, modulePath, parentModules, originalRepoPath, nextIndex, continueFlow);
             } else {
-              // Skip nested modules, continue with next parent module
-              setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+              continueFlow();
             }
           },
           () => {
-            // User skipped nested modules, continue to next parent module
-            setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+            continueFlow();
           }
         );
       } else {
-        // No nested modules, continue to next module in sequence
-        setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+        continueFlow();
       }
     })
     .catch(err => {
       console.log('Nested module detection error:', err);
-      // Continue to next module anyway
-      setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextIndex), 1000);
+      continueFlow();
     });
 }
 
-export function scanNestedModulesThenContinue(nestedModules, parentModulePath, parentModules, originalRepoPath, nextParentIndex) {
+export function scanNestedModulesThenContinue(nestedModules, parentModulePath, parentModules, originalRepoPath, nextParentIndex, onComplete = null) {
   // Recursively scan nested modules, then continue with parent module sequence
   scanModulesSequentially(nestedModules, originalRepoPath, 0, () => {
-    // Callback: when all nested modules done, continue with next parent module
+    if (typeof onComplete === 'function') {
+      onComplete();
+      return;
+    }
     setTimeout(() => scanModulesSequentially(parentModules, originalRepoPath, nextParentIndex), 1000);
   });
 }
@@ -425,7 +474,7 @@ export function startScan(repoPath) {
   closeArchitectureAiStream();
   closeEventSource();
   clearLog();
-  clearDiagrams();
+  clearDiagrams('Live architecture preview will appear during scan; final diagram loads on completion.');
   showLogView();
 
   window._triage.setStatus('Scan pipeline…', '');

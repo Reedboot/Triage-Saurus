@@ -455,6 +455,51 @@ class TestDiagramPanel:
         expect(home.locator("#diagram-views svg")).to_have_count(0)
         expect(home.locator("#diagram-placeholder")).to_be_visible()
 
+    def test_not_found_module_confirm_enables_scan(self, home: Page):
+        """Confirming a path for a not-found module should select it and enable module scan."""
+        home.wait_for_function("window.Alpine && window.Alpine.store && window.Alpine.store('scan')")
+        home.evaluate(
+            """
+            () => {
+              const store = window.Alpine.store('scan');
+              store.detectedModules = [{
+                name: 'missing-module',
+                inferred_type: 'terraform_module',
+                source: 'git::https://example.invalid/missing-module',
+                source_file: 'infra/main.tf',
+                source_line: 7,
+                found_in_repos: false,
+                already_scanned: false,
+                module_repo_name: null,
+                module_repo_path: null,
+                selected: false,
+                userProvidedPath: '',
+                pathInputVisible: true,
+                editingPath: false,
+                pathValidated: false
+              }];
+              store.moduleModalVisible = true;
+            }
+            """
+        )
+
+        path_input = home.locator("#module-list .module-item input[type='text']").first
+        path_input.fill("/tmp/missing-module")
+        home.locator("#module-list .module-item button:has-text('Confirm')").first.click()
+
+        assert home.evaluate(
+            """
+            () => {
+              const mod = window.Alpine.store('scan').detectedModules[0];
+              return !!mod.selected &&
+                     mod.module_repo_path === '/tmp/missing-module' &&
+                     mod.pathInputVisible === false &&
+                     mod.pathValidated === true;
+            }
+            """
+        )
+        expect(home.locator("#module-scan")).to_be_enabled()
+
     def test_toggle_log_button(self, home: Page):
         """📜 Hide/show scan log button is visible in the diagram panel."""
         expect(home.locator("#toggle-log-btn")).to_be_visible()

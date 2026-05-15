@@ -38,7 +38,7 @@ except Exception as e:
     raise ImportError("Required module 'cozo_helpers' not found. Install pycozo or provide cozo_helpers.py in PYTHONPATH. Original error: " + str(e))
 
 # Prefer cozo consolidated DB if present; fall back to legacy triage DB
-import db_helpers as _db_helpers
+from . import db_helpers as _db_helpers
 DB_PATH = _db_helpers.DB_PATH
 
 

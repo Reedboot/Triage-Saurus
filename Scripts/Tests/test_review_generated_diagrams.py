@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,3 +78,39 @@ def test_build_report_contains_before_after_delta_table(tmp_path: Path):
     assert "Before / After Metrics" in report
     assert "| `repos_failed` | 1 | 0 | -1 |" in report
     assert "Security Architect Interpretation" in report
+
+
+def test_apply_detection_rules_and_regenerate_times_out(monkeypatch, tmp_path: Path):
+    import review_generated_diagrams
+
+    rule_file = tmp_path / "rule-1.yml"
+    rule_file.write_text("id: rule-1\n", encoding="utf-8")
+
+    monkeypatch.setattr(review_generated_diagrams, "DETECTION_RULES_DIR", tmp_path)
+
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, capture_output, text, check=False, timeout=None, **_kwargs):
+        seen["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(review_generated_diagrams.subprocess, "run", fake_run)
+
+    baseline_summary = {
+        "results": [
+            {
+                "repo_name": "repo-a",
+                "experiment_id": "exp-1",
+                "detection_rules": [{"rule_id": "rule-1"}],
+            }
+        ]
+    }
+
+    result = review_generated_diagrams._apply_detection_rules_and_regenerate(
+        baseline_summary=baseline_summary,
+        repo_paths={"repo-a": "/repos/repo-a"},
+        scan_timeout_sec=123,
+    )
+
+    assert result is False
+    assert seen["timeout"] == 123

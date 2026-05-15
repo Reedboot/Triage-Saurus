@@ -5987,6 +5987,8 @@ class HierarchicalDiagramBuilder:
                     for resource_name in self._tier_nodes[tier_id]:
                         # Use actual node ID from override, or fallback to resource name
                         actual_node_id = self.node_id_override.get(resource_name, resource_name)
+                        if actual_node_id not in all_rendered_ids:
+                            continue
                         if actual_node_id not in already_styled:
                             lines.append(f"  style {actual_node_id} stroke:{color},stroke-width:3px")
                             already_styled.add(actual_node_id)

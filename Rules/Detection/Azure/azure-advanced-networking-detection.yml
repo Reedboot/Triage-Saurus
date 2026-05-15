@@ -1,0 +1,206 @@
+rules:
+  - id: context-azure-nat-gateway
+    message: |
+      Azure NAT Gateway detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_nat_gateway" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-nat
+      technology: [terraform, azure, nat]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: NAT Gateway
+        resource_type: azurerm_nat_gateway
+        resource_name: $NAME
+      description: |
+        Detects Azure NAT Gateways in Terraform. NAT gateways manage outbound
+        connectivity and provide source IP masquerading for resources in subnets.
+        Critical for understanding egress paths and security posture.
+
+  - id: context-azure-nat-gateway-public-ip-association
+    message: |
+      Azure NAT Gateway Public IP Association detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_nat_gateway_public_ip_association" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-nat
+      technology: [terraform, azure, nat]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: NAT Gateway IP Association
+        resource_type: azurerm_nat_gateway_public_ip_association
+        resource_name: $NAME
+      description: |
+        Detects NAT Gateway Public IP Associations. Associates public IPs
+        with NAT gateways to define outbound source addresses for masquerading.
+
+  - id: context-azure-subnet-nat-gateway-association
+    message: |
+      Azure Subnet NAT Gateway Association detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_subnet_nat_gateway_association" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-nat
+      technology: [terraform, azure, nat]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet NAT Gateway Association
+        resource_type: azurerm_subnet_nat_gateway_association
+        resource_name: $NAME
+      description: |
+        Detects Subnet NAT Gateway Associations. Associates NAT gateways
+        with subnets; all outbound traffic from subnet uses the NAT gateway.
+
+  - id: context-azure-virtual-network-peering
+    message: |
+      Azure Virtual Network Peering detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_virtual_network_peering" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-connectivity
+      technology: [terraform, azure, networking]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Network Peering
+        resource_type: azurerm_virtual_network_peering
+        resource_name: $NAME
+      description: |
+        Detects Azure Virtual Network Peering connections. VNet peering enables
+        inter-VNet communication with controls for traffic forwarding, gateway
+        transit, and access policies. Critical for understanding network topology
+        and cross-network threat vectors.
+
+  - id: context-azure-private-endpoint
+    message: |
+      Azure Private Endpoint detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_endpoint" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-private-connectivity
+      technology: [terraform, azure, private-link]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private Endpoint
+        resource_type: azurerm_private_endpoint
+        resource_name: $NAME
+      description: |
+        Detects Azure Private Endpoints. Private endpoints provide private
+        IP-based access to Azure services, bypassing public internet exposure.
+        Critical for zero-trust network segmentation and reducing attack surface.
+
+  - id: context-azure-private-dns-zone
+    message: |
+      Azure Private DNS Zone detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_dns_zone" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: dns-resolution
+      technology: [terraform, azure, dns]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private DNS Zone
+        resource_type: azurerm_private_dns_zone
+        resource_name: $NAME
+      description: |
+        Detects Azure Private DNS Zones. Used for private DNS resolution
+        of private endpoints and private link services. Enables split-DNS
+        and private namespace management.
+
+  - id: context-azure-private-dns-zone-vnet-link
+    message: |
+      Azure Private DNS Zone Virtual Network Link detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_dns_zone_virtual_network_link" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: dns-resolution
+      technology: [terraform, azure, dns]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private DNS Zone VNet Link
+        resource_type: azurerm_private_dns_zone_virtual_network_link
+        resource_name: $NAME
+      description: |
+        Detects Private DNS Zone Virtual Network Links. Links private DNS
+        zones to VNets for DNS resolution of private services.
+
+  - id: context-azure-private-link-service
+    message: |
+      Azure Private Link Service detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_link_service" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-private-connectivity
+      technology: [terraform, azure, private-link]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private Link Service
+        resource_type: azurerm_private_link_service
+        resource_name: $NAME
+      description: |
+        Detects Azure Private Link Services. Exposes internal services via
+        private endpoints to other subscriptions/tenants. Controls access
+        based on subscription alias or manual approval.

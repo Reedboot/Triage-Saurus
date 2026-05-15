@@ -90,22 +90,15 @@
       <div class="flex items-center gap-2 mb-2">
         <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Scan pipeline</span>
       </div>
-      <div class="flex items-center gap-1">
+      <div class="pipeline-progress-row" :style="{ gridTemplateColumns: `repeat(${$store.scan.phases.length}, minmax(0, 1fr))` }">
         <template x-for="phase in $store.scan.phases" :key="phase.id">
-          <div :class="$store.scan.phaseClass(phase)" :title="phase.title"></div>
+          <div :class="$store.scan.phaseClass(phase)" :title="phase.label || phase.title"></div>
         </template>
       </div>
-      <div class="flex justify-between mt-1">
-        <span class="text-[10px] text-gray-600">detection</span>
-        <span class="text-[10px] text-gray-600">misconfig</span>
-        <span class="text-[10px] text-gray-600">patterns</span>
-        <span class="text-[10px] text-gray-600">manifests</span>
-        <span class="text-[10px] text-gray-600">topology</span>
-        <span class="text-[10px] text-gray-600">analysis</span>
-        <span class="text-[10px] text-gray-600">persist</span>
-        <span class="text-[10px] text-gray-600">diagrams</span>
-        <span class="text-[10px] text-gray-600">finalizing</span>
-        <span class="text-[10px] text-gray-600">ready</span>
+      <div class="pipeline-label-row" :style="{ gridTemplateColumns: `repeat(${$store.scan.phases.length}, minmax(0, 1fr))` }">
+        <template x-for="phase in $store.scan.phases" :key="phase.id + '-label'">
+          <span x-text="phase.label || phase.title"></span>
+        </template>
       </div>
     </div>
 
@@ -374,15 +367,24 @@
                   <span x-text="'Type: ' + mod.inferred_type" style="display: block; font-size: 0.8rem; color: #9ca3af; margin-top: 2px;"></span>
                   <span style="display: block; font-size: 0.8rem; color: #f87171; margin-top: 2px; font-weight: 500;">⚠ Not found in ReposToScan.txt</span>
                 </div>
-                <div style="display: flex; gap: 6px;">
+                <div x-show="mod.pathInputVisible" style="display: flex; gap: 6px;">
                   <input type="text" 
                          :placeholder="'e.g., /home/user/repos/' + mod.name"
-                         @input="mod.userProvidedPath = $event.target.value"
+                         @input="mod.userProvidedPath = $event.target.value; mod.pathValidated = false; mod.selected = false"
+                         @keydown.enter.prevent="$store.scan.confirmModulePath(mod)"
                          :value="mod.userProvidedPath || ''"
                          style="flex: 1; padding: 6px; background: #0f1419; border: 1px solid #374151; border-radius: 3px; color: #c9d1d9; font-size: 0.85rem;">
-                  <button @click="mod.pathInputVisible = false"
+                  <button @click="$store.scan.confirmModulePath(mod)"
+                          :disabled="!(mod.userProvidedPath && mod.userProvidedPath.trim())"
                           style="padding: 6px 12px; background: #238636; border: 1px solid #2ea043; color: #fff; border-radius: 3px; cursor: pointer; font-size: 0.85rem;">
                     Confirm
+                  </button>
+                </div>
+                <div x-show="!mod.pathInputVisible" style="margin-top: 6px;">
+                  <span x-text="'Path: ' + (mod.module_repo_path || mod.userProvidedPath || '')" style="display: block; font-size: 0.75rem; color: #10b981; margin-top: 2px; word-break: break-all;"></span>
+                  <button @click="mod.pathInputVisible = true; mod.pathValidated = false; mod.selected = false"
+                          style="display: inline-block; margin-top: 4px; padding: 2px 6px; font-size: 0.75rem; background: transparent; border: 1px solid #4b5563; color: #8b949e; border-radius: 3px; cursor: pointer; transition: all 0.2s;">
+                    ✎ Edit path
                   </button>
                 </div>
               </div>
@@ -426,6 +428,11 @@
 
   <!-- Modal styles -->
 
+  <script>
+    window._triage = window._triage || {};
+    window._triage.moduleScanConcurrency = {{ (scan_flags.module_scan_concurrency if scan_flags else 2) | tojson }};
+    window._triage.scanFeatureFlags = {{ (scan_flags if scan_flags else {}) | tojson }};
+  </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="/static/table-resize.js" defer></script>
   <script type="module" src="/static/js/main.js?v=4"></script>

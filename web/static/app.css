@@ -403,6 +403,26 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   .pipeline-phase--active { animation: none; }
 }
 
+.pipeline-progress-row,
+.pipeline-label-row {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pipeline-label-row {
+  margin-top: 0.25rem;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.pipeline-label-row span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .architecture-ai-progress {
   display: none;
   margin: 10px 0 0;
