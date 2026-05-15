@@ -2,6 +2,7 @@
 """Regression tests for Azure parent resolution in context_extraction.py."""
 
 from pathlib import Path
+import threading
 import sys
 from textwrap import dedent
 
@@ -153,3 +154,53 @@ def test_meta_resources_infer_provider_for_new_prefixes(tmp_path, monkeypatch):
         context = context_extraction.extract_context(str(case_dir))
         meta = next(r for r in context.resources if r.resource_type == "terraform_data")
         assert (meta.properties or {}).get("inferred_provider") == expected_provider
+
+
+def test_run_parallel_detectors_runs_tasks_concurrently():
+    first_started = threading.Event()
+    second_started = threading.Event()
+
+    def first():
+        first_started.set()
+        assert second_started.wait(timeout=1)
+        return "first"
+
+    def second():
+        second_started.set()
+        assert first_started.wait(timeout=1)
+        return "second"
+
+    results = context_extraction._run_parallel_detectors(  # type: ignore[attr-defined]
+        {"first": first, "second": second},
+        max_workers=2,
+    )
+
+    assert results == {"first": "first", "second": "second"}
+
+
+def test_extract_context_reuses_cached_file_text(tmp_path, monkeypatch):
+    _stub_heavy_detectors(monkeypatch)
+    (tmp_path / "main.tf").write_text(
+        dedent(
+            """
+            resource "azurerm_service_plan" "plan" {
+              name     = "plan"
+              location = "eastus"
+            }
+            """
+        ).strip()
+    )
+    counts: dict[str, int] = {}
+    original_read_text = context_extraction.Path.read_text
+
+    def tracked_read_text(self, *args, **kwargs):
+        if self.is_file() and self.parent == tmp_path:
+            key = str(self)
+            counts[key] = counts.get(key, 0) + 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(context_extraction.Path, "read_text", tracked_read_text, raising=False)
+
+    context_extraction.extract_context(str(tmp_path))
+
+    assert counts[str(tmp_path / "main.tf")] == 1

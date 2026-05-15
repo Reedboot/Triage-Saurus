@@ -1,4 +1,6 @@
 # context_extraction.py
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -6,8 +8,10 @@ import signal
 import sqlite3
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Dict, Set, Tuple, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import sys
 from pathlib import Path
@@ -396,7 +400,11 @@ def detect_hosting_from_terraform(files: List[Path], repo_path: Path) -> Dict:
     return {"type": "Unknown", "evidence": []}
 
 
-def detect_ingress_from_code(files: List[Path], repo_path: Path) -> Dict:
+def detect_ingress_from_code(
+    files: List[Path],
+    repo_path: Path,
+    repo_index: _RepoFileIndex | None = None,
+) -> Dict:
     """Detect ingress points from code."""
     ingress_signals = {
         "type": "Unknown",
@@ -435,6 +443,11 @@ def detect_ingress_from_code(files: List[Path], repo_path: Path) -> Dict:
     seen_hosts: set[str] = set()
     seen_evidence: set[str] = set()
     candidate_suffixes = {".tf", ".py", ".js", ".ts", ".cs", ".go", ".java", ".yaml", ".yml", ".json", ".xml", ".config"}
+    candidate_files = (
+        repo_index.tf_files + repo_index.yaml_files + repo_index.code_files + repo_index.json_files
+        if repo_index
+        else files
+    )
 
     for result in ingress_rule_hits:
         source_path = Path(str(result.get("path", "")))
@@ -446,7 +459,7 @@ def detect_ingress_from_code(files: List[Path], repo_path: Path) -> Dict:
             seen_evidence.add(evidence)
             ingress_signals["evidence"].append(evidence)
 
-    for file in files:
+    for file in candidate_files:
         if not file.is_file():
             continue
         if any(part in _SKIP_DIRS for part in file.parts):
@@ -459,7 +472,7 @@ def detect_ingress_from_code(files: List[Path], repo_path: Path) -> Dict:
             rel = str(file)
 
         try:
-            text = file.read_text(errors="ignore")
+            text = repo_index.text(file) if repo_index else file.read_text(errors="ignore")
         except Exception:
             continue
 
@@ -568,7 +581,12 @@ def classify_terraform_resources(resource_types: Set[str], provider: str) -> Dic
     # Simplified for brevity
     return {}
 
-def extract_kubernetes_topology_signals(files: List[Path], repo_path: Path, prefixes: List[str] = None) -> Dict:
+def extract_kubernetes_topology_signals(
+    files: List[Path],
+    repo_path: Path,
+    prefixes: List[str] = None,
+    repo_index: _RepoFileIndex | None = None,
+) -> Dict:
     """Extract Kubernetes topology signals from manifests."""
     prefixes = prefixes or []
     prefix_filters = tuple(p.lower() for p in prefixes if p)
@@ -609,7 +627,9 @@ def extract_kubernetes_topology_signals(files: List[Path], repo_path: Path, pref
                 names.append(svc)
         return names
 
-    for file in files:
+    candidate_files = repo_index.yaml_files + repo_index.tf_files if repo_index else files
+
+    for file in candidate_files:
         if not file.is_file():
             continue
         if any(part in _SKIP_DIRS for part in file.parts):
@@ -623,7 +643,7 @@ def extract_kubernetes_topology_signals(files: List[Path], repo_path: Path, pref
             rel = str(file)
 
         try:
-            text = file.read_text(errors="ignore")
+            text = repo_index.text(file) if repo_index else file.read_text(errors="ignore")
         except Exception:
             continue
 
@@ -760,7 +780,11 @@ def extract_kubernetes_topology_signals(files: List[Path], repo_path: Path, pref
     return signals
 
 
-def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) -> List[Resource]:
+def extract_kubernetes_manifest_resources(
+    files: List[Path],
+    repo_path: Path,
+    repo_index: _RepoFileIndex | None = None,
+) -> List[Resource]:
     """Extract concrete Kubernetes resources from manifests (opengrep-first)."""
     repo_root = Path(__file__).resolve().parents[2]
     rules_dir = repo_root / "Rules" / "Detection" / "Kubernetes"
@@ -882,7 +906,7 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             # For Services, read source file and find the specific YAML doc to extract spec.type
             if kind == "Service":
                 try:
-                    svc_text = source_path.read_text(errors="ignore")
+                    svc_text = repo_index.text(source_path) if repo_index else source_path.read_text(errors="ignore")
                     # Split into YAML documents and find the one matching this service name
                     for svc_doc in re.split(r'^\s*---\s*$', svc_text, flags=re.MULTILINE):
                         name_chk = re.search(r'^\s*name:\s*(\S+)', svc_doc, re.MULTILINE)
@@ -918,7 +942,9 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             return "<templated>"
         return cleaned
 
-    for file in files:
+    candidate_files = repo_index.yaml_files if repo_index else files
+
+    for file in candidate_files:
         if not file.is_file():
             continue
         if any(part in _SKIP_DIRS for part in file.parts):
@@ -932,7 +958,7 @@ def extract_kubernetes_manifest_resources(files: List[Path], repo_path: Path) ->
             rel = str(file)
 
         try:
-            text = file.read_text(errors="ignore")
+            text = repo_index.text(file) if repo_index else file.read_text(errors="ignore")
         except Exception:
             continue
 
@@ -1716,7 +1742,7 @@ def _load_parent_type_map() -> Dict[str, str]:
         return fallback_map
 
 
-def _extract_tf_locals(files: List[Path]) -> Dict[str, str]:
+def _extract_tf_locals(files: List[Path], repo_index: _RepoFileIndex | None = None) -> Dict[str, str]:
     """Parse Terraform ``locals {}`` blocks and return ``{local_name: string_value}``."""
     result: Dict[str, str] = {}
     assignment_re = re.compile(r'^\s+([a-z][a-z0-9_]+)\s*=\s*"([^"]*)"', re.M)
@@ -1724,7 +1750,7 @@ def _extract_tf_locals(files: List[Path]) -> Dict[str, str]:
         if not hasattr(f, "suffix") or f.suffix != ".tf":
             continue
         try:
-            text = f.read_text(errors="ignore")
+            text = repo_index.text(f) if repo_index else f.read_text(errors="ignore")
         except Exception:
             continue
         for m in re.finditer(r"^\s*locals\s*\{", text, re.M):
@@ -1785,17 +1811,118 @@ def _resolve_apim_service_name(service_url: str, locals_dict: Dict[str, str]) ->
     return None
 
 
+def _run_parallel_detectors(
+    tasks: Dict[str, Callable[[], object]],
+    max_workers: int | None = None,
+) -> Dict[str, object]:
+    """Run independent detector tasks in parallel and return their results."""
+    if not tasks:
+        return {}
+
+    worker_count = max_workers or min(4, len(tasks))
+    results: Dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        future_map = {pool.submit(task): name for name, task in tasks.items()}
+        for future in as_completed(future_map):
+            name = future_map[future]
+            try:
+                results[name] = future.result()
+            except Exception as exc:
+                print(f"[Phase 1] [WARN] Parallel detector '{name}' failed: {exc}")
+                results[name] = None
+    return results
+
+
+@dataclass
+class _RepoFileIndex:
+    """Shared file classification and text cache for Phase 1 detectors."""
+
+    repo_path: Path
+    files: list[Path]
+    tf_files: list[Path] = field(default_factory=list)
+    yaml_files: list[Path] = field(default_factory=list)
+    json_files: list[Path] = field(default_factory=list)
+    code_files: list[Path] = field(default_factory=list)
+    text_cache: dict[Path, str] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, repo_path: Path) -> "_RepoFileIndex":
+        files = sorted((path for path in iter_files(repo_path) if path.is_file()), key=lambda p: p.as_posix())
+        tf_files: list[Path] = []
+        yaml_files: list[Path] = []
+        json_files: list[Path] = []
+        code_files: list[Path] = []
+        for path in files:
+            suffix = path.suffix.lower()
+            if suffix == ".tf":
+                tf_files.append(path)
+            elif suffix in {".yaml", ".yml"}:
+                yaml_files.append(path)
+            elif suffix == ".json":
+                json_files.append(path)
+            elif suffix in {".cs", ".py", ".js", ".ts", ".go", ".java", ".xml", ".config"}:
+                code_files.append(path)
+        return cls(
+            repo_path=repo_path,
+            files=files,
+            tf_files=sorted(tf_files),
+            yaml_files=sorted(yaml_files),
+            json_files=sorted(json_files),
+            code_files=sorted(code_files),
+        )
+
+    def text(self, file: Path, errors: str = "ignore") -> str:
+        cached = self.text_cache.get(file)
+        if cached is not None:
+            return cached
+        try:
+            content = file.read_text(errors=errors)
+        except Exception:
+            content = ""
+        self.text_cache[file] = content
+        return content
+
+    def tf_text_files(self) -> list[Path]:
+        return list(self.tf_files)
+
+
 def extract_context(repo_path_str: str) -> RepositoryContext:
     """
     Extracts context from the repository and returns a data model.
     """
     repo_path = Path(repo_path_str)
-    files = iter_files(repo_path)
-    dockerfiles = list(iter_dockerfiles(repo_path))
+    repo_index = _RepoFileIndex.build(repo_path)
+    files = repo_index.files
     repo_name = repo_path.name
     context = RepositoryContext(repository_name=repo_name)
-    k8s_topology = extract_kubernetes_topology_signals(files, repo_path)
-    ingress_signals = detect_ingress_from_code(files, repo_path)
+
+    early_detector_results = _run_parallel_detectors(
+        {
+            "k8s_topology": lambda: extract_kubernetes_topology_signals(files, repo_path, repo_index=repo_index),
+            "ingress_signals": lambda: detect_ingress_from_code(files, repo_path, repo_index=repo_index),
+            "k8s_manifest_resources": lambda: extract_kubernetes_manifest_resources(files, repo_path, repo_index=repo_index),
+        },
+        max_workers=3,
+    )
+
+    k8s_topology = early_detector_results.get("k8s_topology") or {
+        "ingress_names": [],
+        "service_names": [],
+        "manifest_secret_names": [],
+        "ingress_classes": [],
+        "controller_hints": [],
+        "lb_hints": [],
+        "evidence_files": [],
+        "ingress_to_service": [],
+    }
+    ingress_signals = early_detector_results.get("ingress_signals") or {
+        "type": "Unknown",
+        "edge_resources": [],
+        "hosts": [],
+        "evidence": [],
+    }
+    k8s_manifest_resources = early_detector_results.get("k8s_manifest_resources") or []
+
     k8s_service_names = {
         name for name in k8s_topology.get("service_names", [])
         if isinstance(name, str) and name and not name.startswith("<")
@@ -1825,7 +1952,13 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         "Azure/network/azurerm":                   ["azurerm_virtual_network", "azurerm_subnet"],
     }
 
-    def _resolve_module_source(file: "Path", source: str, module_name: str, module_line: int) -> list[Resource]:
+    def _resolve_module_source(
+        file: "Path",
+        source: str,
+        module_name: str,
+        module_line: int,
+        repo_index: _RepoFileIndex | None = None,
+    ) -> list[Resource]:
         """Resolve a module source to concrete Resource objects.
 
         For local modules (source starts with ./ or ../) the module directory
@@ -1839,7 +1972,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 inner_re = re.compile(r'^\s*resource\s+"([A-Za-z_][A-Za-z0-9_]*)"\s+"([^"]+)"')
                 for tf_file in tf_files:
                     try:
-                        inner_content = tf_file.read_text(errors="ignore")
+                        inner_content = repo_index.text(tf_file) if repo_index else tf_file.read_text(errors="ignore")
                     except Exception:
                         continue
                     for inner_line_number, line in enumerate(inner_content.splitlines(), start=1):
@@ -1890,13 +2023,14 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     resource_blocks: list[tuple[Resource, str]] = []  # (resource, raw_block_text)
     # Track (resource_type, name) pairs to avoid duplicates — including module-inferred resources
     known_resource_keys: set[tuple[str, str]] = set()
-    for file in sorted(f for f in files if f.suffix == ".tf"):
+    tf_files = repo_index.tf_files
+    for file in tf_files:
         try:
             rel = str(file.relative_to(repo_path))
         except ValueError:
             rel = str(file)
         try:
-            content = file.read_text(errors="ignore")
+            content = repo_index.text(file) if repo_index else file.read_text(errors="ignore")
         except Exception:
             continue
         lines = content.splitlines()
@@ -1917,7 +2051,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 mod_text = "\n".join(mod_lines)
                 src_m = re.search(r'source\s*=\s*"([^"]+)"', mod_text)
                 if src_m:
-                    module_resources = _resolve_module_source(file, src_m.group(1), module_name, i + 1)
+                    module_resources = _resolve_module_source(file, src_m.group(1), module_name, i + 1, repo_index=repo_index)
                     for mr in module_resources:
                         key = (mr.resource_type, mr.name)
                         if key not in known_resource_keys:
@@ -1968,7 +2102,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
     }
     # known_resource_keys already populated above (including module-inferred resources)
 
-    for manifest_resource in extract_kubernetes_manifest_resources(files, repo_path):
+    for manifest_resource in k8s_manifest_resources:
         key = (manifest_resource.resource_type, manifest_resource.name)
         if key in known_resource_keys:
             continue
@@ -3465,9 +3599,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             # relying solely on name prefix matching (which is too broad when one
             # API name is a prefix of another, e.g. "aks-helloworld" vs
             # "aks-helloworld-dr-testapp-api").
-            _tf_locals = _extract_tf_locals(
-                [f for f in files if hasattr(f, "suffix") and f.suffix == ".tf"]
-            )
+            _tf_locals = _extract_tf_locals(tf_files, repo_index=repo_index)
             _svc_url_re = re.compile(r'^\s*service_url\s*=\s*"([^"]*)"', re.M)
             _apim_resolved_service: Dict[str, Optional[str]] = {}
             for _res, _btext in resource_blocks:

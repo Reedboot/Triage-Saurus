@@ -10,14 +10,24 @@ import threading
 from pathlib import Path
 from typing import Iterable, Optional
 
-from . import db_helpers
-from .write_queue_contract import (
-    CONTRACT_VERSION,
-    OperationKind,
-    OperationOwner,
-    WriteOperation,
-    build_write_operation,
-)
+try:
+    from . import db_helpers
+    from .write_queue_contract import (
+        CONTRACT_VERSION,
+        OperationKind,
+        OperationOwner,
+        WriteOperation,
+        build_write_operation,
+    )
+except ImportError:
+    import db_helpers  # type: ignore
+    from write_queue_contract import (  # type: ignore
+        CONTRACT_VERSION,
+        OperationKind,
+        OperationOwner,
+        WriteOperation,
+        build_write_operation,
+    )
 
 
 @dataclass

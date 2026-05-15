@@ -1314,6 +1314,8 @@ def _ensure_schema(conn: sqlite3.Connection):
             conn.execute("ALTER TABLE findings ADD COLUMN attack_chain_steps TEXT")
         if "attack_impact" not in findings_columns:
             conn.execute("ALTER TABLE findings ADD COLUMN attack_impact TEXT")
+        if "inherited_from_module" not in findings_columns:
+            conn.execute("ALTER TABLE findings ADD COLUMN inherited_from_module TEXT")
 
         # Exposure analysis table columns (ensure they exist for backward compatibility)
         exposure_columns = {row[1] for row in conn.execute("PRAGMA table_info(exposure_analysis)").fetchall()}

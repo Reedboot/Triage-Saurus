@@ -2238,10 +2238,7 @@
       fullscreenBtn.addEventListener('click', openStandaloneDiagramViewer);
     }
 
-    const openDiagramViewerBtn = document.getElementById('open-diagram-viewer-btn');
-    if (openDiagramViewerBtn) {
-      openDiagramViewerBtn.addEventListener('click', openStandaloneDiagramViewer);
-    }
+
 
     // Handle API ops visibility toggle button
     const toggleApiOpsBtn = document.getElementById('toggle-api-ops-btn');

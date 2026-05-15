@@ -78,7 +78,7 @@ def _feature_flag_int(name: str, default: int, minimum: int = 1) -> int:
 
 def _scan_feature_flags() -> dict[str, object]:
     return {
-        "module_scan_concurrency": _feature_flag_int("TRIAGE_MODULE_SCAN_CONCURRENCY", default=2, minimum=1),
+        "module_scan_concurrency": _feature_flag_int("TRIAGE_MODULE_SCAN_CONCURRENCY", default=1, minimum=1),
         "single_writer_queue_enabled": _feature_flag_enabled("TRIAGE_SINGLE_WRITER_QUEUE_ENABLED", default=True),
         "pipeline_parallel_mode_enabled": _feature_flag_enabled("TRIAGE_PIPELINE_PARALLEL_MODE", default=True),
     }

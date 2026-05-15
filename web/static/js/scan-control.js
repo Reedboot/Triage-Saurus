@@ -159,7 +159,7 @@ export function scanModulesThenProceed(repoPath, selectedModules) {
   scanModulesSequentially(modulesToScan, repoPath);
 }
 
-const DEFAULT_MODULE_SCAN_CONCURRENCY = 2;
+const DEFAULT_MODULE_SCAN_CONCURRENCY = 1;
 
 function getModuleScanConcurrency() {
   const configured = Number(window._triage?.moduleScanConcurrency ?? DEFAULT_MODULE_SCAN_CONCURRENCY);
@@ -265,14 +265,36 @@ export function scanModulesSequentially(modulesToScan, originalRepoPath, index =
 function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) {
   return new Promise(resolve => {
     const addModuleLog = (message, level) => addLogLine(`[${module.name}] ${message}`, level);
+    const isHeartbeatLog = (message) =>
+      typeof message === 'string' && message.includes('[Web] 🕵️ Scan in progress');
+    let lastModuleHeartbeatTs = 0;
+    const addFilteredModuleLog = (message, level) => {
+      if (!isHeartbeatLog(message)) {
+        addModuleLog(message, level);
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastModuleHeartbeatTs >= 30000) {
+        addModuleLog(message, level || 'info');
+        lastModuleHeartbeatTs = now;
+      }
+    };
     const continueAfterNested = () => {
       checkAndScanNestedModules(module.module_repo_path, [], originalRepoPath, 0, () => {
         setTimeout(resolve, 1000);
       });
     };
+    let finalStatePublished = false;
+    const publishModuleState = (state) => {
+      if (state !== 'running' && finalStatePublished) return;
+      if (state !== 'running') finalStatePublished = true;
+      window.triagePipeline?.onModuleScanState?.(module.name, state);
+    };
 
     window._triage.setStatus(`Scanning module ${displayIndex} of ${totalModules}: ${module.name}…`, '');
     console.log(`Starting scan for module: ${module.name} at ${module.module_repo_path}`);
+    publishModuleState('running');
 
     const moduleBaseName = module.module_repo_path.split('/').filter(Boolean).pop() || module.name;
     const scanName = moduleBaseName.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_module_scan';
@@ -285,6 +307,7 @@ function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) 
         if (!response.ok) {
           addModuleLog(`Error: HTTP ${response.status}`, 'error');
           window._triage.setStatus(`Failed to scan module: ${module.name}`, 'error');
+          publishModuleState('failed');
           continueAfterNested();
           return;
         }
@@ -292,6 +315,7 @@ function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) 
 
         if (!response.body) {
           addModuleLog('Error: Response body not available', 'error');
+          publishModuleState('failed');
           continueAfterNested();
           return;
         }
@@ -309,6 +333,7 @@ function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) 
               addModuleLog('🔒 Module scan pipeline closed', 'info');
               if (!sawDoneEvent) {
                 window._triage.setStatus(`Module scan for ${module.name} closed before completion`, 'warn');
+                publishModuleState('interrupted');
               }
               continueAfterNested();
               return;
@@ -329,16 +354,18 @@ function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) 
                 try {
                   const message = JSON.parse(dataStr);
                   if (typeof message === 'string') {
-                    addModuleLog(message, currentEvent || '');
+                    addFilteredModuleLog(message, currentEvent || '');
                   } else if (message && typeof message === 'object') {
-                    if (message.message) addModuleLog(message.message, message.level || currentEvent || '');
+                    if (message.message) addFilteredModuleLog(message.message, message.level || currentEvent || '');
                     if (currentEvent === 'done') {
                       sawDoneEvent = true;
                       const isFailed = Number(message.exit_code || 0) !== 0 || message.status === 'failed';
                       if (isFailed) {
                         addModuleLog(`Module scan failed with exit code: ${message.exit_code}`, 'error');
+                        publishModuleState('failed');
                       } else {
                         addModuleLog('Module scan completed successfully', 'success');
+                        publishModuleState('success');
                         const expId = message.experiment_id || state.currentExperimentId;
                         registerModuleScan(module, expId);
                       }
@@ -360,6 +387,7 @@ function scanSingleModule(module, displayIndex, totalModules, originalRepoPath) 
         console.warn('Module scan error:', err);
         addModuleLog(`Error scanning module: ${err.message}`, 'error');
         window._triage.setStatus(`Module scan failed: ${err.message}`, 'error');
+        publishModuleState('failed');
         continueAfterNested();
       });
   });

@@ -3402,7 +3402,7 @@ class HierarchicalDiagramBuilder:
         has_azure_apim = any(
             (r.get('resource_type') or '').lower() in azure_apim_types
             or 'api_management' in (r.get('resource_type') or '').lower()
-            for r in apim_apis
+            for r in (apim_apis + products)
         )
         if not has_azure_apim or (not apim_apis and not products):
             return []
@@ -4157,6 +4157,7 @@ class HierarchicalDiagramBuilder:
         lines.append("")
 
         has_internet = False
+        has_client = False
         edge_list = []  # Track (conn, src_id, tgt_id) for all rendered edges
         # Fan-out suppression: track how many sources already connect to each target.
         # Limit to MAX_INCOMING_EDGES per target node to prevent spider-web layouts.
@@ -4165,6 +4166,15 @@ class HierarchicalDiagramBuilder:
 
         def _is_internet(name: Optional[str]) -> bool:
             return str(name or '').strip().lower() == 'internet'
+
+        def _is_non_endpoint_apim_type(resource_type: str) -> bool:
+            rt = (resource_type or '').lower()
+            return any(tok in rt for tok in (
+                'api_management_product',
+                'api_management_subscription',
+                'api_management_user',
+                'api_management_product_api',
+            ))
 
         def _resolve_node_id(name: Optional[str]) -> str:
             if _is_internet(name):
@@ -4206,13 +4216,27 @@ class HierarchicalDiagramBuilder:
             # Never render self-referential edges (node -> same node); these add noise.
             if src == tgt or sanitize_id(src) == sanitize_id(tgt):
                 continue
+
+            # Internet edges are rendered only when explicitly confirmed.
+            # This avoids implying public exposure from heuristic/inferred records.
+            if _is_internet(src) and conn.get('confirmed') is not True:
+                continue
+            if _is_internet(src):
+                tgt_resource = self._get_primary_resource(tgt)
+                if tgt_resource and _is_non_endpoint_apim_type(tgt_resource.get('resource_type') or ''):
+                    continue
             
-            # ── Special case: Internet → APIM subgraph ────────────────────────
+            # ── Special case: APIM subgraph entry edges ───────────────────────
             # Mermaid allows connecting to subgraph IDs directly.
             if tgt == '__apim_subgraph__':
-                label = '🔒 unknown visibility'
-                lines.append(f"  internet -.->|\"{label}\"| apim")
-                has_internet = True
+                if src == '__apim_client__':
+                    lines.append('  apim_client -.->|"calls API"| apim')
+                    has_client = True
+                    continue
+                if _is_internet(src):
+                    label = '🔒 unknown visibility'
+                    lines.append(f"  internet -.->|\"{label}\"| apim")
+                    has_internet = True
                 continue
 
             # Skip if nodes weren't emitted
@@ -4398,6 +4422,9 @@ class HierarchicalDiagramBuilder:
 
         if self.exposed_resources:
             for dict_key, exposure_detail in self.exposed_resources.items():
+                # Heuristic exposure alone is not enough to draw Internet edges.
+                if (exposure_detail.exposure_type or '').lower() == 'heuristic':
+                    continue
                 # dict_key is normally resource_name, but may be "__id_{resource_id}" when
                 # multiple resources share the same Terraform name (e.g., "example").
                 if dict_key.startswith('__id_'):
@@ -4427,6 +4454,8 @@ class HierarchicalDiagramBuilder:
 
                 # Skip pure infrastructure types — they are network config, not internet endpoints
                 if any(tok in resource_type for tok in _INFRA_ONLY_TOKENS):
+                    continue
+                if _is_non_endpoint_apim_type(resource_type):
                     continue
 
                 is_igw = 'internet_gateway' in resource_type
@@ -4548,6 +4577,8 @@ class HierarchicalDiagramBuilder:
         # Prepend internet node definition if any Internet edges were emitted.
         if has_internet:
             lines.insert(0, '  internet["🌐 Internet"]')
+        if has_client:
+            lines.insert(0, '  apim_client["🧑‍💻 Client"]')
 
         return lines
     
@@ -4590,25 +4621,6 @@ class HierarchicalDiagramBuilder:
                         'connection_type': 'confirmed_public',
                         'protocol': 'https',
                         'confirmed': True
-                    })
-                    connected_pairs.add(pair_key)
-                    has_internet = True
-        
-        for r in self.resources:
-            if self.is_public_edge_resource(r):
-                pair_key = ('Internet', r['resource_name'])
-                if pair_key not in connected_pairs:
-                    # Only emit unconfirmed Internet->X edges for non-APIM edge resources.
-                    # APIM can be internal/private; rely on explicit internet_access=true signals.
-                    if self.is_api_gateway(r) or self.is_api_operation(r):
-                        continue
-                    self.connections.append({
-                        'source': 'Internet',
-                        'target': r['resource_name'],
-                        'connection_type': 'unconfirmed_public',
-                        'protocol': 'https',
-                        'auth_method': 'Subscription Key' if self.is_api_gateway(r) or self.is_api_operation(r) else '',
-                        'confirmed': False
                     })
                     connected_pairs.add(pair_key)
                     has_internet = True
@@ -4737,35 +4749,6 @@ class HierarchicalDiagramBuilder:
                     'confirmed': has_existing_sql_link,
                 })
                 connected_pairs.add(pair_key)
-        
-        # Add unconfirmed Internet → AKS cluster connections when visibility is unknown
-        k8s_clusters = [
-            r for r in self.resources
-            if self.is_managed_kubernetes_cluster(r) or 'kubernetes_cluster' in (r.get('resource_type') or '').lower()
-        ]
-        for cluster in k8s_clusters:
-            cluster_name = cluster['resource_name']
-            pair_key = ('Internet', cluster_name)
-            
-            # Only add if not already connected and if cluster doesn't have explicit internet_access=false
-            if pair_key not in connected_pairs:
-                has_explicit_private = False
-                # Check if this cluster has an explicit private setting
-                for conn in self.connections:
-                    if conn.get('target') == cluster_name and (conn.get('connection_type') or '').lower() in ['vnet_only', 'private']:
-                        has_explicit_private = True
-                        break
-                
-                if not has_explicit_private:
-                    self.connections.append({
-                        'source': 'Internet',
-                        'target': cluster_name,
-                        'connection_type': 'unconfirmed_k8s_access',
-                        'protocol': 'https',
-                        'confirmed': False
-                    })
-                    connected_pairs.add(pair_key)
-                    has_internet = True
         
         return has_internet
     
@@ -5355,17 +5338,22 @@ class HierarchicalDiagramBuilder:
                 'notes': 'service_url not found — check IaC repo for backend URL',
             })
 
-        # ── Internet/Client → APIM entry point (visibility unknown) — Azure only ──
-        # Only add this edge when there are actual Azure API Management resources.
-        if apim_apis and any('api_management' in (r.get('resource_type') or '').lower() for r in apim_apis):
-            _internet_targets = {c.get('target') for c in self.connections if c.get('source') == 'Internet'}
-            if 'apim' not in _internet_targets:
+        # ── Client → APIM fallback (do not imply public internet exposure) ──────
+        # When APIM assets exist but there is no explicit entry edge, model an
+        # in-repo caller/client hitting APIM instead of Internet→APIM.
+        _has_apim_assets = any(
+            'api_management' in (r.get('resource_type') or '').lower()
+            for r in self.resources
+        )
+        if _has_apim_assets:
+            _has_apim_entry_edge = any(c.get('target') == '__apim_subgraph__' for c in self.connections)
+            if not _has_apim_entry_edge:
                 self.connections.append({
-                    'source': 'Internet',
+                    'source': '__apim_client__',
                     'target': '__apim_subgraph__',
-                    'connection_type': 'inferred_entry',
+                    'connection_type': 'inferred_client_call',
                     'confirmed': False,
-                    'notes': 'Visibility unknown — APIM may be internal or public',
+                    'notes': 'Client/API consumer calls APIM; public exposure unknown',
                 })
 
         # ── GCP: Synthetic Firestore Collection node ───────────────────────────────

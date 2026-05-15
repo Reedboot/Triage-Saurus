@@ -16,9 +16,16 @@ from pathlib import Path
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Utils"))
-from . import db_helpers
-from .single_writer_service import SingleWriterService
-from .write_queue_contract import OperationKind, OperationOwner
+from log_formatter import format_finding, format_summary
+try:
+    from . import db_helpers
+    from .single_writer_service import SingleWriterService
+    from .write_queue_contract import OperationKind, OperationOwner
+except ImportError:
+    # Support direct execution (python Scripts/Persist/store_findings.py)
+    import db_helpers  # type: ignore
+    from single_writer_service import SingleWriterService  # type: ignore
+    from write_queue_contract import OperationKind, OperationOwner  # type: ignore
 
 
 def _base_severity(severity: str) -> str:
@@ -28,6 +35,20 @@ def _base_severity(severity: str) -> str:
     if s == "INFO":
         return "Low"
     return "Medium"
+
+
+def _severity_score(severity: str | None) -> int:
+    """Map scanner severity to the finding severity score (0-10 scale)."""
+    if not severity:
+        return 4
+    s = severity.upper()
+    if s == "ERROR":
+        return 8
+    if s == "WARNING":
+        return 5
+    if s == "INFO":
+        return 2
+    return 4
 
 
 def _single_writer_queue_enabled() -> bool:

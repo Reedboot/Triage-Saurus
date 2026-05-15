@@ -407,6 +407,133 @@ def test_internet_node_absent_when_no_internet_connections(monkeypatch):
     assert 'internet[' not in diagram
 
 
+def test_unconfirmed_internet_edge_is_not_rendered(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'service-a',
+                'resource_type': 'azurerm_api_management_product',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            }
+        ]
+        builder.connections = [
+            {
+                'source': 'Internet',
+                'target': 'service-a',
+                'connection_type': 'unconfirmed_public',
+                'protocol': 'https',
+                'confirmed': False,
+            }
+        ]
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {1: builder.resources[0]}
+        builder.resource_by_name = {'service-a': builder.resources[0]}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *a, **kw: [])
+
+    diagram = builder.generate()
+
+    assert 'internet[' not in diagram
+
+
+def test_heuristic_apim_product_exposure_does_not_emit_internet_edge(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'accounts_mw_product',
+                'resource_type': 'azurerm_api_management_product',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            }
+        ]
+        builder.connections = []
+        builder.children_by_parent = {}
+        builder.exposed_resources = {
+            'accounts_mw_product': ExposureDetail(
+                resource_name='accounts_mw_product',
+                resource_id=1,
+                exposure_type='heuristic',
+                confidence='low',
+                reason='Public-by-design heuristic',
+                color='#ff9900',
+                detection_methods=['heuristic'],
+            )
+        }
+        builder.resource_by_id = {1: builder.resources[0]}
+        builder.resource_by_name = {'accounts_mw_product': builder.resources[0]}
+        builder.emitted_nodes = {'accounts_mw_product'}
+        builder._emitted_mermaid_ids = {'accounts_mw_product'}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *a, **kw: [])
+    monkeypatch.setattr(builder, 'render_styles', lambda *a, **kw: [])
+
+    diagram = builder.generate()
+
+    assert 'internet[' not in diagram
+
+
+def test_apim_fallback_uses_client_not_internet(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'accounts_mw_product',
+                'resource_type': 'azurerm_api_management_product',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            },
+            {
+                'id': 2,
+                'resource_name': 'api_mw_accounts_subscription',
+                'resource_type': 'azurerm_api_management_subscription',
+                'provider': 'azure',
+                'repo_name': 'repo',
+            },
+        ]
+        builder.connections = []
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r['id']: r for r in builder.resources}
+        builder.resource_by_name = {r['resource_name']: r for r in builder.resources}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+
+    diagram = builder.generate()
+
+    assert 'subgraph apim["API Management"]' in diagram
+    assert 'apim_client["🧑‍💻 Client"]' in diagram
+    assert 'apim_client -.->|"calls API"| apim' in diagram
+    assert 'internet[' not in diagram
+
+
 def test_unconnected_sql_node_not_rendered_when_graph_has_other_connections(monkeypatch):
     """Standalone SQL nodes should be pruned instead of floating without edges."""
     builder = HierarchicalDiagramBuilder("exp-1")

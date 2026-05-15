@@ -1593,6 +1593,30 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   border: 1px solid #7c3aed80;
 }
 
+.recent-module-pill--queued {
+  border-color: #4b5563;
+}
+
+.recent-module-pill--running {
+  border-color: #d97706;
+  background: #92400e26;
+}
+
+.recent-module-pill--success {
+  border-color: #10b981;
+  background: #065f4626;
+}
+
+.recent-module-pill--failed {
+  border-color: #ef4444;
+  background: #7f1d1d26;
+}
+
+.recent-module-pill--interrupted {
+  border-color: #eab308;
+  background: #713f1226;
+}
+
 /* ── Code/file references ── */
 .file-link {
   font-family: "SFMono-Regular", Consolas, monospace;

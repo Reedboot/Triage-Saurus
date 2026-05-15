@@ -6,7 +6,7 @@
     <title>{{ diagram_title }} | Triage-Saurus</title>
     <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
     <link rel="stylesheet" href="/static/tailwind.css?v=2">
-    <script src="/static/vendor/mermaid.min.js?v=2"></script>
+    <script src="/static/js/mermaid-loader.js?v=2"></script>
     <script src="/static/js/mermaid-icon-injector.js?v=4" defer></script>
     <style>
         /* ── Tab bar: mobile scroll + fade gradient masks ─────────────────── */
@@ -377,17 +377,34 @@
         const iconImg       = document.getElementById('provider-icon-img');
         const iconDot       = document.getElementById('provider-icon-dot');
 
-        // ── Mermaid initialisation ───────────────────────────────────────────
-        mermaid.initialize({
-            startOnLoad: false,
-            theme: 'dark',
-            securityLevel: 'loose',
-            flowchart: {
-                useMaxWidth: false,
-                htmlLabels: true,
-            },
-            onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
-        });
+        // ── Mermaid initialisation (same loader path as main tab viewer) ─────
+        let mermaidInitialized = false;
+        function ensureMermaidInitialized() {
+            if (mermaidInitialized) return true;
+            if (!window.mermaid) return false;
+            window.mermaid.initialize({
+                startOnLoad: false,
+                theme: 'dark',
+                securityLevel: 'loose',
+                flowchart: {
+                    useMaxWidth: false,
+                    htmlLabels: true,
+                },
+                onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
+            });
+            mermaidInitialized = true;
+            return true;
+        }
+
+        async function waitForMermaid(timeoutMs = 10000) {
+            const started = Date.now();
+            while (!ensureMermaidInitialized()) {
+                if (Date.now() - started > timeoutMs) {
+                    throw new Error(window.__triageMermaidLoadError || 'Mermaid failed to initialize.');
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+        }
 
         // ── Read embedded code for a provider ───────────────────────────────
         function getDiagramCode(provider) {
@@ -578,8 +595,10 @@
             }
 
             try {
+                await waitForMermaid();
+                const sanitizedCode = String(code).replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '');
                 const renderId    = `mermaid-render-${seq}`;
-                const { svg }     = await mermaid.render(renderId, code.trim());
+                const { svg }     = await window.mermaid.render(renderId, sanitizedCode.trim());
                 if (seq !== renderSeq) return; // stale — a newer render is in flight
 
                 skeleton.classList.add('hidden');

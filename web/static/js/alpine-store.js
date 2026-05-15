@@ -4,17 +4,17 @@
  */
 
 const PHASE_MAP = [
-  { id: 'pp-0',  title: 'Module Check',        patterns: ['detecting external modules', 'checking for external modules', 'module detection'],                         label: 'Step 1: Checking modules' },
-  { id: 'pp-1',  title: 'Detection',           patterns: ['phase 1', 'detection scan', 'detection'],                                                                 label: 'Step 2: Detection' },
-  { id: 'pp-2',  title: 'Misconfig Scan',      patterns: ['phase 2 — targeted misconfigurations', 'misconfigurations', 'storing findings in db'],                    label: 'Step 3: Misconfig Scan' },
-  { id: 'pp-3a', title: 'Context - Patterns',  patterns: ['context phase 3.1', 'scanning patterns', 'opengrep detection'],                                           label: 'Step 4: Scanning patterns' },
-  { id: 'pp-3b', title: 'Context - Manifests', patterns: ['context phase 3.2', 'parsing manifests', 'package.json', 'kubernetes manifests'],                         label: 'Step 5: Parsing manifests' },
-  { id: 'pp-3c', title: 'Context - Topology',  patterns: ['context phase 3.3', 'service topology', 'extracting service', 'persisting'],                             label: 'Step 6: Service topology' },
-  { id: 'pp-4',  title: 'Analysis',            patterns: ['phase 3a', 'phase 3c', 'internet exposure', 'semantic', 'extract sg rules', 'extract ci/cd artifacts'],   label: 'Step 7: Analysis' },
-  { id: 'pp-5',  title: 'Persistence',         patterns: ['phase 3b', 'relink findings', 'provider inheritance', 'populate resource_id'],                               label: 'Step 8: Persistence' },
-  { id: 'pp-6',  title: 'Diagrams',            patterns: ['phase 3d', 'diagram gen', 'generate architecture diagrams', 'loading diagrams'],                              label: 'Step 9: Diagrams' },
-  { id: 'pp-7',  title: 'Finalizing',          patterns: ['finalizing'],                                                                                               label: 'Step 10: Finalizing' },
-  { id: 'pp-8',  title: 'Ready',               patterns: ['step 8: ready', 'scan ready', 'pipeline ready'],                                                            label: 'Step 11: Ready' },
+  { id: 'pp-0',  title: 'Module Check',        patterns: ['detecting external modules', 'checking for external modules', 'module detection'],                         label: 'Checking modules' },
+  { id: 'pp-1',  title: 'Detection',           patterns: ['phase 1', 'detection scan', 'detection'],                                                                 label: 'Detection' },
+  { id: 'pp-2',  title: 'Misconfig Scan',      patterns: ['phase 2 — targeted misconfigurations', 'misconfigurations', 'storing findings in db'],                    label: 'Misconfig Scan' },
+  { id: 'pp-3a', title: 'Context - Patterns',  patterns: ['context phase 3.1', 'scanning patterns', 'opengrep detection'],                                           label: 'Scanning patterns' },
+  { id: 'pp-3b', title: 'Context - Manifests', patterns: ['context phase 3.2', 'parsing manifests', 'package.json', 'kubernetes manifests'],                         label: 'Parsing manifests' },
+  { id: 'pp-3c', title: 'Context - Topology',  patterns: ['context phase 3.3', 'service topology', 'extracting service', 'persisting'],                             label: 'Service topology' },
+  { id: 'pp-4',  title: 'Analysis',            patterns: ['phase 3a', 'phase 3c', 'internet exposure', 'semantic', 'extract sg rules', 'extract ci/cd artifacts'],   label: 'Analysis' },
+  { id: 'pp-5',  title: 'Persistence',         patterns: ['phase 3b', 'relink findings', 'provider inheritance', 'populate resource_id'],                               label: 'Persistence' },
+  { id: 'pp-6',  title: 'Diagrams',            patterns: ['phase 3d', 'diagram gen', 'generate architecture diagrams', 'loading diagrams'],                              label: 'Diagrams' },
+  { id: 'pp-7',  title: 'Finalizing',          patterns: ['finalizing'],                                                                                               label: 'Finalizing' },
+  { id: 'pp-8',  title: 'Ready',               patterns: ['step 8: ready', 'scan ready', 'pipeline ready'],                                                            label: 'Ready' },
 ];
 
 const STAGE_TO_PHASE_INDEX = {
@@ -38,6 +38,7 @@ document.addEventListener('alpine:init', () => {
     phaseIdx: -1,
     phaseLabel: '',
     phases: PHASE_MAP.map(p => ({ id: p.id, title: p.title, label: p.label, state: 'idle' })), // idle | active | done
+    moduleScanEntries: [],
 
     // Modal
     modalVisible:  false,
@@ -62,7 +63,45 @@ document.addEventListener('alpine:init', () => {
 
     beginModuleCheck() {
       this.startPipeline(true);
+      this.moduleScanEntries = [];
       this._activatePhase(0, PHASE_MAP[0].label);
+    },
+
+    _moduleStateLabel(state) {
+      if (state === 'running') return 'Running';
+      if (state === 'success') return 'Done';
+      if (state === 'failed') return 'Failed';
+      if (state === 'interrupted') return 'Interrupted';
+      return 'Queued';
+    },
+
+    _moduleStateClass(state) {
+      if (state === 'running') return 'recent-module-pill--running';
+      if (state === 'success') return 'recent-module-pill--success';
+      if (state === 'failed') return 'recent-module-pill--failed';
+      if (state === 'interrupted') return 'recent-module-pill--interrupted';
+      return 'recent-module-pill--queued';
+    },
+
+    updateModuleScan(moduleName, state = 'running') {
+      const name = String(moduleName || '').trim() || 'module';
+      const key = name.toLowerCase();
+      const now = Date.now();
+      const idx = this.moduleScanEntries.findIndex(e => e.key === key);
+      const next = {
+        key,
+        name,
+        state,
+        stateLabel: this._moduleStateLabel(state),
+        stateClass: this._moduleStateClass(state),
+        updatedAt: now,
+      };
+      if (idx >= 0) {
+        this.moduleScanEntries.splice(idx, 1, { ...this.moduleScanEntries[idx], ...next });
+      } else {
+        this.moduleScanEntries.unshift(next);
+      }
+      this.moduleScanEntries.sort((a, b) => b.updatedAt - a.updatedAt);
     },
 
     _activatePhase(index, label) {
@@ -213,6 +252,7 @@ document.addEventListener('alpine:init', () => {
     onScanLine:     (text) => Alpine.store('scan').updatePhase(text),
     onScanStage:    (stage) => Alpine.store('scan').updatePhaseFromStage(stage),
     onScanComplete: () => Alpine.store('scan').completePipeline(),
+    onModuleScanState: (moduleName, state) => Alpine.store('scan').updateModuleScan(moduleName, state),
     showModal:      (msg, onWatch, onNew) => Alpine.store('scan').showModal(msg, onWatch, onNew),
     showModuleModal: (modules, onScan, onSkip) => Alpine.store('scan').showModuleModal(modules, onScan, onSkip),
   };
