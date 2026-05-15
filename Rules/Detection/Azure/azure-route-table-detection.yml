@@ -1,0 +1,66 @@
+rules:
+  - id: context-azure-route-table
+    message: |
+      Azure Route Table (UDR) detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_route_table" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-routing
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Route Table
+        resource_type: azurerm_route_table
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: disable_bgp_route_propagation
+            pattern: disable_bgp_route_propagation = $BGP
+      description: |
+        Detects Azure Route Table (User Defined Route) resources in Terraform.
+        Route Tables control traffic flow between subnets, to the internet, and to
+        virtual appliances (e.g. Azure Firewall). Routes to 0.0.0.0/0 via a firewall
+        NVA indicate forced tunnelling — critical for egress threat modelling.
+
+  - id: context-azure-subnet-route-table-association
+    message: |
+      Azure Subnet to Route Table Association detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_subnet_route_table_association" $NAME {
+        ...
+        subnet_id = $SUBNET_ID
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-routing
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet Route Table Association
+        resource_type: azurerm_subnet_route_table_association
+        resource_name: $NAME
+        properties:
+          - name: subnet_id
+            pattern: subnet_id = $SUBNET_ID
+          - name: route_table_id
+            pattern: route_table_id = $RT_ID
+      description: |
+        Detects association of a Route Table to a subnet. Indicates which subnets
+        have custom routing (UDR) applied — relevant for confirming forced egress through firewall.

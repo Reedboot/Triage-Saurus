@@ -1,0 +1,69 @@
+rules:
+  - id: context-azure-nat-gateway
+    message: |
+      Azure NAT Gateway detected in infrastructure.
+      This rule extracts NAT Gateway configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_nat_gateway" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-egress
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Nat Gateway
+        resource_type: azurerm_nat_gateway
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku_name
+            pattern: sku_name = "$SKU"
+          - name: idle_timeout_in_minutes
+            pattern: idle_timeout_in_minutes = $TIMEOUT
+          - name: zones
+            pattern: zones = $ZONES
+      description: |
+        Detects Azure NAT Gateway resources in Terraform.
+        NAT Gateway provides outbound-only internet connectivity for private subnet resources.
+        It does NOT accept inbound traffic from the internet — only egress.
+
+  - id: context-azure-nat-gateway-public-ip-association
+    message: |
+      Azure NAT Gateway Public IP Association detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_nat_gateway_public_ip_association" $NAME {
+        ...
+        nat_gateway_id = $GW_ID
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-egress
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Nat Gateway Public Ip Association
+        resource_type: azurerm_nat_gateway_public_ip_association
+        resource_name: $NAME
+        properties:
+          - name: nat_gateway_id
+            pattern: nat_gateway_id = $GW_ID
+          - name: public_ip_address_id
+            pattern: public_ip_address_id = $IP_ID
+      description: |
+        Detects the association between a NAT Gateway and its public IP address.

@@ -2,6 +2,7 @@
  * diagram-zoom.js — pan, zoom, fit, and transform for the inline diagram viewer.
  */
 import { state } from './state.js';
+import { getDiagramContentBounds } from './diagram-shared.js';
 
 // ── Transform ─────────────────────────────────────────────────────────────────
 
@@ -40,29 +41,7 @@ export function zoomReset() {
 }
 
 // ── Bounds detection ──────────────────────────────────────────────────────────
-
-export function getDiagramContentBounds(svg) {
-  // 1. viewBox (most reliable)
-  const vb = svg.viewBox && svg.viewBox.baseVal;
-  if (vb && vb.width > 0 && vb.height > 0) {
-    return { width: vb.width, height: vb.height };
-  }
-
-  // 2. getBBox (actual rendered content)
-  try {
-    const bbox = svg.getBBox();
-    if (bbox && bbox.width > 0 && bbox.height > 0) {
-      return { width: bbox.width, height: bbox.height };
-    }
-  } catch (_) {}
-
-  // 3. HTML attributes
-  const w = parseFloat(svg.getAttribute('width'));
-  const h = parseFloat(svg.getAttribute('height'));
-  if (w > 0 && h > 0) return { width: w, height: h };
-
-  return null;
-}
+// (imported from diagram-shared.js)
 
 // ── Fit ───────────────────────────────────────────────────────────────────────
 

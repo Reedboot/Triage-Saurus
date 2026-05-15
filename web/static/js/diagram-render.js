@@ -8,12 +8,16 @@ import {
   saveDiagramState,
   loadDiagramState,
 } from './diagram-zoom.js';
+import {
+  getMermaidConfig,
+  sanitizeMermaidSource,
+  stampSvgDimensions,
+  injectDiagramIcons,
+} from './diagram-shared.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-export function sanitizeMermaidSource(code) {
-  return String(code || '').replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '');
-}
+export { sanitizeMermaidSource };
 
 export function getActiveDiagramView() {
   const diagramViews = document.getElementById('diagram-views');
@@ -53,29 +57,40 @@ export function setDiagramLoadingVisible(visible, message = 'Loading architectur
   overlay.hidden = !visible;
 }
 
-// ── Mermaid init config ───────────────────────────────────────────────────────
-
-function getMermaidConfig() {
-  return {
-    startOnLoad: false,
-    theme: 'dark',
-    securityLevel: 'loose',
-    flowchart: { useMaxWidth: false, htmlLabels: true },
-    onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
-  };
+function createDiagramPlaceholder(message = 'Architecture diagram will appear after the scan completes.') {
+  const placeholder = document.createElement('div');
+  placeholder.className = 'diagram-placeholder';
+  placeholder.id = 'diagram-placeholder';
+  placeholder.innerHTML = `
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="3" width="7" height="7" />
+      <rect x="14" y="3" width="7" height="8" />
+      <rect x="3" y="14" width="7" height="7" />
+      <rect x="14" y="14" width="7" height="7" />
+    </svg>
+    <p>${message}</p>
+  `;
+  return placeholder;
 }
 
-// ── SVG stamping (gives explicit px dimensions so auto-fit works) ─────────────
+export function clearDiagrams(message = 'Architecture diagram will appear after the scan completes.') {
+  const diagramViews = document.getElementById('diagram-views');
+  const diagramTabs = document.getElementById('diagram-tabs');
+  const zoomInner = document.getElementById('diagram-zoom-inner');
 
-function stampSvgDimensions(svg) {
-  const vb = svg.viewBox && svg.viewBox.baseVal;
-  if (vb && vb.width > 0 && vb.height > 0) {
-    svg.setAttribute('width',  `${vb.width}px`);
-    svg.setAttribute('height', `${vb.height}px`);
-    svg.style.setProperty('width',  `${vb.width}px`);
-    svg.style.setProperty('height', `${vb.height}px`);
-    svg.style.removeProperty('max-width');
+  state.storedDiagrams = [];
+  state.currentDiagramIndex = 0;
+  Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
+
+  if (zoomInner) zoomInner.classList.remove('is-rendering');
+  if (diagramTabs) diagramTabs.innerHTML = '';
+
+  if (diagramViews) {
+    diagramViews.replaceChildren(createDiagramPlaceholder(message));
   }
+
+  setDiagramPlaceholderVisible(true);
+  setDiagramLoadingVisible(false);
 }
 
 // ── Per-container Mermaid rendering ───────────────────────────────────────────

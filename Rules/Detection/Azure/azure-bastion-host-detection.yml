@@ -1,0 +1,41 @@
+rules:
+  - id: context-azure-bastion-host
+    message: |
+      Azure Bastion Host detected in infrastructure.
+      This rule extracts Bastion Host configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_bastion_host" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: privileged-access
+      technology: [terraform, azure, bastion]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Bastion Host
+        resource_type: azurerm_bastion_host
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: tunneling_enabled
+            pattern: tunneling_enabled = $TUNNEL
+          - name: file_copy_enabled
+            pattern: file_copy_enabled = $FILE_COPY
+          - name: ip_connect_enabled
+            pattern: ip_connect_enabled = $IP_CONNECT
+      description: |
+        Detects Azure Bastion Host resources in Terraform.
+        Bastion provides secure RDP/SSH to VMs without exposing public IPs.
+        It sits in the AzureBastionSubnet and is reachable over HTTPS from the internet.
+        Privileged access path — critical for admin access threat modelling.

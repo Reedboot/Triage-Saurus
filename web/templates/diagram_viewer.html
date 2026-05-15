@@ -187,8 +187,9 @@
                     </svg>
                     <span id="share-label">Share</span>
                 </button>
-                <button onclick="history.length > 1 ? history.back() : (window.location.href='/')"
-                        title="Go back"
+                <button id="btn-back"
+                        title="Exit fullscreen and return to scan results"
+                        onclick="(function() { const from = new URLSearchParams(window.location.search).get('from'); if (from) { window.location.href = from; } else { window.location.href = '/'; } })()"
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
                                bg-[#21262d] text-[#8b949e] border border-[#30363d]
                                hover:bg-[#30363d] hover:text-[#e6edf3] transition-colors cursor-pointer">
@@ -383,13 +384,9 @@
             securityLevel: 'loose',
             flowchart: {
                 useMaxWidth: false,
-                // Render labels as native SVG text for better cross-browser readability.
-                htmlLabels:  false,
-                padding:     16,
-                nodeSpacing: 60,
-                rankSpacing: 80,
-                curve:       'linear',
+                htmlLabels: true,
             },
+            onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
         });
 
         // ── Read embedded code for a provider ───────────────────────────────
@@ -746,7 +743,20 @@
             if (e.key === '+' || e.key === '=') { e.preventDefault(); applyScale(currentScale * 1.2); }
             if (e.key === '-')                   { e.preventDefault(); applyScale(currentScale / 1.2); }
             if (e.key === 'f' || e.key === 'F')  { e.preventDefault(); applyScale(fitScale); scrollEl.scrollLeft = 0; scrollEl.scrollTop = 0; }
-            if (e.key === 'Escape' && isFullscreen) toggleFullscreen();
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (isFullscreen) {
+                    toggleFullscreen();
+                } else {
+                    // Navigate back to origin
+                    const from = new URLSearchParams(window.location.search).get('from');
+                    if (from) {
+                        window.location.href = from;
+                    } else {
+                        window.location.href = '/';
+                    }
+                }
+            }
         });
 
         // ── Ctrl+scroll zoom ─────────────────────────────────────────────────

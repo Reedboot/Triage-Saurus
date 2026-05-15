@@ -212,6 +212,8 @@ class HierarchicalDiagramBuilder:
         # resources named "example"), a qualified ID using the resource_type prefix is
         # generated instead so Mermaid doesn't collapse distinct nodes into one.
         self._emitted_mermaid_ids: Set[str] = set()
+        # Stable node ID cache keyed by database resource ID.
+        self._resource_id_to_node_id: Dict[str, str] = {}
         # Maps sanitized base_node_id → database resource ID of the FIRST resource
         # emitted with that node ID. Used to detect when a second *different* resource
         # would collide with an already-emitted node and needs a qualified ID.
@@ -2166,7 +2168,7 @@ class HierarchicalDiagramBuilder:
     def _render_nested_resource(self, resource: dict, indent: str = "  ", tier_id: str = None) -> List[str]:
         """Render a resource as a nested subgraph when it has children."""
         name = resource['resource_name']
-        node_id = sanitize_id(name)
+        node_id = self._get_node_id(resource)
         resource_id = resource['id']
         children = self.children_by_parent.get(resource_id, [])
 
@@ -3136,19 +3138,38 @@ class HierarchicalDiagramBuilder:
         Returns:
             String suitable for use as Mermaid node ID (UUID or fallback to sanitized name)
         """
+        resource_id = resource.get('id')
+        if resource_id is not None:
+            cached = self._resource_id_to_node_id.get(str(resource_id))
+            if cached:
+                return cached
+
         # Preserve readable name-based IDs for integer DB ids (test fixtures and
         # historical diagrams rely on this), while still supporting string/UUID ids.
-        uuid = resource.get('id')
+        uuid = resource_id
         if isinstance(uuid, int):
-            return sanitize_id(resource.get('resource_name', 'node'))
+            base_id = sanitize_id(resource.get('resource_name', 'node'))
+            owner = self._node_id_first_owner.get(base_id)
+            if owner and owner != str(uuid):
+                node_id = sanitize_id(f"{base_id}_{uuid}")
+            else:
+                node_id = base_id
+            self._node_id_first_owner.setdefault(node_id, str(uuid))
+            self._resource_id_to_node_id[str(uuid)] = node_id
+            return node_id
         if uuid is not None:
             node_id_str = str(uuid)
             # Mermaid node IDs cannot start with '-': prefix synthetic negative IDs
             if node_id_str.startswith('-'):
-                return f"synthetic_{node_id_str[1:]}"
+                node_id_str = f"synthetic_{node_id_str[1:]}"
             # Mermaid subgraph IDs cannot start with a digit — prefix all numeric IDs
-            if node_id_str[0].isdigit():
-                return f"n{node_id_str}"
+            elif node_id_str[0].isdigit():
+                node_id_str = f"n{node_id_str}"
+            owner = self._node_id_first_owner.get(node_id_str)
+            if owner and owner != str(uuid):
+                node_id_str = sanitize_id(f"{node_id_str}_{uuid}")
+            self._node_id_first_owner.setdefault(node_id_str, str(uuid))
+            self._resource_id_to_node_id[str(uuid)] = node_id_str
             return node_id_str
         return sanitize_id(resource.get('resource_name', 'node'))
 

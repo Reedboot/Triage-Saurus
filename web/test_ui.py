@@ -110,8 +110,11 @@ class TestPageLoad:
 
 class TestScanForm:
     def test_repo_select_present(self, home: Page):
-        """Repository <select> exists and is visible."""
-        expect(home.locator("#repo-select")).to_be_visible()
+        """Repository selector exists and is visible (custom searchable dropdown)."""
+        # Check for the custom dropdown container
+        expect(home.locator(".repo-selector-container")).to_be_visible()
+        # Verify the hidden select still exists for form submission
+        expect(home.locator("#repo-select")).to_be_present()
 
     def test_repo_select_has_placeholder(self, home: Page):
         """Dropdown placeholder option is present."""
@@ -370,6 +373,12 @@ class TestDiagramPanel:
         """🤖 Architecture AI button is visible."""
         expect(home.locator("#architecture-run-ai-btn")).to_be_visible()
 
+    def test_architecture_ai_progress_bar_present(self, home: Page):
+        """Architecture AI progress bar exists and starts hidden."""
+        progress = home.locator("#architecture-ai-progress")
+        expect(progress).to_be_attached()
+        expect(progress).to_be_hidden()
+
     def test_copy_diagram_button(self, home: Page):
         """📋 Copy source button is visible."""
         expect(home.locator("#copy-diagram-btn")).to_be_visible()
@@ -387,6 +396,60 @@ class TestDiagramPanel:
         placeholder = home.locator("#diagram-placeholder")
         expect(placeholder).to_be_visible()
         assert "architecture diagram" in placeholder.inner_text().lower()
+
+    def test_run_scan_clears_previous_diagrams(self, home: Page):
+        """Clicking Run Scan should clear any previously rendered architecture diagrams."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Stale diagram',
+                code: 'flowchart LR; A[Old] --> B[Diagram]'
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+
+        home.route(
+            "**/api/scans/**",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"running_experiment": null}',
+            ),
+        )
+        home.route(
+            "**/api/detect-modules",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"modules": []}',
+            ),
+        )
+        home.route(
+            "**/scan",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                body='event: experiment\ndata: "test-exp"\n\nevent: done\ndata: {"experiment_id":"test-exp","status":"complete","exit_code":0}\n\n',
+            ),
+        )
+
+        repo_select = home.locator("#repo-select")
+        repo_value = repo_select.evaluate(
+            "select => Array.from(select.options).find(option => !option.disabled)?.value || ''"
+        )
+        assert repo_value, "Expected at least one selectable repository"
+        repo_select.select_option(value=repo_value)
+
+        home.locator("#scan-btn").click()
+        home.wait_for_timeout(200)
+
+        expect(home.locator("#diagram-tabs button")).to_have_count(0)
+        expect(home.locator("#diagram-views svg")).to_have_count(0)
+        expect(home.locator("#diagram-placeholder")).to_be_visible()
 
     def test_toggle_log_button(self, home: Page):
         """📜 Hide/show scan log button is visible in the diagram panel."""

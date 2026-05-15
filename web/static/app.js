@@ -2208,6 +2208,25 @@
       exportPngBtn.addEventListener('click', exportDiagramPNG);
     }
 
+    // Handle diagram fullscreen button - navigate to standalone diagram viewer
+    const fullscreenBtn = document.getElementById('diagram-fullscreen-btn');
+    if (fullscreenBtn) {
+      fullscreenBtn.addEventListener('click', () => {
+        const experimentId = state.currentExperimentId;
+        if (!experimentId) {
+          showToast('No diagram loaded');
+          return;
+        }
+        // Get current provider from active diagram tab button
+        const activeTabBtn = document.querySelector('#diagram-tabs button.active');
+        const provider = activeTabBtn?.textContent?.toLowerCase() || 'all';
+        // Build fullscreen URL with return-to parameter
+        const originUrl = window.location.href;
+        const fullscreenUrl = `/diagrams/${encodeURIComponent(experimentId)}?provider=${encodeURIComponent(provider)}&from=${encodeURIComponent(originUrl)}`;
+        window.location.href = fullscreenUrl;
+      });
+    }
+
     // Handle API ops visibility toggle button
     const toggleApiOpsBtn = document.getElementById('toggle-api-ops-btn');
     if (toggleApiOpsBtn) {

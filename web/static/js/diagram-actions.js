@@ -14,26 +14,72 @@ import {
   renderDiagrams,
   setDiagramLoadingVisible,
 } from './diagram-render.js';
+import { showToast } from './diagram-shared.js';
 
-// ── Toast ─────────────────────────────────────────────────────────────────────
+const ARCHITECTURE_AI_PHASES = [
+  { index: 0, text: 'Collecting repository facts…', matches: ['step 1/3', 'collecting repository facts', 'facts for resume'] },
+  { index: 1, text: 'Running architecture review…', matches: ['step 2/3', 'running focused architecture ai review', 'architecture validation', 'architecture review'] },
+  { index: 2, text: 'Finalizing results…', matches: ['step 3/3', 'finalizing', 'completed'] },
+];
 
-export function showToast(message) {
-  document.querySelector('.diagram-toast')?.remove();
-  const toast = document.createElement('div');
-  toast.className = 'diagram-toast';
-  toast.textContent = message;
-  toast.style.cssText = [
-    'position:fixed', 'bottom:20px', 'right:20px',
-    'background:#1e293b', 'color:#e2e8f0', 'padding:12px 16px',
-    'border-radius:6px', 'border:1px solid #475569', 'z-index:1000',
-    'font-size:14px', 'box-shadow:0 4px 12px rgba(0,0,0,0.3)',
-    'animation:slideIn 0.3s ease-out',
-  ].join(';');
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.animation = 'fadeOut 0.3s ease-out';
-    setTimeout(() => toast.remove(), 300);
-  }, 2500);
+function getArchitectureAiProgressRoot() {
+  return document.getElementById('architecture-ai-progress');
+}
+
+function getArchitectureAiProgressText() {
+  return document.getElementById('architecture-ai-progress-text');
+}
+
+function getArchitectureAiProgressSteps() {
+  return Array.from(document.querySelectorAll('#architecture-ai-progress [data-ai-step]'));
+}
+
+export function clearArchitectureAiProgress() {
+  const root = getArchitectureAiProgressRoot();
+  const text = getArchitectureAiProgressText();
+  if (!root) return;
+  root.hidden = true;
+  if (text) text.textContent = 'Preparing…';
+  getArchitectureAiProgressSteps().forEach(step => {
+    step.classList.remove('pipeline-phase--done', 'pipeline-phase--active');
+    step.classList.add('pipeline-phase--idle');
+  });
+}
+
+export function setArchitectureAiProgress(stepIndex, label, done = false) {
+  const root = getArchitectureAiProgressRoot();
+  const text = getArchitectureAiProgressText();
+  const steps = getArchitectureAiProgressSteps();
+  if (!root || !steps.length) return;
+
+  root.hidden = false;
+  if (text) text.textContent = label || ARCHITECTURE_AI_PHASES[stepIndex]?.text || 'Running architecture AI…';
+
+  steps.forEach((step, idx) => {
+    step.classList.remove('pipeline-phase--idle', 'pipeline-phase--done', 'pipeline-phase--active');
+    if (done || idx < stepIndex) {
+      step.classList.add('pipeline-phase--done');
+    } else if (idx === stepIndex) {
+      step.classList.add('pipeline-phase--active');
+    } else {
+      step.classList.add('pipeline-phase--idle');
+    }
+  });
+}
+
+function updateArchitectureAiProgressFromText(text, currentStep = 0) {
+  const lower = String(text || '').toLowerCase();
+  for (const phase of ARCHITECTURE_AI_PHASES) {
+    if (phase.matches.some(match => lower.includes(match))) {
+      const isDone = phase.index === ARCHITECTURE_AI_PHASES.length - 1 && lower.includes('completed');
+      setArchitectureAiProgress(phase.index, phase.text, isDone);
+      return phase.index;
+    }
+  }
+  if (lower.includes('stop requested') || lower.includes('stop failed')) {
+    setArchitectureAiProgress(currentStep, 'Stopping architecture AI…');
+  }
+  return currentStep;
 }
 
 // ── AI stream management ──────────────────────────────────────────────────────
@@ -47,13 +93,14 @@ export function updateArchitectureAiButton(isRunning) {
     : 'Run AI against the architecture diagram and suggest code/rule changes';
 }
 
-export function closeArchitectureAiStream() {
+export function closeArchitectureAiStream({ hideProgress = true } = {}) {
   if (state.architectureAiStream) {
     try { state.architectureAiStream.close(); } catch (_) {}
     state.architectureAiStream = null;
   }
   state.architectureAiStopInFlight = false;
   updateArchitectureAiButton(false);
+  if (hideProgress) clearArchitectureAiProgress();
   if (typeof window._triage?.setToolbarStopState === 'function') {
     window._triage.setToolbarStopState({ enabled: false, visible: false, label: '⏹ Stop AI Scan' });
   }
@@ -278,6 +325,7 @@ export function runArchitectureAiReview() {
   closeArchitectureAiStream();
   state.architectureAiStopInFlight = false;
   updateArchitectureAiButton(true);
+  setArchitectureAiProgress(0, ARCHITECTURE_AI_PHASES[0].text);
 
   window._triage?.showLog?.();
   window._triage?.setStatus?.('Running architecture AI…', 'info');
@@ -314,13 +362,16 @@ export function runArchitectureAiReview() {
 
   let streamDone = false;
   let pollTimer  = null;
+  let currentStep = 0;
 
   const clearPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
 
   const finishSuccess = () => {
     streamDone = true;
     clearPolling();
-    closeArchitectureAiStream();
+    setArchitectureAiProgress(2, ARCHITECTURE_AI_PHASES[2].text, true);
+    closeArchitectureAiStream({ hideProgress: false });
+    setTimeout(() => clearArchitectureAiProgress(), 1500);
     window._triage?.setStatus?.('Completed', 'success');
     window._triage?.appendLog?.('[Architecture] Architecture review completed');
     refetchDiagrams(true);
@@ -338,13 +389,16 @@ export function runArchitectureAiReview() {
     try {
       const resp = await fetch(`/api/analysis/status/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`);
       const data = await resp.json().catch(() => ({}));
-      if (data.status === 'running') {
-        const label = (data.active_agent_label || data.active_agent || 'Architecture validation').toString();
-        window._triage?.setStatus?.(`Running: ${label}…`, 'info');
-        window._triage?.setStatusBusy?.(true);
-        window._triage?.setToolbarStopState?.({ enabled: true, visible: true, label: '⏹ Stop Architecture AI' });
-        return;
-      }
+        if (data.status === 'running') {
+          const label = (data.active_agent_label || data.active_agent || 'Architecture validation').toString();
+          if (label) {
+            currentStep = updateArchitectureAiProgressFromText(label, currentStep);
+          }
+          window._triage?.setStatus?.(`Running: ${label}…`, 'info');
+          window._triage?.setStatusBusy?.(true);
+          window._triage?.setToolbarStopState?.({ enabled: true, visible: true, label: '⏹ Stop Architecture AI' });
+          return;
+        }
       if (data.status === 'completed') { finishSuccess(); return; }
       if (data.status === 'failed' || data.status === 'stopped') {
         finishFailure((data.error || (data.status === 'stopped' ? 'Stopped' : 'Failed')).toString());
@@ -354,7 +408,11 @@ export function runArchitectureAiReview() {
 
   state.architectureAiStream = new EventSource(streamUrl);
   state.architectureAiStream.addEventListener('log', (evt) => {
-    try { window._triage?.appendLog?.(`[Architecture] ${JSON.parse(evt.data)}`); } catch (_) {}
+    try {
+      const line = JSON.parse(evt.data);
+      window._triage?.appendLog?.(`[Architecture] ${line}`);
+      currentStep = updateArchitectureAiProgressFromText(line, currentStep);
+    } catch (_) {}
   });
   state.architectureAiStream.addEventListener('done', () => finishSuccess());
   state.architectureAiStream.addEventListener('error', async () => {

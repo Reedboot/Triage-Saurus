@@ -1,0 +1,105 @@
+rules:
+  - id: context-azure-firewall
+    message: |
+      Azure Firewall detected in infrastructure.
+      This rule extracts Azure Firewall configuration for context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_firewall" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Azure Firewall
+        resource_type: azurerm_firewall
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku_name
+            pattern: sku_name = "$SKU"
+          - name: sku_tier
+            pattern: sku_tier = "$TIER"
+          - name: firewall_policy_id
+            pattern: firewall_policy_id = $POLICY
+      description: |
+        Detects Azure Firewall resources in Terraform.
+        Azure Firewall is a managed, cloud-based network security service that
+        protects Azure Virtual Network resources. Its presence indicates a hub-and-spoke
+        network with centralised egress/inspection control.
+
+  - id: context-azure-firewall-policy
+    message: |
+      Azure Firewall Policy detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_firewall_policy" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Firewall Policy
+        resource_type: azurerm_firewall_policy
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: base_policy_id
+            pattern: base_policy_id = $BASE
+      description: |
+        Detects Azure Firewall Policy resources in Terraform.
+        Firewall Policies define DNAT, Network, and Application rule collections.
+
+  - id: context-azure-firewall-policy-rule-collection-group
+    message: |
+      Azure Firewall Policy Rule Collection Group detected.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_firewall_policy_rule_collection_group" $NAME {
+        ...
+        firewall_policy_id = $POLICY_ID
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Firewall Policy Rule Collection Group
+        resource_type: azurerm_firewall_policy_rule_collection_group
+        resource_name: $NAME
+        properties:
+          - name: firewall_policy_id
+            pattern: firewall_policy_id = $POLICY_ID
+          - name: priority
+            pattern: priority = $PRIORITY
+      description: |
+        Detects Azure Firewall Policy Rule Collection Group resources.
+        These define ordered sets of DNAT, Network, and Application rules.

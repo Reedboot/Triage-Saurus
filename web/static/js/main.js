@@ -13,9 +13,10 @@ import {
   refreshDiagram, copyDiagramSource, exportDiagramSvg, exportDiagramPNG,
   refetchDiagrams,
   runArchitectureAiReview, updateArchitectureAiButton, closeArchitectureAiStream,
+  setArchitectureAiProgress, clearArchitectureAiProgress,
   _showDiagramNotReady,
 } from './diagram-actions.js';
-import { setDiagramLoadingVisible, setDiagramPlaceholderVisible } from './diagram-render.js';
+import { clearDiagrams } from './diagram-render.js';
 import {
   showSectionsView, showLogView, getCurrentRepoName,
   buildSectionTabs, loadSectionContent, activateSectionKey,
@@ -82,6 +83,9 @@ window._triage.registerToolbarStop = (callback) => {
     btn.addEventListener('click', () => { if (_toolbarStopCallback) _toolbarStopCallback(); });
   }
 };
+
+window._triage.setArchitectureAiProgress = setArchitectureAiProgress;
+window._triage.clearArchitectureAiProgress = clearArchitectureAiProgress;
 
 // ── DOM ready init ────────────────────────────────────────────────────────────
 
@@ -241,14 +245,7 @@ function init() {
       const panelContent = document.getElementById('section-panel-content');
       if (panelContent) panelContent.innerHTML = '<div class="empty-state" id="section-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h18M3 12h18M3 17h18"/></svg><p>Run or load a scan to view<br/>section details.</p></div>';
 
-      const diagramViews = document.getElementById('diagram-views');
-      if (diagramViews) {
-        diagramViews.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="8"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><p>Run or load a scan to view<br/>architecture diagrams.</p></div>';
-        setDiagramPlaceholderVisible(true);
-      }
-      setDiagramLoadingVisible(false);
-      const dt = document.getElementById('diagram-tabs');
-      if (dt) dt.innerHTML = '';
+      clearDiagrams('Run or load a scan to view<br/>architecture diagrams.');
 
       if (!this.value) {
         document.getElementById('past-scans-row')?.classList.remove('visible');

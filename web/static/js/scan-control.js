@@ -5,7 +5,7 @@ import { state }                   from './state.js';
 import { closeEventSource, addLogLine, clearLog, setLogAutoScrollEnabled } from './scan-stream.js';
 import { closeArchitectureAiStream }                                       from './diagram-actions.js';
 import { buildSectionTabs, getCurrentRepoName, showLogView }               from './sections.js';
-import { renderDiagrams }                                                   from './diagram-render.js';
+import { clearDiagrams, renderDiagrams }                                   from './diagram-render.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,8 @@ export function handleScanSubmit(e) {
 
   const repoPath = (document.getElementById('repo-select')?.value || '').trim();
   if (!repoPath) { window._triage.setStatus('Choose a repo to run a scan', 'error'); return; }
+
+  clearDiagrams();
 
   const repoSelect = document.getElementById('repo-select');
   const repoOpt    = repoSelect?.querySelector('option:checked');
@@ -429,6 +431,7 @@ export function startScan(repoPath) {
   closeArchitectureAiStream();
   closeEventSource();
   clearLog();
+  clearDiagrams();
   showLogView();
 
   if (state.statusBar) state.statusBar.style.display = 'flex';
@@ -558,6 +561,7 @@ export function handleReset() {
   closeEventSource();
   if (state.currentPollInterval) { clearInterval(state.currentPollInterval); state.currentPollInterval = null; }
   clearLog();
+  clearDiagrams();
   state.currentExperimentId = null;
   if (state.statusBar) state.statusBar.style.display = 'none';
   if (state.spinner)   state.spinner.style.display   = 'none';

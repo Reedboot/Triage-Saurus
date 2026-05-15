@@ -91,7 +91,8 @@ header {
   justify-content: flex-end;
 }
 
-.header-left-controls select {
+.header-left-controls select,
+.header-left-controls .repo-selector-container {
   flex: 1 1 auto;
   min-width: 220px;
   max-width: 620px;
@@ -243,6 +244,78 @@ select, input[type="text"] {
 select:focus, input[type="text"]:focus { border-color: var(--accent); }
 option.not-found { color: var(--text-faint); }
 
+/* ── Searchable Repo Selector ── */
+.repo-selector-container {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 220px;
+  max-width: 620px;
+}
+
+.repo-selector-input {
+  width: 100%;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.repo-selector-input:focus {
+  border-color: var(--accent);
+}
+
+.repo-selector-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  margin-top: -1px;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+  z-index: 100;
+}
+
+.repo-selector-dropdown.open {
+  max-height: 300px;
+  overflow-y: auto;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.repo-selector-list {
+  padding: 4px 0;
+}
+
+.repo-selector-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background-color 0.15s;
+}
+
+.repo-selector-item:hover,
+.repo-selector-item.active {
+  background-color: var(--bg-hover);
+}
+
+.repo-selector-no-results {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 /* ── Buttons ── */
 button, .btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -342,6 +415,48 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 
 @media (prefers-reduced-motion: reduce) {
   .pipeline-phase--active { animation: none; }
+}
+
+.architecture-ai-progress {
+  display: none;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.architecture-ai-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.architecture-ai-progress-title {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.architecture-ai-progress-text {
+  color: var(--text);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.architecture-ai-progress-labels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* ── Workspace ── */

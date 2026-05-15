@@ -1,0 +1,67 @@
+rules:
+  - id: context-azure-private-endpoint
+    message: |
+      Azure Private Endpoint detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_endpoint" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: private-connectivity
+      technology: [terraform, azure, network, private-endpoint]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private Endpoint
+        resource_type: azurerm_private_endpoint
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: subnet_id
+            pattern: subnet_id = $SUBNET_ID
+      description: |
+        Detects Azure Private Endpoint resources in Terraform.
+        Private Endpoints map a PaaS service (Storage, Cosmos DB, Key Vault, SQL, etc.)
+        to a private IP inside a VNet, removing the need for public internet exposure.
+        Their presence is strong evidence that a PaaS service is NOT internet-accessible —
+        this MUST override any heuristic "Internet → Service" ingress assumption.
+
+  - id: context-azure-private-link-service
+    message: |
+      Azure Private Link Service detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_private_link_service" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: private-connectivity
+      technology: [terraform, azure, network, private-link]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Private Link Service
+        resource_type: azurerm_private_link_service
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: load_balancer_frontend_ip_configuration_ids
+            pattern: load_balancer_frontend_ip_configuration_ids = $LB_IDS
+      description: |
+        Detects Azure Private Link Service resources. Used to expose custom services
+        to other VNets/subscriptions via private connectivity.

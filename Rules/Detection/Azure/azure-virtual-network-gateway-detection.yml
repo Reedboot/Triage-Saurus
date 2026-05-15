@@ -1,0 +1,42 @@
+rules:
+  - id: context-azure-virtual-network-gateway
+    message: |
+      Azure Virtual Network Gateway detected in infrastructure (VPN or ExpressRoute).
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_virtual_network_gateway" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-gateway
+      technology: [terraform, azure, vpn, expressroute]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Network Gateway
+        resource_type: azurerm_virtual_network_gateway
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: type
+            pattern: type = "$TYPE"
+          - name: vpn_type
+            pattern: vpn_type = "$VPN_TYPE"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: active_active
+            pattern: active_active = $AA
+          - name: enable_bgp
+            pattern: enable_bgp = $BGP
+      description: |
+        Detects Azure Virtual Network Gateway resources in Terraform.
+        Used for VPN (Site-to-Site, Point-to-Site) and ExpressRoute hybrid connectivity.
+        Represents a trust boundary between on-premises and Azure — critical for
+        lateral movement and hybrid identity threat modelling.

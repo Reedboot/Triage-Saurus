@@ -1,0 +1,106 @@
+rules:
+  - id: context-azure-virtual-network
+    message: |
+      Azure Virtual Network detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_virtual_network" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Network
+        resource_type: azurerm_virtual_network
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: address_space
+            pattern: address_space = $CIDR
+          - name: dns_servers
+            pattern: dns_servers = $DNS
+      description: |
+        Detects Azure Virtual Network resources in Terraform.
+        VNets are the fundamental network isolation boundary in Azure.
+
+  - id: context-azure-vnet-peering
+    message: |
+      Azure Virtual Network Peering detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_virtual_network_peering" $NAME {
+        ...
+        virtual_network_name = $VNET_NAME
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, azure, network]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Virtual Network Peering
+        resource_type: azurerm_virtual_network_peering
+        resource_name: $NAME
+        properties:
+          - name: virtual_network_name
+            pattern: virtual_network_name = $VNET_NAME
+          - name: remote_virtual_network_id
+            pattern: remote_virtual_network_id = $REMOTE_ID
+          - name: allow_forwarded_traffic
+            pattern: allow_forwarded_traffic = $FWD
+          - name: use_remote_gateways
+            pattern: use_remote_gateways = $REMOTE_GW
+          - name: allow_gateway_transit
+            pattern: allow_gateway_transit = $GW_TRANSIT
+      description: |
+        Detects VNet peering relationships. Peerings extend reachability between VNets
+        and can allow lateral movement if access controls are not properly scoped.
+        allow_forwarded_traffic and use_remote_gateways are relevant for hub-and-spoke
+        routing through centralised firewall/gateway.
+
+  - id: context-azure-ip-group
+    message: |
+      Azure IP Group detected in infrastructure.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_ip_group" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network-security
+      technology: [terraform, azure, firewall]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Ip Group
+        resource_type: azurerm_ip_group
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: cidrs
+            pattern: cidrs = $CIDRS
+      description: |
+        Detects Azure IP Group resources. IP Groups aggregate IP ranges/CIDRs for
+        use in Firewall Policy rules. They define allowed source/destination address spaces.
