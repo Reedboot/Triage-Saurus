@@ -29,14 +29,7 @@ import {
 
 window._triage = window._triage || {};
 
-window._triage.setStatus = (message, type) => {
-  if (!state.statusText) return;
-  state.statusText.textContent = message;
-  state.statusText.className   = 'status-text';
-  if (type === 'error')   state.statusText.classList.add('error');
-  else if (type === 'warn')    state.statusText.classList.add('warn');
-  else if (type === 'success') state.statusText.classList.add('success');
-};
+window._triage.setStatus = () => {};
 
 window._triage.appendLog = (text) => {
   if (state.logOutput) addLogLine(text, 'info');
@@ -62,9 +55,7 @@ window._triage.loadSectionContent = (key, experimentId, repoName) => {
 window._triage.activateSectionKey = (key, experimentId, repoName) =>
   activateSectionKey(key, experimentId, repoName);
 
-window._triage.setStatusBusy = (isBusy) => {
-  if (state.spinner) state.spinner.style.display = isBusy ? 'block' : 'none';
-};
+window._triage.setStatusBusy = () => {};
 
 window._triage.setToolbarStopState = (opts) => {
   const btn = document.getElementById('stop-ai-toolbar-btn');
@@ -91,9 +82,6 @@ window._triage.clearArchitectureAiProgress = clearArchitectureAiProgress;
 
 function init() {
   // Grab shared DOM refs into state
-  state.statusBar     = document.getElementById('status-bar');
-  state.statusText    = document.getElementById('status-text');
-  state.spinner       = document.getElementById('spinner');
   state.logOutput     = document.getElementById('log-output');
   state.scanBtn       = document.getElementById('scan-btn');
   state.logAutoScrollBtn = document.getElementById('toggle-log-autoscroll-btn');
@@ -236,8 +224,6 @@ function init() {
         state.logOutput.scrollTop = 0;
       }
       setLogAutoScrollEnabled(true, false);
-      if (state.statusBar) state.statusBar.style.display = 'none';
-      if (state.spinner)   state.spinner.style.display   = 'none';
       window._triage.setStatus('Ready', '');
 
       const tabBar = document.getElementById('section-tab-bar');
@@ -394,8 +380,6 @@ function init() {
   }
 
   // Initial status + log view
-  if (state.statusText) state.statusText.textContent = 'Ready';
-  if (state.statusBar)  state.statusBar.style.display = 'none';
   showLogView();
 
   // Log auto-scroll on manual scroll

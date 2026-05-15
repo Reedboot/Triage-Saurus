@@ -56,6 +56,7 @@ export function handleScanSubmit(e) {
 // ── Module detection ───────────────────────────────────────────────────────────
 
 export function detectAndPromptForModules(repoPath) {
+  window.triagePipeline?.onModuleCheckStart?.();
   // Show status while detecting modules
   window._triage.setStatus('Detecting external modules…', '');
 
@@ -216,8 +217,6 @@ export function scanModulesSequentially(modulesToScan, originalRepoPath, index =
   clearLog();
   showLogView();
 
-  if (state.statusBar) state.statusBar.style.display = 'flex';
-  if (state.spinner)   state.spinner.style.display   = 'block';
   if (state.scanBtn) state.scanBtn.disabled = true;
 
   window.triagePipeline?.onScanStart?.();
@@ -235,8 +234,6 @@ export function scanModulesSequentially(modulesToScan, originalRepoPath, index =
         addLogLine(`Error: HTTP ${response.status}`, 'error');
         window._triage.setStatus(`Failed to scan module: ${module.name}`, 'error');
         if (state.scanBtn) state.scanBtn.disabled = false;
-        if (state.statusBar) state.statusBar.style.display = 'none';
-        if (state.spinner)   state.spinner.style.display   = 'none';
         // Continue with next module anyway
         setTimeout(() => scanModulesSequentially(modulesToScan, originalRepoPath, nextIndex), 1000);
         return;
@@ -264,7 +261,6 @@ export function scanModulesSequentially(modulesToScan, originalRepoPath, index =
             addLogLine(`[Info] 🔒 Module scan pipeline closed`, 'info');
             setScanButtonsVisible(true);
             if (state.scanBtn) state.scanBtn.disabled = false;
-            if (state.spinner) state.spinner.style.display = 'none';
             if (!sawDoneEvent) {
               window._triage.setStatus(`Module scan for ${module.name} closed before completion`, 'warn');
             }
@@ -321,8 +317,6 @@ export function scanModulesSequentially(modulesToScan, originalRepoPath, index =
       addLogLine(`Error scanning module: ${err.message}`, 'error');
       window._triage.setStatus(`Module scan failed: ${err.message}`, 'error');
       if (state.scanBtn) state.scanBtn.disabled = false;
-      if (state.statusBar) state.statusBar.style.display = 'none';
-      if (state.spinner) state.spinner.style.display = 'none';
       // Continue with next module anyway
       setTimeout(() => scanModulesSequentially(modulesToScan, originalRepoPath, nextIndex), 1000);
     });
@@ -434,8 +428,6 @@ export function startScan(repoPath) {
   clearDiagrams();
   showLogView();
 
-  if (state.statusBar) state.statusBar.style.display = 'flex';
-  if (state.spinner)   state.spinner.style.display   = 'block';
   window._triage.setStatus('Scan pipeline…', '');
   if (state.scanBtn) state.scanBtn.disabled = true;
 
@@ -455,8 +447,6 @@ export function startScan(repoPath) {
         addLogLine(`Error: HTTP ${response.status}`, 'error');
         window._triage.setStatus('Scan failed', 'error');
         if (state.scanBtn) state.scanBtn.disabled = false;
-        if (state.statusBar) state.statusBar.style.display = 'none';
-        if (state.spinner)   state.spinner.style.display   = 'none';
         return;
       }
 
@@ -481,7 +471,6 @@ export function startScan(repoPath) {
             addLogLine('[Info] 🔒 Scan pipeline closed', 'info');
             setScanButtonsVisible(true);
             if (state.scanBtn) state.scanBtn.disabled = false;
-            if (state.spinner) state.spinner.style.display = 'none';
             if (!sawDoneEvent) {
               window._triage.setStatus('Scan pipeline closed before completion', 'warn');
             }
@@ -549,8 +538,6 @@ export function startScan(repoPath) {
       addLogLine(`Connection error: ${error.message}`, 'error');
       window._triage.setStatus('Connection failed', 'error');
       if (state.scanBtn) state.scanBtn.disabled = false;
-      if (state.statusBar) state.statusBar.style.display = 'none';
-      if (state.spinner)   state.spinner.style.display   = 'none';
     });
 }
 
@@ -563,8 +550,6 @@ export function handleReset() {
   clearLog();
   clearDiagrams();
   state.currentExperimentId = null;
-  if (state.statusBar) state.statusBar.style.display = 'none';
-  if (state.spinner)   state.spinner.style.display   = 'none';
   if (state.logOutput) {
     state.logOutput.innerHTML = '<span class="s-inline-0e3800">Scan output will appear here…</span>';
     state.logOutput.scrollTop = 0;
@@ -598,8 +583,6 @@ export function checkForRunningScan(repoPath) {
         setLogAutoScrollEnabled(true, false);
         document.getElementById('section-placeholder')?.style.setProperty('display', 'none');
         addLogLine(`[Info] 🔄 Reconnecting to running experiment ${data.running_experiment}...`, 'info');
-        if (state.statusBar) state.statusBar.style.display = 'flex';
-        if (state.spinner)   state.spinner.style.display   = 'block';
         window._triage.setStatus(`Reconnecting to experiment ${data.running_experiment}...`, '');
         reconnectToRunningExperiment(repoPath, data.running_experiment, data.running_experiment_created_at);
       }
@@ -636,7 +619,6 @@ export function reconnectToRunningExperiment(repoPath, experimentId, createdAt) 
       _startReconnectPoll(repoName, experimentId, createdAt);
     });
 
-  if (state.statusBar) state.statusBar.style.display = 'flex';
 }
 
 export function _startReconnectPoll(repoName, experimentId, createdAt) {
@@ -665,7 +647,6 @@ export function _startReconnectPoll(repoName, experimentId, createdAt) {
       addLogLine('[Error] ❌ Scan appears to have stalled or crashed (no completion after 7+ minutes)', 'error');
       addLogLine('[Error] ⚠️ Lock file may be stale. You can try starting a new scan.', 'error');
       window._triage.setStatus('Scan timeout', 'error');
-      if (state.spinner) state.spinner.style.display = 'none';
       if (state.scanBtn) state.scanBtn.disabled = false;
       return;
     }
@@ -678,7 +659,6 @@ export function _startReconnectPoll(repoName, experimentId, createdAt) {
           state.currentPollInterval = null;
           addLogLine('[Info] ✅ Scan ready!', 'info');
           window._triage.setStatus('Scan ready', 'success');
-          if (state.spinner) state.spinner.style.display = 'none';
           if (state.scanBtn) state.scanBtn.disabled = false;
           addLogLine(m > 0 ? `[Info] ⏱️ Total time: ${m}m ${s}s` : `[Info] ⏱️ Total time: ${elapsed}s`, 'info');
           const expId = state.currentExperimentId || experimentId;
@@ -695,5 +675,4 @@ export function _startReconnectPoll(repoName, experimentId, createdAt) {
       .catch(() => {});
   }, 5000);
 
-  if (state.spinner) state.spinner.style.display = 'none';
 }

@@ -391,6 +391,10 @@ class TestDiagramPanel:
         """⬇ PNG export button is visible."""
         expect(home.locator("#export-diagram-png-btn")).to_be_visible()
 
+    def test_open_standalone_viewer_button(self, home: Page):
+        """⛶ Viewer button is visible."""
+        expect(home.locator("#open-diagram-viewer-btn")).to_be_visible()
+
     def test_diagram_placeholder_shown(self, home: Page):
         """Before a scan, the diagram area shows a placeholder."""
         placeholder = home.locator("#diagram-placeholder")

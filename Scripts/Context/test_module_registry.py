@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 from pathlib import Path
 import sqlite3
 import sys
@@ -11,6 +12,7 @@ from module_registry import (  # noqa: E402
     ModuleMetadata,
     capture_module_findings,
     get_module_findings,
+    record_module_usage,
     register_module,
 )
 
@@ -168,3 +170,109 @@ def test_capture_module_findings_supports_base_severity_schema(tmp_path):
     assert count == 1
     assert len(stored) == 1
     assert stored[0]["severity"] == "high"
+
+
+def test_record_module_usage_supports_base_severity_schema(tmp_path):
+    db_path = tmp_path / "cozo.db"
+    module_source = "git::https://example.com/org/terraform-network"
+
+    register_module(
+        ModuleMetadata(
+            module_source=module_source,
+            module_name="terraform-network",
+            resource_types=["azurerm_virtual_network"],
+            outputs={},
+            variables={},
+            description="test module",
+        ),
+        db_path=str(db_path),
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE resources (
+            id INTEGER PRIMARY KEY,
+            experiment_id TEXT,
+            repo_id INTEGER,
+            resource_name TEXT,
+            resource_type TEXT,
+            provider TEXT,
+            discovered_by TEXT,
+            discovery_method TEXT,
+            source_file TEXT,
+            source_line_start INTEGER,
+            status TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE findings (
+            id INTEGER PRIMARY KEY,
+            experiment_id TEXT,
+            repo_id INTEGER,
+            title TEXT,
+            description TEXT,
+            base_severity TEXT,
+            severity_score INTEGER,
+            resource_id INTEGER,
+            rule_id TEXT,
+            source_file TEXT,
+            source_line_start INTEGER,
+            inherited_from_module TEXT
+        )
+        """
+    )
+    conn.execute(
+        "UPDATE module_registry SET findings = ? WHERE module_source = ?",
+        (
+            json.dumps(
+                [
+                    {
+                        "title": "Open NSG rule",
+                        "description": "nsg allows 0.0.0.0/0",
+                        "severity": "high",
+                        "severity_score": 80,
+                        "rule_id": "azure-nsg-open",
+                        "source_file": "main.tf",
+                        "source_line_start": 12,
+                        "resource_type": "azurerm_virtual_network",
+                    }
+                ]
+            ),
+            module_source,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    record_module_usage(
+        experiment_id="exp-900",
+        repo_id=2,
+        module_instance_name="network",
+        module_source=module_source,
+        source_file="main.tf",
+        source_line=7,
+        resolved_resource_types=["azurerm_virtual_network"],
+        db_path=str(db_path),
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT title, base_severity, severity_score, inherited_from_module
+        FROM findings
+        WHERE repo_id = ?
+        """,
+        (2,),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row["title"] == "[Inherited] Open NSG rule"
+    assert row["base_severity"] == "high"
+    assert row["severity_score"] == 80
+    assert row["inherited_from_module"] == module_source

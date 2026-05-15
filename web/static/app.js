@@ -1136,6 +1136,10 @@
       const tabBtn = document.createElement('button');
       tabBtn.className = 'btn-small' + (idx === 0 ? ' active' : '');
       tabBtn.dataset.idx = idx;
+      const provider = String(diag.provider || '').trim().toLowerCase();
+      if (provider) {
+        tabBtn.dataset.provider = provider;
+      }
       tabBtn.textContent = title;
       tabBtn.style.marginRight = '4px';
       diagramTabs.appendChild(tabBtn);
@@ -1334,6 +1338,27 @@
     const preEl = diagramView.querySelector('pre.mermaid');
     if (!preEl) return null;
     return sanitizeMermaidSource(preEl.dataset.source || preEl.textContent || '');
+  }
+
+  function getActiveDiagramProvider() {
+    const activeTabBtn = document.querySelector('#diagram-tabs button.active');
+    const provider = String(activeTabBtn?.dataset?.provider || '').trim().toLowerCase();
+    if (provider) return provider;
+    const tabLabel = String(activeTabBtn?.textContent || '').toLowerCase();
+    const fromTitle = tabLabel.replace(/\s+architecture\b/g, '').trim();
+    return fromTitle || 'all';
+  }
+
+  function openStandaloneDiagramViewer() {
+    const experimentId = currentExperimentId;
+    if (!experimentId) {
+      showToast('No diagram loaded');
+      return;
+    }
+    const provider = getActiveDiagramProvider();
+    const originUrl = window.location.href;
+    const fullscreenUrl = `/diagrams/${encodeURIComponent(experimentId)}?provider=${encodeURIComponent(provider)}&from=${encodeURIComponent(originUrl)}`;
+    window.location.href = fullscreenUrl;
   }
 
   function refreshDiagram() {
@@ -2068,7 +2093,6 @@
 
   // Initialize on DOM ready
   function init() {
-    statusBar = document.getElementById('status-bar');
     statusText = document.getElementById('status-text');
     spinner = document.getElementById('spinner');
     logOutput = document.getElementById('log-output');
@@ -2211,20 +2235,12 @@
     // Handle diagram fullscreen button - navigate to standalone diagram viewer
     const fullscreenBtn = document.getElementById('diagram-fullscreen-btn');
     if (fullscreenBtn) {
-      fullscreenBtn.addEventListener('click', () => {
-        const experimentId = state.currentExperimentId;
-        if (!experimentId) {
-          showToast('No diagram loaded');
-          return;
-        }
-        // Get current provider from active diagram tab button
-        const activeTabBtn = document.querySelector('#diagram-tabs button.active');
-        const provider = activeTabBtn?.textContent?.toLowerCase() || 'all';
-        // Build fullscreen URL with return-to parameter
-        const originUrl = window.location.href;
-        const fullscreenUrl = `/diagrams/${encodeURIComponent(experimentId)}?provider=${encodeURIComponent(provider)}&from=${encodeURIComponent(originUrl)}`;
-        window.location.href = fullscreenUrl;
-      });
+      fullscreenBtn.addEventListener('click', openStandaloneDiagramViewer);
+    }
+
+    const openDiagramViewerBtn = document.getElementById('open-diagram-viewer-btn');
+    if (openDiagramViewerBtn) {
+      openDiagramViewerBtn.addEventListener('click', openStandaloneDiagramViewer);
     }
 
     // Handle API ops visibility toggle button

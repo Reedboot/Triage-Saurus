@@ -4,30 +4,31 @@
  */
 
 const PHASE_MAP = [
-  { id: 'pp-1',  title: 'Detection',           patterns: ['phase 1', 'detection scan', 'detection'],                                                             label: 'Step 1: Detection' },
-  { id: 'pp-2',  title: 'Misconfig Scan',      patterns: ['phase 2 — targeted misconfigurations', 'misconfigurations', 'storing findings in db'],                label: 'Step 2: Misconfig Scan' },
-  { id: 'pp-3a', title: 'Context - Patterns',  patterns: ['context phase 3.1', 'scanning patterns', 'opengrep detection'],                                       label: 'Step 3: Scanning patterns' },
-  { id: 'pp-3b', title: 'Context - Manifests', patterns: ['context phase 3.2', 'parsing manifests', 'package.json', 'kubernetes manifests'],                     label: 'Step 4: Parsing manifests' },
-  { id: 'pp-3c', title: 'Context - Topology',  patterns: ['context phase 3.3', 'service topology', 'extracting service', 'persisting'],                         label: 'Step 5: Service topology' },
-  { id: 'pp-4',  title: 'Analysis',            patterns: ['phase 3a', 'phase 3c', 'internet exposure', 'semantic', 'extract sg rules', 'extract ci/cd artifacts'], label: 'Step 6: Analysis' },
-  { id: 'pp-5',  title: 'Persistence',         patterns: ['phase 3b', 'relink findings', 'provider inheritance', 'populate resource_id'],                           label: 'Step 7: Persistence' },
-  { id: 'pp-6',  title: 'Diagrams',            patterns: ['phase 3d', 'diagram gen', 'generate architecture diagrams', 'loading diagrams'],                          label: 'Step 8: Diagrams' },
-  { id: 'pp-7',  title: 'Finalizing',          patterns: ['finalizing'],                                                                                           label: 'Step 9: Finalizing' },
-  { id: 'pp-8',  title: 'Ready',               patterns: ['step 8: ready', 'scan ready', 'pipeline ready'],                                                        label: 'Step 10: Ready' },
+  { id: 'pp-0',  title: 'Module Check',        patterns: ['detecting external modules', 'checking for external modules', 'module detection'],                         label: 'Step 1: Checking modules' },
+  { id: 'pp-1',  title: 'Detection',           patterns: ['phase 1', 'detection scan', 'detection'],                                                                 label: 'Step 2: Detection' },
+  { id: 'pp-2',  title: 'Misconfig Scan',      patterns: ['phase 2 — targeted misconfigurations', 'misconfigurations', 'storing findings in db'],                    label: 'Step 3: Misconfig Scan' },
+  { id: 'pp-3a', title: 'Context - Patterns',  patterns: ['context phase 3.1', 'scanning patterns', 'opengrep detection'],                                           label: 'Step 4: Scanning patterns' },
+  { id: 'pp-3b', title: 'Context - Manifests', patterns: ['context phase 3.2', 'parsing manifests', 'package.json', 'kubernetes manifests'],                         label: 'Step 5: Parsing manifests' },
+  { id: 'pp-3c', title: 'Context - Topology',  patterns: ['context phase 3.3', 'service topology', 'extracting service', 'persisting'],                             label: 'Step 6: Service topology' },
+  { id: 'pp-4',  title: 'Analysis',            patterns: ['phase 3a', 'phase 3c', 'internet exposure', 'semantic', 'extract sg rules', 'extract ci/cd artifacts'],   label: 'Step 7: Analysis' },
+  { id: 'pp-5',  title: 'Persistence',         patterns: ['phase 3b', 'relink findings', 'provider inheritance', 'populate resource_id'],                               label: 'Step 8: Persistence' },
+  { id: 'pp-6',  title: 'Diagrams',            patterns: ['phase 3d', 'diagram gen', 'generate architecture diagrams', 'loading diagrams'],                              label: 'Step 9: Diagrams' },
+  { id: 'pp-7',  title: 'Finalizing',          patterns: ['finalizing'],                                                                                               label: 'Step 10: Finalizing' },
+  { id: 'pp-8',  title: 'Ready',               patterns: ['step 8: ready', 'scan ready', 'pipeline ready'],                                                            label: 'Step 11: Ready' },
 ];
 
 const STAGE_TO_PHASE_INDEX = {
-  'phase1-detection': 0,
-  'phase1-misconfig': 1,
-  'phase2-context-patterns': 2,
-  'phase2-context-manifests': 3,
-  'phase2-context-topology': 4,
-  'phase2-context': 2, // fallback for old stage ID
-  'phase3-analysis': 5,
-  'phase3-persistence': 6,
-  'phase3-diagrams': 7,
-  finalizing: 8,
-  ready: 9,
+  'phase1-detection': 1,
+  'phase1-misconfig': 2,
+  'phase2-context-patterns': 3,
+  'phase2-context-manifests': 4,
+  'phase2-context-topology': 5,
+  'phase2-context': 3, // fallback for old stage ID
+  'phase3-analysis': 6,
+  'phase3-persistence': 7,
+  'phase3-diagrams': 8,
+  finalizing: 9,
+  ready: 10,
 };
 
 document.addEventListener('alpine:init', () => {
@@ -51,11 +52,17 @@ document.addEventListener('alpine:init', () => {
     _moduleSkipCb: null,
 
     // Pipeline actions
-    startPipeline() {
+    startPipeline(forceReset = false) {
+      if (this.pipelineVisible && !forceReset) return;
       this.pipelineVisible = true;
       this.phaseIdx  = -1;
       this.phaseLabel = '';
       this.phases.forEach(p => { p.state = 'idle'; });
+    },
+
+    beginModuleCheck() {
+      this.startPipeline(true);
+      this._activatePhase(0, PHASE_MAP[0].label);
     },
 
     _activatePhase(index, label) {
@@ -112,7 +119,7 @@ document.addEventListener('alpine:init', () => {
 
     completePipeline() {
       this.phases.forEach(p => { p.state = 'done'; });
-      this.phaseLabel = 'Step 10: Ready ✓';
+      this.phaseLabel = 'Step 11: Ready ✓';
       setTimeout(() => { this.pipelineVisible = false; }, 3000);
     },
 
@@ -187,6 +194,7 @@ document.addEventListener('alpine:init', () => {
 
   // Expose triagePipeline so scan-control.js / scan-stream.js can call it
   window.triagePipeline = {
+    onModuleCheckStart: () => Alpine.store('scan').beginModuleCheck(),
     onScanStart:    () => Alpine.store('scan').startPipeline(),
     onScanLine:     (text) => Alpine.store('scan').updatePhase(text),
     onScanStage:    (stage) => Alpine.store('scan').updatePhaseFromStage(stage),

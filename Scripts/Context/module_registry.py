@@ -387,10 +387,11 @@ def record_module_usage(
         inherited_count = 0
 
         # Ensure findings table has the inherited_from_module column
-        cols = [r[0] for r in conn.execute("PRAGMA table_info(findings)").fetchall()]
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(findings)").fetchall()}
         if "inherited_from_module" not in cols:
             try:
                 conn.execute("ALTER TABLE findings ADD COLUMN inherited_from_module TEXT")
+                cols.add("inherited_from_module")
             except Exception:
                 pass
 
@@ -399,35 +400,67 @@ def record_module_usage(
             f_rtype = f.get("resource_type") or ""
             resource_id = inferred_resource_ids.get(f_rtype)
 
+            finding_title = f"[Inherited] {f.get('title', 'Module finding')}"
+            finding_desc = (
+                f"⚠️ Inherited from module `{module_source}`.\n\n"
+                + (f.get("description") or "")
+            )
+            finding_severity = f.get("severity", "medium")
+            finding_score = f.get("severity_score", 5)
+
+            insert_columns = [
+                "experiment_id",
+                "repo_id",
+                "title",
+                "description",
+                "severity_score",
+                "resource_id",
+                "rule_id",
+                "source_file",
+            ]
+            insert_values = [
+                experiment_id,
+                repo_id,
+                finding_title,
+                finding_desc,
+                finding_score,
+                resource_id,
+                f.get("rule_id"),
+                f.get("source_file"),
+            ]
+
+            # findings schema varies across DB versions: severity may be stored
+            # as either "severity" or "base_severity".
+            if "severity" in cols:
+                insert_columns.append("severity")
+                insert_values.append(finding_severity)
+            elif "base_severity" in cols:
+                insert_columns.append("base_severity")
+                insert_values.append(finding_severity)
+
+            if "source_line_start" in cols:
+                insert_columns.append("source_line_start")
+                insert_values.append(f.get("source_line_start"))
+            elif "source_line" in cols:
+                insert_columns.append("source_line")
+                insert_values.append(f.get("source_line_start"))
+
+            if "code_snippet" in cols:
+                insert_columns.append("code_snippet")
+                insert_values.append(f.get("code_snippet"))
+
+            if "attack_impact" in cols:
+                insert_columns.append("attack_impact")
+                insert_values.append(f.get("attack_impact"))
+
+            if "inherited_from_module" in cols:
+                insert_columns.append("inherited_from_module")
+                insert_values.append(module_source)
+
+            placeholders = ", ".join("?" for _ in insert_columns)
             conn.execute(
-                """
-                INSERT INTO findings
-                    (experiment_id, repo_id, title, description, severity,
-                     severity_score, resource_id, rule_id, source_file,
-                     source_line_start, code_snippet, attack_impact,
-                     inherited_from_module)
-                VALUES (?, ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?)
-                """,
-                (
-                    experiment_id, repo_id,
-                    f"[Inherited] {f.get('title', 'Module finding')}",
-                    (
-                        f"⚠️ Inherited from module `{module_source}`.\n\n"
-                        + (f.get("description") or "")
-                    ),
-                    f.get("severity", "medium"),
-                    f.get("severity_score", 5),
-                    resource_id,
-                    f.get("rule_id"),
-                    f.get("source_file"),
-                    f.get("source_line_start"),
-                    f.get("code_snippet"),
-                    f.get("attack_impact"),
-                    module_source,
-                ),
+                f"INSERT INTO findings ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                insert_values,
             )
             inherited_count += 1
 

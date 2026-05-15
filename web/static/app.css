@@ -364,20 +364,6 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   max-width: 360px;
 }
 
-/* ── Status bar ── */
-.status-bar { display: none; margin-top: 0; align-items: center; gap: 8px; font-size: 0.8rem; flex-direction: row; }
-.status-bar.visible { display: flex; }
-.status-text { color: var(--text-muted); white-space: nowrap; }
-.status-text.success { color: var(--green); }
-.status-text.error   { color: var(--red); }
-
-.spinner {
-  width: 14px; height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Pipeline progress states ── */

@@ -2,7 +2,7 @@
  * state.js — shared mutable application state for Triage-Saurus.
  *
  * All modules import this single object and mutate it directly.
- * DOM element refs (statusBar etc.) are populated by main.js init().
+ * DOM element refs are populated by main.js init().
  */
 export const state = {
   // ── EventSource / polling ─────────────────────────────────────────────────
@@ -10,9 +10,6 @@ export const state = {
   currentPollInterval:   null,
 
   // ── DOM element refs (set by main.js init) ────────────────────────────────
-  statusBar:   null,
-  statusText:  null,
-  spinner:     null,
   logOutput:   null,
   scanBtn:     null,
   logAutoScrollBtn:   null,
