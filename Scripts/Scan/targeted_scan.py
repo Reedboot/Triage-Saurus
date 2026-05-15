@@ -146,6 +146,16 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-azure-appinsights-connection":    ["Secrets"],
     "context-azure-redis-connection":          ["Secrets"],
     "context-azure-servicebus-connection-appconfig": ["Secrets"],
+    "context-dotnet-appconfig-servicebus-endpoint-reference": ["Azure/ServiceBus", "Secrets"],
+    "context-dotnet-appconfig-blob-connection-reference": ["Azure/Storage", "Secrets"],
+    "context-dotnet-appconfig-cosmos-endpoint-reference": ["Azure/CosmosDB", "Secrets"],
+    "context-dotnet-appconfig-apim-baseurl-reference": ["Azure/APIM", "Secrets"],
+    "context-dotnet-csharp-servicebus-client-registration": ["Azure/ServiceBus", "Secrets"],
+    "context-dotnet-csharp-blob-client-registration": ["Azure/Storage", "Secrets"],
+    "context-dotnet-csharp-cosmos-client-registration": ["Azure/CosmosDB", "Secrets"],
+    "context-dotnet-csharp-cosmos-config-reference": ["Azure/CosmosDB", "Secrets"],
+    "context-dotnet-csharp-apim-subscription-key-header": ["Azure/APIM", "Secrets"],
+    "context-dotnet-csharp-apim-operation-call": ["Secrets"],
     "context-cicd-pipeline":                      ["CICD"],
 
     # Azure Key Vault children
@@ -288,6 +298,16 @@ ALWAYS_INCLUDE: list[str] = [
 FILE_PATTERN_FALLBACKS: list[tuple[str, str, list[str]]] = []
 
 
+_RESOURCE_TYPE_BY_CONTEXT_RULE: dict[str, str] = {
+    # Existing AppConfig rules emit generic connection resource types; normalize them
+    # so downstream diagram logic can classify concrete service dependencies.
+    "context-azure-servicebus-connection": "azurerm_servicebus_namespace",
+    "context-azure-storage-connection": "azurerm_storage_account",
+    "context-azure-redis-connection": "azurerm_redis_cache",
+    "context-azure-application-insights-connection": "azurerm_application_insights",
+}
+
+
 def _git_ls_files(target: Path, rel_path: str | None = None) -> list[str]:
     cmd = ["git", "-C", str(target), "ls-files"]
     if rel_path:
@@ -418,6 +438,16 @@ def _extract_metavar_text(extra: dict, token: str) -> str:
     return ""
 
 
+def _normalize_detected_resource(context_id: str, resource_type: str) -> str:
+    normalized = (resource_type or "").strip()
+    if not normalized:
+        return normalized
+    mapped = _RESOURCE_TYPE_BY_CONTEXT_RULE.get(context_id)
+    if mapped:
+        return mapped
+    return normalized
+
+
 def persist_detection_assets(scan_data: dict, experiment_id: str, repo_name: str, target: Path) -> int:
     """Persist Detection/Asset hits as resources so diagrams can render."""
     repo_id = db_helpers.ensure_repository_entry(experiment_id, repo_name)
@@ -426,6 +456,9 @@ def persist_detection_assets(scan_data: dict, experiment_id: str, repo_name: str
         for result in scan_data.get("results", []):
             extra = result.get("extra") or {}
             metadata = extra.get("metadata") or {}
+            context_id = str(result.get("check_id") or "")
+            if "." in context_id:
+                context_id = context_id.split(".")[-1]
             if metadata.get("rule_type") != "context_discovery":
                 continue
             if metadata.get("finding_kind") != "Asset":
@@ -434,7 +467,10 @@ def persist_detection_assets(scan_data: dict, experiment_id: str, repo_name: str
             extracts = metadata.get("extracts") or {}
             if not isinstance(extracts, dict):
                 continue
-            resource_type = str(extracts.get("resource_type") or "").strip()
+            resource_type = _normalize_detected_resource(
+                context_id,
+                str(extracts.get("resource_type") or "").strip(),
+            )
             name_expr = str(extracts.get("resource_name") or "").strip()
             if not resource_type or not name_expr:
                 continue

@@ -1,0 +1,228 @@
+rules:
+  - id: context-dotnet-appconfig-servicebus-endpoint-reference
+    message: |
+      .NET appsettings Service Bus endpoint reference detected.
+      Captures runtime dependency on Azure Service Bus even when secrets are injected at deploy time.
+    severity: INFO
+    languages: [json]
+    pattern-either:
+      - pattern-regex: |
+          (?im)"ServiceBusEndpoint"\s*:\s*"[^"\n]*servicebus\.windows\.net[^"\n]*"
+      - pattern-regex: |
+          (?im)Endpoint=sb://[A-Za-z0-9\.\-]+\.servicebus\.windows\.net/;[^"\n]*
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: messaging
+      technology: [dotnet, azure, servicebus]
+      target_files: ["**/appsettings*.json", "**/*.config", "**/*.yaml", "**/*.yml"]
+      extracts:
+        service_type: Azure Service Bus
+        resource_type: azurerm_servicebus_namespace
+        resource_name: appsettings-servicebus-endpoint
+
+  - id: context-dotnet-appconfig-blob-connection-reference
+    message: |
+      .NET appsettings/storage connection reference detected.
+      Captures Azure Storage dependency for standard and tokenized connection formats.
+    severity: INFO
+    languages: [json]
+    pattern-either:
+      - pattern-regex: |
+          (?im)"BlobStorageConnection"\s*:\s*"[^"\n]*"
+      - pattern-regex: |
+          (?im)DefaultEndpointsProtocol=https;[^"\n]*AccountName=[^;"\n]+;[^"\n]*(?:AccountKey|SharedAccessSignature)=[^;"\n]+
+      - pattern-regex: |
+          (?im)BlobEndpoint=https?://[A-Za-z0-9\.\-]+\.blob\.core\.windows\.net/?;?
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: storage
+      technology: [dotnet, azure, storage]
+      target_files: ["**/appsettings*.json", "**/*.config", "**/*.yaml", "**/*.yml"]
+      extracts:
+        service_type: Azure Storage
+        resource_type: azurerm_storage_account
+        resource_name: appsettings-blob-storage-connection
+
+  - id: context-dotnet-appconfig-cosmos-endpoint-reference
+    message: |
+      .NET appsettings Cosmos DB endpoint reference detected.
+      Captures runtime dependency on Azure Cosmos DB from configuration.
+    severity: INFO
+    languages: [json]
+    pattern-either:
+      - pattern-regex: |
+          (?im)"EndpointUri"\s*:\s*"[^"\n]*"
+      - pattern-regex: |
+          (?im)(?:documents|cosmos)\.azure\.com
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [dotnet, azure, cosmosdb]
+      target_files: ["**/appsettings*.json", "**/*.config", "**/*.yaml", "**/*.yml"]
+      extracts:
+        service_type: Azure Cosmos DB
+        resource_type: azurerm_cosmosdb_account
+        resource_name: appsettings-cosmos-endpoint
+
+  - id: context-dotnet-appconfig-apim-baseurl-reference
+    message: |
+      .NET appsettings APIM BaseUrl reference detected.
+      Captures application dependency on Azure API Management gateway URLs.
+    severity: INFO
+    languages: [json]
+    pattern-regex: |
+      (?im)"BaseUrl"\s*:\s*"(?:https?://[^"\n]+|#\{[^"\n}]*api[_-]?manager[^"\n}]*\}#[^"\n]*)"
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: api-gateway
+      technology: [dotnet, azure, apim]
+      target_files: ["**/appsettings*.json", "**/*.config", "**/*.yaml", "**/*.yml"]
+      extracts:
+        service_type: Azure API Management
+        resource_type: azurerm_api_management
+        resource_name: appsettings-apim-baseurl
+
+  - id: context-dotnet-csharp-servicebus-client-registration
+    message: |
+      .NET Service Bus client registration detected.
+      Captures runtime usage of Azure Service Bus SDK client wiring.
+    severity: INFO
+    languages: [csharp]
+    pattern: |
+      $BUILDER.AddServiceBusClient($CONNECTION_STRING);
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: messaging
+      technology: [dotnet, azure, servicebus]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: Azure Service Bus Client
+        resource_type: azurerm_servicebus_namespace
+        resource_name: dotnet-servicebus-client
+
+  - id: context-dotnet-csharp-blob-client-registration
+    message: |
+      .NET Blob service client registration detected.
+      Captures runtime usage of Azure Blob Storage SDK client wiring.
+    severity: INFO
+    languages: [csharp]
+    pattern: |
+      $BUILDER.AddBlobServiceClient($CONNECTION_STRING);
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: storage
+      technology: [dotnet, azure, storage]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: Azure Blob Storage Client
+        resource_type: azurerm_storage_account
+        resource_name: dotnet-blob-service-client
+
+  - id: context-dotnet-csharp-cosmos-client-registration
+    message: |
+      .NET CosmosClient registration detected.
+      Captures runtime usage of Azure Cosmos DB from code wiring.
+    severity: INFO
+    languages: [csharp]
+    pattern-regex: |
+      new\s+CosmosClient\s*\(
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [dotnet, azure, cosmosdb]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: Azure Cosmos DB Client
+        resource_type: azurerm_cosmosdb_account
+        resource_name: dotnet-cosmos-client
+
+  - id: context-dotnet-csharp-cosmos-config-reference
+    message: |
+      CosmosDb endpoint configuration reference detected in .NET code.
+      Captures dependency on Cosmos DB when values are read from IConfiguration.
+    severity: INFO
+    languages: [csharp]
+    pattern: |
+      $CONFIG["CosmosDb:EndpointUri"]
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: database
+      technology: [dotnet, azure, cosmosdb]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: Azure Cosmos DB Config
+        resource_type: azurerm_cosmosdb_account
+        resource_name: dotnet-cosmos-config-reference
+
+  - id: context-dotnet-csharp-apim-subscription-key-header
+    message: |
+      APIM subscription key header wiring detected in .NET HttpClient configuration.
+      Captures API gateway authentication dependency via Ocp-Apim-Subscription-Key.
+    severity: INFO
+    languages: [csharp]
+    pattern: |
+      $HTTP_CLIENT.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", $KEY);
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: application
+      subcategory: api-gateway
+      technology: [dotnet, azure, apim]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: APIM Subscription Auth
+        resource_type: azurerm_api_management_subscription
+        resource_name: dotnet-apim-subscription-key-header
+
+  - id: context-dotnet-csharp-apim-operation-call
+    message: |
+      .NET HttpClient operation call detected.
+      Captures API operation paths invoked by app clients without assuming cloud/provider.
+    severity: INFO
+    languages: [csharp]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $RESPONSE = await $CLIENT.PostAsync($PATH, $BODY, $TOKEN);
+          - pattern: |
+              using var $RESPONSE = await $CLIENT.PostAsync($PATH, $BODY, $TOKEN);
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: '^"/[A-Za-z0-9_\\-\\./]+"$'
+    metadata:
+      finding_kind: Asset
+      asset_provider: unknown
+      rule_type: context_discovery
+      category: application
+      subcategory: api-operations
+      technology: [dotnet, http, api]
+      target_files: ["**/*.cs"]
+      extracts:
+        service_type: API Operation Call
+        resource_type: api_operation
+        resource_name: $PATH

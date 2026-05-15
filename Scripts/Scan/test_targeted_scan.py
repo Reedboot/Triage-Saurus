@@ -99,3 +99,34 @@ def test_chunk_progress_log_is_compact():
 def test_chunk_progress_log_handles_repo_root():
     msg = targeted_scan._format_chunk_progress(["."], idx=2, total=2)
     assert msg == "  [chunk 2/2] scanning repository root (.)"
+
+
+def test_dotnet_runtime_dependency_rules_are_mapped():
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-dotnet-appconfig-servicebus-endpoint-reference"] == [
+        "Azure/ServiceBus",
+        "Secrets",
+    ]
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-dotnet-csharp-apim-operation-call"] == [
+        "Secrets",
+    ]
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-dotnet-csharp-cosmos-config-reference"] == [
+        "Azure/CosmosDB",
+        "Secrets",
+    ]
+
+
+def test_appconfig_resource_type_normalization_maps_generic_connection_types():
+    assert (
+        targeted_scan._normalize_detected_resource(
+            "context-azure-servicebus-connection",
+            "connection_string",
+        )
+        == "azurerm_servicebus_namespace"
+    )
+    assert (
+        targeted_scan._normalize_detected_resource(
+            "context-azure-storage-connection",
+            "connection_string",
+        )
+        == "azurerm_storage_account"
+    )
