@@ -36,6 +36,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo-at-a-time", action="store_true")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--repos", nargs="*", help="Optional repo names to include")
+    parser.add_argument(
+        "--only-unscanned",
+        action="store_true",
+        help="Target only repos that have no prior scan history.",
+    )
     parser.add_argument("--skip-after-pass", action="store_true", help="Run baseline only (no after pass)")
     return parser.parse_args(argv)
 
@@ -74,6 +79,8 @@ def _build_validator_command(
         cmd.append("--headed")
     if args.repos:
         cmd.extend(["--repos", *args.repos])
+    if args.only_unscanned:
+        cmd.append("--only-unscanned")
     if write_detection_rules:
         cmd.append("--write-detection-rules")
     if validate_detection_rules:

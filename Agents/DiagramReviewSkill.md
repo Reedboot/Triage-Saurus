@@ -46,6 +46,31 @@ For **each diagram element**, verify:
 - ✓ **Missing icon = detection gap** (resource type detection rule missing or incomplete)
 - ✓ **Examples:** Route Tables, Security Groups, EC2 Instances should have icons representing their type
 
+#### Icon Validation & Creation Workflow
+When reviewing diagram icons:
+1. **Verify icon correctness** — does the displayed icon match the cloud provider's official resource icon?
+   - AWS: Check AWS icon library (https://aws.amazon.com/architecture/icons/)
+   - Azure: Check Azure icon library (https://learn.microsoft.com/en-us/azure/architecture/icons/)
+   - GCP: Check GCP icon library (https://cloud.google.com/architecture/icons/)
+   
+2. **Missing or incorrect icons** — if icon is missing or wrong:
+   - Search the internet for the official cloud resource icon
+   - Document the resource type (e.g., "AWS Route Table", "Azure Application Gateway")
+   - Capture or reference the official icon URL
+   
+3. **Create SVG version** — if icon doesn't exist in diagram library:
+   - Download or screenshot the official icon
+   - Convert to SVG format using online tools (e.g., Convertio, CloudConvert, Inkscape)
+   - Create appropriately sized SVG (suggest 64x64 or 128x128px)
+   - Name convention: `<provider>-<resource-type>.svg` (e.g., `aws-route-table.svg`, `azure-api-gateway.svg`)
+   - Add to diagram generation icon library for future use
+   - Document icon source and creation date in icon metadata comments
+   
+4. **Flag in review report**:
+   - ⚠ **Icon gap:** Resource type without proper visual representation
+   - ✓ **Icon added:** New SVG created and integrated
+   - Include icon comparison (before/after) if updated
+
 ### Connection Validity
 Verify **all diagram edges** (connections) represent actual data flows:
 - ✓ **Cross-reference with IaC** (does dependency exist in Terraform/CloudFormation?)

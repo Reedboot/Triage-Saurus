@@ -8,7 +8,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Scripts" / "Validate"))
 
-from review_generated_diagrams import build_report, summarize_issues  # noqa: E402
+from review_generated_diagrams import (  # noqa: E402
+    _build_validator_command,
+    build_report,
+    parse_args,
+    summarize_issues,
+)
 
 
 def test_summarize_issues_counts_totals_and_value_classes():
@@ -114,3 +119,19 @@ def test_apply_detection_rules_and_regenerate_times_out(monkeypatch, tmp_path: P
 
     assert result is False
     assert seen["timeout"] == 123
+
+
+def test_parse_args_only_unscanned_flag():
+    args = parse_args(["--only-unscanned"])
+    assert args.only_unscanned is True
+
+
+def test_build_validator_command_forwards_only_unscanned(tmp_path: Path):
+    args = parse_args(["--only-unscanned"])
+    cmd = _build_validator_command(
+        args=args,
+        pass_audit_root=tmp_path,
+        write_detection_rules=False,
+        validate_detection_rules=False,
+    )
+    assert "--only-unscanned" in cmd

@@ -457,6 +457,10 @@
             const fos = Array.from(svgEl.querySelectorAll('foreignObject'));
 
             fos.forEach((fo, idx) => {
+                // Keep label blocks that already contain embedded icons intact; hiding the
+                // foreignObject would remove the icon image entirely.
+                if (fo.querySelector('img, image, svg')) return;
+
                 const text = (fo.textContent || '').trim();
                 if (!text) return;
 

@@ -1148,7 +1148,7 @@ def validate_rules_with_opengrep(
 
 async def discover_repos(page) -> list[RepoOption]:
     await page.goto("/", wait_until="domcontentloaded")
-    await page.wait_for_selector("#repo-select")
+    await page.wait_for_selector("#repo-select", state="attached")
     rows = await page.evaluate(
         """
         () => {
@@ -1170,8 +1170,22 @@ async def discover_repos(page) -> list[RepoOption]:
 
 async def start_scan_from_ui(page, repo: RepoOption, logger: ProgressLogger) -> None:
     await page.goto("/", wait_until="domcontentloaded")
-    await page.wait_for_selector("#repo-select")
-    await page.select_option("#repo-select", value=repo.path)
+    await page.wait_for_selector("#repo-select", state="attached")
+    set_ok = await page.evaluate(
+        """
+        (repoPath) => {
+          const sel = document.querySelector('#repo-select');
+          if (!sel) return false;
+          const hasOption = Array.from(sel.options || []).some((opt) => opt.value === repoPath);
+          sel.value = repoPath;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return hasOption;
+        }
+        """,
+        repo.path,
+    )
+    if not set_ok:
+        raise RuntimeError(f"{repo.name}: repo path not found in #repo-select options")
     await page.click("#scan-btn")
     await asyncio.sleep(1.0)
     modal_visible = await page.locator("#scan-modal").is_visible()
@@ -1249,6 +1263,19 @@ def should_finish_wait(
     if any(str(s.get("experiment_id")) == str(expected_experiment_id) for s in (scans or [])):
         return (True, "completed")
     return (True, "no_history_record")
+
+
+async def get_scan_history_count(page, repo_status_key: str) -> int:
+    """Return number of scan history rows currently recorded for a repo."""
+    escaped = quote(repo_status_key, safe="")
+    response = await page.request.get(f"/api/scans/{escaped}")
+    if not response.ok:
+        raise RuntimeError(
+            f"Failed to read scan history for {repo_status_key}: HTTP {response.status}"
+        )
+    payload = await response.json()
+    scans = payload.get("scans") or []
+    return len(scans)
 
 
 async def capture_provider_screenshots(browser, base_url: str, repo_name: str, experiment_id: str, output_dir: Path, logger: ProgressLogger) -> list[dict[str, Any]]:
@@ -1582,6 +1609,7 @@ async def run(args: argparse.Namespace) -> int:
 
     dropdown_repos: list[RepoOption] = []
     skipped_dropdown_repos: list[RepoOption] = []
+    skipped_scanned_repos: list[RepoOption] = []
     repos: list[RepoOption] = []
     primary_results: list[ScanResult] = []
     retry_results: list[ScanResult] = []
@@ -1593,20 +1621,29 @@ async def run(args: argparse.Namespace) -> int:
             browser = await p.chromium.launch(headless=not args.headed)
             context = await browser.new_context(base_url=args.base_url)
             page = await context.new_page()
-            dropdown_repos = await discover_repos(page)
-            repos, skipped_dropdown_repos = filter_repos_to_resolved_intake(dropdown_repos, intake_resolved)
-            await context.close()
 
-            if skipped_dropdown_repos:
-                await logger.warn(
-                    f"Skipping {len(skipped_dropdown_repos)} dropdown repo(s) not resolvable via Intake/search paths: "
-                    f"{[r.name for r in skipped_dropdown_repos]}"
-                )
-
+            # If caller supplied explicit --repos, avoid UI dropdown discovery and
+            # resolve directly from Intake/search roots to reduce UI dependency.
             if args.repos:
-                filter_set = {r.strip().lower() for r in args.repos if r.strip()}
-                repos = [r for r in repos if r.name.lower() in filter_set]
-                await logger.info(f"Repo filter applied: {sorted(filter_set)}")
+                wanted = [r.strip() for r in args.repos if r.strip()]
+                wanted_set = {r.lower() for r in wanted}
+                intake_by_name = {r.name.lower(): r for r in intake_resolved}
+                repos = [intake_by_name[name] for name in wanted_set if name in intake_by_name]
+                missing = sorted({name for name in wanted_set if name not in intake_by_name})
+                dropdown_repos = list(intake_resolved)
+                if missing:
+                    await logger.warn(
+                        f"Requested repos not resolvable from Intake/search roots and will be skipped: {missing}"
+                    )
+                await logger.info(f"Repo filter applied: {sorted(wanted_set)}")
+            else:
+                dropdown_repos = await discover_repos(page)
+                repos, skipped_dropdown_repos = filter_repos_to_resolved_intake(dropdown_repos, intake_resolved)
+                if skipped_dropdown_repos:
+                    await logger.warn(
+                        f"Skipping {len(skipped_dropdown_repos)} dropdown repo(s) not resolvable via Intake/search paths: "
+                        f"{[r.name for r in skipped_dropdown_repos]}"
+                    )
 
             repos = partition_repos(repos, args.partition_count, args.partition_index)
             if args.partition_count is not None:
@@ -1614,6 +1651,26 @@ async def run(args: argparse.Namespace) -> int:
                     f"Partition filter applied: index={args.partition_index}/{args.partition_count - 1}, "
                     f"targeting {len(repos)} repo(s)"
                 )
+
+            if args.only_unscanned and repos:
+                unscanned: list[RepoOption] = []
+                for repo in repos:
+                    history_count = await get_scan_history_count(page, repo.api_key)
+                    if history_count == 0:
+                        unscanned.append(repo)
+                    else:
+                        skipped_scanned_repos.append(repo)
+                repos = unscanned
+                await logger.info(
+                    f"Only-unscanned filter applied: targeting {len(repos)} repo(s), "
+                    f"skipping {len(skipped_scanned_repos)} already scanned repo(s)"
+                )
+                if skipped_scanned_repos:
+                    await logger.warn(
+                        f"Skipped already scanned repos: {[r.name for r in skipped_scanned_repos]}"
+                    )
+
+            await context.close()
 
             if not repos:
                 await logger.error("No repositories available from UI dropdown after filtering")
@@ -1760,11 +1817,15 @@ async def run(args: argparse.Namespace) -> int:
         "opengrep_timeout_sec": args.opengrep_timeout_sec,
         "partition_count": args.partition_count,
         "partition_index": args.partition_index,
+        "only_unscanned": bool(args.only_unscanned),
         "repos_discovered_from_dropdown": len(dropdown_repos),
         "repos_resolved_from_intake": len(intake_resolved),
         "repos_unresolved_from_intake": intake_unresolved,
         "repos_skipped_from_dropdown": [
             {"name": r.name, "path": r.path} for r in sorted(skipped_dropdown_repos, key=lambda x: x.name.lower())
+        ],
+        "repos_skipped_already_scanned": [
+            {"name": r.name, "path": r.path} for r in sorted(skipped_scanned_repos, key=lambda x: x.name.lower())
         ],
         "repos_total": len(repos),
         "primary_completed": sum(1 for r in primary_results if r.status == "completed"),
@@ -1820,6 +1881,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--audit-root", default=str(DEFAULT_AUDIT_ROOT), help="Audit output root directory")
     parser.add_argument("--repos", nargs="*", help="Optional repo names to include (defaults to all dropdown repos)")
+    parser.add_argument(
+        "--only-unscanned",
+        action="store_true",
+        help="Scan only repos with zero prior scan history from /api/scans/<repo>.",
+    )
     parser.add_argument("--partition-count", type=int, help="Total partition count for deterministic repo sharding")
     parser.add_argument("--partition-index", type=int, help="Zero-based partition index to execute")
     parser.add_argument(

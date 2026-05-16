@@ -261,9 +261,15 @@ def test_parse_args_scan_complete_timeout_default_and_override():
     assert default_args.scan_complete_timeout_sec == 600
     assert default_args.concurrency == 6
     assert default_args.mode == "parallel"
+    assert default_args.only_unscanned is False
 
     overridden_args = parse_args(["--scan-complete-timeout-sec", "777"])
     assert overridden_args.scan_complete_timeout_sec == 777
+
+
+def test_parse_args_only_unscanned_flag():
+    args = parse_args(["--only-unscanned"])
+    assert args.only_unscanned is True
 
 
 def test_effective_concurrency_enforces_serial_mode():
@@ -688,3 +694,100 @@ def test_run_repo_at_a_time_retries_before_next_repo(monkeypatch, tmp_path: Path
     assert summary["retry_attempted"] == 1
     assert summary["retry_recovered"] == 1
     assert call_order == ["repo-a#1", "repo-a#2", "repo-b#1"]
+
+
+def test_run_only_unscanned_filters_out_already_scanned_repos(monkeypatch, tmp_path: Path):
+    class DummyPage:
+        pass
+
+    class DummyContext:
+        async def new_page(self):
+            return DummyPage()
+
+        async def close(self):
+            return None
+
+    class DummyBrowser:
+        async def new_context(self, base_url):
+            return DummyContext()
+
+        async def close(self):
+            return None
+
+    class DummyPlaywright:
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return DummyBrowser()
+
+        def __init__(self):
+            self.chromium = self.Chromium()
+
+    class DummyPlaywrightContext:
+        async def __aenter__(self):
+            return DummyPlaywright()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.async_api",
+        SimpleNamespace(async_playwright=lambda: DummyPlaywrightContext()),
+    )
+
+    repos = [
+        RepoOption(name="repo-a", path=str(tmp_path / "repo-a")),
+        RepoOption(name="repo-b", path=str(tmp_path / "repo-b")),
+    ]
+
+    async def fake_discover_repos(_page):
+        return repos
+
+    async def fake_history_count(_page, repo_status_key):
+        return 1 if repo_status_key == "repo-a" else 0
+
+    async def fake_worker(**kwargs):
+        repo = kwargs["repo"]
+        return ScanResult(
+            repo_name=repo.name,
+            repo_path=repo.path,
+            experiment_id=f"exp-{repo.name}",
+            status="completed",
+            provider_screenshots=[],
+            orphan_issues=[],
+            connection_issues=[],
+            parity_issues=[],
+            hierarchy_issues=[],
+            resource_value_assessments=[],
+            rule_candidates=[],
+            detection_rules=[],
+            rule_validations=[],
+        )
+
+    monkeypatch.setattr("web_parallel_scan_validator.discover_repos", fake_discover_repos)
+    monkeypatch.setattr(
+        "web_parallel_scan_validator.resolve_intake_repos",
+        lambda: (repos, [], [str(tmp_path)]),
+    )
+    monkeypatch.setattr("web_parallel_scan_validator.get_scan_history_count", fake_history_count)
+    monkeypatch.setattr("web_parallel_scan_validator.scan_repo_worker", fake_worker)
+
+    args = parse_args(
+        [
+            "--audit-root",
+            str(tmp_path),
+            "--mode",
+            "serial",
+            "--only-unscanned",
+        ]
+    )
+    exit_code = asyncio.run(run(args))
+
+    summary_paths = list(tmp_path.glob("WebScanValidation_*/summary.json"))
+    assert exit_code == 0
+    assert len(summary_paths) == 1
+    summary = json.loads(summary_paths[0].read_text(encoding="utf-8"))
+    assert summary["only_unscanned"] is True
+    assert summary["repos_total"] == 1
+    assert [row["repo_name"] for row in summary["results"]] == ["repo-b"]
+    assert [row["name"] for row in summary["repos_skipped_already_scanned"]] == ["repo-a"]

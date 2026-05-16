@@ -294,6 +294,12 @@ Parallel headless validation (dropdown repos, bounded concurrency):
 python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --concurrency 6 --write-rule-candidates
 ```
 
+Only run repos that have never been scanned (no history in `/api/scans/<repo>`):
+
+```bash
+python3 Scripts/Validate/web_parallel_scan_validator.py --base-url http://127.0.0.1:9000 --only-unscanned
+```
+
 Strict repo-by-repo validation (one repo at a time with immediate retry on failure):
 
 ```bash
@@ -306,6 +312,12 @@ Diagram Review Skill (baseline + after with screenshots and rule validation repo
 python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000
 ```
 
+Diagram review for only unscanned repos:
+
+```bash
+python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000 --only-unscanned
+```
+
 Repo slash command (in Copilot Chat):
 
 ```text
@@ -313,6 +325,7 @@ Repo slash command (in Copilot Chat):
 ```
 
 - Discovers all repos from `#repo-select`, starts scans in parallel (6 at a time by default), and consumes results as they complete.
+- `--only-unscanned` limits scope to repos with zero prior scan records.
 - Uses a hard per-repo completion safeguard timeout (default: 600s) so stalled scans do not block the batch.
 - Use `--scan-complete-timeout-sec <seconds>` to override the per-repo completion wait time.
 - Automatically retries failed/time-out repos once after the primary pass.

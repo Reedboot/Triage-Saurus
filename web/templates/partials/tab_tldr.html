@@ -10,6 +10,24 @@
       {% endif %}
     </div>
   {% endif %}
+
+  <div id="tldr-ai-progress" class="architecture-ai-progress" hidden>
+    <div class="architecture-ai-progress-header">
+      <span class="architecture-ai-progress-title">AI Analysis</span>
+      <span id="tldr-ai-progress-text" class="architecture-ai-progress-text">Preparing…</span>
+    </div>
+    <div class="flex items-center gap-1">
+      <div class="pipeline-phase pipeline-phase--idle" data-ai-step="0" title="Connecting to the AI analysis stream"></div>
+      <div class="pipeline-phase pipeline-phase--idle" data-ai-step="1" title="Running AI analysis"></div>
+      <div class="pipeline-phase pipeline-phase--idle" data-ai-step="2" title="Finalizing results"></div>
+    </div>
+    <div class="architecture-ai-progress-labels">
+      <span>Connect</span>
+      <span>Analyze</span>
+      <span>Done</span>
+    </div>
+  </div>
+
   {% if ai_status == 'pending' %}
     <div class="callout warning" style="margin-bottom:14px; display:flex; align-items:flex-start; gap:10px;">
       <span style="font-size:1.4rem;">⚠️</span>

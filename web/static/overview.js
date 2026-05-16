@@ -197,6 +197,97 @@
     }
   }
 
+  function createAiProgressController(container) {
+    var root = container.querySelector('#overview-ai-progress, #tldr-ai-progress');
+    if (!root) {
+      return {
+        clear: function() {},
+        start: function() {},
+        updateFromStatus: function() {},
+        complete: function() {},
+      };
+    }
+
+    var textEl = root.querySelector('#overview-ai-progress-text, #tldr-ai-progress-text');
+    var steps = Array.from(root.querySelectorAll('[data-ai-step]'));
+    var hideTimer = null;
+
+    function resetSteps() {
+      steps.forEach(function(step) {
+        step.classList.remove('pipeline-phase--done', 'pipeline-phase--active');
+        step.classList.add('pipeline-phase--idle');
+      });
+    }
+
+    function render(stepIndex, label, done) {
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      root.hidden = false;
+      if (textEl) {
+        textEl.textContent = label || 'Running AI analysis…';
+      }
+      steps.forEach(function(step, idx) {
+        step.classList.remove('pipeline-phase--idle', 'pipeline-phase--done', 'pipeline-phase--active');
+        if (done || idx < stepIndex) {
+          step.classList.add('pipeline-phase--done');
+        } else if (idx === stepIndex) {
+          step.classList.add('pipeline-phase--active');
+        } else {
+          step.classList.add('pipeline-phase--idle');
+        }
+      });
+    }
+
+    return {
+      clear: function() {
+        if (hideTimer) {
+          clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+        root.hidden = true;
+        if (textEl) {
+          textEl.textContent = 'Preparing…';
+        }
+        resetSteps();
+      },
+      start: function(label) {
+        render(0, label || 'Connecting to Copilot…', false);
+      },
+      updateFromStatus: function(data) {
+        var status = String(data && data.status ? data.status : '').toLowerCase();
+        var label = String((data && (data.active_step_label || data.active_step)) || '').trim();
+        var lowerLabel = label.toLowerCase();
+
+        if (status !== 'running' && status !== 'started') {
+          return;
+        }
+
+        var stepIndex = 0;
+        if (/enrich|skeptic|overview|rules|analysis|running/.test(lowerLabel)) {
+          stepIndex = 1;
+        }
+        if (/final|complete|done/.test(lowerLabel)) {
+          stepIndex = 2;
+        }
+
+        render(stepIndex, label || 'Running AI analysis…', false);
+      },
+      complete: function(label) {
+        render(2, label || 'Completed', true);
+        hideTimer = setTimeout(function() {
+          root.hidden = true;
+          resetSteps();
+          if (textEl) {
+            textEl.textContent = 'Preparing…';
+          }
+          hideTimer = null;
+        }, 2500);
+      },
+    };
+  }
+
   function initOverview(container) {
     if (!container) container = document;
 
@@ -209,6 +300,7 @@
     const experimentId = (meta.dataset.experimentId || '').trim();
     const repoName = (meta.dataset.repoName || '').trim();
     const refreshSection = (meta.dataset.refreshSection || 'overview').trim() || 'overview';
+    const aiProgress = createAiProgressController(container);
     if (!experimentId || !repoName) {
       statusEl.textContent = 'Missing experiment context';
       if (runBtn) runBtn.disabled = true;
@@ -363,6 +455,7 @@
         if (data.status === 'running') {
           observedActiveRun = true;
           completionRefreshTriggered = false;
+          aiProgress.updateFromStatus(data);
           const label = (data.active_step_label || data.active_step || '').toString();
           const skepticsRunning = !!data.skeptics_running;
           const statusText = label ? `Running: ${label}${skepticsRunning ? ' (skeptics)' : ''}…` : 'Running...';
@@ -384,6 +477,7 @@
         if (data.status === 'completed') {
           closeActiveStream('completed via status');
           setStatus('Completed', false);
+          aiProgress.complete('Completed');
           if (runBtn) runBtn.disabled = false;
           updateToolbarStop(false);
           updateGlobalBusy(false);
@@ -397,6 +491,7 @@
           closeActiveStream(`${data.status} via status`);
           const detail = (data.error || (data.status === 'stopped' ? 'Stopped' : 'Failed')).toString();
           setStatus(detail, true);
+          aiProgress.clear();
           if (runBtn) runBtn.disabled = false;
           updateToolbarStop(false);
           updateGlobalBusy(false);
@@ -412,6 +507,7 @@
           observedActiveRun = false;
           closeActiveStream('idle via status');
           setStatus('Idle', false);
+          aiProgress.clear();
           if (runBtn) runBtn.disabled = false;
           updateToolbarStop(false);
           updateGlobalBusy(false);
@@ -434,6 +530,7 @@
         runBtn.disabled = true;
         observedActiveRun = true;
         completionRefreshTriggered = false;
+        aiProgress.start('Connecting to Copilot…');
         if (triage && typeof triage.setToolbarStopState === 'function') {
           triage.setToolbarStopState({
             enabled: true,
@@ -467,7 +564,7 @@
           const es = new EventSource(streamUrl);
           activeStream = es;
 
-           es.addEventListener('log', (evt) => {
+          es.addEventListener('log', (evt) => {
             try {
               const line = JSON.parse(evt.data);
               if (window._triage && typeof window._triage.appendLog === 'function') {
@@ -478,23 +575,24 @@
             }
           });
 
-           let streamDone = false;
+          let streamDone = false;
 
-           es.addEventListener('done', () => {
-              streamDone = true;
-              closeActiveStream('completed');
-              setStatus('Completed', false);
-               runBtn.disabled = false;
-               updateToolbarStop(false);
-               updateGlobalBusy(false);
-             clearPolling();
+          es.addEventListener('done', () => {
+            streamDone = true;
+            closeActiveStream('completed');
+            setStatus('Completed', false);
+            aiProgress.complete('Completed');
+            runBtn.disabled = false;
+            updateToolbarStop(false);
+            updateGlobalBusy(false);
+            clearPolling();
             maybeRefreshSectionAfterCompletion();
           });
 
-           es.addEventListener('error', async () => {
-              // EventSource fires 'error' for disconnects, and may also fire when the server closes the stream.
-              // If we've already seen a 'done' event, ignore this.
-              if (streamDone) {
+          es.addEventListener('error', async () => {
+               // EventSource fires 'error' for disconnects, and may also fire when the server closes the stream.
+               // If we've already seen a 'done' event, ignore this.
+               if (streamDone) {
                 closeActiveStream('completed');
                 return;
               }
@@ -504,12 +602,13 @@
                 const resp = await fetch(`/api/analysis/status/${encodeURIComponent(experimentId)}/${encodeURIComponent(repoName)}`);
                 const st = await resp.json().catch(() => ({}));
                 if (st && st.status === 'completed') {
-                  streamDone = true;
-                  closeActiveStream('completed');
-                  setStatus('Completed', false);
-                  runBtn.disabled = false;
-                  updateToolbarStop(false);
-                  updateGlobalBusy(false);
+                   streamDone = true;
+                   closeActiveStream('completed');
+                   setStatus('Completed', false);
+                   aiProgress.complete('Completed');
+                   runBtn.disabled = false;
+                   updateToolbarStop(false);
+                   updateGlobalBusy(false);
                   clearPolling();
                   maybeRefreshSectionAfterCompletion();
                   return;
@@ -521,6 +620,7 @@
                   }
                   closeActiveStream('failed');
                   setStatus(detail, true);
+                  aiProgress.clear();
                   runBtn.disabled = false;
                   updateToolbarStop(false);
                   updateGlobalBusy(false);
@@ -538,17 +638,19 @@
               updateGlobalBusy(true);
             });
 
-           setStatus('Running Copilot...', false);
-           if (pollTimer) clearInterval(pollTimer);
-           pollTimer = setInterval(pollStatus, 2000);
+          setStatus('Running Copilot...', false);
+          aiProgress.start('Running AI analysis…');
+          if (pollTimer) clearInterval(pollTimer);
+          pollTimer = setInterval(pollStatus, 2000);
         } catch (err) {
-           setStatus('Start failed', true);
-           if (window._triage && typeof window._triage.appendLog === 'function') {
-             window._triage.appendLog('[Copilot] Start failed due to network/runtime error');
-           }
-            runBtn.disabled = false;
-            updateToolbarStop(false);
-            updateGlobalBusy(false);
+          setStatus('Start failed', true);
+          aiProgress.clear();
+          if (window._triage && typeof window._triage.appendLog === 'function') {
+            window._triage.appendLog('[Copilot] Start failed due to network/runtime error');
+          }
+          runBtn.disabled = false;
+          updateToolbarStop(false);
+          updateGlobalBusy(false);
         }
       });
     }
