@@ -83,6 +83,12 @@ DETECTION_TO_MISCONFIG: dict[str, list[str]] = {
     "context-aws-security-group":              ["AWS/SecurityGroup"],
     "context-aws-vpc":                         ["AWS/SecurityGroup"],
     "context-aws-vpc-module":                  ["AWS/SecurityGroup"],
+    "context-aws-subnet":                      ["AWS/SecurityGroup"],
+    "context-aws-route-table":                 ["AWS/SecurityGroup"],
+    "context-aws-network-interface":           ["AWS/EC2", "AWS/SecurityGroup"],
+    "context-aws-default-network-acl":         ["AWS/SecurityGroup"],
+    "context-aws-route-table-association":     ["AWS/SecurityGroup"],
+    "context-aws-network-interface-attachment":["AWS/EC2", "AWS/SecurityGroup"],
     "context-aws-api-gateway-rest":            ["AWS/IAM", "Secrets"],
     "context-aws-cloudfront-distribution":     ["AWS/SecurityGroup"],
 

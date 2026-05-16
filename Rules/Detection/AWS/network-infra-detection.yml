@@ -1,0 +1,100 @@
+rules:
+  - id: context-aws-subnet
+    message: |
+      AWS Subnet detected in infrastructure.
+      This rule extracts subnet configuration for network-context analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_subnet" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, subnet]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Subnet
+        resource_type: aws_subnet
+        resource_name: $NAME
+      description: |
+        Detects AWS subnet resources for routing, segmentation, and exposure path context.
+
+  - id: context-aws-route-table
+    message: |
+      AWS Route Table detected in infrastructure.
+      This rule extracts route table configuration for network-path analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_route_table" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, route_table]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Route Table
+        resource_type: aws_route_table
+        resource_name: $NAME
+      description: |
+        Detects AWS route tables to improve internet-path and trust-boundary visibility.
+
+  - id: context-aws-network-interface
+    message: |
+      AWS Network Interface detected in infrastructure.
+      This rule extracts ENI context for attachment and exposure analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_network_interface" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, eni]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network Interface
+        resource_type: aws_network_interface
+        resource_name: $NAME
+      description: |
+        Detects AWS ENIs to preserve compute-to-network attachment context in diagrams.
+
+  - id: context-aws-default-network-acl
+    message: |
+      AWS Default Network ACL detected in infrastructure.
+      This rule extracts default ACL context for baseline network control analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "aws_default_network_acl" $NAME {
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: aws
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: network
+      technology: [terraform, aws, network_acl]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: Network ACL
+        resource_type: aws_default_network_acl
+        resource_name: $NAME
+      description: |
+        Detects AWS default NACL resources for network filtering and default-policy context.

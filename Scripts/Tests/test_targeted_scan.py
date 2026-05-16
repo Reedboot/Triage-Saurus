@@ -20,6 +20,14 @@ def test_new_azure_alias_rules_route_to_expected_folders():
     assert targeted_scan.DETECTION_TO_MISCONFIG["context-azure-cosmosdb-account"] == ["Azure/CosmosDB"]
 
 
+def test_aws_network_association_rules_route_to_expected_folders():
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-aws-route-table-association"] == ["AWS/SecurityGroup"]
+    assert targeted_scan.DETECTION_TO_MISCONFIG["context-aws-network-interface-attachment"] == [
+        "AWS/EC2",
+        "AWS/SecurityGroup",
+    ]
+
+
 def test_tencentcloud_detection_rules_are_mapped():
     expected_ids = {
         "context-tencentcloud-cvm-instance",
