@@ -1032,7 +1032,6 @@ def write_detection_rules(
                 try:
                     content = context_rule_file.read_text()
                     # Parse YAML to get rule ID (simple regex for now)
-                    import re
                     match = re.search(r'id:\s*([^\n]+)', content)
                     context_rule_id = match.group(1).strip() if match else rule_filename
                 except Exception:

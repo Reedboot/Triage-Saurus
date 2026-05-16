@@ -1,0 +1,16 @@
+rules:
+  - id: diagram-gap-aws-ingress_nginx-detection
+    message: |
+      Diagram coverage gap detected for 'ingress_nginx' in repo 'insecure-kubernetes-deployments'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)ingress\ nginx'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [aws]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule
