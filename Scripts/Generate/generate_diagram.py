@@ -6092,6 +6092,23 @@ def main():
     repo_root = Path(__file__).parent.parent.parent
     sys.path.insert(0, str(repo_root))
     
+    # If repo name not provided, fetch it from database
+    repo_name = args.repo
+    if not repo_name:
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "Persist"))
+            from db_helpers import get_db_connection
+            
+            with get_db_connection() as conn:
+                result = conn.execute(
+                    "SELECT repo_name FROM repositories WHERE experiment_id = ? LIMIT 1",
+                    [experiment_id]
+                ).fetchone()
+                if result:
+                    repo_name = result['repo_name']
+        except Exception as e:
+            print(f"Warning: Could not fetch repo name from database: {e}", file=sys.stderr)
+    
     # Get list of providers to generate diagrams for
     providers_to_process = []
     if args.provider:
@@ -6121,7 +6138,7 @@ def main():
         # Fallback to single diagram
         builder = HierarchicalDiagramBuilder(
             experiment_id, 
-            repo_name=args.repo,
+            repo_name=repo_name,
             use_embedded_icons=args.persist_db
         )
         diagram = builder.generate()
@@ -6130,14 +6147,14 @@ def main():
             diagram = _embed_classdefs_in_diagram(diagram, builder)
         provider = builder.detect_cloud_provider()
         diagram_title = f"{provider} Architecture"
-        diagrams = [(provider.lower(), diagram_title, diagram, args.repo)]
+        diagrams = [(provider.lower(), diagram_title, diagram, repo_name)]
     else:
         diagrams = []
         for provider in providers_to_process:
             # Create builder with provider filter
             builder = HierarchicalDiagramBuilder(
                 experiment_id,
-                repo_name=args.repo,
+                repo_name=repo_name,
                 provider_filter=provider,
                 use_embedded_icons=args.persist_db
             )
@@ -6166,7 +6183,7 @@ def main():
                 }
                 provider_display = provider_map.get(provider.lower(), provider.title())
                 diagram_title = f"{provider_display} Architecture"
-                diagrams.append((provider.lower(), diagram_title, diagram, args.repo))
+                diagrams.append((provider.lower(), diagram_title, diagram, repo_name))
     
     # Persist to database if requested
     if args.persist_db:

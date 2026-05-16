@@ -750,10 +750,37 @@ def main() -> None:
 
     print(f"\n{format_scan_complete()}")
     print("  Findings persisted directly to DB")
+    
+    # Automatically generate architecture diagrams
+    print(f"\n{Header.ANALYZE} Generating architecture diagrams...")
+    diagram_cmd = [
+        sys.executable,
+        str(REPO_ROOT / "Scripts" / "Generate" / "generate_diagram.py"),
+        "--experiment-id", args.experiment,
+        "--persist-db",
+    ]
+    try:
+        result = subprocess.run(diagram_cmd, check=False, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            print(f"  ✓ Architecture diagrams generated and persisted to database")
+            for line in result.stdout.split('\n'):
+                if line.strip() and ('diagram' in line.lower() or 'persisted' in line.lower()):
+                    print(f"    {line}")
+        else:
+            print(f"  ⚠ Diagram generation had issues (non-zero exit code)")
+            if result.stderr:
+                for line in result.stderr.split('\n')[:5]:
+                    if line.strip():
+                        print(f"    {line}")
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠ Diagram generation timed out after 120s")
+    except Exception as e:
+        print(f"  ⚠ Diagram generation error: {e}")
+    
     print(f"\nNext steps:")
     print(f"  python3 Scripts/Enrich/enrich_findings.py --experiment {args.experiment}")
     print(f"  python3 Scripts/run_skeptics.py --experiment {args.experiment} --reviewer all")
-    print(f"  python3 Scripts/Generate/generate_diagram.py --experiment-id {args.experiment}")
+
 
 
 if __name__ == "__main__":

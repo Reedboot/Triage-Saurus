@@ -35,3 +35,5 @@ icon-cache/*
 node_modules/*
 .bin/*
 web/node_modules/*
+
+.pytest_cache
