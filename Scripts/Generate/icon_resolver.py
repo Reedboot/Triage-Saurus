@@ -525,7 +525,7 @@ AZURE_RESOURCE_TYPE_TO_ICON = {
     'azurerm_sql_edge': ('databases', 'sql-edge'),
     'azurerm_sql_elastic_pools': ('databases', 'sql-elastic-pools'),
     'azurerm_sql_managed_instance': ('databases', 'sql-managed-instance'),
-    'azurerm_sql_server': ('other', 'sql-server'),
+    'azurerm_sql_server': ('databases', 'sql-server'),
     'azurerm_mssql_server': ('databases', 'sql-server'),
     'azurerm_mssql_database': ('databases', 'sql-database'),
     'azurerm_ssd': ('general', 'ssd'),
@@ -960,7 +960,7 @@ AWS_RESOURCE_TYPE_TO_ICON = {
     'aws_ecr_repository':             ('Arch_Security-Identity', 'ecr'),
     'aws_elb':                        ('Arch_Networking-Content-Delivery', 'elastic-load-balancing'),
     'aws_neptune_cluster':            ('Arch_Databases', 'neptune'),
-    'aws_network_interface':          ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_network_interface':          ('Arch_Compute', 'ec2'),
     'aws_dynamodb_table':             ('Arch_Databases', 'dynamodb'),
     'aws_api_gateway_rest_api':       ('Arch_Networking-Content-Delivery', 'api-gateway'),
     'aws_api_gateway_v2_api':         ('Arch_Networking-Content-Delivery', 'api-gateway'),
@@ -971,8 +971,8 @@ AWS_RESOURCE_TYPE_TO_ICON = {
     'aws_ecs_task_definition':        ('Arch_Containers', 'ecs'),
     'aws_ecs_cluster':                ('Arch_Containers', 'ecs'),
     'aws_eks_cluster':                ('Arch_Containers', 'elastic-kubernetes-service'),
-    'aws_internet_gateway':           ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
-    'aws_subnet':                     ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
+    'aws_internet_gateway':           ('Arch_Networking-Content-Delivery', 'global-accelerator'),
+    'aws_subnet':                     ('Arch_Networking-Content-Delivery', 'public-subnet'),
     'aws_vpc':                        ('Arch_Networking-Content-Delivery', 'virtual-private-cloud'),
     'aws_security_group':             ('Arch_Security-Identity', 'security-group'),
     'aws_route_table':                ('Arch_Networking-Content-Delivery', 'route-table'),
@@ -1072,7 +1072,7 @@ def _find_icon_file(category: str, icon_name: str, provider: str = 'azure') -> O
     svg_files = sorted(category_path.glob("*.svg"))
     
     if not svg_files:
-        return None
+        return _discover_icon_by_name(icon_name, provider)
     
     # First pass: exact match (case-insensitive)
     for icon_file in svg_files:
@@ -1089,7 +1089,11 @@ def _find_icon_file(category: str, icon_name: str, provider: str = 'azure') -> O
     
     if svg_word_matches:
         return svg_word_matches[0]
-    
+
+    fallback = _discover_icon_by_name(icon_name, provider)
+    if fallback:
+        return fallback
+
     # Fallback: return first SVG file in category
     return svg_files[0] if svg_files else None
 

@@ -125,53 +125,51 @@ def _apply_detection_rules_and_regenerate(
     scan_success = True
     for repo_name, repo_path in repo_paths.items():
         print(f"\nRe-scanning {repo_name} with new rules...")
-        for rule_id, rule_file in rules_to_apply:
-            # Find the experiment ID from the baseline results
-            experiment_id = None
-            for result in baseline_results:
-                if result.get("repo_name") == repo_name:
-                    experiment_id = result.get("experiment_id")
-                    break
-            
-            if not experiment_id:
-                print(f"  ⚠ Could not find experiment ID for {repo_name}")
-                continue
-            
-            cmd = [
-                sys.executable,
-                str(TARGETED_SCAN_SCRIPT),
-                repo_path,
-                "--experiment",
-                experiment_id,
-                "--repo",
-                repo_name,
-            ]
-            
-            # Note: targeted_scan.py looks for rules in Rules/Detection/ by default
-            # The rules are already there from the baseline pass
-            
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=scan_timeout_sec,
-                )
-            except subprocess.TimeoutExpired as exc:
-                print(f"  ⚠ Scan timed out for {repo_name} with {rule_id} after {scan_timeout_sec}s")
-                if exc.stdout:
-                    print(f"    stdout: {str(exc.stdout)[:200]}")
-                if exc.stderr:
-                    print(f"    stderr: {str(exc.stderr)[:200]}")
-                scan_success = False
-                continue
-            if result.returncode != 0:
-                print(f"  ⚠ Scan failed for {repo_name} with {rule_id}")
-                print(f"    Error: {result.stderr[:200]}")
-                scan_success = False
-            else:
-                print(f"  ✓ Scan completed for {repo_name}")
+        # Find the experiment ID from the baseline results
+        experiment_id = None
+        for result in baseline_results:
+            if result.get("repo_name") == repo_name:
+                experiment_id = result.get("experiment_id")
+                break
+
+        if not experiment_id:
+            print(f"  ⚠ Could not find experiment ID for {repo_name}")
+            continue
+
+        cmd = [
+            sys.executable,
+            str(TARGETED_SCAN_SCRIPT),
+            repo_path,
+            "--experiment",
+            experiment_id,
+            "--repo",
+            repo_name,
+        ]
+
+        # Note: targeted_scan.py looks for rules in Rules/Detection/ by default.
+        # The rules are already present from the baseline pass.
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=scan_timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            print(f"  ⚠ Scan timed out for {repo_name} after {scan_timeout_sec}s")
+            if exc.stdout:
+                print(f"    stdout: {str(exc.stdout)[:200]}")
+            if exc.stderr:
+                print(f"    stderr: {str(exc.stderr)[:200]}")
+            scan_success = False
+            continue
+        if result.returncode != 0:
+            print(f"  ⚠ Scan failed for {repo_name}")
+            print(f"    Error: {result.stderr[:200]}")
+            scan_success = False
+        else:
+            print(f"  ✓ Scan completed for {repo_name}")
     
     return scan_success
 

@@ -19,6 +19,7 @@ class Header:
     # Major phase headers (yellow background-like appearance)
     MISCONFIGURATIONS = f"{Color.YELLOW}[Misconfigurations]{Color.RESET}"
     STORE = f"{Color.YELLOW}[Store]{Color.RESET}"
+    ANALYZE = f"{Color.YELLOW}[Analyze]{Color.RESET}"
     DETECTION = f"{Color.YELLOW}[detection]{Color.RESET}"
     DRY_RUN = f"{Color.YELLOW}[dry-run]{Color.RESET}"
     

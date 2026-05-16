@@ -14,8 +14,23 @@ def test_provider_specific_icon_paths_exist():
     assert get_icon_path("aws_ebs_volume", "aws").as_posix().endswith(
         "web/static/assets/icons/aws/Arch_Storage/64/elastic-block-store.svg"
     )
+    assert get_icon_path("aws_network_interface", "aws").as_posix().endswith(
+        "web/static/assets/icons/aws/Arch_Compute/64/ec2.svg"
+    )
+    assert get_icon_path("aws_internet_gateway", "aws").as_posix().endswith(
+        "web/static/assets/icons/aws/Arch_Networking-Content-Delivery/64/global-accelerator.svg"
+    )
+    assert get_icon_path("aws_subnet", "aws").as_posix().endswith(
+        "web/static/assets/icons/aws/public-subnet.svg"
+    )
+    assert get_icon_path("aws_route_table", "aws").as_posix().endswith(
+        "web/static/assets/icons/aws/Arch_Networking-Content-Delivery/route-table.svg"
+    )
     assert get_icon_path("google_compute_disk", "gcp").as_posix().endswith(
         "web/static/assets/icons/gcp/Hyperdisk/SVG/hyperdisk.svg"
+    )
+    assert get_icon_path("azurerm_sql_server", "azure").as_posix().endswith(
+        "web/static/assets/icons/azure/databases/sql-server.svg"
     )
     assert get_icon_path("alicloud_db_instance", "alicloud").as_posix().endswith(
         "web/static/assets/icons/alicloud/database/db-instance.svg"

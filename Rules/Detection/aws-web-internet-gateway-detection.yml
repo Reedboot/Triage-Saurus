@@ -1,0 +1,16 @@
+rules:
+  - id: context-aws-web-internet-gateway
+    message: |
+      Diagram coverage gap detected for 'aws-web-internet-gateway' in repo 'lirshindalman__terragoat1'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)web(?:[_\s-])?(?:igw|internet(?:[_\s-])?gateway)'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [aws]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

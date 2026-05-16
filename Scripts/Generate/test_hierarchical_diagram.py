@@ -139,6 +139,50 @@ def test_direct_internet_edges_are_red(monkeypatch):
     assert 'linkStyle 0 stroke:red,stroke-width:2px' in diagram
 
 
+def test_empty_subgraph_styles_are_pruned(monkeypatch):
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    def fake_load_data():
+        builder.resources = [
+            {
+                'id': 1,
+                'resource_name': 'web_vpc',
+                'resource_type': 'aws_vpc',
+                'provider': 'aws',
+                'repo_name': 'repo',
+            }
+        ]
+        builder.connections = []
+        builder.children_by_parent = {}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {1: builder.resources[0]}
+        builder.resource_by_name = {'web_vpc': builder.resources[0]}
+
+    monkeypatch.setattr(builder, 'load_data', fake_load_data)
+    monkeypatch.setattr(builder, 'infer_connections', lambda: False)
+    monkeypatch.setattr(builder, 'render_apim_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_kubernetes_cluster', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_service_bus', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_monitoring', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_application_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_data_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_paas_identity_hierarchy', lambda *args, **kwargs: [])
+    monkeypatch.setattr(builder, 'render_compute_hierarchy', lambda *args, **kwargs: [])
+
+    def fake_render_network_hierarchy(*_args, **_kwargs):
+        return [
+            '  subgraph web_vpc["web vpc"]',
+            '  end',
+        ]
+
+    monkeypatch.setattr(builder, 'render_network_hierarchy', fake_render_network_hierarchy)
+
+    diagram = builder.generate()
+
+    assert 'subgraph web_vpc' not in diagram
+    assert 'style web_vpc' not in diagram
+
+
 def test_application_tier_groups_children(monkeypatch):
     builder = HierarchicalDiagramBuilder("exp-1")
 

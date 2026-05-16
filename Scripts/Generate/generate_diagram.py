@@ -5689,7 +5689,10 @@ class HierarchicalDiagramBuilder:
         conn_lines = self._offset_linkstyle_indices(conn_lines, pre_connection_edge_count)
         lines.extend(conn_lines)
         
-        # Add styling for resource categories
+        lines = self._strip_empty_subgraphs(lines)
+        
+        # Add styling for resource categories after pruning empty subgraphs so
+        # styles only target nodes that still exist in the final diagram.
         style_lines = self.render_styles(lines)
         if style_lines:
             lines.append("")
@@ -5699,7 +5702,6 @@ class HierarchicalDiagramBuilder:
         lines.append("")
       #  lines.append("%%{init: {'theme':'dark'} }%%")
         
-        lines = self._strip_empty_subgraphs(lines)
         diagram_text = "\n".join(lines)
         
         # Validate diagram syntax before returning

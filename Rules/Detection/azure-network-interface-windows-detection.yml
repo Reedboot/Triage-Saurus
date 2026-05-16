@@ -1,16 +1,16 @@
 rules:
-  - id: diagram-gap-aws-internet_ingress-detection
+  - id: context-azure-network-interface-windows
     message: |
-      Diagram coverage gap detected for 'internet_ingress' in repo 'insecure-kubernetes-deployments'.
+      Diagram coverage gap detected for 'azure-network-interface-windows' in repo 'lirshindalman__terragoat1'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
     patterns:
-      - pattern-regex: '(?i)internet\ ingress'
+      - pattern-regex: '(?i)(?:ni|network(?:[_\s-])?interface)(?:[_\s-])?(?:win|windows)'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]
-      technology: [aws]
+      technology: [azure]
       finding_kind: asset_detection
       generated_by: web_parallel_scan_validator
       note: placeholder_rule - consider mapping to existing context-detection rule

@@ -1,7 +1,7 @@
 rules:
-  - id: diagram-gap-aws-ingress_nginx-detection
+  - id: context-aws-ingress-nginx
     message: |
-      Diagram coverage gap detected for 'ingress_nginx' in repo 'insecure-kubernetes-deployments'.
+      Diagram coverage gap detected for 'aws-ingress-nginx' in repo 'insecure-kubernetes-deployments'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
