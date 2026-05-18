@@ -53,7 +53,7 @@
 - Document **complete routing chains:** Public hostname → App Gateway backend pool → Service → APIM API → Final backend
 - Show which services proxy TO APIM (e.g., my-api forwards to APIM) vs direct APIM access
 - Include APIM API names, path patterns, and backend service mappings
-- Distinguish external vs internal backends (e.g., Marqeta external, psd2-api.internal)
+- Distinguish external vs internal backends (e.g., Marqeta external, test-api.internal)
 
 **Benefits of multiple diagrams:**
 - Easier to understand (each diagram tells one story)
@@ -382,15 +382,15 @@ flowchart TB
     AGW -->|Backend: backstage| AKS[AKS]
     
     MYAPI -->|Calls| APIM[API Management]
-    APIM -->|Routes to| PSD2[psd2-api]
-    APIM -->|Routes to| BACS[my-api-bacs]
+    APIM -->|Routes to| test[test-api]
+    APIM -->|Routes to| User[my-api-User]
     
     click AGW "../Repos/terraform-app_gateway.md" "View App Gateway config"
     click MYAPI "../Repos/my_api.md" "View my-api service"
     click AKS "../Repos/terraform-aks.md" "View AKS cluster"
     click APIM "#-api-management-routing" "View APIM routing section"
-    click PSD2 "../Repos/psd2-api.md" "View PSD2 API service"
-    click BACS "../Repos/my-api-bacs.md" "View BACS service"
+    click test "../Repos/test-api.md" "View test API service"
+    click User "../Repos/my-api-User.md" "View User service"
 ```
 
 **Linking Rules:**

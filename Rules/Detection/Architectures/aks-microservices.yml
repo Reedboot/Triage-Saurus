@@ -3,16 +3,19 @@ rules:
     message: |
       AKS Microservices Architecture: Terraform module-based AKS workload deployment detected.
       This rule is specifically for repositories confirmed as "aks_microservices" architecture type.
-      Detects module invocations from the terraform-aks registry that deploy containerized workloads.
+      Detects module invocations from remote Git module sources that deploy containerized workloads.
     severity: INFO
     languages: [terraform, hcl]
-    pattern: |
-      module $MODULE_NAME {
-        source = "git::https://dev.azure.com/cbinfrastructure/cbi/_git/terraform-aks//modules/azure"
-        ...
-        app_name = $APP_NAME
-        ...
-      }
+    patterns:
+      - pattern-inside: |
+          module $MODULE_NAME {
+            ...
+          }
+      - pattern: source = $SOURCE
+      - pattern: app_name = $APP_NAME
+      - metavariable-regex:
+          metavariable: $SOURCE
+          regex: ^"(git::)?((https?|ssh)://|git@)[^"]+"$
     metadata:
       finding_kind: Asset
       asset_provider: azure

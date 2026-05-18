@@ -11652,36 +11652,37 @@ def scan_001_diagram():
 
 @app.route("/diagrams/<experiment_id>")
 def view_diagram(experiment_id: str):
-    """Display architecture diagrams with multi-provider tab navigation."""
+    """Display architecture diagrams with multi-provider tab navigation.
+    
+    Uses the same diagram fetching and rendering logic as /api/diagrams/<experiment_id>
+    to ensure icons, CSS, and text are all properly rendered.
+    """
     try:
-        db_path = REPO_ROOT / "Output" / "Data" / "cozo.db"
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT mermaid_code, diagram_title, provider, display_order
-            FROM cloud_diagrams
-            WHERE experiment_id = ?
-            ORDER BY display_order ASC, provider ASC
-        """, (experiment_id,))
-
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
+        sys.path.insert(0, str(REPO_ROOT))
+        from Scripts.Persist.db_helpers import get_cloud_diagrams  # type: ignore
+        
+        # Fetch diagrams using the same logic as the API endpoint
+        db_diagrams = get_cloud_diagrams(experiment_id)
+        
+        if not db_diagrams:
             return f"Diagram not found: {experiment_id}", 404
 
         # Active provider from query string; default to first
-        active_provider = request.args.get("provider", rows[0][2])
+        active_provider = request.args.get("provider", db_diagrams[0].get("provider", "azure"))
         # Ensure requested provider exists in this experiment
-        providers_in_experiment = [r[2] for r in rows]
+        providers_in_experiment = [d.get("provider") for d in db_diagrams]
         if active_provider not in providers_in_experiment:
-            active_provider = rows[0][2]
+            active_provider = db_diagrams[0].get("provider", "azure")
 
-        # Build list of all diagrams for tab rendering (strip orphan styles, preserve linkStyle coloring)
+        # Build list of all diagrams for tab rendering (preserve full code with CSS/icons)
         diagrams = [
-            {"code": _strip_orphan_styles(r[0] or ""), "title": r[1], "provider": r[2]}
-            for r in rows
+            {
+                "code": _strip_orphan_styles(d.get("mermaid_code") or ""),
+                "title": d.get("diagram_title"),
+                "provider": d.get("provider"),
+                "css_code": d.get("css_code", "")
+            }
+            for d in db_diagrams
         ]
 
         # Active diagram
@@ -11690,8 +11691,9 @@ def view_diagram(experiment_id: str):
             diagrams[0]
         )
 
-        mermaid_code = _strip_orphan_styles(active_diagram["code"] or "")
-        title = active_diagram["title"]
+        mermaid_code = _strip_orphan_styles(active_diagram.get("code") or "")
+        title = active_diagram.get("title")
+        css_code = active_diagram.get("css_code", "")
 
         icon_type = (
             "SVG Icons (Base64 Data URIs)"
@@ -11710,6 +11712,8 @@ def view_diagram(experiment_id: str):
             active_provider=active_provider,
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return f"Error loading diagram: {str(e)}", 500
 
 

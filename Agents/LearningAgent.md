@@ -11,6 +11,8 @@ When you identify a **missing detection** or **new vulnerability pattern**, your
 **Location:** `Rules/Misconfigurations/` or `Rules/Misconfigurations/Secrets/`  
 **Format:** Opengrep/Semgrep-compatible YAML
 
+**Portability requirement:** Rules must be organisation/project agnostic. Avoid hardcoded org names, project names, repository names, and tenant-specific host/path fragments; use constrained generic patterns so rules work across any environment.
+
 **Example workflow:**
 ```
 Learning: Opus found nonsensitive() usage but we missed it

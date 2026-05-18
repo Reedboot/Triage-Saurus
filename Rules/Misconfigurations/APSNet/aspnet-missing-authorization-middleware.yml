@@ -6,7 +6,7 @@ rules:
       and all requests bypass authorization checks - a CRITICAL authentication bypass.
       
       Detected authentication middleware without UseAuthorization():
-      - UseClearBankPrincipalMiddleware
+      - UseCustomPrincipalMiddleware
       - UseAuthentication
       - Other custom auth middleware
       

@@ -71,6 +71,6 @@ rules:
 # TODO: Validate on account-viewing-permissions repository
 # TODO: Document in Rules/README.md
 
-# Expected detection: account-viewing-permissions/ClearBankUserContextRetriever.cs:23
+# Expected detection: account-viewing-permissions/UserContextRetriever.cs:23
 # var claims = JsonConvert.DeserializeObject<Dictionary<string, string>>(userContext);
 # where userContext = Request.Headers["CB-User-Context"] (no signature validation)

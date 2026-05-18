@@ -3,16 +3,19 @@ rules:
     message: |
       Terraform AKS module deployment detected (abstract container workload).
       This rule extracts module-based AKS deployments for topology analysis.
-      Modules from terraform-aks registry indicate Kubernetes workloads deployed to AKS.
+      Modules sourced from remote Git repositories indicate Kubernetes workloads deployed to AKS.
     severity: INFO
     languages: [terraform, hcl]
-    pattern: |
-      module $MODULE_NAME {
-        source = "git::https://dev.azure.com/cbinfrastructure/cbi/_git/terraform-aks//modules/azure"
-        ...
-        app_name = $APP_NAME
-        ...
-      }
+    patterns:
+      - pattern-inside: |
+          module $MODULE_NAME {
+            ...
+          }
+      - pattern: source = $SOURCE
+      - pattern: app_name = $APP_NAME
+      - metavariable-regex:
+          metavariable: $SOURCE
+          regex: ^"(git::)?((https?|ssh)://|git@)[^"]+"$
     metadata:
       finding_kind: Asset
       asset_provider: azure
@@ -27,7 +30,7 @@ rules:
         resource_name: $MODULE_NAME
         module_app_name: $APP_NAME
       description: |
-        Detects Terraform module-based AKS deployments from the terraform-aks registry.
+        Detects Terraform module-based AKS deployments from remote Git module sources.
         These modules represent abstract container workloads deployed to AKS clusters.
         Used to construct topology diagrams and connection inference for microservices
         architectures where workloads are deployed via reusable module abstractions.

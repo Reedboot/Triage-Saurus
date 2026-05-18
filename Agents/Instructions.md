@@ -34,6 +34,7 @@ This repository supports consistent security triage. The expected workflow is:
 ### Rule Creation & Verification
 
 - **When creating new rules** (regardless of experiment or not), create them in the relevant subfolder of `Rules/` (e.g., `Rules/Detection/`, `Rules/Misconfigurations/`, `Rules/Misconfigurations/Secrets/`).
+- **Rules must be organisation/project agnostic**: do not hardcode tenant-specific org names, project names, repository names, or host-specific URL paths in detection patterns or examples. Prefer portable patterns with constrained wildcards/regex that work across any organisation/project.
 - **After creating a rule**, run opengrep verification against the rule: `opengrep scan --config <rule-file.yml> <target>` to validate syntax and test detection behavior.
 - If the rule is intended for a specific pattern, create a minimal test case to confirm the rule triggers correctly.
 - **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/Scan/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.

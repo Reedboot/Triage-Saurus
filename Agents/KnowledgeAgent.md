@@ -92,7 +92,7 @@ When writing to Knowledge/ files:
    - ✅ Don't copy-paste without validation
 
 2. **Cite evidence:**
-   - ✅ "Runtime: .NET 8.0 (from ClearBank.FI.API.csproj:TargetFramework)"
+   - ✅ "Runtime: .NET 8.0 (from My.API.csproj:TargetFramework)"
    - ❌ "Runtime: .NET Framework 4.8" (no citation = probably wrong)
 
 3. **Be precise with technology versions:**

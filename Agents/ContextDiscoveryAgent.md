@@ -369,7 +369,7 @@ Client → Azure App Gateway (HTTPS:443)
       → [InstitutionIdMiddleware]
       → [RouteMappingMiddleware → ApiManagerRouteMappings.json]
       → Azure APIM (HTTPS)
-      → Backend Services (Accounts, Ledger, BACS, etc.)
+      → Backend Services (Accounts, Ledger, user, etc.)
 ```
 
 ### Egress Discovery (MANDATORY - CRITICAL FOR THREAT MODELING)
@@ -610,7 +610,7 @@ grep -r "host:\|destination:\|service:\|port:" --include="*.yaml" -A 3 | head -3
   - **Kubernetes:** Ingress controllers (nginx/traefik/istio), Service mesh (Istio/Linkerd), Gateway API
   - **Service Fabric:** Stateful/legacy microservices platform
 - Example: `terraform-app_gateway` may contain API Management routing + AKS ingress routing + Service Fabric routing, not just AGW resources
-- Example: `psd2-integration` contains APIM API definitions with backend service URLs
+- Example: `test-integration` contains APIM API definitions with backend service URLs
 - Example: `terraform-alb` may route to Lambda, ECS, EC2 across multiple services
 - Example: `k8s-ingress` may route to 20+ internal services via nginx ingress
 - **Always check if config files reference services NOT in the repo name**
@@ -645,12 +645,12 @@ grep -r "host:\|destination:\|service:\|port:" --include="*.yaml" -A 3 | head -3
   - Services hosted on AKS
 - **Gateway → Service Fabric routing:** If backend pools reference Service Fabric clusters, document:
   - Backend pool name (e.g., `schemesimulator`, `shared`)
-  - Target FQDN (e.g., `cbuk-core-prod-sf-uksouth-schesim.cbinnovation.private.uk`)
+  - Target FQDN (e.g., `cbuk-core-prod-sf-uksouth-schesim.mydomain.private.uk`)
   - Services hosted on Service Fabric with ports
   - Service Fabric cluster type (shared, dedicated, per-service)
 - **Kubernetes Ingress definitions:** If K8s Ingress resources found, document:
   - Ingress name and IngressClass (nginx, traefik, istio)
-  - Hostnames exposed (e.g., `backstage-prod.cbinnovation.uk`)
+  - Hostnames exposed (e.g., `backstage-prod.mydomain.uk`)
   - Path patterns and backend services
   - Backend service ports
   - TLS configuration (cert-manager, manual certs)
@@ -920,7 +920,7 @@ flowchart TB
     
     click AGW "../../Summary/Cloud/Architecture_Azure.md#-ingress-flow-internet--services" "View complete ingress architecture"
     click APIM "../../Summary/Cloud/Architecture_Azure.md#-api-management-routing" "View APIM routing details"
-    click Backend "psd2-api.md" "View backend service (if documented)"
+    click Backend "test-api.md" "View backend service (if documented)"
 ```
 
 **Components:**
@@ -1020,9 +1020,9 @@ flowchart TB
 ### Ingress Definitions
 | Ingress Name | IngressClass | Hosts | Paths | Backend Service | Backend Port | TLS |
 |--------------|--------------|-------|-------|-----------------|--------------|-----|
-| backstage-ingress | nginx | backstage-prod.cbinnovation.uk | / | backstage-backend | 7007 | Yes (cert-manager) |
-| api-ingress | nginx | api-prod.cbinnovation.uk | /v1/* | api-service | 8080 | Yes |
-| webhook-ingress | nginx | webhooks-prod.cbinnovation.uk | /github/* | github-webhook | 3000 | Yes |
+| backstage-ingress | nginx | backstage-prod.mydomain.co.uk | / | backstage-backend | 7007 | Yes (cert-manager) |
+| api-ingress | nginx | api-prod.mydomain.co.uk | /v1/* | api-service | 8080 | Yes |
+| webhook-ingress | nginx | webhooks-prod.mydomain.co.uk | /github/* | github-webhook | 3000 | Yes |
 
 **Ingress Controller:**
 - Type: NGINX Ingress Controller v1.14.0
@@ -1041,14 +1041,14 @@ flowchart TB
 ### Registered APIs
 | API Name | Path Pattern | Backend Service | Authentication | Notes |
 |----------|--------------|-----------------|----------------|-------|
-| psd2-api | /psd2/* | psd2-api.internal:443 | Subscription key | Open Banking PSD2 |
-| bankconnect-api | /psd2-bankconnect-api/* | psd2-bankconnect-api.internal:443 | Subscription key | Private frontend only |
+| test-api | /test/* | test-api.internal:443 | Subscription key | test |
+| my-api | /test-my-api/* | test-my-api.internal:443 | Subscription key | Private frontend only |
 | cards-marqeta | /cards/marqeta-gateway/v1/* | Marqeta API (external) | API key injection | Card processing |
 | napier-events | /napier-api/* | Napier API (external) | Subscription key | AML events webhook |
 | signicat-webhooks | /signicat-webhooks | Signicat API (external) | IP whitelisting | KYC webhooks |
 
 **Products:**
-- PSD2 APIs (includes psd2-api, bankconnect-api)
+- test APIs (includes test-api, my-api)
 - Partner Integrations (includes cards-marqeta, napier-events, signicat-webhooks)
 
 **Policies Applied:**
@@ -1064,17 +1064,17 @@ flowchart TB
 
 | Public Hostname | App Gateway Pool | Service | APIM API | Final Backend |
 |-----------------|------------------|---------|----------|---------------|
-| prod-institution-api-uksouth.example.com | myapi | my-api (ASE v3) | my_authentication | my-api-bacs, my-api-accounts, ledger-external |
-| apimanagement-prod.cbinnovation.uk | apimanagementpublic | API Management | thetaray-callbacks, eventgrid-bridge | psd2-api.internal |
-| psd2-bankconnect-prod.private.cbinnovation.uk | apimanagement | API Management | psd2-bankconnect-api | psd2-bankconnect-api.internal |
-| marqeta-prod.cbinnovation.uk | apimanagement | API Management | cards-marqeta | Marqeta API (external) |
-| backstage-prod.cbinnovation.uk | backstage | AKS NGINX Ingress | N/A | Backstage pods |
-| simgreen-schemesimulator.cbinnovation.uk | schemesimulator | Service Fabric | N/A | Scheme Simulator Web/MT/MX |
+| prod-institution-api-uksouth.example.com | myapi | my-api (ASE v3) | my_authentication | my-api-user, my-api-accounts, ledger-external |
+| apimanagement-prod.mydomain.uk | apimanagementpublic | API Management | thetaray-callbacks, eventgrid-bridge | test-api.internal |
+| test-my-prod.private.mydomain.uk | apimanagement | API Management | test-my-api | test-my-api.internal |
+| marqeta-prod.mydomain.uk | apimanagement | API Management | cards-marqeta | Marqeta API (external) |
+| backstage-prod.mydomain.uk | backstage | AKS NGINX Ingress | N/A | Backstage pods |
+| sim-schemesimulator.mydomain.uk | schemesimulator | Service Fabric | N/A | Scheme Simulator Web/MT/MX |
 
 **Key Insights:**
 - **my-api** acts as reverse proxy: receives requests from Internet but forwards to APIM for authentication/routing
 - **Direct APIM access** via apimanagementpublic pool for external webhooks/callbacks
-- **Private APIM access** for PSD2 BankConnect (internal-only, .private.cbinnovation.uk domain)
+- **Private APIM access** for test my (internal-only, .private.mydomain.uk domain)
 - **Service Fabric** and **AKS** accessed directly without APIM layer
 ```
 
@@ -1478,7 +1478,7 @@ flowchart TB
 - **terraform-aks** - Kubernetes infrastructure
 - **terraform-service_fabric_cluster** - Service Fabric clusters (schesim, shared, fps)
 - **terraform-app_gateway** - Application Gateway with routing to ASE/APIM/AKS/SF
-- **psd2-integration** - API Management configuration
+- **test-integration** - API Management configuration
 - ...
 ```
 

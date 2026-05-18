@@ -3637,7 +3637,7 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
                 context.resources.append(workload_resource)
 
                 # Infer connections from API Gateway to API/service workloads.
-                # Match kubernetes_service workloads (API services deployed via cbi-api chart)
+                # Match kubernetes_service workloads (API services deployed via my-api chart)
                 # and any workload whose name suggests it is an API backend (contains "api"
                 # but is not a background worker/listener).
                 _worker_keywords = ("queuelistener", "worker", "consumer", "subscriber", "job", "cron", "batch")

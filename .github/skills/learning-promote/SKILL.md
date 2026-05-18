@@ -34,6 +34,7 @@ For every missed detection or new vulnerability pattern found in the experiment:
 ```
 
 Rule must include: what pattern to match, why it's dangerous, how to fix it.
+Rules must stay reusable across repositories and tenants: avoid hardcoding organization-, project-, or repo-specific identifiers (for example fixed Azure DevOps org/project paths). Prefer generalized patterns with constrained wildcards/regex.
 Validate before promoting:
 ```bash
 opengrep scan --config Rules/Misconfigurations/<new-rule.yml> <target-repo>

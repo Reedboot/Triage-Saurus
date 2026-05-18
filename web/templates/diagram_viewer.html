@@ -134,7 +134,7 @@
 
     {# ── Embedded diagram data (all providers, for client-side tab switching) ── #}
     {% for d in diagrams %}
-    <script type="application/json" data-provider="{{ d.provider }}" data-title="{{ d.title | e }}">{{ d.code | tojson }}</script>
+    <script type="application/json" data-provider="{{ d.provider }}" data-title="{{ d.title | e }}" data-css="{{ (d.css_code or '') | e }}">{{ d.code | tojson }}</script>
     {% endfor %}
 
     {# ── Header ───────────────────────────────────────────────────────────── #}
@@ -411,7 +411,11 @@
             const el = document.querySelector(
                 `script[type="application/json"][data-provider="${provider.replace(/"/g, '\\"')}"]`
             );
-            return el ? JSON.parse(el.textContent) : null;
+            if (!el) return null;
+            const code = JSON.parse(el.textContent);
+            const cssCode = el.getAttribute('data-css') || '';
+            // Prepend CSS code (icon definitions) to diagram code
+            return cssCode ? (cssCode + '\n' + code) : code;
         }
 
         // ── Scale helpers ────────────────────────────────────────────────────
