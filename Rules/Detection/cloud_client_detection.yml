@@ -1,0 +1,251 @@
+rules:
+  - id: detect-azure-servicebus-client
+    message: Application uses Azure Service Bus client library
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # C# Azure.Messaging.ServiceBus
+          - pattern: |
+              using Azure.Messaging.ServiceBus;
+          - pattern: |
+              new ServiceBusClient($CONN_STR)
+          - pattern: |
+              _$CLIENT.CreateSender($QUEUE_NAME)
+          # Java Azure SDK
+          - pattern: |
+              com.azure.messaging.servicebus.*
+          # Python Azure SDK
+          - pattern: |
+              from azure.servicebus import $CLIENT
+          # Node.js Azure SDK
+          - pattern: |
+              require("@azure/service-bus")
+    metadata:
+      finding_kind: Architecture
+      cloud_service: Azure
+      service_type: Message Queue
+      description: |
+        Detects applications that use Azure Service Bus for messaging.
+        Indicates dependency on cloud message queue infrastructure.
+      resource_implications:
+        - azurerm_servicebus_namespace
+        - azurerm_servicebus_queue
+        - azurerm_servicebus_topic
+
+  - id: detect-aws-sqs-client
+    message: Application uses AWS SQS client library
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # Java AWS SDK
+          - pattern: |
+              software.amazon.awssdk.services.sqs.*
+          # Python boto3
+          - pattern: |
+              import boto3
+              $CLIENT = boto3.client("sqs")
+          # Node.js AWS SDK
+          - pattern: |
+              require("@aws-sdk/client-sqs")
+          # C# AWS SDK
+          - pattern: |
+              Amazon.SQS.*
+    metadata:
+      finding_kind: Architecture
+      cloud_service: AWS
+      service_type: Message Queue
+      description: |
+        Detects applications that use AWS SQS for messaging.
+        Indicates dependency on AWS message queue infrastructure.
+      resource_implications:
+        - aws_sqs_queue
+
+  - id: detect-gcp-pubsub-client
+    message: Application uses GCP Pub/Sub client library
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # Python
+          - pattern: |
+              from google.cloud import pubsub_v1
+          # Java
+          - pattern: |
+              com.google.cloud.pubsub.*
+          # Node.js
+          - pattern: |
+              require("@google-cloud/pubsub")
+    metadata:
+      finding_kind: Architecture
+      cloud_service: GCP
+      service_type: Message Queue
+      description: |
+        Detects applications that use GCP Pub/Sub for messaging.
+        Indicates dependency on GCP message queue infrastructure.
+
+  - id: detect-sql-server-client
+    message: Application connects to SQL Server database
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # C# SqlClient
+          - pattern: |
+              using System.Data.SqlClient;
+          - pattern: |
+              using Microsoft.Data.SqlClient;
+          - pattern: |
+              new SqlConnection($CONN_STR)
+          - pattern: |
+              new SqlCommand($QUERY)
+          - pattern: |
+              UseSqlServer($CONNECTION_STRING)
+          - pattern: |
+              services.AddSqlServer(...)
+          # JDBC SQL Server
+          - pattern: |
+              com.microsoft.sqlserver.jdbc.*
+          - pattern: |
+              jdbc:sqlserver://
+          # Python pyodbc
+          - pattern: |
+              import pyodbc
+          - pattern: |
+              pyodbc.connect($CONN_STR)
+          # Node.js mssql
+          - pattern: |
+              require("mssql")
+          - pattern: |
+              new sql.ConnectionPool(...)
+    metadata:
+      finding_kind: Architecture
+      cloud_service: Azure/On-Premises
+      service_type: Relational Database
+      description: |
+        Detects applications that connect to SQL Server databases.
+        Indicates dependency on SQL Server infrastructure (Azure SQL or on-premises).
+      resource_implications:
+        - azurerm_mssql_server
+        - azurerm_mssql_database
+
+  - id: detect-cloud-database-client
+    message: Application connects to cloud database service
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # Azure Cosmos DB
+          - pattern: |
+              Azure.Cosmos.*
+          - pattern: |
+              CosmosClient($CONNECTION)
+          # AWS RDS
+          - pattern: |
+              AWS.*RDS.*
+          # GCP Cloud SQL
+          - pattern: |
+              google.cloud.sql.*
+          # PostgreSQL (cloud providers)
+          - pattern: |
+              Npgsql.*
+          - pattern: |
+              new NpgsqlConnection(...)
+    metadata:
+      finding_kind: Architecture
+      cloud_service: Multiple
+      service_type: Database
+      description: |
+        Detects applications that connect to managed cloud databases.
+        Indicates dependency on cloud database infrastructure.
+
+  - id: detect-cloud-storage-client
+    message: Application uses cloud storage service
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # Azure Blob Storage
+          - pattern: |
+              Azure.Storage.*
+          - pattern: |
+              BlobClient($URL)
+          # AWS S3
+          - pattern: |
+              Amazon.S3.*
+          - pattern: |
+              s3_client = boto3.client("s3")
+          # GCP Cloud Storage
+          - pattern: |
+              google.cloud.storage.*
+    metadata:
+      finding_kind: Architecture
+      cloud_service: Multiple
+      service_type: Object Storage
+      description: |
+        Detects applications that use cloud storage services.
+        Indicates dependency on cloud storage infrastructure.
+
+  - id: detect-cloud-api-gateway-client
+    message: Application invokes cloud API gateway or managed API
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    patterns:
+      - pattern-either:
+          # Azure API Management
+          - pattern: |
+              using Azure.Identity;
+              HttpClient.*apim.*
+          # AWS API Gateway
+          - pattern: |
+              apigateway_client = boto3.client("apigateway")
+          # Generic API client to cloud domain
+          - pattern: |
+              $CLIENT.get($DOMAIN)
+          - metavariable-regex:
+              metavariable: $DOMAIN
+              regex: ".*\\.azure\\.com.*"
+    metadata:
+      finding_kind: Architecture
+      cloud_service: Multiple
+      service_type: API Gateway
+      description: |
+        Detects applications that invoke cloud API gateways or managed APIs.
+
+  - id: detect-application-code-with-cloud-dependencies
+    message: Repository appears to be application code with cloud service dependencies
+    severity: INFO
+    languages: [csharp, java, python, typescript, javascript]
+    pattern: |
+      $IMPORT_CLOUD_SDK
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  using Azure.*
+              - pattern: |
+                  new $CLIENT(...)
+          - patterns:
+              - pattern: |
+                  import boto3
+              - pattern: |
+                  client = boto3.client(...)
+          - patterns:
+              - pattern: |
+                  from google.cloud import $SERVICE
+              - pattern: |
+                  $CLIENT = $SERVICE.client(...)
+    metadata:
+      finding_kind: RepositoryType
+      repo_type: Application
+      cloud_connected: true
+      description: |
+        Indicates this is an APPLICATION REPOSITORY (not IaC) that connects to
+        cloud services. Should be accompanied by infrastructure definitions
+        (Terraform, CloudFormation, Kubernetes) that define the cloud resources.
+      architecture_implications: |
+        - This code depends on cloud infrastructure
+        - Missing: IaC definitions for cloud resources
+        - Missing: Architecture diagram showing service topology
+        - Recommendation: Add Terraform/CloudFormation for infrastructure

@@ -1,0 +1,16 @@
+rules:
+  - id: azure-aks_queue_listener_azurerm_kubernetes_cluster_node_pool-detection
+    message: |
+      Diagram coverage gap detected for 'aks_queue_listener_azurerm_kubernetes_cluster_node_pool'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)aks\ queue\ listener\ azurerm\ kubernetes\ cluster\ node\ pool'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [azure]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

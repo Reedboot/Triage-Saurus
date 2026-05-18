@@ -64,6 +64,7 @@ IGNORED_ORPHAN_NODE_IDS = {
     "note",
     "external",
     "unknown",
+    "no_resources",
 }
 
 EVIDENCE_SUFFIXES = {

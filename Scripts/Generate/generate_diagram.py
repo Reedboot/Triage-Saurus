@@ -2227,6 +2227,12 @@ class HierarchicalDiagramBuilder:
             if child['id'] == resource_id:
                 continue
 
+            # Skip children whose Mermaid node ID would collide with the parent subgraph ID.
+            # This prevents Mermaid from treating the child node as the subgraph itself
+            # (e.g., subgraph drtestapp_sql containing a node also named drtestapp_sql).
+            if self._get_node_id(child) == node_id:
+                continue
+
             # Cloud functions are compute resources — don't nest them inside storage buckets
             if _parent_is_storage:
                 _child_rtype = (child.get('resource_type') or '').lower()
@@ -5067,7 +5073,7 @@ class HierarchicalDiagramBuilder:
             self._infer_from_config_files()
         
         if not self.resources:
-            return "flowchart TB\n  empty[No resources found]"
+            return "flowchart TB\n  no_resources[No resources found]"
         
         lines = ["flowchart TB"]
         

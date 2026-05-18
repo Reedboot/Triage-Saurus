@@ -1,0 +1,16 @@
+rules:
+  - id: hashicorp-aks_azure_job_kubernetes_config_map_v1-detection
+    message: |
+      Diagram coverage gap detected for 'aks_azure_job_kubernetes_config_map_v1'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)aks\ azure\ job\ kubernetes\ config\ map\ v1'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [hashicorp]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

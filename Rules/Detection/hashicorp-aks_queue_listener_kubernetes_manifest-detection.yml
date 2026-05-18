@@ -1,0 +1,16 @@
+rules:
+  - id: hashicorp-aks_queue_listener_kubernetes_manifest-detection
+    message: |
+      Diagram coverage gap detected for 'aks_queue_listener_kubernetes_manifest'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)aks\ queue\ listener\ kubernetes\ manifest'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [hashicorp]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule
