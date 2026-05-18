@@ -5,7 +5,9 @@
 **Output artifacts** (written under `Output/Audit/DiagramReviewSkill_<timestamp>/`):
 - `diagram_review_report.md` — main before/after report with metrics table
 - `baseline/` — baseline pass summaries and provider-tab screenshots
+  - `screenshots/` — complete multi-view capture set (panned/scrolled for large diagrams)
 - `after/` — after pass summaries and screenshots (post rule-apply cycle)
+  - `screenshots/` — complete multi-view capture set (panned/scrolled for large diagrams)
 
 **Full SKILL.md** (Copilot slash command): `.github/skills/diagram-review/SKILL.md`
 
@@ -24,17 +26,30 @@ If an element is unconnected, unnested, or unsupported by evidence, treat it as 
 - hierarchy extraction logic is incomplete
 - diagram generation/parsing logic dropped relationships
 
+## Screenshot Capture for Large Diagrams
+The diagram review automatically captures multiple viewport views for diagrams that exceed standard browser size:
+- **Initial capture** — Viewport at default zoom/pan position
+- **Horizontal panning** — Scrolls left-to-right to capture wide diagrams
+- **Vertical panning** — Scrolls top-to-bottom to capture tall diagrams
+- **Multi-quadrant capture** — For very large diagrams, captures all four quadrants systematically
+
+Each captured view is stored separately in the `screenshots/` folder with metadata indicating the viewport position and visible elements. This ensures that even large cloud architectures with 50+ resources can be fully reviewed element-by-element.
+
+**Note:** When reviewing panned screenshots, cross-reference element positions across multiple views to identify connections that may span viewport boundaries.
+
 ## Required Workflow
 1. Run baseline diagram validation with screenshots for each provider tab.
+   - For large diagrams, the tool automatically captures multi-view screenshots via panning
 2. Review each issue with element-level rationale:
    - attack-path contribution (ingress, trust boundary, identity, data, control plane)
    - smell severity when connection/hierarchy is missing
+   - Cross-check element visibility across panned screenshots if diagram is large
 3. Propose or update OpenGrep detection rules for confirmed gaps.
 4. Validate each new/updated rule:
    - `opengrep scan --config <rule-file.yml> <target-repo>`
 5. Re-run scan + diagram validation.
 6. Produce before/after report with:
-   - screenshots
+   - screenshots (multi-view for large diagrams)
    - issue deltas
    - rule changes + validation results
    - unresolved risks
@@ -94,6 +109,20 @@ When a client, app, or service calls cloud resources but its hosting is not know
   3. Check IaC `allowed_origins`, `ip_rules`, `network_acls`, or WAF rules for expected source ranges.
   4. If the caller is another cloud provider or region, flag cross-cloud data-flow as a supply-chain risk.
 - **Do not drop the node** — an unhosted caller left off the diagram is a missing threat-model element, not noise.
+
+## HTML Entity Checking in Diagram Elements
+The diagram validation automatically detects HTML entities in element names and labels that may cause rendering issues:
+
+### Common problematic HTML entities:
+- `&gt;` — Should be `>`
+- `&lt;` — Should be `<`
+- `&amp;` — Should be `&`
+- `&br;` — Should be a space or line break (context-dependent)
+- `&quot;` — Should be `"` (unless literal quote is needed)
+- `&nbsp;` — Should be a regular space
+- `&#...;` — Numeric HTML entities that should use plain characters
+
+These encoded entities often result from unintended escaping during diagram generation and should be replaced with their plain-text equivalents. The validation framework will warn on detection and suggest the appropriate replacement character.
 
 ## Noise Reduction Guidance
 Call out resource types that likely should not appear on architecture diagrams when they do not contribute to threat modeling (e.g., pure metadata/config scaffolding). Keep rationale explicit and evidence-backed.
@@ -170,3 +199,12 @@ When diagram shows unexplained or suspicious connectivity:
 3. **Check IAM/policies** (permissions allowing access)
 4. **Verify threat model relevance** (does connection serve security-relevant purpose?)
 5. **Document finding** (why it exists, risk assessment, recommendation)
+
+### Multi-View Screenshot Review (Large Diagrams)
+For diagrams requiring multiple panned views to capture all elements:
+1. **Review each screenshot in sequence** — Cross-check element visibility across viewport pans
+2. **Identify boundary-crossing connections** — Some edges may span multiple screenshots; trace them across views
+3. **Build mental model of full diagram** — Assemble panned views mentally to understand global architecture
+4. **Check for orphans in secondary views** — Orphaned elements may appear only in non-initial screenshots
+5. **Document which view shows each key element** — Note in review for reproducibility (e.g., "API Gateway visible in top-left pan")
+6. **Flag if panned views are incomplete** — If no screenshot captures a known resource, escalate as coverage gap

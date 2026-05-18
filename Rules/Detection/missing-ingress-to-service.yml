@@ -1,0 +1,62 @@
+id: missing-ingress-to-service
+title: "Service has no internet ingress path defined"
+description: |
+  A service resource (e.g., App Service, API Gateway, Load Balancer) exists
+  but has no ingress route from the internet. This may indicate:
+  - The service is isolated but should be public
+  - Ingress resources (API Gateway, Load Balancer, Application Gateway) are missing
+  - Network routing is incomplete or misconfigured
+
+patterns:
+  - pattern-either:
+      # Azure App Service without Application Gateway or API Management
+      - pattern: |
+          resource "azurerm_app_service" "..." {
+            ...
+          }
+      # Azure App Service Plan without associated Application Gateway
+      - pattern: |
+          resource "azurerm_app_service_plan" "..." {
+            ...
+          }
+      # Azure API Management without gateway listener
+      - pattern: |
+          resource "azurerm_api_management" "..." {
+            ...
+            $LISTENERS = [...]
+          }
+          where:
+            $LISTENERS = []
+      # AWS ALB without target group
+      - pattern: |
+          resource "aws_lb" "..." {
+            ...
+          }
+          where:
+            target_group = null
+      # AWS API Gateway without integration
+      - pattern: |
+          resource "aws_apigatewayv2_api" "..." {
+            ...
+          }
+      # GCP Load Balancer without backend service
+      - pattern: |
+          resource "google_compute_http_load_balancer" "..." {
+            ...
+          }
+          where:
+            backend_services = []
+
+severity: HIGH
+impact: "Service unreachable or security posture unclear"
+recommendation: |
+  1. Verify the service should be internet-accessible
+  2. If public: Add API Gateway, Load Balancer, or Application Gateway
+  3. If private: Document the private access pattern explicitly
+  4. Update diagrams to show the complete ingress path
+
+tags:
+  - ingress
+  - networking
+  - architecture
+  - security-perimeter

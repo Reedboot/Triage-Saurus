@@ -165,6 +165,49 @@ def _check_invalid_node_ids(block: list[str], start_line_no: int) -> list[Proble
     return problems
 
 
+def _check_html_entities_in_elements(block: list[str], start_line_no: int) -> list[Problem]:
+    """Check for HTML entities in element names/labels.
+    
+    HTML entities like &gt;, &lt;, &br;, &quot;, etc. can cause issues in Mermaid rendering.
+    These are often unintended encoding of HTML characters and should be replaced with plain text.
+    """
+    problems: list[Problem] = []
+    
+    # Pattern to detect common HTML entities: &name;
+    html_entity_re = re.compile(r'&[a-zA-Z]+;|&#\d+;|&#x[0-9a-fA-F]+;')
+    # Common problematic HTML entities
+    problematic_entities = {
+        '&gt;': '>',
+        '&lt;': '<',
+        '&amp;': '&',
+        '&quot;': '"',
+        '&apos;': "'",
+        '&br;': ' ',
+        '&nbsp;': ' ',
+    }
+    
+    for j, line in enumerate(block):
+        # Skip comments and direction lines
+        if line.lstrip().startswith('%') or line.strip().startswith('direction'):
+            continue
+        
+        # Check if line contains any HTML entities
+        if html_entity_re.search(line):
+            # Extract entities found
+            entities_found = html_entity_re.findall(line)
+            # Check for common problematic ones
+            for entity in entities_found:
+                if entity.lower() in [e.lower() for e in problematic_entities.keys()]:
+                    problems.append(Problem(
+                        Path("."), "WARN",
+                        f"Mermaid element contains HTML entity '{entity}'; prefer plain character. "
+                        f"Use '{problematic_entities.get(entity.lower(), entity)}' instead.",
+                        start_line_no + j,
+                    ))
+    
+    return problems
+
+
 
 def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Problem], str, bool]:
     """Validate Mermaid fences; optionally auto-fix safe issues."""
@@ -366,6 +409,10 @@ def validate_and_fix_mermaid_blocks(text: str, *, fix: bool) -> tuple[list[Probl
         # NEW: Check for invalid node IDs
         node_id_problems = _check_invalid_node_ids(block, start_line_no)
         problems.extend(node_id_problems)
+        
+        # NEW: Check for HTML entities in element names
+        html_entity_problems = _check_html_entities_in_elements(block, start_line_no)
+        problems.extend(html_entity_problems)
 
         # Check for empty subgraphs (only direction directive, no nodes).
         # Mermaid 11.x rejects these with a syntax error.

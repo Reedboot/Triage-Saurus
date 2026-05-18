@@ -25,3 +25,38 @@ flowchart TB
     assert "stroke-width" in new_text
     assert "fill_opacity" not in new_text
     assert "fill-opacity" in new_text
+
+
+def test_detects_html_entities_in_element_names():
+    """Test detection of HTML entities like &gt;, &lt;, &br; in diagram elements."""
+    text = """```mermaid
+flowchart TB
+  A["API &gt; Gateway"]
+  B["Data &lt; Storage"]
+  C["Item &br; Container"]
+  D["Quote &quot; Test"]
+```
+"""
+
+    problems, new_text, changed = validate_and_fix_mermaid_blocks(text, fix=False)
+
+    # Should detect 4 HTML entity issues
+    entity_warnings = [p for p in problems if "HTML entity" in p.message]
+    assert len(entity_warnings) >= 3, f"Expected at least 3 HTML entity warnings, got {len(entity_warnings)}"
+    assert any("&gt;" in p.message for p in entity_warnings)
+    assert any("&lt;" in p.message for p in entity_warnings)
+    assert any("&br;" in p.message for p in entity_warnings)
+
+
+def test_html_entities_warnings_are_warn_level():
+    """Test that HTML entity issues are flagged as WARN (not ERROR)."""
+    text = """```mermaid
+flowchart TB
+  A["Result &gt; 100"]
+```
+"""
+
+    problems, new_text, changed = validate_and_fix_mermaid_blocks(text, fix=False)
+
+    entity_warnings = [p for p in problems if "HTML entity" in p.message]
+    assert any(p.level == "WARN" for p in entity_warnings)

@@ -1761,7 +1761,8 @@ class HierarchicalDiagramBuilder:
                       'security_group_rule', 'internet_gateway', 'nat_gateway', 'route_table', 
                       'network_acl', 'load_balancer', 'firewall', 'availability_zone',
                       'eks_cluster', 'eks_node_group', 'eks_fargate',
-                      'kubernetes_cluster', 'container_cluster']
+                      'kubernetes_cluster', 'container_cluster',
+                      'vpn', 'express_route', 'public_ip']
         return any(tok in rtype for tok in net_tokens)
     
     def is_security_group_or_rule(self, resource: dict) -> bool:

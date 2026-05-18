@@ -105,19 +105,10 @@
     <!-- Recent Scans — compact pill strip -->
     <div class="mt-3 mb-3 flex items-center gap-2 min-w-0"
          x-data="{ hasServerEntries: {{ 1 if experiments else 0 }} }"
-         x-show="hasServerEntries || $store.scan.moduleScanEntries.length > 0"
+         x-show="hasServerEntries"
          style="display:none">
       <span class="text-xs text-gray-500 whitespace-nowrap flex-shrink-0">📂 Recent:</span>
       <div class="flex gap-2 overflow-x-auto pb-0.5" style="scrollbar-width:thin;scrollbar-color:#374151 transparent;">
-        <template x-for="entry in $store.scan.moduleScanEntries" :key="'module-' + entry.key">
-          <span class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border bg-gray-900 transition-colors"
-                :class="entry.stateClass"
-                :title="'Module scan: ' + entry.name + ' (' + entry.stateLabel + ')'">
-            <span class="text-sm font-medium text-gray-200 whitespace-nowrap" x-text="entry.name"></span>
-            <span class="recent-count-pill text-xs px-1.5 py-0.5 rounded-full font-mono"
-                  x-text="entry.stateLabel"></span>
-          </span>
-        </template>
         {% for exp in experiments %}
         <a href="/experiment/{{ exp.id }}"
            class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-900 hover:border-gray-500 hover:bg-gray-800 transition-colors group">

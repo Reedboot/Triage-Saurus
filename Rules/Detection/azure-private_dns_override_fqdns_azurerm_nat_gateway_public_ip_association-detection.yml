@@ -1,0 +1,16 @@
+rules:
+  - id: azure-private_dns_override_fqdns_azurerm_nat_gateway_public_ip_association-detection
+    message: |
+      Diagram coverage gap detected for 'private_dns_override_fqdns_azurerm_nat_gateway_public_ip_association' in repo 'terraform-network'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)private\ dns\ override\ fqdns\ azurerm\ nat\ gateway\ public\ ip\ association'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [azure]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

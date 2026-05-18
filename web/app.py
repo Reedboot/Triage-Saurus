@@ -5710,6 +5710,13 @@ def _normalize_display_name(name: str) -> str:
     return value
 
 
+def _normalize_recent_key(name: str | None) -> str:
+    """Canonical key used to de-duplicate recent scan entries."""
+    value = str(name or "").strip().lower()
+    value = re.sub(r"_(module_)?scan$", "", value)
+    return re.sub(r"[^a-z0-9]+", "", value)
+
+
 # Attach a normalizer hook for templates by exposing a simple mapping endpoint
 # (templates call /api/view/normalize?name=... via JS when rendering ingress rows)
 @app.route("/api/view/normalize")
@@ -11137,6 +11144,7 @@ def api_export_csv(experiment_id: str, repo_name: str, section: str):
 @app.route("/")
 def index():
     experiments = []
+    seen_recent_keys: set[str] = set()
     try:
         with db_helpers.get_db_connection() as conn:
             rows = conn.execute("""
@@ -11152,10 +11160,15 @@ def index():
                 )
                 GROUP BY e.id, e.name, e.repos
                 ORDER BY e.id DESC
-                LIMIT 10
+                LIMIT 50
             """).fetchall()
             for row in rows:
                 exp = dict(row)
+                recent_key = _normalize_recent_key(exp.get("name"))
+                if recent_key and recent_key in seen_recent_keys:
+                    continue
+                if recent_key:
+                    seen_recent_keys.add(recent_key)
                 providers = conn.execute(
                     "SELECT DISTINCT provider FROM cloud_diagrams WHERE experiment_id = ? ORDER BY provider",
                     [exp['id']]
@@ -11171,6 +11184,8 @@ def index():
                 except Exception:
                     exp['repo_path'] = ''
                 experiments.append(exp)
+                if len(experiments) >= 10:
+                    break
     except Exception:
         pass
     return render_template(

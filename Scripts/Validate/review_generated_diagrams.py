@@ -219,7 +219,16 @@ def run_validation_pass(
     # integrate the rules into Rules/Detection/ for the next full scan.
     
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    summary_file = _find_latest_summary(pass_root)
+    try:
+        summary_file = _find_latest_summary(pass_root)
+    except FileNotFoundError as exc:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        details = stderr or stdout or str(exc)
+        raise RuntimeError(
+            f"{pass_name} validation did not produce summary.json (exit_code={proc.returncode}). "
+            f"Command: {' '.join(cmd)}. Details: {details}"
+        ) from exc
     summary = json.loads(summary_file.read_text(encoding="utf-8"))
     return {
         "name": pass_name,
@@ -470,56 +479,60 @@ def main(argv: list[str] | None = None) -> int:
     run_root = Path(args.audit_root).resolve() / f"DiagramReviewSkill_{timestamp}"
     run_root.mkdir(parents=True, exist_ok=True)
 
-    baseline_pass = run_validation_pass(
-        pass_name="baseline",
-        args=args,
-        run_root=run_root,
-        write_detection_rules=True,
-        validate_detection_rules=True,
-    )
-    
-    after_pass: dict[str, Any] | None = None
-    if not args.skip_after_pass:
-        # Between baseline and after: apply detection rules and regenerate diagrams
-        print("\n" + "="*60)
-        print("APPLYING DETECTION RULES & REGENERATING DIAGRAMS")
-        print("="*60)
-        
-        # Build repo_paths dict from baseline results
-        repo_paths: dict[str, str] = {}
-        for result in baseline_pass["summary"].get("results", []):
-            repo_name = result.get("repo_name")
-            repo_path = result.get("repo_path")
-            if repo_name and repo_path:
-                repo_paths[repo_name] = repo_path
-        
-        # Apply detection rules and re-scan
-        scan_status = _apply_detection_rules_and_regenerate(
-            baseline_summary=baseline_pass["summary"],
-            repo_paths=repo_paths,
-            scan_timeout_sec=args.scan_complete_timeout_sec + 90,
-            repo_at_a_time=args.repo_at_a_time,
-        )
-        
-        if scan_status:
-            print("✓ Detection rules applied and scans completed")
-        else:
-            print("⚠ Some scans encountered errors (continuing with validation)")
-        
-        # Now run the after pass to measure improvement
-        print("\n" + "="*60)
-        print("VALIDATING REGENERATED DIAGRAMS (AFTER PASS)")
-        print("="*60)
-        
-        after_pass = run_validation_pass(
-            pass_name="after",
+    try:
+        baseline_pass = run_validation_pass(
+            pass_name="baseline",
             args=args,
             run_root=run_root,
-            write_detection_rules=False,
-            validate_detection_rules=False,
-            apply_detection_rules=False,
-            baseline_summary=baseline_pass["summary"],
+            write_detection_rules=True,
+            validate_detection_rules=True,
         )
+        
+        after_pass: dict[str, Any] | None = None
+        if not args.skip_after_pass:
+            # Between baseline and after: apply detection rules and regenerate diagrams
+            print("\n" + "="*60)
+            print("APPLYING DETECTION RULES & REGENERATING DIAGRAMS")
+            print("="*60)
+            
+            # Build repo_paths dict from baseline results
+            repo_paths: dict[str, str] = {}
+            for result in baseline_pass["summary"].get("results", []):
+                repo_name = result.get("repo_name")
+                repo_path = result.get("repo_path")
+                if repo_name and repo_path:
+                    repo_paths[repo_name] = repo_path
+            
+            # Apply detection rules and re-scan
+            scan_status = _apply_detection_rules_and_regenerate(
+                baseline_summary=baseline_pass["summary"],
+                repo_paths=repo_paths,
+                scan_timeout_sec=args.scan_complete_timeout_sec + 90,
+                repo_at_a_time=args.repo_at_a_time,
+            )
+            
+            if scan_status:
+                print("✓ Detection rules applied and scans completed")
+            else:
+                print("⚠ Some scans encountered errors (continuing with validation)")
+            
+            # Now run the after pass to measure improvement
+            print("\n" + "="*60)
+            print("VALIDATING REGENERATED DIAGRAMS (AFTER PASS)")
+            print("="*60)
+            
+            after_pass = run_validation_pass(
+                pass_name="after",
+                args=args,
+                run_root=run_root,
+                write_detection_rules=False,
+                validate_detection_rules=False,
+                apply_detection_rules=False,
+                baseline_summary=baseline_pass["summary"],
+            )
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     report = build_report(
         baseline=baseline_pass["summary"],

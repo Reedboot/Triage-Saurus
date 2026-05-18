@@ -1,0 +1,16 @@
+rules:
+  - id: azure-private_dns_override_fqdns_azurerm_network_security_rule-detection
+    message: |
+      Diagram coverage gap detected for 'private_dns_override_fqdns_azurerm_network_security_rule' in repo 'terraform-network'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)private\ dns\ override\ fqdns\ azurerm\ network\ security\ rule'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [azure]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

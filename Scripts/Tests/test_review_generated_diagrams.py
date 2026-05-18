@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Scripts" / "Validate"))
 
@@ -12,6 +14,7 @@ from review_generated_diagrams import (  # noqa: E402
     _build_validator_command,
     build_report,
     parse_args,
+    run_validation_pass,
     summarize_issues,
 )
 
@@ -158,3 +161,31 @@ def test_build_validator_command_forwards_only_unscanned(tmp_path: Path):
         validate_detection_rules=False,
     )
     assert "--only-unscanned" in cmd
+
+
+def test_run_validation_pass_surfaces_missing_summary(monkeypatch, tmp_path: Path):
+    import review_generated_diagrams
+
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=["python3", "validator.py"],
+            returncode=1,
+            stdout="validator stdout",
+            stderr="validator stderr",
+        )
+
+    def fake_find_latest_summary(_pass_audit_root: Path):
+        raise FileNotFoundError("missing summary")
+
+    monkeypatch.setattr(review_generated_diagrams.subprocess, "run", fake_run)
+    monkeypatch.setattr(review_generated_diagrams, "_find_latest_summary", fake_find_latest_summary)
+
+    args = parse_args([])
+    with pytest.raises(RuntimeError, match="did not produce summary.json"):
+        run_validation_pass(
+            pass_name="baseline",
+            args=args,
+            run_root=tmp_path,
+            write_detection_rules=False,
+            validate_detection_rules=False,
+        )
