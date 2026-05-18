@@ -17,6 +17,7 @@ from review_generated_diagrams import (  # noqa: E402
     run_validation_pass,
     summarize_issues,
 )
+from rendering_validation import validate_icon_mapping_semantics  # noqa: E402
 
 
 def test_summarize_issues_counts_totals_and_value_classes():
@@ -189,3 +190,22 @@ def test_run_validation_pass_surfaces_missing_summary(monkeypatch, tmp_path: Pat
             write_detection_rules=False,
             validate_detection_rules=False,
         )
+
+
+def test_validate_icon_mapping_semantics_flags_service_bus_child_reusing_namespace_icon():
+    mappings = {
+        "azurerm_service_bus": ("integration", "service-bus"),
+        "azurerm_servicebus_queue": ("integration", "service-bus"),
+    }
+
+    errors = validate_icon_mapping_semantics(mappings)
+    assert any(error.resource_type == "azurerm_servicebus_queue" for error in errors)
+
+
+def test_validate_icon_mapping_semantics_flags_service_bus_namespace_topic_icon():
+    mappings = {
+        "azurerm_service_bus": ("integration", "system-topic"),
+    }
+
+    errors = validate_icon_mapping_semantics(mappings)
+    assert any(error.resource_type == "azurerm_service_bus" for error in errors)

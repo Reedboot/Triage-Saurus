@@ -611,6 +611,8 @@ _KNOWN_EXTERNAL_SERVICES: list[tuple[str, str, str, list[str]]] = [
     # Auth / identity
     ("Auth0",            "auth0.com",                 "auth",           [r"auth0\.com", r"Auth0Client", r"AUTH0_"]),
     ("Okta",             "okta.com",                  "auth",           [r"okta\.com", r"OktaClient", r"OKTA_"]),
+    # Azure platform services (client SDK usage from application code)
+    ("Azure Key Vault",  "vault.azure.net",           "secrets",        [r"vault\.azure\.net", r"SecretClient", r"KeyVaultSecret", r"AZURE_KEY_VAULT", r"KEY_VAULT_URI", r"KEY_VAULT_URL", r"KeyVaultClient", r"CertificateClient", r"azure\.keyvault", r"Azure\.Security\.KeyVault"]),
     # Other SaaS
     ("GitHub API",       "api.github.com",            "vcs",            [r"api\.github\.com", r"GitHubClient", r"GITHUB_TOKEN"]),
     ("Jira",             "atlassian.net",             "issue_tracking", [r"atlassian\.net", r"JiraClient", r"JIRA_"]),

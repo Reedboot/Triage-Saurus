@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- DynamoDB - NoSQL/table grid icon -->
+  <defs>
+    <style>
+      .dynamo-main { fill: #FF9900; }
+      .dynamo-grid { fill: none; stroke: #FFFFFF; stroke-width: 1.5; }
+    </style>
+  </defs>
+  
+  <!-- Main container -->
+  <rect x="8" y="12" width="48" height="40" rx="3" class="dynamo-main"/>
+  
+  <!-- Grid lines (table visualization) -->
+  <!-- Horizontal lines -->
+  <line x1="12" y1="24" x2="52" y2="24" class="dynamo-grid"/>
+  <line x1="12" y1="32" x2="52" y2="32" class="dynamo-grid"/>
+  <line x1="12" y1="40" x2="52" y2="40" class="dynamo-grid"/>
+  <line x1="12" y1="48" x2="52" y2="48" class="dynamo-grid"/>
+  
+  <!-- Vertical lines -->
+  <line x1="22" y1="16" x2="22" y2="52" class="dynamo-grid"/>
+  <line x1="32" y1="16" x2="32" y2="52" class="dynamo-grid"/>
+  <line x1="42" y1="16" x2="42" y2="52" class="dynamo-grid"/>
+  
+  <!-- Cell data dots -->
+  <circle cx="17" cy="28" r="1.5" fill="#FFFFFF" opacity="0.7"/>
+  <circle cx="27" cy="28" r="1.5" fill="#FFFFFF" opacity="0.7"/>
+  <circle cx="37" cy="36" r="1.5" fill="#FFFFFF" opacity="0.7"/>
+  <circle cx="47" cy="44" r="1.5" fill="#FFFFFF" opacity="0.7"/>
+</svg>

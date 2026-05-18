@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Load Balancer - Balance/scale icon -->
+  <defs>
+    <style>
+      .lb-main { fill: #FF9900; }
+      .lb-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Base/beam -->
+  <rect x="10" y="46" width="44" height="4" rx="2" class="lb-main"/>
+  
+  <!-- Left pan -->
+  <rect x="12" y="32" width="16" height="14" rx="2" class="lb-main" transform="skewX(-5)"/>
+  
+  <!-- Right pan -->
+  <rect x="36" y="32" width="16" height="14" rx="2" class="lb-main" transform="skewX(5)"/>
+  
+  <!-- Balance point (triangle/fulcrum) -->
+  <polygon points="32,46 30,52 34,52" class="lb-fg"/>
+  
+  <!-- Connection lines from pans to balance -->
+  <line x1="20" y1="32" x2="28" y2="46" stroke="#FFFFFF" stroke-width="1.5" class="lb-fg"/>
+  <line x1="44" y1="32" x2="36" y2="46" stroke="#FFFFFF" stroke-width="1.5" class="lb-fg"/>
+  
+  <!-- Weight indicators -->
+  <circle cx="20" cy="28" r="2" class="lb-fg"/>
+  <circle cx="44" cy="28" r="2" class="lb-fg"/>
+</svg>

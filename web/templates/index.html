@@ -110,8 +110,11 @@
       <span class="text-xs text-gray-500 whitespace-nowrap flex-shrink-0">📂 Recent:</span>
       <div class="flex gap-2 overflow-x-auto pb-0.5" style="scrollbar-width:thin;scrollbar-color:#374151 transparent;">
         {% for exp in experiments %}
-        <a href="/experiment/{{ exp.id }}"
-           class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-900 hover:border-gray-500 hover:bg-gray-800 transition-colors group">
+        <button type="button"
+           class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-900 hover:border-gray-500 hover:bg-gray-800 transition-colors group"
+           data-experiment-id="{{ exp.id }}"
+           data-repo-path="{{ exp.repo_path }}"
+           onclick="loadRecentScan(event)">
           <span class="text-sm font-medium text-gray-200 group-hover:text-white whitespace-nowrap">{{ exp.display_name }}</span>
           {% if exp.finding_count > 0 %}
           <span class="recent-count-pill text-xs px-1.5 py-0.5 rounded-full font-mono"
@@ -120,7 +123,7 @@
           {% for provider in exp.providers %}
           <span class="prov-pill recent-prov-pill {{ provider | lower }}">{{ provider }}</span>
           {% endfor %}
-        </a>
+        </button>
         {% endfor %}
       </div>
     </div>

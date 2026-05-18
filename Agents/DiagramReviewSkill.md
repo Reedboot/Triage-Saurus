@@ -95,6 +95,13 @@ Each captured view is stored separately in the `screenshots/` folder with metada
   - Ingress → Service → Pod
   - ConfigMap / Secret scoped to Namespace (flag if shown at cluster-level without justification)
 
+  **Hashicorp / Terraform**
+  - VPC → Subnet → EC2/RDS/S3 (as managed resources)
+  - Auto Scaling Group → Launch Configuration → EC2 Instances
+  - API Gateway → Stage → Resource/Method
+  - RDS Cluster → RDS Instance
+  - Load Balancer → Target Group → Instance
+
 If children appear flat while parent context exists, flag as hierarchy smell.
 
 ## Unknown / External Client Handling

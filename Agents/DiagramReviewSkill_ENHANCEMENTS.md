@@ -6,6 +6,31 @@
 
 ---
 
+## Multi-Provider Support Status
+
+✅ **COMPLETED** — Hashicorp/Terraform provider support added
+- Added "hashicorp" provider detection to `_parse_provider_from_title()`
+- Created icon directory structure: `/web/static/assets/icons/hashicorp/`
+- Generated SVG icons for common Terraform resources:
+  - **Provisioning:** terraform.svg
+  - **Compute:** ec2.svg, auto-scaling.svg
+  - **Networking:** vpc.svg, subnet.svg, load-balancer.svg
+  - **Storage:** s3-bucket.svg
+  - **Database:** rds.svg, dynamodb.svg
+  - **Security:** security-group.svg, iam-user.svg
+- Updated documentation in `DiagramReviewSkill.md` and `SKILL.md`
+
+**Providers now supported:**
+- Azure ✅
+- AWS ✅
+- GCP ✅
+- Kubernetes ✅
+- Oracle Cloud (OCI) ✅
+- Alibaba Cloud ✅
+- Hashicorp / Terraform ✅
+
+---
+
 ## Problem Statement
 
 The Diagram Review Skill successfully detects **structural issues** (orphans, hierarchy, parity gaps) but **completely misses**:

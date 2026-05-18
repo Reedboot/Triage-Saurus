@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- RDS Database - Cylinder icon -->
+  <defs>
+    <style>
+      .rds-main { fill: #FF9900; }
+      .rds-top { fill: #FFB84D; }
+      .rds-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Cylinder body -->
+  <rect x="14" y="24" width="36" height="28" rx="2" class="rds-main"/>
+  
+  <!-- Top ellipse (3D cylinder top) -->
+  <ellipse cx="32" cy="24" rx="18" ry="6" class="rds-top"/>
+  
+  <!-- Bottom ellipse -->
+  <ellipse cx="32" cy="52" rx="18" ry="6" class="rds-main" opacity="0.8"/>
+  
+  <!-- Database symbol (cylinder with lines) -->
+  <line x1="22" y1="32" x2="42" y2="32" class="rds-fg" stroke="#FFFFFF" stroke-width="1.5"/>
+  <line x1="22" y1="38" x2="42" y2="38" class="rds-fg" stroke="#FFFFFF" stroke-width="1.5"/>
+  <line x1="22" y1="44" x2="42" y2="44" class="rds-fg" stroke="#FFFFFF" stroke-width="1.5"/>
+</svg>

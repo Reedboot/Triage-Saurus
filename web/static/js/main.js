@@ -78,6 +78,61 @@ window._triage.registerToolbarStop = (callback) => {
 window._triage.setArchitectureAiProgress = setArchitectureAiProgress;
 window._triage.clearArchitectureAiProgress = clearArchitectureAiProgress;
 
+// ── Load Recent Scan Handler ───────────────────────────────────────────────────────────
+
+/**
+ * Load a recent scan by setting the repository and loading the experiment
+ * This replaces the old behavior of navigating to /experiment/{id}
+ */
+window.loadRecentScan = function(event) {
+  event.preventDefault();
+  const btn = event.currentTarget;
+  const experimentId = btn.dataset.experimentId;
+  const repoPath = btn.dataset.repoPath;
+  
+  if (!experimentId || !repoPath) return;
+  
+  const repoSelect = document.getElementById('repo-select');
+  if (!repoSelect) return;
+  
+  // Find matching option by value or by name matching
+  let targetOpt = Array.from(repoSelect.options).find(o => o.value === repoPath);
+  
+  if (!targetOpt) {
+    // Try matching by repo name if full path doesn't match
+    const repoName = repoPath.split('/').pop();
+    targetOpt = Array.from(repoSelect.options).find(o => {
+      const optName = (o.dataset?.name || '').toLowerCase();
+      return optName === repoName.toLowerCase();
+    });
+  }
+  
+  if (!targetOpt) {
+    // Fallback: try to find by any path component match
+    targetOpt = Array.from(repoSelect.options).find(o => 
+      repoPath.includes(o.value) || o.value.includes(repoPath.split('/').pop() || '')
+    );
+  }
+  
+  if (!targetOpt) {
+    console.warn(`Could not find repository option for: ${repoPath}`);
+    return;
+  }
+  
+  // Set the repo select and trigger change event
+  repoSelect.value = targetOpt.value;
+  repoSelect.dispatchEvent(new Event('change'));
+  
+  // After repo is selected, load the past scan
+  setTimeout(() => {
+    const pastScanSelect = document.getElementById('past-scan-select');
+    if (pastScanSelect) {
+      pastScanSelect.value = experimentId;
+      pastScanSelect.dispatchEvent(new Event('change'));
+    }
+  }, 100);
+};
+
 // ── DOM ready init ────────────────────────────────────────────────────────────
 
 function init() {

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- EC2 Instance box with server icon -->
+  <defs>
+    <style>
+      .ec2-bg { fill: #FF9900; }
+      .ec2-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Main container -->
+  <rect x="8" y="12" width="48" height="40" rx="4" class="ec2-bg"/>
+  
+  <!-- Server icon - rectangle with slots -->
+  <rect x="16" y="20" width="32" height="24" rx="2" class="ec2-fg"/>
+  
+  <!-- Slot indicators -->
+  <rect x="18" y="24" width="28" height="2" class="ec2-bg"/>
+  <rect x="18" y="29" width="28" height="2" class="ec2-bg"/>
+  <rect x="18" y="34" width="28" height="2" class="ec2-bg"/>
+  
+  <!-- LED indicators on side -->
+  <circle cx="14" cy="25" r="1.5" class="ec2-fg" opacity="0.6"/>
+  <circle cx="14" cy="30" r="1.5" class="ec2-fg" opacity="0.6"/>
+  <circle cx="14" cy="35" r="1.5" class="ec2-fg" opacity="0.6"/>
+</svg>

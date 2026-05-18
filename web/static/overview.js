@@ -31,18 +31,26 @@
     }
     function inferRepoFromSource(source) {
       if (!source) return null;
+      // Azure DevOps git URL: …/_git/RepoName
       var m = source.match(/_git\/([^\/\?#]+)/);
       if (m) return decodeURIComponent(m[1]);
+      // GitHub / GitLab URL: github.com/org/repo-name
       m = source.match(/(?:github|gitlab)\.com\/[^\/]+\/([^\/\?#.]+)/);
       if (m) return m[1];
+      // Local relative path: ../repo-name  or  ../../some/repo-name  or  ./module
+      // Take the last non-empty path segment, strip any git ref suffix (?ref=…)
+      m = source.replace(/\?.*$/, '').match(/(?:^|[\/\\])([^\/\\]+)\s*$/);
+      if (m && m[1] && !/^\.+$/.test(m[1])) return m[1];
       return null;
     }
     function repoMatchScore(rName, suggested) {
       if (!rName || !suggested) return 0;
-      var r = rName.toLowerCase(), s = suggested.toLowerCase();
+      // Normalise dashes and underscores so accounts-console ↔ accounts_console match
+      var r = rName.toLowerCase().replace(/[-_]/g, '_');
+      var s = suggested.toLowerCase().replace(/[-_]/g, '_');
       if (r === s) return 3;
       if (r.includes(s) || s.includes(r)) return 2;
-      var rWords = r.split(/[-_]+/), sWords = s.split(/[-_]+/);
+      var rWords = r.split('_'), sWords = s.split('_');
       var overlap = rWords.filter(function(w) { return sWords.includes(w) && w.length > 2; }).length;
       return overlap > 0 ? 1 : 0;
     }

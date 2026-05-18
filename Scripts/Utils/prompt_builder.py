@@ -546,43 +546,46 @@ def build_focused_prompt(
     roles = baseline_data.get("roles", [])
     ports = baseline_data.get("ports", [])
     attack_paths = baseline_data.get("attack_paths", [])
+    agent_excerpt = agent_content[:8000]
+    if len(agent_content) > 8000:
+        agent_excerpt += "\n\n[... remaining agent instructions truncated for prompt size ...]"
 
     prompt_parts = [
         f"You are acting as the **{agent_name}** reviewer for a security triage portal.",
         f"{role_hint}",
         "",
         "# YOUR AGENT INSTRUCTIONS:",
-        agent_content,
+        agent_excerpt,
         "",
         "---",
         "",
         "# BASELINE DATA:",
         f"Repository: {repo_name}  |  Experiment: {experiment_id}",
         "",
-        f"## Findings ({len(findings)} total — showing top 15 by severity):",
+        f"## Findings ({len(findings)} total — showing top 10 by severity):",
     ]
 
-    for finding in findings[:15]:
+    for finding in findings[:10]:
         prompt_parts.append(
             f"- [{finding.get('severity_score', 'N/A')}/10] {finding.get('title', 'Untitled')}"
             f"  (rule: {finding.get('rule_id', '?')}, file: {finding.get('source_file', '?')})"
         )
-    if len(findings) > 15:
-        prompt_parts.append(f"  … and {len(findings) - 15} more findings")
+    if len(findings) > 10:
+        prompt_parts.append(f"  … and {len(findings) - 10} more findings")
 
     prompt_parts.append("")
-    prompt_parts.append(f"## Resources ({len(resources)} total — showing top 20):")
-    for resource in resources[:20]:
+    prompt_parts.append(f"## Resources ({len(resources)} total — showing top 12):")
+    for resource in resources[:12]:
         prompt_parts.append(
             f"- {resource.get('resource_type', 'unknown')}: {resource.get('resource_name', 'unnamed')}"
         )
-    if len(resources) > 20:
-        prompt_parts.append(f"  … and {len(resources) - 20} more resources")
+    if len(resources) > 12:
+        prompt_parts.append(f"  … and {len(resources) - 12} more resources")
 
     if roles:
         prompt_parts.append("")
-        prompt_parts.append(f"## Roles / permissions ({len(roles)} total — showing top 15):")
-        for role in roles[:15]:
+        prompt_parts.append(f"## Roles / permissions ({len(roles)} total — showing top 10):")
+        for role in roles[:10]:
             prompt_parts.append(
                 f"- {role.get('identity_name', 'unknown')} | role={role.get('role_name', role.get('permissions', 'unknown'))} "
                 f"| scope={role.get('scope_name', role.get('resource_name', 'unknown'))} | principal={role.get('principal_name', role.get('principal_id', 'unknown'))}"
@@ -590,8 +593,8 @@ def build_focused_prompt(
 
     if attack_paths:
         prompt_parts.append("")
-        prompt_parts.append(f"## Candidate attack paths ({len(attack_paths)} total — showing top 8):")
-        for attack_path in attack_paths[:8]:
+        prompt_parts.append(f"## Candidate attack paths ({len(attack_paths)} total — showing top 6):")
+        for attack_path in attack_paths[:6]:
             prompt_parts.append(
                 f"- {attack_path.get('title', 'Attack path')} | path={attack_path.get('path', 'unknown')} "
                 f"| impact={attack_path.get('impact', 'unknown')} | evidence={'; '.join((attack_path.get('evidence') or [])[:2])}"
@@ -599,8 +602,8 @@ def build_focused_prompt(
 
     if ports:
         prompt_parts.append("")
-        prompt_parts.append(f"## Exposure evidence ({len(ports)} total — showing top 10):")
-        for port in ports[:10]:
+        prompt_parts.append(f"## Exposure evidence ({len(ports)} total — showing top 8):")
+        for port in ports[:8]:
             prompt_parts.append(
                 f"- resource_id={port.get('resource_id')} port={port.get('port')} protocol={port.get('protocol')} evidence={port.get('evidence')}"
             )

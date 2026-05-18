@@ -41,6 +41,18 @@ For larger diagrams that exceed viewport size, the tool automatically:
 
 This ensures that even complex, multi-panel diagrams with dozens of resources are fully captured and can be reviewed element-by-element.
 
+## Multi-Provider Support
+The diagram review skill automatically detects and validates diagrams for multiple cloud and infrastructure providers:
+- **AWS** — EC2, S3, RDS, VPC, Load Balancers, Security Groups, etc.
+- **Azure** — App Services, Storage, SQL Database, API Management, etc.
+- **GCP** — Compute Engine, Cloud Storage, Cloud SQL, VPCs, etc.
+- **Kubernetes** — Pods, Services, Deployments, Namespaces, Ingress, etc.
+- **Oracle Cloud (OCI)** — Compute, Object Storage, Autonomous Database, etc.
+- **Alibaba Cloud** — ECS, OSS, RDS, VPC, etc.
+- **Hashicorp / Terraform** — Infrastructure provisioning diagrams with IaC resource types
+
+For each provider, the review validates hierarchy, icon availability, and icon mappings to ensure diagrams render correctly with appropriate visual identity.
+
 ## Output artifacts
 All artifacts are written under:
 ```

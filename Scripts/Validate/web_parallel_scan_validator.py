@@ -426,9 +426,9 @@ def _slug(value: str) -> str:
 
 def _parse_provider_from_title(title: str) -> str:
     t = (title or "").lower()
-    for key in ("azure", "aws", "gcp", "kubernetes", "oci", "alicloud"):
+    for key in ("azure", "aws", "gcp", "kubernetes", "oci", "alicloud", "hashicorp", "terraform"):
         if key in t:
-            return key
+            return key if key != "terraform" else "hashicorp"
     return "unknown"
 
 
@@ -941,6 +941,26 @@ def gather_repo_evidence(repo_path: Path, node_id: str, max_hits: int = 3) -> li
     return hits
 
 
+def _infer_provider_from_key(issue_key: str) -> str:
+    """Infer a provider slug from an issue key when none is supplied.
+
+    Falls back to 'terraform' (the common IaC denominator) rather than the
+    uninformative 'unknown' so generated rule IDs are meaningful.
+    """
+    k = str(issue_key).lower()
+    if any(x in k for x in ("azurerm", "azure", "key_vault", "keyvault")):
+        return "azure"
+    if any(x in k for x in ("aws", "s3", "sqs", "ec2", "iam", "lambda")):
+        return "aws"
+    if any(x in k for x in ("google", "gcp", "gke")):
+        return "gcp"
+    if any(x in k for x in ("kubernetes", "k8s", "helm")):
+        return "kubernetes"
+    # IaC structural terms — use hashicorp to match the existing convention for
+    # generic Terraform coverage-gap rules (hashicorp/null, hashicorp/time, etc.)
+    return "hashicorp"
+
+
 def write_rule_candidate_stubs(
     repo: RepoOption,
     issues: list[dict[str, Any]],
@@ -952,10 +972,10 @@ def write_rule_candidate_stubs(
     for issue in issues:
         if not issue.get("repo_evidence_files"):
             continue
-        provider = issue.get("provider") or "unknown"
         issue_type = issue.get("issue_type") or "coverage_gap"
         issue_key = issue.get("node_id") or issue.get("expected_asset") or issue_type
         clean_node = _slug(str(issue_key).lower())
+        provider = issue.get("provider") or _infer_provider_from_key(str(issue_key))
         rule_id = f"context-{provider}-{clean_node}-detection"
         path_regex = "(?:\\.tf|\\.yaml|\\.yml|README\\.md)$"
         pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
@@ -964,7 +984,7 @@ def write_rule_candidate_stubs(
                 "rules:",
                 f"  - id: {rule_id}",
                 "    message: |",
-                f"      Candidate detection rule generated for {issue_type} ('{issue_key}') in repo '{repo.name}'.",
+                f"      Candidate detection rule for {issue_type} ('{issue_key}').",
                 "      Confirm exact IaC/resource shape and tighten this rule before production use.",
                 "    severity: INFO",
                 "    languages: [regex]",
@@ -1018,7 +1038,6 @@ def write_detection_rules(
         evidence_files = issue.get("repo_evidence_files") or []
         if not evidence_files:
             continue
-        provider = issue.get("provider") or "unknown"
         issue_type = issue.get("issue_type") or "coverage_gap"
         issue_key = issue.get("node_id") or issue.get("expected_asset") or issue_type
         clean_node = _slug(str(issue_key).lower())
@@ -1051,6 +1070,7 @@ def write_detection_rules(
                 continue
         
         # Fall back to generating a simple pattern rule (for unmapped assets)
+        provider = issue.get("provider") or _infer_provider_from_key(str(issue_key))
         rule_id = f"{provider}-{clean_node}-detection"
         pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
         rule_file = rules_dir / f"{rule_id}.yml"
@@ -1059,7 +1079,7 @@ def write_detection_rules(
                 "rules:",
                 f"  - id: {rule_id}",
                 "    message: |",
-                f"      Diagram coverage gap detected for '{issue_key}' in repo '{repo.name}'.",
+                f"      Diagram coverage gap detected for '{issue_key}'.",
                 "      Resource appears in repo evidence but diagram is missing a required connection or representation.",
                 "    severity: WARNING",
                 "    languages: [regex]",

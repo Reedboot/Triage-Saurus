@@ -1,7 +1,7 @@
 rules:
-  - id: context-azure-database
+  - id: azure-database-detection
     message: |
-      Diagram coverage gap detected for 'azure-database' in repo 'lirshindalman__terragoat1'.
+      Diagram coverage gap detected for 'database'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]

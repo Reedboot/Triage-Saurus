@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Security Group - Shield icon -->
+  <defs>
+    <style>
+      .sg-main { fill: #FF9900; }
+      .sg-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Shield outline -->
+  <path d="M 32 12 L 48 20 L 48 36 Q 48 48 32 56 Q 16 48 16 36 L 16 20 Z" class="sg-main"/>
+  
+  <!-- Checkmark inside shield -->
+  <path d="M 26 36 L 30 42 L 40 28" class="sg-fg" fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

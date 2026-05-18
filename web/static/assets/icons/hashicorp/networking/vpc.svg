@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- VPC - Cloud/Network icon -->
+  <defs>
+    <style>
+      .vpc-main { fill: #FF9900; }
+      .vpc-outline { fill: none; stroke: #FFFFFF; stroke-width: 2; }
+    </style>
+  </defs>
+  
+  <!-- Outer cloud shape -->
+  <path d="M 16 36 Q 12 36 10 32 Q 8 28 12 24 Q 10 20 16 18 Q 20 12 28 12 Q 36 12 40 18 Q 48 16 52 22 Q 56 26 54 32 Q 58 36 52 36 Z" class="vpc-main"/>
+  
+  <!-- Inner network lines -->
+  <line x1="20" y1="28" x2="44" y2="28" class="vpc-outline"/>
+  <line x1="20" y1="32" x2="44" y2="32" class="vpc-outline"/>
+  <circle cx="25" cy="30" r="2" class="vpc-outline"/>
+  <circle cx="32" cy="30" r="2" class="vpc-outline"/>
+  <circle cx="39" cy="30" r="2" class="vpc-outline"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- IAM User - Person icon -->
+  <defs>
+    <style>
+      .iam-main { fill: #FF9900; }
+      .iam-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Head -->
+  <circle cx="32" cy="20" r="8" class="iam-fg"/>
+  
+  <!-- Body background container -->
+  <rect x="8" y="12" width="48" height="40" rx="4" class="iam-main"/>
+  
+  <!-- Body -->
+  <path d="M 24 28 L 20 44 L 24 44 L 28 36 L 36 36 L 40 44 L 44 44 L 40 28 Z" class="iam-fg"/>
+  
+  <!-- Key/Lock accent -->
+  <circle cx="48" cy="48" r="4" class="iam-main" stroke="#FFFFFF" stroke-width="1.5" fill="none"/>
+</svg>

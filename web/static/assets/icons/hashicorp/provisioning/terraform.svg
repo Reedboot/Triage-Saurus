@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Terraform logo - purple/blue diamond with horizontal lines -->
+  <defs>
+    <style>
+      .terraform-main { fill: #623CE4; }
+      .terraform-accent { fill: #4B3FB8; }
+    </style>
+  </defs>
+  
+  <!-- Top diamond section -->
+  <polygon points="32,8 48,16 48,28 32,36 16,28 16,16" class="terraform-main"/>
+  
+  <!-- Middle diamond section -->
+  <polygon points="32,36 48,44 48,56 32,64 16,56 16,44" class="terraform-accent"/>
+  
+  <!-- Right accent sections (horizontal stripes) -->
+  <rect x="48" y="20" width="12" height="3" class="terraform-main" opacity="0.7"/>
+  <rect x="48" y="26" width="12" height="3" class="terraform-main" opacity="0.7"/>
+  <rect x="48" y="48" width="12" height="3" class="terraform-accent" opacity="0.7"/>
+  <rect x="48" y="54" width="12" height="3" class="terraform-accent" opacity="0.7"/>
+</svg>

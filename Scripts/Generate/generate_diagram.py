@@ -341,7 +341,12 @@ class HierarchicalDiagramBuilder:
         - Normalize underscores to spaces for readability.
         - Wrap long labels with <br/> so Mermaid boxes stay compact.
         """
-        text = re.sub(r'\s+', ' ', str(label or '').strip())
+        text = str(label or '')
+        # Normalize both real control chars and literal escaped sequences that can
+        # appear in Terraform-derived names (e.g. "format(...,\\n...)").
+        text = re.sub(r'\\[nrt]', ' ', text)
+        text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        text = re.sub(r'\s+', ' ', text.strip())
         if not text:
             return text
         
@@ -351,7 +356,7 @@ class HierarchicalDiagramBuilder:
             if parts:
                 text = parts[-1]
 
-        normalized = text.replace('_', ' ')
+        normalized = text.replace('_', ' ').replace('"', "'")
         if len(normalized) <= width:
             return normalized
 
@@ -365,7 +370,14 @@ class HierarchicalDiagramBuilder:
 
     def _quote_mermaid_label(self, label: str) -> str:
         """Return a Mermaid label wrapped in quotes with embedded quotes escaped."""
-        safe = str(label or '').replace('\\', '\\\\').replace('"', '\\"')
+        safe = str(label or '')
+        safe = re.sub(r'\\[nrt]', ' ', safe)
+        safe = safe.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        safe = re.sub(r'\s+', ' ', safe.strip())
+        # Mermaid is less tolerant of escaped double-quotes in node labels;
+        # prefer apostrophes to keep labels parse-safe.
+        safe = safe.replace('"', "'")
+        safe = safe.replace('\\', '\\\\')
         return f'"{safe}"'
 
     def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:

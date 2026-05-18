@@ -242,6 +242,7 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
   - Verify: `copilot --version`
   - Alternatively, set the `COPILOT_COMMAND` environment variable to point to another Copilot CLI executable.
   - **Note:** `gh copilot` (the `gh` extension) is **not** supported — it does not accept the `--model`, `--stream`, and `--allow-all-tools` flags required by the AI pipeline.
+  - **Usage-based billing note:** Copilot usage is transitioning to AI-credit-based billing. Prefer low-cost defaults and only run optional AI passes when needed.
 - **git** — recommended for repository metadata and repo discovery (used by Scripts/Scan/pull_repo.py and DB repo registration).
 - **Optional / Helpers**:
   - `pysqlite3-binary` (pip) — if a system sqlite3 CLI is not present but Python access to SQLite is required: `pip install pysqlite3-binary`
@@ -287,6 +288,17 @@ What the web UI does:
   - `TRIAGE_MODULE_SCAN_CONCURRENCY` (default `2`)
   - `TRIAGE_SINGLE_WRITER_QUEUE_ENABLED` (default `true`)
   - `TRIAGE_PIPELINE_PARALLEL_MODE` (default `true`)
+  - `TRIAGE_AI_REVIEW_MODE` (default `minimal`) — `minimal|standard|full`
+  - `TRIAGE_AI_ENABLE_THEMES` (default `false`) — optional finding theme clustering
+  - `TRIAGE_AI_ENABLE_IMAGE_SUMMARIES` (default `false`) — optional container image summaries
+  - `COPILOT_MODEL_OVERVIEW` / `COPILOT_MODEL_ARCHITECTURE` / `COPILOT_MODEL_RULES` — per-task model overrides
+  - `COPILOT_MODEL_THEMES` / `COPILOT_MODEL_IMAGE_SUMMARIES` — optional-step model overrides
+
+Usage-based billing recommendations (lowest-cost mode):
+- Keep `TRIAGE_AI_REVIEW_MODE=minimal` for routine scans; use `full` only for high-risk repos.
+- Leave `TRIAGE_AI_ENABLE_THEMES=false` and `TRIAGE_AI_ENABLE_IMAGE_SUMMARIES=false` unless explicitly needed.
+- Keep architecture AI as on-demand (`Run AI (Architecture)`) rather than default.
+- The AI start endpoint supports freshness guardrails; add `?force=1` only when you intentionally need a full rerun.
 
 Parallel headless validation (dropdown repos, bounded concurrency):
 

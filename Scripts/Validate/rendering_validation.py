@@ -127,10 +127,19 @@ AWS_RESOURCE_TYPE_TO_ICON = _load_aws_mappings_from_source()
 
 
 # Semantic validation rules for icon mappings
+SERVICE_BUS_ICON = "service-bus"
+SERVICE_BUS_NAMESPACE_TYPE = "azurerm_service_bus"
+SERVICE_BUS_CHILD_TYPES = {
+    "azurerm_servicebus_queue": "queue",
+    "azurerm_servicebus_topic": "topic",
+    "azurerm_servicebus_subscription": "subscription",
+}
+
 SEMANTIC_MAPPING_CHECKS = [
     # (resource_type, wrong_icon_name, correct_icon_name, reason)
     ("aws_route_table", "route53", "route-table", "route53 is DNS service, not routing"),
     ("aws_security_group", "network-firewall", "security-group", "network-firewall is different service"),
+    (SERVICE_BUS_NAMESPACE_TYPE, "system-topic", SERVICE_BUS_ICON, "Service Bus namespace should use the Service Bus icon, not a topic icon"),
 ]
 
 
@@ -193,6 +202,21 @@ def validate_icon_mapping_semantics(mappings: dict[str, tuple[str, str]] | None 
                         reason=reason,
                     )
                 )
+
+    # Service Bus child resources should not reuse the generic namespace icon.
+    for child_type, child_label in SERVICE_BUS_CHILD_TYPES.items():
+        if child_type not in mappings:
+            continue
+        _, mapped_icon = mappings[child_type]
+        if mapped_icon == SERVICE_BUS_ICON:
+            errors.append(
+                MappingError(
+                    resource_type=child_type,
+                    wrong_icon=SERVICE_BUS_ICON,
+                    correct_icon=f"{child_label}-specific icon",
+                    reason=f"Service Bus {child_label}s should not use the generic Service Bus namespace icon",
+                )
+            )
 
     return sorted(errors, key=lambda e: e.resource_type)
 

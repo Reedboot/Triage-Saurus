@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Auto Scaling - Multiple boxes with upward arrow -->
+  <defs>
+    <style>
+      .asg-main { fill: #FF9900; }
+      .asg-fg { fill: #FFFFFF; }
+    </style>
+  </defs>
+  
+  <!-- Back boxes (stacked 3D effect) -->
+  <rect x="20" y="24" width="16" height="12" rx="2" class="asg-main" opacity="0.6"/>
+  <rect x="22" y="26" width="16" height="12" rx="2" class="asg-main" opacity="0.7"/>
+  
+  <!-- Front box -->
+  <rect x="24" y="28" width="16" height="12" rx="2" class="asg-main"/>
+  
+  <!-- Upward arrow (scale indicator) -->
+  <polygon points="48,32 48,48 52,48 44,56 36,48 40,48 40,32" class="asg-fg"/>
+  
+  <!-- Scaling text indicator -->
+  <line x1="28" y1="34" x2="36" y2="34" stroke="#FFFFFF" stroke-width="1" opacity="0.8"/>
+</svg>

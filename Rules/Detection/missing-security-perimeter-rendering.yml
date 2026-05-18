@@ -1,59 +1,44 @@
-id: missing-security-perimeter-rendering
-title: "Security perimeter components not rendered in diagram"
-description: |
-  Firewall, VPN, or ExpressRoute resources exist in Infrastructure-as-Code
-  but are not displayed in architecture diagrams. These are critical
-  security perimeter elements affecting the network threat boundary.
+rules:
+  - id: missing-security-perimeter-firewall
+    message: Security perimeter components not rendered in diagram - Azure Firewall missing
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_firewall" $NAME {
+        ...
+      }
+    metadata:
+      category: security-architecture
+      finding_kind: Gap
+      description: |
+        Firewall, VPN, or ExpressRoute resources exist in Infrastructure-as-Code
+        but are not displayed in architecture diagrams. These are critical
+        security perimeter elements affecting the network threat boundary.
+      recommendation: |
+        1. Ensure firewall, VPN, and ExpressRoute resources are rendered in diagrams
+        2. Update diagram generation to include security perimeter components
+        3. Validate diagram completeness
 
-patterns:
-  - pattern-either:
-      # Azure Firewall resource exists
-      - pattern: |
-          resource "azurerm_firewall" "..." {
-            ...
-          }
-      # Azure VPN Gateway exists
-      - pattern: |
-          resource "azurerm_vpn_gateway" "..." {
-            ...
-          }
-      # Azure ExpressRoute Circuit exists
-      - pattern: |
-          resource "azurerm_express_route_circuit" "..." {
-            ...
-          }
-      # AWS WAF + Firewall Manager
-      - pattern: |
-          resource "aws_wafv2_web_acl" "..." {
-            ...
-          }
-      # AWS Transit Gateway with firewall
-      - pattern: |
-          resource "aws_ec2_network_insights_path" "..." {
-            ...
-          }
-      # GCP Cloud Armor + Cloud VPN
-      - pattern: |
-          resource "google_compute_firewall" "..." {
-            ...
-          }
+  - id: missing-security-perimeter-vpn
+    message: Security perimeter components not rendered in diagram - VPN Gateway missing
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_vpn_gateway" $NAME {
+        ...
+      }
+    metadata:
+      category: security-architecture
+      finding_kind: Gap
 
-severity: HIGH
-impact: "Network security posture invisible in architecture diagrams; trust boundaries unclear"
-recommendation: |
-  1. These components ARE in the IaC and should be rendered
-  2. Update diagram generator to include security perimeter resources:
-     - Add 'vpn', 'express_route', and 'vpn_gateway' to network resource classification
-     - Ensure firewall rules are rendered as security policy nodes
-  3. Update architecture diagrams to show:
-     - Firewall placement and rules
-     - VPN/ExpressRoute for hybrid connectivity
-     - WAF/Cloud Armor for API protection
-  4. Document the security boundary and trust zones
-
-tags:
-  - security-perimeter
-  - firewall
-  - vpn
-  - diagram-coverage
-  - rendering-gap
+  - id: missing-security-perimeter-expressroute
+    message: Security perimeter components not rendered in diagram - ExpressRoute Circuit missing
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_express_route_circuit" $NAME {
+        ...
+      }
+    metadata:
+      category: security-architecture
+      finding_kind: Gap

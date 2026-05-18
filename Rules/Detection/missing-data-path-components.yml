@@ -1,37 +1,44 @@
-id: missing-data-path-queues-storage
-title: "Data path component missing (queue, storage, or database)"
-description: |
-  Architecture documentation references queues, storage, or databases,
-  but Infrastructure-as-Code is missing these resource definitions.
-  This indicates an incomplete or outdated IaC implementation.
+rules:
+  - id: missing-data-path-queue
+    message: Data path component missing - queue resource not found in IaC
+    severity: WARNING
+    languages: [terraform, hcl, yaml]
+    pattern: |
+      resource "azurerm_service_bus" $NAME {
+        ...
+      }
+    metadata:
+      category: architecture-parity
+      finding_kind: Gap
+      description: |
+        Documentation references queues, storage, or databases, but 
+        Infrastructure-as-Code is missing these resource definitions.
+        This indicates an incomplete or outdated IaC implementation.
+      recommendation: |
+        1. Review architecture documentation for referenced components
+        2. Identify which queue/storage/database services are documented
+        3. Add missing resource definitions to Terraform
 
-patterns:
-  - pattern-either:
-      # Documentation mentions 'queue' but no service bus/SQS/Pub-Sub defined
-      - pattern: |
-          # Matches markdown/docs with 'queue' mentioned
-          # This is typically found in architecture.md or README files
-          $DOC_TEXT = "... queue ..."
-      # Documentation mentions 'storage' but no blob/S3/GCS defined
-      - pattern: |
-          $DOC_TEXT = "... storage ..."
-      # Documentation mentions 'database' but no SQL/NoSQL defined
-      - pattern: |
-          $DOC_TEXT = "... database ..."
+  - id: missing-data-path-storage
+    message: Data path component missing - storage resource not found in IaC
+    severity: WARNING
+    languages: [terraform, hcl, yaml]
+    pattern: |
+      resource "azurerm_storage_account" $NAME {
+        ...
+      }
+    metadata:
+      category: architecture-parity
+      finding_kind: Gap
 
-severity: HIGH
-impact: "Data flow architecture incomplete; IaC/docs parity gap creates security risk"
-recommendation: |
-  1. Review architecture documentation for referenced components
-  2. Identify which queue/storage/database services are documented
-  3. Add missing resource definitions to Terraform/CloudFormation:
-     - For queues: Add Service Bus, SQS, or Pub/Sub
-     - For storage: Add Blob Storage, S3, or GCS
-     - For databases: Add SQL Server, RDS, or Cosmos DB
-  4. Ensure IaC reflects the documented architecture
-
-tags:
-  - data-path
-  - completeness
-  - architecture
-  - parity
+  - id: missing-data-path-database
+    message: Data path component missing - database resource not found in IaC
+    severity: WARNING
+    languages: [terraform, hcl, yaml]
+    pattern: |
+      resource "azurerm_mssql_server" $NAME {
+        ...
+      }
+    metadata:
+      category: architecture-parity
+      finding_kind: Gap

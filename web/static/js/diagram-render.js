@@ -19,6 +19,32 @@ import {
 
 export { sanitizeMermaidSource };
 
+function sanitizeMermaidForParseFallback(source) {
+  return String(source || '')
+    // Terraform/resource labels sometimes include escaped control sequences
+    // (e.g. format("%s-%s",\n...)) that Mermaid cannot parse reliably.
+    .replace(/\\[nrt]/g, ' ')
+    // Mermaid labels are more stable with apostrophes than escaped double-quotes.
+    .replace(/\\"/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function shouldUseParseSafeSource(source) {
+  return /\\[nrt]|\\\"/.test(String(source || ''));
+}
+
+function cleanupMermaidRenderArtifact(renderId) {
+  if (!renderId) return;
+  document.getElementById(`d${renderId}`)?.remove();
+}
+
+function cleanupStaleMermaidArtifacts() {
+  document
+    .querySelectorAll('div[id^="ddiag_"], div[id^="ddiagfb_"]')
+    .forEach((el) => el.remove());
+}
+
 export function getActiveDiagramView() {
   const diagramViews = document.getElementById('diagram-views');
   if (!diagramViews) return null;
@@ -88,6 +114,7 @@ export function clearDiagrams(message = 'Architecture diagram will appear after 
   if (diagramViews) {
     diagramViews.replaceChildren(createDiagramPlaceholder(message));
   }
+  cleanupStaleMermaidArtifacts();
 
   setDiagramPlaceholderVisible(true);
   setDiagramLoadingVisible(false);
@@ -96,18 +123,39 @@ export function clearDiagrams(message = 'Architecture diagram will appear after 
 // ── Per-container Mermaid rendering ───────────────────────────────────────────
 
 export async function renderMermaidInContainer(container) {
+  cleanupStaleMermaidArtifacts();
   const mermaidBlocks = Array.from(container.querySelectorAll('.mermaid'));
   for (let idx = 0; idx < mermaidBlocks.length; idx++) {
     const block  = mermaidBlocks[idx];
-    const source = block.dataset.source || block.textContent || '';
+    const source = sanitizeMermaidSource(block.dataset.source || block.textContent || '');
     if (!source.trim()) continue;
+    const preferredSource = shouldUseParseSafeSource(source)
+      ? sanitizeMermaidForParseFallback(source)
+      : source;
+    const renderId = `diag_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
     try {
-      const renderId = `diag_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
-      const rendered = await window.mermaid.render(renderId, source);
+      const rendered = await window.mermaid.render(renderId, preferredSource);
       block.innerHTML = rendered.svg || '';
       const svg = block.querySelector('svg');
       if (svg) stampSvgDimensions(svg);
+      cleanupMermaidRenderArtifact(renderId);
     } catch (err) {
+      cleanupMermaidRenderArtifact(renderId);
+      const fallbackSource = sanitizeMermaidForParseFallback(source);
+      if (fallbackSource && fallbackSource !== preferredSource) {
+        const fallbackRenderId = `diagfb_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
+        try {
+          const rendered = await window.mermaid.render(fallbackRenderId, fallbackSource);
+          block.innerHTML = rendered.svg || '';
+          const svg = block.querySelector('svg');
+          if (svg) stampSvgDimensions(svg);
+          cleanupMermaidRenderArtifact(fallbackRenderId);
+          continue;
+        } catch (_) {
+          cleanupMermaidRenderArtifact(fallbackRenderId);
+          // Fall through to original error log below
+        }
+      }
       console.error('[Mermaid] Rendering error:', err.message || err);
     }
   }
@@ -135,6 +183,7 @@ export function renderDiagrams(diagrams) {
 
   setDiagramLoadingVisible(true, 'Rendering architecture diagram…');
   if (zoomInner) zoomInner.classList.add('is-rendering');
+  cleanupStaleMermaidArtifacts();
 
   // Reset per-diagram zoom state
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);

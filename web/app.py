@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import html
 import contextvars
+import hashlib
 import re
 import sqlite3
 import shlex
@@ -82,6 +83,120 @@ def _scan_feature_flags() -> dict[str, object]:
         "single_writer_queue_enabled": _feature_flag_enabled("TRIAGE_SINGLE_WRITER_QUEUE_ENABLED", default=True),
         "pipeline_parallel_mode_enabled": _feature_flag_enabled("TRIAGE_PIPELINE_PARALLEL_MODE", default=True),
     }
+
+
+def _env_model(name: str, fallback: str = "gpt-5.4-mini") -> str:
+    """Resolve a model override from env with a safe fallback."""
+    value = (os.environ.get(name) or "").strip()
+    if value:
+        return value
+    global_fallback = (os.environ.get("COPILOT_MODEL") or "").strip()
+    if global_fallback:
+        return global_fallback
+    return fallback
+
+
+def _analysis_mode_from_request() -> str:
+    return (request.args.get("mode") or "").strip().lower()
+
+
+def _force_rerun_requested() -> bool:
+    raw = (request.args.get("force") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def _overview_reviewer_agents() -> list[tuple[str, str, str]]:
+    """Return reviewer agent set based on cost mode.
+
+    Modes:
+    - minimal (default): SecurityAgent only
+    - standard: ContextDiscoveryAgent + SecurityAgent
+    - full: ContextDiscoveryAgent + SecurityAgent + DevSkeptic + PlatformSkeptic
+    """
+    mode = (os.environ.get("TRIAGE_AI_REVIEW_MODE") or "minimal").strip().lower()
+    if mode == "full":
+        return [
+            ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
+            ("SecurityAgent", "🔒 Security", "security_review"),
+            ("DevSkeptic", "💻 Dev Skeptic", "dev_review"),
+            ("PlatformSkeptic", "☁️ Platform", "platform_review"),
+        ]
+    if mode == "standard":
+        return [
+            ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
+            ("SecurityAgent", "🔒 Security", "security_review"),
+        ]
+    return [
+        ("SecurityAgent", "🔒 Security", "security_review"),
+    ]
+
+
+def _compute_ai_input_fingerprint(experiment_id: str, repo_name: str) -> str | None:
+    """Compute a compact fingerprint for AI input freshness checks."""
+    conn = _get_db()
+    if conn is None:
+        return None
+    try:
+        repo_row = conn.execute(
+            """
+            SELECT id FROM repositories
+            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?)
+            LIMIT 1
+            """,
+            (experiment_id, repo_name),
+        ).fetchone()
+        if not repo_row:
+            return None
+        repo_id = repo_row["id"]
+
+        finding_sig = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS c,
+              COALESCE(MAX(id), 0) AS max_id,
+              COALESCE(SUM(COALESCE(severity_score, 0)), 0) AS sev_sum,
+              COALESCE(SUM(LENGTH(COALESCE(title, '')) + LENGTH(COALESCE(reason, ''))), 0) AS txt_sum
+            FROM findings
+            WHERE experiment_id = ? AND repo_id = ?
+            """,
+            (experiment_id, repo_id),
+        ).fetchone()
+        resource_sig = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS c,
+              COALESCE(MAX(id), 0) AS max_id,
+              COALESCE(SUM(LENGTH(COALESCE(resource_type, '')) + LENGTH(COALESCE(resource_name, '')) + LENGTH(COALESCE(provider, ''))), 0) AS txt_sum
+            FROM resources
+            WHERE experiment_id = ? AND repo_id = ?
+            """,
+            (experiment_id, repo_id),
+        ).fetchone()
+        diagram_sig = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS c,
+              COALESCE(MAX(id), 0) AS max_id,
+              COALESCE(SUM(LENGTH(COALESCE(title, '')) + LENGTH(COALESCE(code_snippet, '')) + LENGTH(COALESCE(mermaid_code, ''))), 0) AS txt_sum
+            FROM cloud_diagrams
+            WHERE experiment_id = ? AND repo_name = ?
+            """,
+            (experiment_id, repo_name),
+        ).fetchone()
+
+        material = {
+            "experiment_id": experiment_id,
+            "repo_name": repo_name.lower(),
+            "findings": dict(finding_sig or {}),
+            "resources": dict(resource_sig or {}),
+            "diagrams": dict(diagram_sig or {}),
+        }
+        digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode("utf-8")).hexdigest()
+        return digest
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 
 # DB helpers are used to persist Copilot-generated overview metadata.
@@ -2084,7 +2199,7 @@ def _stream_scan(repo_path: str, scan_name: str):
         rtype = str(resource.get("resource_type") or "resource").strip()
         name = re.sub(r"\s+", " ", name)[:42]
         rtype = re.sub(r"\s+", " ", rtype)[:34]
-        return f"{name}\\n{rtype}"
+        return f"{name}<br/>{rtype}"
 
     def _build_live_diagram_payload() -> tuple[list[dict], str] | tuple[None, None]:
         if not experiment_id:
@@ -2833,6 +2948,7 @@ def api_experiment_repo(experiment_id: str):
 @app.route("/api/analysis/start/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_start(experiment_id: str, repo_name: str):
     """Start a fresh AI analysis job (Steps 1, 2, 3 from the beginning)."""
+    force_rerun = _force_rerun_requested()
     conn = _get_db()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
@@ -2845,6 +2961,46 @@ def api_analysis_start(experiment_id: str, repo_name: str):
         conn.close()
 
     key = _ai_job_key(resolved_exp_id, repo_name)
+    if not force_rerun:
+        current_fp = _compute_ai_input_fingerprint(resolved_exp_id, repo_name)
+        db_status = _get_db_job_status(resolved_exp_id, repo_name)
+        prior_fp = None
+        conn_fp = _get_db()
+        if conn_fp:
+            try:
+                row = conn_fp.execute(
+                    """
+                    SELECT value FROM context_metadata
+                    WHERE experiment_id = ? AND namespace = 'ai_overview'
+                      AND key = 'ai_input_fingerprint'
+                      AND repo_id = (
+                        SELECT id FROM repositories
+                        WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                      )
+                    LIMIT 1
+                    """,
+                    (resolved_exp_id, resolved_exp_id, repo_name),
+                ).fetchone()
+                prior_fp = (row["value"] if row else None)
+            except Exception:
+                prior_fp = None
+            finally:
+                conn_fp.close()
+        if (
+            db_status
+            and db_status.get("status") == "completed"
+            and current_fp
+            and prior_fp
+            and current_fp == prior_fp
+        ):
+            return jsonify(
+                {
+                    "status": "completed",
+                    "experiment_id": resolved_exp_id,
+                    "repo_name": repo_name,
+                    "message": "AI analysis already up-to-date. Pass ?force=1 to rerun.",
+                }
+            )
     
     with _AI_ANALYSIS_LOCK:
         existing = _AI_ANALYSIS_JOBS.get(key)
@@ -3110,8 +3266,45 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             conn.close()
 
         key = _ai_job_key(resolved_exp_id, repo_name)
-        analysis_mode = (request.args.get("mode") or "").strip().lower()
+        analysis_mode = _analysis_mode_from_request()
         raw_file = _ai_raw_output_file(key)
+        input_fingerprint = _compute_ai_input_fingerprint(resolved_exp_id, repo_name)
+        force_rerun = _force_rerun_requested()
+
+        if not force_rerun:
+            db_status = _get_db_job_status(resolved_exp_id, repo_name)
+            prior_fp = None
+            conn_fp = _get_db()
+            if conn_fp:
+                try:
+                    row = conn_fp.execute(
+                        """
+                        SELECT value FROM context_metadata
+                        WHERE experiment_id = ? AND namespace = 'ai_overview'
+                          AND key = 'ai_input_fingerprint'
+                          AND repo_id = (
+                            SELECT id FROM repositories
+                            WHERE experiment_id = ? AND LOWER(repo_name) = LOWER(?) LIMIT 1
+                          )
+                        LIMIT 1
+                        """,
+                        (resolved_exp_id, resolved_exp_id, repo_name),
+                    ).fetchone()
+                    prior_fp = (row["value"] if row else None)
+                except Exception:
+                    prior_fp = None
+                finally:
+                    conn_fp.close()
+            if (
+                db_status
+                and db_status.get("status") == "completed"
+                and input_fingerprint
+                and prior_fp
+                and input_fingerprint == prior_fp
+            ):
+                yield _sse("log", "AI analysis already up-to-date (inputs unchanged). Use ?force=1 to rerun.")
+                yield _sse("done", {"status": "completed", "cached": True})
+                return
 
         with _AI_ANALYSIS_LOCK:
             existing = _AI_ANALYSIS_JOBS.get(key)
@@ -3186,7 +3379,9 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             if analysis_mode == "architecture":
                 yield _sse("log", "Step 2/3: Running focused architecture AI review...")
             else:
-                yield _sse("log", "Step 2/3: Running focused per-agent AI reviews (Security → Dev → Platform)...")
+                reviewer_agents = _overview_reviewer_agents()
+                agent_names = " → ".join(agent.replace("Agent", "") for agent, _, _ in reviewer_agents)
+                yield _sse("log", f"Step 2/3: Running focused AI review ({agent_names})...")
         else:
             # Resuming, need to fetch facts for context but skip the AI review
             try:
@@ -3260,12 +3455,7 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 ("ArchitectureValidationAgent", "🏗️ Architecture validation", "architecture_review"),
             ]
         else:
-            REVIEWER_AGENTS = [
-                ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
-                ("SecurityAgent",         "🔒 Security",           "security_review"),
-                ("DevSkeptic",            "💻 Dev Skeptic",         "dev_review"),
-                ("PlatformSkeptic",       "☁️ Platform",           "platform_review"),
-            ]
+            REVIEWER_AGENTS = _overview_reviewer_agents()
 
         per_agent_combined: dict[str, str] = {}
         aggregated_attack_paths: list[dict] = []
@@ -3280,7 +3470,10 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 _AI_ANALYSIS_JOBS[key] = job
 
             # We stream *progress* + a compact formatted result, not the raw token stream.
-            model = os.environ.get("COPILOT_MODEL", "gpt-5.4-mini")
+            if analysis_mode == "architecture":
+                model = _env_model("COPILOT_MODEL_ARCHITECTURE", fallback="gpt-5.4-mini")
+            else:
+                model = _env_model("COPILOT_MODEL_OVERVIEW", fallback="gpt-5.4-mini")
 
             # Set up a single working copy of the repo that all three agents share.
             repo_cwd = str(REPO_ROOT)
@@ -4300,7 +4493,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             findings_for_themes = []
             _append_ai_job_log(key, f"Could not fetch findings for theme analysis: {_fe}")
 
-        if findings_for_themes:
+        themes_enabled = _feature_flag_enabled("TRIAGE_AI_ENABLE_THEMES", default=False)
+        if findings_for_themes and themes_enabled:
             themes_prompt = (
                 "You are a security analyst reviewing findings from a static analysis scan.\n"
                 "Your task is to identify COMMON THEMES across the findings listed below, "
@@ -4333,7 +4527,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 tmp_dir_t = Path(tempfile.mkdtemp())
                 try:
                     prompt_args_t, prompt_file_t = _prepare_copilot_prompt(themes_prompt, str(tmp_dir_t))
-                    cmd_t = [*copilot_cmd_t, "--no-color", *prompt_args_t]
+                    model_themes = _env_model("COPILOT_MODEL_THEMES", fallback=_env_model("COPILOT_MODEL_OVERVIEW", fallback="gpt-5.4-mini"))
+                    cmd_t = [*copilot_cmd_t, "--no-color", "--model", model_themes, "--stream", "off", *prompt_args_t]
                     t0_t = time.time()
                     proc_t = subprocess.run(
                         cmd_t, capture_output=True, text=True, timeout=600
@@ -4375,6 +4570,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                         _shutil.rmtree(tmp_dir_t, ignore_errors=True)
                     except Exception:
                         pass
+        elif findings_for_themes and not themes_enabled:
+            yield _sse("log", "  (theme analysis skipped — TRIAGE_AI_ENABLE_THEMES is disabled)")
         else:
             yield _sse("log", "  (no findings to analyse)")
 
@@ -4431,7 +4628,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
             image_names = []
             _append_ai_job_log(key, f"Could not fetch container images: {_cie}")
 
-        if image_names:
+        image_summaries_enabled = _feature_flag_enabled("TRIAGE_AI_ENABLE_IMAGE_SUMMARIES", default=False)
+        if image_names and image_summaries_enabled:
             img_prompt = (
                 "You are a DevSecOps expert reviewing container images in a repository.\n"
                 "For each image listed below, provide:\n"
@@ -4452,7 +4650,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                 tmp_dir_ci = Path(tempfile.mkdtemp())
                 try:
                     prompt_args_ci, _ = _prepare_copilot_prompt(img_prompt, str(tmp_dir_ci))
-                    cmd_ci = [*copilot_cmd_ci, "--no-color", *prompt_args_ci]
+                    model_ci = _env_model("COPILOT_MODEL_IMAGE_SUMMARIES", fallback=_env_model("COPILOT_MODEL_OVERVIEW", fallback="gpt-5.4-mini"))
+                    cmd_ci = [*copilot_cmd_ci, "--no-color", "--model", model_ci, "--stream", "off", *prompt_args_ci]
                     t0_ci = time.time()
                     proc_ci = subprocess.run(cmd_ci, capture_output=True, text=True, timeout=600)
                     elapsed_ci = round(time.time() - t0_ci, 1)
@@ -4490,6 +4689,8 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                         _sh2.rmtree(tmp_dir_ci, ignore_errors=True)
                     except Exception:
                         pass
+        elif image_names and not image_summaries_enabled:
+            yield _sse("log", "  (container summaries skipped — TRIAGE_AI_ENABLE_IMAGE_SUMMARIES is disabled)")
         else:
             yield _sse("log", "  (no container images found)")
 
@@ -4503,6 +4704,15 @@ def api_analysis_copilot_stream(experiment_id: str, repo_name: str):
                     namespace="ai_overview",
                     source="copilot_stream",
                 )
+                if input_fingerprint:
+                    db_helpers.upsert_context_metadata(
+                        resolved_exp_id,
+                        repo_name,
+                        "ai_input_fingerprint",
+                        input_fingerprint,
+                        namespace="ai_overview",
+                        source="copilot_stream",
+                    )
             except Exception:
                 pass
             yield _sse("done", {"status": "completed"})
@@ -4660,7 +4870,7 @@ def api_analysis_generate_rules(experiment_id: str, repo_name: str):
             *copilot_cmd,
             "--no-color",
             "--model",
-            os.environ.get("COPILOT_MODEL", "gpt-5.4-mini"),
+            _env_model("COPILOT_MODEL_RULES", fallback="gpt-5.4-mini"),
             "--stream",
             "off",
             *prompt_args,
