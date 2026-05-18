@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for scan routing mappings."""
 
+import json
 from pathlib import Path
 import sys
 import subprocess
@@ -100,19 +101,33 @@ def test_huaweicloud_detection_rules_are_mapped():
     ]
 
 
-def test_run_opengrep_fails_fast_when_single_pass_detection_times_out(monkeypatch, tmp_path: Path):
-    seen: dict[str, object] = {}
+def test_run_opengrep_falls_back_to_chunked_scan_after_detection_timeout(monkeypatch, tmp_path: Path):
+    seen: dict[str, object] = {"calls": 0}
 
     monkeypatch.setattr(targeted_scan, "_tracked_file_count", lambda _target: 1)
+    monkeypatch.setattr(
+        targeted_scan,
+        "_build_scan_chunks",
+        lambda _target, max_files, max_paths: [["a.tf"], ["b.tf"]],
+    )
 
-    def fake_run(cmd, capture_output, text, timeout=None, **_kwargs):
-        seen["timeout"] = timeout
-        raise subprocess.TimeoutExpired(cmd, timeout)
+    def fake_run(cmd, capture_output, text, timeout=None, cwd=None, **_kwargs):
+        seen["calls"] += 1
+        if cwd is None:
+            seen["timeout"] = timeout
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+        if seen["calls"] == 2:
+            payload = {"results": [{"check_id": "chunk-1"}], "errors": [], "paths": {"scanned": ["a.tf"]}}
+        else:
+            payload = {"results": [{"check_id": "chunk-2"}], "errors": [], "paths": {"scanned": ["b.tf"]}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
     monkeypatch.setattr(targeted_scan.subprocess, "run", fake_run)
 
-    with pytest.raises(SystemExit) as exc:
-        targeted_scan.run_opengrep([targeted_scan.DETECTION], tmp_path, "Detection")
+    data = targeted_scan.run_opengrep([targeted_scan.DETECTION], tmp_path, "Detection")
 
-    assert exc.value.code == 1
     assert seen["timeout"] == 180
+    assert seen["calls"] == 3
+    assert [result["check_id"] for result in data["results"]] == ["chunk-1", "chunk-2"]
+    assert data["paths"]["scanned"] == ["a.tf", "b.tf"]

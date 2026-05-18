@@ -1,3 +1,16 @@
+## Invocation & Output
+
+**Script:** `python3 Scripts/Validate/review_generated_diagrams.py --base-url http://127.0.0.1:9000`
+
+**Output artifacts** (written under `Output/Audit/DiagramReviewSkill_<timestamp>/`):
+- `diagram_review_report.md` — main before/after report with metrics table
+- `baseline/` — baseline pass summaries and provider-tab screenshots
+- `after/` — after pass summaries and screenshots (post rule-apply cycle)
+
+**Full SKILL.md** (Copilot slash command): `.github/skills/diagram-review/SKILL.md`
+
+---
+
 # 🔍 Diagram Review Skill
 
 ## Role
@@ -28,17 +41,64 @@ If an element is unconnected, unnested, or unsupported by evidence, treat it as 
 
 ## Hierarchy Expectations
 - Child resources should be nested under logical parents (examples):
+
+  **Azure**
   - Storage Account → Container → Blob/Object
   - SQL Server/Instance → Database
-  - API Management/API Gateway → APIs/Operations
-  - Service Bus/Topic Namespace → Queues/Subscriptions
+  - API Management → APIs/Operations
+  - Service Bus Namespace → Queue / Topic → Subscription
+
+  **AWS**
+  - S3 Bucket → Object Prefix
+  - API Gateway → Stage → Resource/Method
+  - RDS Instance → Database
+
+  **GCP**
+  - Project → VPC Network → Subnet
+  - Pub/Sub Topic → Subscription
+  - Cloud SQL Instance → Database
+  - GKE Cluster → Node Pool
+
+  **Alibaba Cloud (Alicloud)**
+  - OSS Bucket → Object Prefix
+  - RDS Instance → Database
+  - VPC → VSwitch → ECS Instance
+  - API Gateway Group → API
+  - MQ (RocketMQ) Instance → Topic → Group
+
+  **Oracle Cloud (OCI)**
+  - Compartment → VCN → Subnet
+  - Object Storage Bucket → Object Prefix
+  - Autonomous Database → Schema
+  - API Gateway → Deployment → Route
+  - Streaming → Stream Pool → Stream
+
+  **Kubernetes**
+  - Cluster → Namespace → Workload (Deployment / StatefulSet / DaemonSet)
+  - Workload → Pod → Container
+  - Namespace → Service → Endpoint
+  - Ingress → Service → Pod
+  - ConfigMap / Secret scoped to Namespace (flag if shown at cluster-level without justification)
 
 If children appear flat while parent context exists, flag as hierarchy smell.
+
+## Unknown / External Client Handling
+When a client, app, or service calls cloud resources but its hosting is not known from IaC evidence:
+
+- **Represent it explicitly** — show an `External Client` or `Unknown Origin` node rather than leaving the call-path unmodelled.
+- **Flag the ambiguity** — mark the node with ⚠ and note: *"origin not confirmed in IaC; may be SaaS, on-prem, 3rd-party, or another cloud"*.
+- **Treat as high-risk until proven otherwise** — an uncontrolled caller reaching cloud services (storage, databases, queues) is a potential trust boundary violation.
+- **Investigate for evidence:**
+  1. Check for API keys / client credentials in config files or CI/CD secrets — may indicate an external system.
+  2. Check CORS / allowlist settings on the cloud service — may reveal expected callers.
+  3. Check IaC `allowed_origins`, `ip_rules`, `network_acls`, or WAF rules for expected source ranges.
+  4. If the caller is another cloud provider or region, flag cross-cloud data-flow as a supply-chain risk.
+- **Do not drop the node** — an unhosted caller left off the diagram is a missing threat-model element, not noise.
 
 ## Noise Reduction Guidance
 Call out resource types that likely should not appear on architecture diagrams when they do not contribute to threat modeling (e.g., pure metadata/config scaffolding). Keep rationale explicit and evidence-backed.
 
-## Enhanced Security Architecture Review (NEW)
+## Enhanced Security Architecture Review
 
 ### Resource Type Classification
 For **each diagram element**, verify:

@@ -561,6 +561,7 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     # Be conservative on WSL/network filesystems: chunk once repos are moderately sized.
     use_chunked = tracked_files >= 250
 
+    timed_out_fallback = False
     if not use_chunked:
         if label == "Detection":
             print(f"{Header.DETECTION} Detection chunk prep: single-pass scan")
@@ -568,21 +569,25 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         except subprocess.TimeoutExpired:
             print(
-                f"{Header.ERROR} Detection scan timed out after 180s; "
-                "aborting targeted scan to avoid hanging diagram regeneration.",
+                f"{Header.WARN} {label} scan timed out after 180s; "
+                "retrying with chunked opengrep.",
                 file=sys.stderr,
             )
-            sys.exit(1)
-        # opengrep exits non-zero when findings exist — that's expected
-        try:
-            return _parse_opengrep_json(result)
-        except json.JSONDecodeError as exc:
-            print(f"{Header.ERROR} Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            sys.exit(1)
+            timed_out_fallback = True
+        else:
+            # opengrep exits non-zero when findings exist — that's expected
+            try:
+                return _parse_opengrep_json(result)
+            except json.JSONDecodeError as exc:
+                print(f"{Header.ERROR} Failed to parse opengrep JSON output: {exc}", file=sys.stderr)
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+                sys.exit(1)
 
-    print(f"{Header.INFO} Large repo detected ({tracked_files} tracked files); using chunked opengrep.")
+    if timed_out_fallback:
+        print(f"{Header.INFO} Falling back to chunked opengrep for {label} scan.")
+    else:
+        print(f"{Header.INFO} Large repo detected ({tracked_files} tracked files); using chunked opengrep.")
     chunk_size = 40
     chunks = _build_scan_chunks(target, max_files=chunk_size, max_paths=3)
     if label == "Detection":

@@ -1,0 +1,16 @@
+rules:
+  - id: azure-subnet_natgw-detection
+    message: |
+      Diagram coverage gap detected for 'subnet_natgw' in repo 'terraform-network'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)subnet\ natgw'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [azure]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

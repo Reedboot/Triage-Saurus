@@ -1,0 +1,16 @@
+rules:
+  - id: azure-firewall_public_ip-detection
+    message: |
+      Diagram coverage gap detected for 'firewall_public_ip' in repo 'terraform-network'.
+      Resource appears in repo evidence but diagram is missing a required connection or representation.
+    severity: WARNING
+    languages: [regex]
+    patterns:
+      - pattern-regex: '(?i)firewall\ public\ ip'
+    metadata:
+      category: security
+      subcategory: [asset-discovery-gap]
+      technology: [azure]
+      finding_kind: asset_detection
+      generated_by: web_parallel_scan_validator
+      note: placeholder_rule - consider mapping to existing context-detection rule

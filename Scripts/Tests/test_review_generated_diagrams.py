@@ -85,6 +85,29 @@ def test_build_report_contains_before_after_delta_table(tmp_path: Path):
     assert "Security Architect Interpretation" in report
 
 
+def test_build_report_includes_asset_validation_report(tmp_path: Path):
+    baseline = {
+        "completed": 1,
+        "failed": 0,
+        "results": [],
+        "detection_rules_written": 0,
+        "detection_rules_validated": 0,
+        "detection_rule_validation_failed": 0,
+    }
+    baseline_pass = {"summary_file": tmp_path / "baseline.json", "cmd": ["python3", "validator.py", "--baseline"]}
+
+    report = build_report(
+        baseline=baseline,
+        after=None,
+        baseline_pass=baseline_pass,
+        after_pass=None,
+        run_root=tmp_path,
+    )
+
+    assert "ASSET VALIDATION REPORT" in report
+    assert "Asset validation report generation failed" not in report
+
+
 def test_apply_detection_rules_and_regenerate_times_out(monkeypatch, tmp_path: Path):
     import review_generated_diagrams
 

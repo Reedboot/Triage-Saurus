@@ -17,9 +17,11 @@ repository.
 - **Path:** Agents/ExperimentAgent.md
   - **Purpose:** Orchestrate triage experiments to optimize scan efficiency and accuracy.
   - **Capabilities:** Create numbered experiment folders, copy agents/scripts per run, coordinate SecurityAgent/DevSkeptic/PlatformSkeptic, capture metrics, maintain cross-session state via `state.json`.
+  - **Slash command:** `.github/skills/experiment-run/SKILL.md`
 - **Path:** Agents/LearningAgent.md
   - **Purpose:** Analyze experiment results and human feedback to improve future runs.
   - **Capabilities:** Compare experiments, identify patterns, propose agent instruction changes, update strategies, maintain SQLite learning index.
+  - **Slash command:** `.github/skills/learning-promote/SKILL.md`
 
 ## Additional Agent Files
 - **Path:** Templates/CloudFinding.md
@@ -29,32 +31,41 @@ repository.
 - **Path:** Agents/ContextDiscoveryAgent.md
   - **Purpose:** Fast context discovery for repositories (purpose, tech stack, services, architecture) - runs before security scans. Creates navigable Mermaid diagrams with hyperlinks (🔗 visual indicators) to related services.
   - **Capabilities:** Multi-cloud (Azure/AWS/GCP), Kubernetes/AKS with Ingress tracking, cross-service configuration detection, Dockerfile/CI-CD analysis, ingress/egress mandatory discovery, **complete APIM routing chains** (Internet → Gateway → Service → APIM → Backend), **database schema detection** (Terraform/Dacpac/EF/SQL), **WAF mode detection** (Detection vs Prevention), **Mermaid diagram hyperlinking with 🔗 indicators**.
+  - **Slash command:** `.github/skills/context-discovery/SKILL.md`
 - **Path:** Agents/RepoAgent.md
   - **Purpose:** Comprehensive guidance for repository scanning (ingress paths, architecture, dependencies, security).
 - **Path:** Agents/DevSkeptic.md
   - **Purpose:** Review approach for developer-focused findings.
 - **Path:** Agents/PlatformSkeptic.md
   - **Purpose:** Review approach for platform-focused findings.
+  - **Slash command:** `.github/skills/skeptic-review/SKILL.md` (combined Dev + Platform)
 - **Path:** Knowledge/DevSkeptic.md
   - **Purpose:** Reusable dev-centric context (app patterns, common mitigations, org conventions).
 - **Path:** Knowledge/PlatformSkeptic.md
   - **Purpose:** Reusable platform-centric context (networking/CI/CD constraints, guardrails, rollout realities).
 - **Path:** Agents/SecurityAgent.md
   - **Purpose:** Review approach for security-focused findings.
+  - **Slash command:** `.github/skills/enrich-findings/SKILL.md`
 - **Path:** Agents/ArchitectureAgent.md
   - **Purpose:** Create and update cloud architecture diagrams based on knowledge. Creates multi-diagram views with hyperlinks (🔗 visual indicators) between services for interactive navigation.
   - **Approach:** Multiple focused diagrams (Ingress, Routing, Backend, Network) instead of single monolithic diagram for clarity.
 - **Path:** Agents/DiagramReviewSkill.md
   - **Purpose:** Review generated diagrams via Playwright screenshots and structural analysis from a security-architect threat-model perspective.
   - **Capabilities:** Provider-tab screenshot capture, element-level rationale ("why is it there"), orphan/hierarchy smell detection, detection-rule gap identification, OpenGrep rule validation, and before/after reporting.
+  - **Slash command:** `.github/skills/diagram-review/SKILL.md`
+- **Path:** Agents/ArchitectureValidationAgent.md
+  - **Purpose:** Validate generated architecture diagrams for hierarchy issues, missing internet ingress, network segmentation gaps, and missing components. Runs after Phase 1, before security scanning.
+  - **Slash command:** `.github/skills/architecture-validation/SKILL.md`
 - **Path:** Agents/CloudSummaryAgent.md
-  - **Purpose:** Guidance for summarising cloud findings.
+  - **Purpose:** Guidance for summarising cloud findings grouped by resource type.
+  - **Slash command:** `.github/skills/cloud-summary/SKILL.md`
 - **Path:** Agents/RepoSummaryAgent.md
   - **Purpose:** Create executive summaries for scanned repositories.
 - **Path:** Agents/RiskRegisterAgent.md
   - **Purpose:** Create and maintain the executive risk register spreadsheet.
+  - **Slash command:** `.github/skills/risk-register/SKILL.md`
 - **Path:** Agents/CodeSummaryAgent.md
-- **Purpose:** Guidance for summarising code repository findings.
+  - **Purpose:** Guidance for summarising code repository findings.
 - **Path:** Agents/KnowledgeAgent.md
   - **Purpose:** Capture and maintain `Knowledge/` (confirmed + assumptions) and keep
     architecture diagrams in sync.

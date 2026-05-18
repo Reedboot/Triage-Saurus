@@ -336,7 +336,7 @@ Repo slash command (in Copilot Chat):
   - `--write-detection-rules` writes evidence-backed rules to `Rules/Detection/`
   - `--validate-detection-rules` runs `opengrep scan --config <rule-file.yml> <target-repo>` for each generated rule
 - `review_generated_diagrams.py` wraps this flow into a two-pass (before/after) security-architect report under `Output/Audit/DiagramReviewSkill_<timestamp>/diagram_review_report.md`.
-- `/diagram-review` is defined by `.github/prompts/diagram-review.prompt.md` and is available when working in this repository.
+- `/diagram-review` is defined by `.github/skills/diagram-review/SKILL.md` and is available when working in this repository.
 
 Security warning
 

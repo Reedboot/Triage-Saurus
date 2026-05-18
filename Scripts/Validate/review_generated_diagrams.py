@@ -415,6 +415,8 @@ def build_report(
     
     # Add asset validation report if available
     try:
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
         from Scripts.Validate.rendering_validation import generate_asset_validation_report
         asset_report = generate_asset_validation_report("aws")
         lines.append(asset_report)

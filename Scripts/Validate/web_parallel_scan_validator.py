@@ -1051,7 +1051,7 @@ def write_detection_rules(
                 continue
         
         # Fall back to generating a simple pattern rule (for unmapped assets)
-        rule_id = f"diagram-gap-{provider}-{clean_node}-detection"
+        rule_id = f"{provider}-{clean_node}-detection"
         pattern_regex = rf"(?i){re.escape(str(issue_key).replace('_', ' '))}"
         rule_file = rules_dir / f"{rule_id}.yml"
         content = "\n".join(
