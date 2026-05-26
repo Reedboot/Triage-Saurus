@@ -7,9 +7,6 @@ rules:
     languages: [regex]
     paths:
       include:
-        - "*.tf"
-        - "*.tfvars"
-        - "*.hcl"
         - "**/*.tf"
         - "**/*.tfvars"
         - "**/*.hcl"
