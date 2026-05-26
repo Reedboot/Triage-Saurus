@@ -357,8 +357,20 @@ UPDATE provisioned_assets SET status='active' WHERE id='/subscriptions/.../my-ap
    - **☁ Cloud Subscriptions** — List all harvested Azure subscriptions
    - **📦 All Cloud Assets** — Browse all harvested resources across subscriptions
    - **⚙ Settings** — Configure AI models per scan phase and performance tuning
-4. From **Cloud Subscriptions** tab: Click **View Architecture** on any subscription → live Mermaid diagram grouped by resource group (public assets highlighted in amber 🌐)
+4. From **Cloud Subscriptions** tab: Click **View Architecture** on any subscription
+   - Displays **collapsible diagrams grouped by resource group**
+   - Each resource group is its own expandable section (first open, others collapsed)
+   - Public assets highlighted in amber 🌐
+   - Click resource group header to expand/collapse
+   - Shows asset count and public asset count per RG
+   - No "Maximum text size" errors even for 1000+ assets
 5. From the repo page → **Subscription tab** → use the **"Linked Azure Subscriptions"** widget to declare which subscription(s) this repo deploys into
+
+**Diagram features:**
+- **Per-resource-group diagrams**: Each RG rendered separately (3-10x smaller)
+- **Collapsible sections**: Only expanded diagrams render, faster load times
+- **Asset statistics**: View counts of total/public assets without expanding
+- **Scalable**: Handles 100s of resource groups without performance issues
 
 **Settings page features:**
 - **AI Models**: Choose which LLM model to use globally or override per scan phase (Architecture, Overview, Rules, Themes, Image Summaries)
