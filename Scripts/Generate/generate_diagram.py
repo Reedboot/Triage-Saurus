@@ -485,6 +485,8 @@ class HierarchicalDiagramBuilder:
         # Build parent-child relationships from database (parent_resource_id column).
         # This ensures proper nesting: if a resource has parent_resource_id set, it
         # will be rendered inside its parent's subgraph rather than at the top level.
+        # However, filter out tier-incompatible relationships (e.g., SQL Server as child
+        # of app service plan).
         with get_db_connection() as conn:
             rows = conn.execute("""
                 SELECT parent_resource_id, id as child_id
@@ -495,9 +497,28 @@ class HierarchicalDiagramBuilder:
             for row in rows:
                 parent_id = row['parent_resource_id']
                 child_id = row['child_id']
-                if child_id in self.resource_by_id:
-                    child_resource = self.resource_by_id[child_id]
-                    self.children_by_parent[parent_id].append(child_resource)
+                if child_id not in self.resource_by_id or parent_id not in self.resource_by_id:
+                    continue
+                
+                child_resource = self.resource_by_id[child_id]
+                parent_resource = self.resource_by_id[parent_id]
+                
+                # Skip tier-incompatible relationships
+                # e.g., SQL Server (data tier) should not be a child of App Service Plan (app tier)
+                child_type = (child_resource.get('resource_type') or '').lower()
+                parent_type = (parent_resource.get('resource_type') or '').lower()
+                
+                # Database resources should not be children of app service plans or web apps
+                if any(db_tok in child_type for db_tok in ['sql', 'database', 'mssql', 'postgres', 'mysql', 'cosmos']):
+                    if any(app_tok in parent_type for app_tok in ['app_service', 'web_app', 'function_app', 'webapp']):
+                        continue
+                
+                # Storage/data resources should not be children of app tiers
+                if any(stor_tok in child_type for stor_tok in ['storage', 'bucket', 'objectstorage', 'oss']):
+                    if any(app_tok in parent_type for app_tok in ['app_service', 'function_app', 'ecs', 'lambda']):
+                        continue
+                
+                self.children_by_parent[parent_id].append(child_resource)
 
         # Also treat structural connection edges as hierarchy hints.
         # Some providers persist containment via resource_connections instead of parent_resource_id,
