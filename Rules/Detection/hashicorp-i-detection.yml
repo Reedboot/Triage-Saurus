@@ -11,7 +11,7 @@ rules:
         - "**/*.tfvars"
         - "**/*.hcl"
     patterns:
-      - pattern-regex: '(?im)^\s*(terraform|provider|resource|module|data)\b'
+      - pattern-regex: '(?im)^\s*(terraform|provider|resource|module|data|variable|output|locals|moved)\b'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]
