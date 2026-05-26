@@ -1,0 +1,60 @@
+<!-- ── Burger navigation menu ── -->
+<div class="burger-menu" id="burger-menu">
+  <button type="button" class="burger-btn" id="burger-btn" title="Navigation menu" aria-label="Open navigation menu" aria-expanded="false" aria-controls="burger-dropdown">
+    <span class="burger-bar"></span>
+    <span class="burger-bar"></span>
+    <span class="burger-bar"></span>
+  </button>
+  <nav class="burger-dropdown" id="burger-dropdown" role="menu" hidden>
+    <div class="burger-section-label">Scanning</div>
+    <a class="burger-item" href="/" role="menuitem">🦖 Triage-Saurus</a>
+
+    <div class="burger-divider"></div>
+    <div class="burger-section-label">Cloud</div>
+    <a class="burger-item" href="/cloud" role="menuitem">☁ Cloud Subscriptions</a>
+    <a class="burger-item" href="/cloud/assets" role="menuitem">📦 All Cloud Assets</a>
+
+    <div class="burger-divider"></div>
+    <div class="burger-section-label">Reference</div>
+    <a class="burger-item" href="/diagrams/latest" role="menuitem">🗺 Architecture Diagrams</a>
+    <a class="burger-item" href="https://github.com/Reedboot/Triage-Saurus" target="_blank" rel="noopener" role="menuitem">📖 GitHub Repo</a>
+
+    <div class="burger-divider"></div>
+    <div class="burger-section-label">Configuration</div>
+    <a class="burger-item" href="/settings" role="menuitem">⚙ Settings</a>
+  </nav>
+</div>
+
+<script>
+(function () {
+  const btn      = document.getElementById('burger-btn');
+  const dropdown = document.getElementById('burger-dropdown');
+  if (!btn || !dropdown) return;
+
+  function openMenu() {
+    dropdown.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  }
+  function closeMenu() {
+    dropdown.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  }
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    dropdown.hidden ? openMenu() : closeMenu();
+  });
+
+  // Close on click outside
+  document.addEventListener('click', e => {
+    if (!dropdown.hidden && !dropdown.contains(e.target) && e.target !== btn) {
+      closeMenu();
+    }
+  });
+
+  // Close on Escape
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !dropdown.hidden) closeMenu();
+  });
+})();
+</script>
