@@ -5,6 +5,14 @@ rules:
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
+    paths:
+      include:
+        - "*.tf"
+        - "*.tfvars"
+        - "*.hcl"
+        - "**/*.tf"
+        - "**/*.tfvars"
+        - "**/*.hcl"
     patterns:
       - pattern-regex: '(?i)i'
     metadata:
