@@ -1,23 +1,23 @@
 // Shared Mermaid rendering utilities
 (function() {
-  // Wait for mermaid to load and initialize
+  // Wait for mermaid to load
   function waitForMermaid(callback, maxWait = 5000) {
     const start = Date.now();
     const check = () => {
-      if (window.mermaid && typeof window.mermaid.contentLoaded === 'function') {
-        console.log('[Diagram] Mermaid ready');
+      if (window.mermaid && typeof window.mermaid.run === 'function') {
+        console.log('[Diagram] Mermaid ready for rendering');
         if (callback) callback();
       } else if (Date.now() - start < maxWait) {
         setTimeout(check, 100);
       } else {
         console.warn('[Diagram] Mermaid did not load within timeout');
-        if (callback) callback(); // Call anyway so things don't hang
+        if (callback) callback(); // Call anyway
       }
     };
     check();
   }
 
-  // Simple render function that uses mermaid's contentLoaded
+  // Render diagrams using mermaid.run()
   async function renderDiagrams(container) {
     if (!window.mermaid) {
       console.warn('[Diagram] Mermaid not loaded');
@@ -25,10 +25,10 @@
     }
 
     try {
-      // Use mermaid's built-in content rendering
-      console.log('[Diagram] Running mermaid.contentLoaded()');
-      await window.mermaid.contentLoaded();
-      console.log('[Diagram] ✓ Mermaid rendering complete');
+      console.log('[Diagram] Starting render with mermaid.run()');
+      // mermaid.run() will find all .mermaid divs and render them
+      await window.mermaid.run();
+      console.log('[Diagram] ✓ All diagrams rendered');
       return true;
     } catch (err) {
       console.error('[Diagram] Error rendering:', err);

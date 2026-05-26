@@ -7,17 +7,17 @@
     s.onerror = function () { if (onerror) onerror(); };
     document.head.appendChild(s);
   }
-  // Load from CDN
-  loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () {
-    console.info('mermaid loaded from CDN');
+  // Load from local static directory
+  loadScript('/static/js/mermaid.min.js', function () {
+    console.info('✓ Mermaid loaded from local static directory');
     // Initialize mermaid
     if (window.mermaid && typeof window.mermaid.initialize === 'function') {
       window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
-      console.info('mermaid initialized');
+      console.info('✓ Mermaid initialized');
     }
   }, function () {
-    console.warn('Mermaid library failed to load from CDN. Diagrams will not render.');
-    var message = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access.';
+    console.error('✗ Failed to load mermaid library from /static/js/mermaid.min.js');
+    var message = 'Mermaid library unavailable — diagrams will not render.';
     window.__triageMermaidLoadError = message;
     try {
       window.dispatchEvent(new CustomEvent('triage:mermaid-load-error', { detail: { message: message } }));
