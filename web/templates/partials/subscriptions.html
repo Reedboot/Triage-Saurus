@@ -159,12 +159,14 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         
         container.appendChild(ingressSection);
         
-        // Render using shared Mermaid utility (same as main diagram viewer)
-        if (window.TriageMermaid) {
+      // Render using shared Mermaid utility with proper waiting
+      if (window.TriageDiagramRenderer) {
+        window.TriageDiagramRenderer.waitForMermaid(() => {
           setTimeout(() => {
-            window.TriageMermaid.render(ingressDiv).catch(e => console.warn('Ingress diagram render error:', e));
+            window.TriageDiagramRenderer.render(ingressDiv).catch(e => console.warn('Ingress diagram render error:', e));
           }, 100);
-        }
+        });
+      }
       }
 
       // Then render the detailed diagrams (one per resource group)
@@ -226,11 +228,8 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         diagramDiv.style.display = isOpen ? 'block' : 'none';
         diagramDiv.style.overflow = 'auto';
         
-        if (window.mermaid) {
-          diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
-        } else {
-          diagramDiv.innerHTML = `<pre style="font-size:0.75rem;overflow:auto;">${d.mermaid}</pre>`;
-        }
+        // Always wrap in mermaid div - rendering is handled by TriageMermaid.render()
+        diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
         
         header.addEventListener('click', () => {
           const isVisible = diagramDiv.style.display !== 'none';
@@ -238,10 +237,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
           toggle.textContent = isVisible ? '▶' : '▼';
           
           // Use shared Mermaid rendering when opening diagram
-          if (!isVisible && window.TriageMermaid) {
-            setTimeout(() => {
-              window.TriageMermaid.render(diagramDiv).catch(e => console.warn('Diagram render error:', e));
-            }, 50);
+          if (!isVisible && window.TriageDiagramRenderer) {
+            window.TriageDiagramRenderer.waitForMermaid(() => {
+              setTimeout(() => {
+                window.TriageDiagramRenderer.render(diagramDiv).catch(e => console.warn('Diagram render error:', e));
+              }, 50);
+            });
           }
         });
         
@@ -251,10 +252,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       });
 
       // Initialize Mermaid for initially visible diagrams using shared utility
-      if (window.TriageMermaid) {
-        setTimeout(() => {
-          window.TriageMermaid.render(container).catch(e => console.warn('Diagram render error:', e));
-        }, 100);
+      if (window.TriageDiagramRenderer) {
+        window.TriageDiagramRenderer.waitForMermaid(() => {
+          setTimeout(() => {
+            window.TriageDiagramRenderer.render(container).catch(e => console.warn('Diagram render error:', e));
+          }, 100);
+        });
       }
     } catch(e) {
       loading.textContent = 'Failed to load diagram: ' + e.message;

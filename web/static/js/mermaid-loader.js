@@ -8,7 +8,14 @@
     document.head.appendChild(s);
   }
   // Load from CDN
-  loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () { console.info('mermaid loaded from CDN'); }, function () {
+  loadScript('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js', function () {
+    console.info('mermaid loaded from CDN');
+    // Initialize mermaid
+    if (window.mermaid && typeof window.mermaid.initialize === 'function') {
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+      console.info('mermaid initialized');
+    }
+  }, function () {
     console.warn('Mermaid library failed to load from CDN. Diagrams will not render.');
     var message = 'Mermaid library unavailable — diagrams may not render. To fix: enable CDN access.';
     window.__triageMermaidLoadError = message;
