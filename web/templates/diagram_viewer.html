@@ -7,7 +7,8 @@
     <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
     <link rel="stylesheet" href="/static/tailwind.css?v=2">
     <script src="/static/js/mermaid-loader.js?v=2"></script>
-    <script src="/static/js/mermaid-icon-injector.js?v=4" defer></script>
+    <script type="module" src="/static/js/diagram-shared.js?v=2"></script>
+    <script src="/static/js/mermaid-icon-injector.js?v=5" defer></script>
     <style>
         /* ── Tab bar: mobile scroll + fade gradient masks ─────────────────── */
         .tab-scroll {
@@ -377,21 +378,19 @@
         const iconImg       = document.getElementById('provider-icon-img');
         const iconDot       = document.getElementById('provider-icon-dot');
 
-        // ── Mermaid initialisation (same loader path as main tab viewer) ─────
+        // ── Mermaid initialisation (uses shared config from diagram-shared.js) ──
         let mermaidInitialized = false;
         function ensureMermaidInitialized() {
             if (mermaidInitialized) return true;
             if (!window.mermaid) return false;
-            window.mermaid.initialize({
+            const cfg = window.DiagramShared?.getMermaidConfig?.() ?? {
                 startOnLoad: false,
                 theme: 'dark',
                 securityLevel: 'loose',
-                flowchart: {
-                    useMaxWidth: false,
-                    htmlLabels: true,
-                },
+                flowchart: { useMaxWidth: false, htmlLabels: true },
                 onError: (err) => console.error('[Mermaid] Rendering error:', err.message),
-            });
+            };
+            window.mermaid.initialize(cfg);
             mermaidInitialized = true;
             return true;
         }

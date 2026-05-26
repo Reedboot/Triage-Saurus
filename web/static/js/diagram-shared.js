@@ -1,6 +1,8 @@
 /**
  * diagram-shared.js — Shared diagram utilities for both standalone and inline viewers.
  * This module contains common logic that should be identical across all diagram viewers.
+ *
+ * Also exposes window.DiagramShared for non-module contexts (e.g. diagram_viewer.html).
  */
 
 // ── Mermaid Configuration ──────────────────────────────────────────────────────
@@ -198,4 +200,11 @@ export async function renderMermaidDiagram(container) {
     console.error('[Mermaid] Error rendering diagram:', err);
     return false;
   }
+}
+
+// ── Global export for non-module contexts (e.g. diagram_viewer.html) ─────────
+// Makes getMermaidConfig available as window.DiagramShared.getMermaidConfig()
+// so the standalone viewer stays in sync with the inline viewer's config.
+if (typeof window !== 'undefined') {
+  window.DiagramShared = { getMermaidConfig };
 }
