@@ -138,6 +138,50 @@ const MermaidIconInjector = (() => {
   }
 
   /**
+   * Add tooltips to all nodes with resource types (even those without icons)
+   * Ensures every cloud provider resource has a helpful tooltip
+   */
+  function addTooltipsToAllNodes(svgElement) {
+    if (!svgElement) return;
+    
+    try {
+      // Find all nodes that might have resource type information
+      const nodes = findMermaidNodes(svgElement);
+      
+      let tooltipCount = 0;
+      for (const node of nodes) {
+        try {
+          // Skip if already has a title (already added tooltip)
+          if (Array.from(node.childNodes).some(child => child.tagName === 'title')) {
+            continue;
+          }
+          
+          // Extract resource type from CSS class
+          const resourceType = extractResourceTypeFromClass(node);
+          if (!resourceType) continue;
+          
+          // Create and add tooltip
+          const nodeTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+          const formattedName = resourceType
+            .split('_')
+            .slice(1)  // Skip provider prefix
+            .join(' ')
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          nodeTitle.textContent = `${formattedName} (${resourceType})`;
+          node.insertBefore(nodeTitle, node.firstChild);
+          tooltipCount++;
+        } catch (err) {
+          // Silently skip nodes that can't get tooltips
+        }
+      }
+    } catch (err) {
+      console.warn('[MermaidIconInjector] Failed to add tooltips to all nodes:', err.message);
+    }
+  }
+
+  /**
    * Main entry point: inject icons into a rendered Mermaid diagram
    * @param {SVGElement} svgElement - The rendered Mermaid diagram SVG
    * @param {Object} iconMap - Mapping of resource_type to icon file paths
@@ -159,6 +203,16 @@ const MermaidIconInjector = (() => {
           console.warn('[MermaidIconInjector] Failed to inject icon for node:', err.message);
         }
       }
+      
+      // After icon injection, add tooltips to any remaining nodes that don't have them
+      // This ensures ALL cloud provider resources have tooltips, not just those with icons
+      setTimeout(() => {
+        try {
+          addTooltipsToAllNodes(svgElement);
+        } catch (err) {
+          console.warn('[MermaidIconInjector] Failed to add tooltips:', err.message);
+        }
+      }, 100);
     } catch (err) {
       console.error('[MermaidIconInjector] Failed to inject icons:', err.message);
     }
