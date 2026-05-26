@@ -357,7 +357,7 @@ class HierarchicalDiagramBuilder:
                 text = parts[-1]
 
         normalized = text.replace('_', ' ')
-        if len(normalized) > 40:
+        if len(normalized) >= 40:
             normalized = normalized[:39].rstrip() + '…'
         if len(normalized) <= width:
             return normalized
@@ -378,7 +378,7 @@ class HierarchicalDiagramBuilder:
         safe = re.sub(r'\s+', ' ', safe.strip())
         # Mermaid is less tolerant of escaped double-quotes in node labels;
         # prefer apostrophes to keep labels parse-safe.
-        safe = safe.replace('\\', '\\\\')
+        safe = re.sub(r'\\(?!")', r'\\\\', safe)
         safe = safe.replace('"', '\\"')
         return f'"{safe}"'
 
@@ -5639,7 +5639,7 @@ class HierarchicalDiagramBuilder:
             and (
                 self._is_connected_resource(r)
                 or self._is_exposed_resource(r)
-                or bool(self.children_by_parent.get(r['id']))
+                or self.children_by_parent.get(r['id'])
             )
         ]
         app_related_ids = {r['id'] for r in app_resources}
@@ -5911,7 +5911,7 @@ class HierarchicalDiagramBuilder:
             return lines
 
         adjusted: List[str] = []
-        linkstyle_re = re.compile(r'^(\s*linkStyle\s+)([0-9,\s]+)(\s+.*)$', re.IGNORECASE)
+        linkstyle_re = re.compile(r'^(\s*linkStyle\s+)(\d+(?:\s*,\s*\d+)*)(\s+.*)$', re.IGNORECASE)
         for line in lines:
             m = linkstyle_re.match(line)
             if not m:
