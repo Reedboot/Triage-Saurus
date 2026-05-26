@@ -12286,7 +12286,7 @@ def api_cloud_assets_all():
         # Summary counts per subscription
         subs = conn.execute(
             """
-            SELECT s.id, s.display_name, s.environment, s.cloud_provider, s.state,
+            SELECT s.id, s.display_name, s.environment, s.state,
                    s.last_synced,
                    COUNT(pa.id)                            AS total,
                    SUM(CASE WHEN pa.is_public=1 THEN 1 ELSE 0 END) AS public_count,
@@ -12305,7 +12305,7 @@ def api_cloud_assets_all():
                    pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
                    pa.first_detected, pa.last_synced,
                    s.id AS sub_id, s.display_name AS sub_name,
-                   s.environment, s.cloud_provider,
+                   s.environment,
                    r.repo_name
             FROM provisioned_assets pa
             JOIN subscriptions s ON s.id = pa.subscription_id
@@ -12319,9 +12319,9 @@ def api_cloud_assets_all():
         for s in subs:
             subscriptions.append({
                 "id": s[0], "display_name": s[1], "environment": s[2],
-                "cloud_provider": s[3] or "Azure", "state": s[4],
-                "last_synced": s[5], "total": s[6] or 0,
-                "public_count": s[7] or 0, "stale_count": s[8] or 0,
+                "cloud_provider": "Azure", "state": s[3] or "Unknown",
+                "last_synced": s[4], "total": s[5] or 0,
+                "public_count": s[6] or 0, "stale_count": s[7] or 0,
             })
 
         assets = []
@@ -12334,8 +12334,8 @@ def api_cloud_assets_all():
                 "is_public": bool(r[7]), "status": r[8] or "active",
                 "pipeline_tag": r[9], "first_detected": r[10], "last_synced": r[11],
                 "sub_id": r[12], "sub_name": r[13],
-                "environment": r[14], "cloud_provider": r[15] or "Azure",
-                "linked_repo": r[16],
+                "environment": r[14], "cloud_provider": "Azure",
+                "linked_repo": r[15],
             })
 
         # Type summary for the filter bar
