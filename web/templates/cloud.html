@@ -8,6 +8,18 @@
   <link rel="stylesheet" href="/static/app.css?v=8" />
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="/static/js/mermaid-loader.js"></script>
+  <script type="module">
+    // Load shared Mermaid utilities for inline rendering
+    import { renderMermaidDiagram, getMermaidConfig, sanitizeMermaidSource } 
+      from '/static/js/diagram-shared.js';
+    
+    // Export to global scope for subscriptions.html to use
+    window.TriageMermaid = {
+      render: renderMermaidDiagram,
+      getMermaidConfig,
+      sanitizeMermaidSource,
+    };
+  </script>
 </head>
 <body>
 

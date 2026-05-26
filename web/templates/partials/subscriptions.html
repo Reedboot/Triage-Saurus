@@ -159,14 +159,10 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         
         container.appendChild(ingressSection);
         
-        // Render Mermaid for ingress diagram
-        if (window.mermaid) {
+        // Render using shared Mermaid utility (same as main diagram viewer)
+        if (window.TriageMermaid) {
           setTimeout(() => {
-            try {
-              window.mermaid.init(undefined, ingressDiv.querySelector('.mermaid'));
-            } catch(e) {
-              console.warn('Mermaid ingress render error:', e.message);
-            }
+            window.TriageMermaid.render(ingressDiv).catch(e => console.warn('Ingress diagram render error:', e));
           }, 100);
         }
       }
@@ -241,10 +237,10 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
           diagramDiv.style.display = isVisible ? 'none' : 'block';
           toggle.textContent = isVisible ? '▶' : '▼';
           
-          // Render Mermaid when opened if not already done
-          if (!isVisible && window.mermaid) {
+          // Use shared Mermaid rendering when opening diagram
+          if (!isVisible && window.TriageMermaid) {
             setTimeout(() => {
-              window.mermaid.init(undefined, diagramDiv.querySelector('.mermaid'));
+              window.TriageMermaid.render(diagramDiv).catch(e => console.warn('Diagram render error:', e));
             }, 50);
           }
         });
@@ -254,16 +250,10 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         container.appendChild(section);
       });
 
-      // Initialize Mermaid for initially visible diagrams
-      if (window.mermaid) {
+      // Initialize Mermaid for initially visible diagrams using shared utility
+      if (window.TriageMermaid) {
         setTimeout(() => {
-          container.querySelectorAll('.mermaid').forEach(el => {
-            try {
-              window.mermaid.init(undefined, el);
-            } catch(e) {
-              console.warn('Mermaid render error:', e.message);
-            }
-          });
+          window.TriageMermaid.render(container).catch(e => console.warn('Diagram render error:', e));
         }, 100);
       }
     } catch(e) {

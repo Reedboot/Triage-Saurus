@@ -158,3 +158,44 @@ export function buildFullscreenDiagramUrl(experimentId, provider, originUrl) {
   }
   return url.toString();
 }
+
+// ── Simple Inline Mermaid Renderer (for non-module contexts) ─────────────────────
+// This function is designed for inline usage in HTML templates (e.g., subscriptions.html)
+// and provides the same configuration and rendering logic as the module-based system.
+
+export async function renderMermaidDiagram(container) {
+  if (!window.mermaid) {
+    console.warn('[Mermaid] Mermaid not loaded yet, retrying...');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (!window.mermaid) {
+      console.error('[Mermaid] Failed to load Mermaid library');
+      return false;
+    }
+  }
+
+  try {
+    window.mermaid.initialize(getMermaidConfig());
+    
+    const mermaidBlocks = Array.from(container.querySelectorAll('.mermaid'));
+    for (const block of mermaidBlocks) {
+      const source = sanitizeMermaidSource(block.textContent || '');
+      if (!source.trim()) continue;
+      
+      const renderId = `diag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const rendered = await window.mermaid.render(renderId, source);
+        block.innerHTML = rendered.svg || '';
+        const svg = block.querySelector('svg');
+        if (svg) stampSvgDimensions(svg);
+        document.getElementById(renderId)?.remove();
+      } catch (err) {
+        console.error('[Mermaid] Rendering error:', err.message || err);
+        document.getElementById(renderId)?.remove();
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error('[Mermaid] Error rendering diagram:', err);
+    return false;
+  }
+}
