@@ -546,6 +546,97 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
 }
 .btn-diagram:hover { background: var(--bg-hover); }
 
+/* ── Burger navigation menu ── */
+.burger-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.burger-btn {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 36px;
+  height: 36px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.burger-btn:hover { background: var(--bg-hover); }
+.burger-btn[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-dim); }
+
+.burger-bar {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: var(--text);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.burger-btn[aria-expanded="true"] .burger-bar { background: var(--accent); }
+
+.burger-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 200;
+  min-width: 220px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 6px 0;
+  animation: burger-fade-in 0.12s ease;
+}
+.burger-dropdown[hidden] { display: none; }
+
+@keyframes burger-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.burger-section-label {
+  padding: 6px 16px 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.burger-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 0;
+}
+
+.burger-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.burger-item:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.burger-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+
 
 /* ── Log output ── */
 #log-output {

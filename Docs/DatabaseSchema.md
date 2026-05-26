@@ -43,6 +43,12 @@ erDiagram
     resource_nodes         ||--o{ resource_equivalences  : "alias candidates"
     resource_nodes         ||--o{ enrichment_queue       : "node-level gaps"
     resource_relationships ||--o{ enrichment_queue       : "relationship gaps"
+
+    subscriptions          ||--o{ provisioned_assets          : "contains"
+    provisioned_assets     ||--o{ provisioned_asset_repo_links : "linked_to"
+    repositories           ||--o{ provisioned_asset_repo_links : "linked_from"
+    repositories           ||--o{ repository_subscriptions     : "deployed_into"
+    subscriptions          ||--o{ repository_subscriptions     : "hosts"
 ```
 
 ---
@@ -630,6 +636,79 @@ WHERE eq.status = 'pending_review'
 ORDER BY CASE eq.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
          eq.created_at ASC;
 ```
+
+---
+
+## Azure Cloud Asset Tables
+
+These tables store **live provisioned assets** fetched directly from Azure via the harvest script (`Scripts/Harvest/harvest_azure_assets.py`). They are separate from IaC-derived `resources` and complement the static analysis with real-world cloud state.
+
+### `subscriptions`
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | Azure subscription GUID |
+| `display_name` | TEXT | Human-readable subscription name |
+| `tenant_id` | TEXT | Azure AD tenant GUID |
+| `environment` | TEXT | Inferred tier: `prod` / `staging` / `dev` / `shared` / `unknown` |
+| `state` | TEXT | `Enabled`, `Disabled`, or `Warned` |
+| `last_synced` | DATETIME | Timestamp of last successful harvest run |
+
+### `provisioned_assets`
+
+Represents live cloud resources fetched from Azure (not IaC-inferred). One row per ARM resource.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | Full Azure ARM resource ID |
+| `subscription_id` | TEXT FK | References `subscriptions.id` |
+| `resource_group` | TEXT | Azure resource group name |
+| `name` | TEXT | Resource display name |
+| `type` | TEXT | ARM resource type, e.g. `Microsoft.Web/sites` |
+| `location` | TEXT | Azure region |
+| `sku` | TEXT | SKU/tier if applicable |
+| `tags` | TEXT | JSON blob of Azure resource tags |
+| `is_public` | INTEGER | `1` if internet-accessible |
+| `fqdn` | TEXT | Primary hostname / default domain |
+| `pipeline_tag` | TEXT | ADO pipeline URL from deployment source tags |
+| `raw_json` | TEXT | Full `az` CLI response JSON (for re-enrichment without re-querying) |
+| `first_detected` | DATETIME | Timestamp of first ever harvest — **never overwritten on subsequent runs** |
+| `last_synced` | DATETIME | Timestamp of most recent successful harvest |
+| `status` | TEXT | `active` (seen in latest run) · `potentially_removed` (absent from latest run, pending confirmation) · `removed` (confirmed gone) |
+
+**Indexes:** `subscription_id`, `type`, `fqdn`
+
+### `provisioned_asset_repo_links`
+
+Maps live provisioned assets to source code repositories, enabling cross-referencing of findings with live infrastructure.
+
+| Column | Type | Description |
+|---|---|---|
+| `asset_id` | TEXT FK | References `provisioned_assets.id` |
+| `repository_id` | INTEGER FK | References `repositories.id` |
+| `match_method` | TEXT | How the link was established: `pipeline_tag`, `fqdn_iac`, `naming_convention`, or `manual` |
+| `confidence` | TEXT | `high`, `medium`, or `low` |
+| `notes` | TEXT | Optional explanation |
+| `created_at` | DATETIME | When link was created |
+
+**Match method confidence tiers:**
+- `pipeline_tag` → **high** — deployment source tag explicitly names the ADO pipeline / repo
+- `fqdn_iac` → **medium** — FQDN from live resource matches an endpoint in IaC
+- `naming_convention` → **low** — resource group / name pattern matches repo name heuristic
+
+### `repository_subscriptions`
+
+Declares which Azure subscriptions a repository is deployed into (many-to-many). Set manually via the web UI Subscription tab. Used to enrich findings with live cloud context and to scope asset harvesting to repos.
+
+| Column | Type | Description |
+|---|---|---|
+| `repository_id` | INTEGER FK | References `repositories.id` |
+| `subscription_id` | TEXT FK | References `subscriptions.id` |
+| `deploy_role` | TEXT | `prod`, `staging`, `dev`, `dr`, `shared`, or `primary` |
+| `notes` | TEXT | Optional free-text annotation |
+| `created_at` | DATETIME | When link was created |
+
+**UI:** Managed via the **Subscription tab** in the web UI — select from harvested subscriptions and assign a deploy role. Populated automatically by `correlate_assets.py` when pipeline tags can be matched.
 
 ---
 

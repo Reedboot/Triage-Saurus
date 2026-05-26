@@ -1,4 +1,171 @@
 {# Subscription-wide Q&A — shared context across repos within an experiment #}
+
+{# ── Linked Azure Subscriptions widget ───────────────────────────────────── #}
+<div class="markdown-card linked-subs-card"
+     data-experiment-id="{{ experiment_id or '' }}"
+     data-repo-name="{{ repo_name or '' }}">
+  <h3 style="margin:0 0 6px;">☁️ Linked Azure Subscriptions</h3>
+  <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 12px;">
+    Declare which Azure subscriptions this repo is deployed into.
+    Used to cross-reference live cloud assets with findings.
+  </p>
+
+  <div id="linked-subs-loading" style="font-size:0.85rem;color:var(--text-muted);">Loading…</div>
+
+  <div id="linked-subs-body" style="display:none;">
+    {# Current links #}
+    <div id="linked-subs-list" style="margin-bottom:12px;"></div>
+
+    {# No subscriptions harvested yet #}
+    <div id="linked-subs-no-harvest" style="display:none;font-size:0.83rem;color:var(--text-muted);padding:8px;background:var(--bg-secondary);border-radius:4px;">
+      No Azure subscriptions harvested yet. Run
+      <code>python Scripts/Harvest/harvest_azure_assets.py --subscription "&lt;name&gt;"</code>
+      first, then return here to link.
+    </div>
+
+    {# Add link form #}
+    <div id="linked-subs-add-form" style="display:none;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px;">
+      <div class="field grow" style="min-width:220px;flex:2 1 260px;">
+        <label style="font-size:0.8rem;">Subscription</label>
+        <select id="linked-subs-select" class="assets-provider-filter" style="width:100%;"></select>
+      </div>
+      <div class="field compact" style="min-width:140px;">
+        <label style="font-size:0.8rem;">Deploy role</label>
+        <select id="linked-subs-role" class="assets-provider-filter">
+          <option value="prod">prod</option>
+          <option value="staging">staging</option>
+          <option value="dev">dev</option>
+          <option value="shared">shared</option>
+          <option value="dr">dr</option>
+          <option value="primary" selected>primary</option>
+        </select>
+      </div>
+      <div class="field grow" style="min-width:180px;flex:1 1 200px;">
+        <label style="font-size:0.8rem;">Notes (optional)</label>
+        <input type="text" id="linked-subs-notes" class="assets-search" placeholder="e.g. West Europe region" />
+      </div>
+      <div class="field compact">
+        <label style="font-size:0.8rem;">&nbsp;</label>
+        <button type="button" class="btn-small" id="linked-subs-add-btn">+ Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.linked-subs-card { padding: 14px 16px; margin-bottom: 16px; }
+.linked-sub-row { display:flex; align-items:center; gap:10px; padding:6px 8px;
+                  border-radius:5px; background:var(--bg-secondary); margin-bottom:6px; flex-wrap:wrap; }
+.linked-sub-row .sub-name { font-weight:600; font-size:0.9rem; flex:1; min-width:140px; }
+.linked-sub-row .sub-role { font-size:0.78rem; padding:2px 7px; border-radius:8px;
+                             background:var(--bg-code,#1e1e1e); color:var(--text-muted); }
+.linked-sub-row .sub-meta { font-size:0.78rem; color:var(--text-muted); }
+.linked-sub-row .sub-remove { margin-left:auto; cursor:pointer; color:var(--text-muted); font-size:0.8rem; background:none; border:none; padding:2px 6px; border-radius:3px; }
+.linked-sub-row .sub-remove:hover { color:#ef4444; }
+</style>
+
+<script>
+(function() {
+  const card = document.querySelector('.linked-subs-card');
+  if (!card) return;
+
+  const expId   = card.dataset.experimentId;
+  const repoName = card.dataset.repoName;
+  if (!expId || !repoName) {
+    document.getElementById('linked-subs-loading').textContent = 'No repo selected.';
+    return;
+  }
+
+  const loading   = document.getElementById('linked-subs-loading');
+  const body      = document.getElementById('linked-subs-body');
+  const list      = document.getElementById('linked-subs-list');
+  const noHarvest = document.getElementById('linked-subs-no-harvest');
+  const addForm   = document.getElementById('linked-subs-add-form');
+  const select    = document.getElementById('linked-subs-select');
+
+  const ENV_COLOURS = { prod:'#dc2626', staging:'#d97706', dev:'#2563eb', shared:'#6b7280' };
+
+  function badge(env) {
+    const c = ENV_COLOURS[env] || '#6b7280';
+    return `<span style="display:inline-block;padding:1px 7px;border-radius:8px;font-size:0.72rem;font-weight:600;background:${c};color:#fff;">${env}</span>`;
+  }
+
+  async function load() {
+    try {
+      const resp = await fetch(`/api/repo-subscriptions/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`);
+      const data = await resp.json();
+
+      loading.style.display = 'none';
+      body.style.display = 'block';
+
+      renderLinked(data.linked || []);
+
+      const available = data.available || [];
+      if (available.length === 0) {
+        noHarvest.style.display = 'block';
+        addForm.style.display = 'none';
+      } else {
+        noHarvest.style.display = 'none';
+        addForm.style.display = 'flex';
+        select.innerHTML = available.map(s =>
+          `<option value="${s.id}">[${(s.environment||'?').padEnd(7)}] ${s.display_name}</option>`
+        ).join('');
+      }
+    } catch(e) {
+      loading.textContent = 'Failed to load subscription links.';
+    }
+  }
+
+  function renderLinked(linked) {
+    if (!linked.length) {
+      list.innerHTML = '<p style="font-size:0.83rem;color:var(--text-muted);margin:0 0 8px;">No subscriptions linked yet.</p>';
+      return;
+    }
+    list.innerHTML = linked.map(s => `
+      <div class="linked-sub-row">
+        <span class="sub-name">${s.display_name || s.subscription_id}</span>
+        ${badge(s.environment)}
+        <span class="sub-role">${s.deploy_role || 'primary'}</span>
+        <span class="sub-meta">${s.asset_count} asset${s.asset_count !== 1 ? 's' : ''}</span>
+        ${s.notes ? `<span class="sub-meta">— ${s.notes}</span>` : ''}
+        <button class="sub-remove" data-sub-id="${s.subscription_id}" title="Remove link">✕</button>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.sub-remove').forEach(btn => {
+      btn.addEventListener('click', () => removeLink(btn.dataset.subId));
+    });
+  }
+
+  document.getElementById('linked-subs-add-btn').addEventListener('click', async () => {
+    const sub_id     = select.value;
+    const deploy_role = document.getElementById('linked-subs-role').value;
+    const notes      = document.getElementById('linked-subs-notes').value.trim();
+    if (!sub_id) return;
+    try {
+      await fetch(`/api/repo-subscriptions/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription_id: sub_id, deploy_role, notes }),
+      });
+      document.getElementById('linked-subs-notes').value = '';
+      await load();
+    } catch(e) { console.error('link failed', e); }
+  });
+
+  async function removeLink(sub_id) {
+    try {
+      await fetch(`/api/repo-subscriptions/${encodeURIComponent(expId)}/${encodeURIComponent(repoName)}/${encodeURIComponent(sub_id)}`, {
+        method: 'DELETE',
+      });
+      await load();
+    } catch(e) { console.error('unlink failed', e); }
+  }
+
+  load();
+})();
+</script>
+
 <div class="markdown-card">
   <div style="padding:8px 12px;background:var(--bg-secondary);border-left:3px solid var(--border-color);margin:0 0 12px;font-size:0.85rem;border-radius:4px;">
     <strong>Cross-repo context & platform decisions.</strong> For repo-specific AI questions, see <a href="#overview" style="color:var(--link-color);">Overview tab →</a>

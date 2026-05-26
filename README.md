@@ -258,6 +258,116 @@ Notes:
 
 ---
 
+## Cloud Asset Harvesting (Azure)
+
+Triage-Saurus can query live Azure subscriptions via the Azure CLI and store the results in `cozo.db`, giving security findings real cloud context.
+
+### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| **Python 3.9+** | Already required for Triage-Saurus |
+| **Azure CLI** | Install from https://aka.ms/installazurecli |
+| **Azure login** | `az login` (interactive) or service principal / managed identity |
+
+The harvest script checks these on startup and exits with a clear message if any are missing.
+
+### Quick start
+
+```bash
+# 1. Log in
+az login
+
+# 2. Harvest a single subscription (name or GUID)
+python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub"
+
+# 3. Harvest ALL accessible subscriptions
+python Scripts/Harvest/harvest_azure_assets.py --all
+
+# 4. Dry-run (see what would be harvested without writing)
+python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --dry-run
+
+# 5. Correlate: match assets to repos and build routing chains
+python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"
+
+# 6. Build APIM → backend routing map (creates apim_api_routes + resource_connections)
+python Scripts/Harvest/apim_routing_map.py --subscription "My-Prod-Sub"
+
+# 7. Build App Gateway → backend routing map + WAF policy audit
+python Scripts/Harvest/appgw_routing_map.py --subscription "My-Prod-Sub"
+
+# 8. Harvest private DNS zones, records, VNet links + ExternalDNS detection
+python Scripts/Harvest/private_dns_map.py --subscription "My-Prod-Sub"
+```
+
+### What gets harvested
+
+| Resource type | CLI query |
+|---|---|
+| App Gateways (+ WAF) | `az network application-gateway list` |
+| API Management | `az apim list` |
+| Traffic Manager | `az network traffic-manager profile list` |
+| App Service Environments | `az appservice ase list` |
+| App Service Plans | `az appservice plan list` |
+| Web Apps | `az webapp list` |
+| Function Apps | `az functionapp list` |
+| AKS clusters | `az aks list` |
+| Service Fabric clusters | `az sf cluster list` |
+| Cosmos DB accounts | `az cosmosdb list` |
+| SQL Servers | `az sql server list` |
+| Redis Cache | `az redis list` |
+| Storage Accounts | `az storage account list` |
+| Event Hub namespaces | `az eventhubs namespace list` |
+| Service Bus namespaces | `az servicebus namespace list` |
+| Data Factory | `az datafactory list` |
+| Cognitive Services (incl. OpenAI) | `az cognitiveservices account list` |
+| Key Vaults | `az keyvault list` |
+| App Configuration stores | `az appconfig list` |
+| Container Registries | `az acr list` |
+| Private Endpoints | `az network private-endpoint list` |
+| Application Insights | `az resource list --resource-type Microsoft.Insights/components` |
+| Virtual Networks | `az network vnet list` |
+
+Each resource is stored in `provisioned_assets` with `first_detected`, `last_synced`, and a `status` of `active`.
+
+### Stale asset detection
+
+On subsequent runs, any asset in the DB that is **not** returned by Azure is automatically flagged as `potentially_removed`:
+
+```
+⚠ 2 asset(s) not seen this run — marked as 'potentially_removed':
+  - Microsoft.Web/sites/my-api (rg: my-rg, last seen: 2026-05-26T09:00:00Z)
+```
+
+To confirm or dismiss:
+
+```sql
+-- Confirm it's gone
+UPDATE provisioned_assets SET status='removed' WHERE id='/subscriptions/.../my-api';
+
+-- False positive — restore
+UPDATE provisioned_assets SET status='active' WHERE id='/subscriptions/.../my-api';
+```
+
+### Viewing in the Web UI
+
+1. Start the web server: `python3 web/app.py`
+2. Open http://localhost:9000
+3. Navigate to the **Subscriptions** tab (global panel)
+4. Click **View Architecture** on any subscription → live Mermaid diagram grouped by resource group (public assets highlighted in amber 🌐)
+5. Open any repo → **Subscription tab** → use the **"Linked Azure Subscriptions"** widget to declare which subscription(s) this repo deploys into
+
+### Service principal login (CI/CD)
+
+```bash
+az login --service-principal \
+  --username "$ARM_CLIENT_ID" \
+  --password "$ARM_CLIENT_SECRET" \
+  --tenant "$ARM_TENANT_ID"
+```
+
+---
+
 ## Web UI (Experimental)
 Triage-Saurus includes a lightweight web portal (web/app.py) that provides a browser-based interface to run scans and stream pipeline output in real time.
 

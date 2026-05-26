@@ -537,6 +537,181 @@ _BASE_TABLES_SQL = """
         FOREIGN KEY (module_source) REFERENCES module_registry(module_source),
         FOREIGN KEY (repo_id)       REFERENCES repositories(id)
     );
+
+    -- Azure subscriptions discovered via 'az account list'
+    CREATE TABLE IF NOT EXISTS subscriptions (
+        id           TEXT PRIMARY KEY,   -- Azure subscription GUID
+        display_name TEXT,
+        tenant_id    TEXT,
+        environment  TEXT,               -- inferred from name: prod/staging/dev/shared/unknown
+        state        TEXT,               -- Enabled / Disabled / Warned
+        last_synced  DATETIME
+    );
+
+    -- Live cloud assets harvested directly from Azure via az CLI (not IaC-inferred)
+    CREATE TABLE IF NOT EXISTS provisioned_assets (
+        id              TEXT PRIMARY KEY,   -- full Azure ARM resource ID
+        subscription_id TEXT,
+        resource_group  TEXT,
+        name            TEXT NOT NULL,
+        type            TEXT NOT NULL,      -- e.g. Microsoft.Web/sites
+        location        TEXT,
+        sku             TEXT,
+        tags            TEXT,               -- JSON blob of Azure resource tags
+        is_public       INTEGER DEFAULT 0,  -- 1 if publicly internet-accessible
+        fqdn            TEXT,               -- primary hostname / default domain
+        pipeline_tag    TEXT,               -- ADO pipeline link from deployment source tags
+        raw_json        TEXT,               -- full az CLI response as JSON (for re-enrichment)
+        first_detected  DATETIME,           -- timestamp of first ever harvest (never overwritten)
+        last_synced     DATETIME,           -- timestamp of most recent successful harvest
+        status          TEXT DEFAULT 'active',  -- active | potentially_removed | removed
+        FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provisioned_assets_subscription
+        ON provisioned_assets(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_provisioned_assets_type
+        ON provisioned_assets(type);
+    CREATE INDEX IF NOT EXISTS idx_provisioned_assets_fqdn
+        ON provisioned_assets(fqdn);
+
+    -- Mapping of repositories to the Azure subscriptions they are deployed into
+    -- (many-to-many: one repo can deploy to dev/staging/prod subscriptions)
+    CREATE TABLE IF NOT EXISTS repository_subscriptions (
+        repository_id   INTEGER NOT NULL,
+        subscription_id TEXT NOT NULL,
+        deploy_role     TEXT DEFAULT 'primary',  -- prod / staging / dev / dr / shared / primary
+        notes           TEXT,
+        created_at      DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (repository_id, subscription_id),
+        FOREIGN KEY (repository_id) REFERENCES repositories(id),
+        FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
+    );
+
+    -- Mapping of live provisioned assets to source code repositories
+    CREATE TABLE IF NOT EXISTS provisioned_asset_repo_links (
+        asset_id      TEXT NOT NULL,
+        repository_id INTEGER NOT NULL,
+        match_method  TEXT NOT NULL,  -- 'pipeline_tag' | 'fqdn_iac' | 'naming_convention' | 'manual'
+        confidence    TEXT NOT NULL,  -- 'high' | 'medium' | 'low'
+        notes         TEXT,
+        created_at    DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        PRIMARY KEY (asset_id, repository_id),
+        FOREIGN KEY (asset_id)      REFERENCES provisioned_assets(id),
+        FOREIGN KEY (repository_id) REFERENCES repositories(id)
+    );
+
+    -- APIM API → backend routing map (populated by apim_routing_map.py)
+    CREATE TABLE IF NOT EXISTS apim_api_routes (
+        id                    TEXT PRIMARY KEY,   -- {apim_name}::{api_name}
+        subscription_id       TEXT NOT NULL,
+        apim_name             TEXT NOT NULL,
+        apim_resource_id      TEXT,
+        api_name              TEXT NOT NULL,
+        api_display_name      TEXT,
+        api_path              TEXT,
+        api_protocols         TEXT,               -- JSON array e.g. ["https"]
+        backend_id            TEXT,               -- named backend entity id, if resolved
+        backend_url           TEXT,               -- resolved backend URL
+        service_url           TEXT,               -- serviceUrl on the API itself
+        requires_subscription INTEGER DEFAULT 1,
+        last_synced           DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_apim_routes_sub  ON apim_api_routes(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_apim_routes_apim ON apim_api_routes(apim_name);
+
+    -- App Gateway listener → backend routing chain (populated by appgw_routing_map.py)
+    CREATE TABLE IF NOT EXISTS appgw_routing_rules (
+        id                  TEXT PRIMARY KEY,   -- {gw_name}::{rule_name}::{path}
+        subscription_id     TEXT NOT NULL,
+        gateway_name        TEXT NOT NULL,
+        gateway_resource_id TEXT,
+        resource_group      TEXT,
+        rule_name           TEXT NOT NULL,
+        listener_name       TEXT,
+        hostname            TEXT,               -- public hostname from listener (e.g. api.mydomain.co.uk)
+        protocol            TEXT,               -- HTTP / HTTPS
+        url_path            TEXT DEFAULT '/*',  -- path pattern
+        backend_pool_name   TEXT,
+        backend_fqdns       TEXT,               -- JSON array of resolved FQDNs/IPs
+        http_settings_name  TEXT,
+        backend_port        INTEGER,
+        backend_protocol    TEXT,
+        host_override       TEXT,               -- backend host header override
+        waf_policy_name     TEXT,               -- per-rule/per-listener WAF policy ref
+        last_synced         DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_appgw_rules_sub     ON appgw_routing_rules(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_appgw_rules_gateway ON appgw_routing_rules(gateway_name);
+    CREATE INDEX IF NOT EXISTS idx_appgw_rules_host    ON appgw_routing_rules(hostname);
+
+    -- WAF policy configuration summary (populated by appgw_routing_map.py)
+    CREATE TABLE IF NOT EXISTS appgw_waf_policies (
+        id                  TEXT PRIMARY KEY,
+        subscription_id     TEXT NOT NULL,
+        name                TEXT NOT NULL,
+        resource_group      TEXT,
+        mode                TEXT,               -- Prevention / Detection / NULL = unconfigured ⚠
+        state               TEXT,               -- Enabled / Disabled / NULL
+        request_body_check  INTEGER DEFAULT 0,
+        max_body_kb         INTEGER,
+        managed_rule_sets   TEXT,               -- JSON array {type, version}
+        custom_rules_count  INTEGER DEFAULT 0,
+        exclusions_count    INTEGER DEFAULT 0,
+        associated_gateways TEXT,               -- JSON array of gateway names
+        last_synced         DATETIME
+    );
+
+    -- Private DNS zones (populated by private_dns_map.py)
+    CREATE TABLE IF NOT EXISTS private_dns_zones (
+        id                  TEXT PRIMARY KEY,
+        subscription_id     TEXT NOT NULL,
+        name                TEXT NOT NULL,
+        resource_group      TEXT,
+        zone_type           TEXT,               -- privatelink | internal | apim | ase | custom
+        record_count        INTEGER DEFAULT 0,
+        vnet_link_count     INTEGER DEFAULT 0,
+        a_record_count      INTEGER DEFAULT 0,
+        cname_count         INTEGER DEFAULT 0,
+        externaldns_managed INTEGER DEFAULT 0,  -- 1 if ExternalDNS TXT markers found
+        last_synced         DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_pdns_zones_sub  ON private_dns_zones(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_pdns_zones_name ON private_dns_zones(name);
+
+    -- Private DNS record sets
+    CREATE TABLE IF NOT EXISTS private_dns_records (
+        id              TEXT PRIMARY KEY,   -- {zone}::{type}::{name}
+        subscription_id TEXT NOT NULL,
+        zone_name       TEXT NOT NULL,
+        record_name     TEXT NOT NULL,
+        fqdn            TEXT,               -- fully-qualified hostname
+        record_type     TEXT NOT NULL,      -- A | CNAME | TXT | MX | SRV | PTR
+        ip_addresses    TEXT,               -- JSON array
+        cname_target    TEXT,
+        txt_values      TEXT,               -- JSON array
+        ttl             INTEGER,
+        managed_by      TEXT,               -- externaldns | azure | manual
+        last_synced     DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_pdns_records_sub  ON private_dns_records(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_pdns_records_zone ON private_dns_records(zone_name);
+    CREATE INDEX IF NOT EXISTS idx_pdns_records_fqdn ON private_dns_records(fqdn);
+
+    -- VNet links per DNS zone (controls which VNets can resolve the zone)
+    CREATE TABLE IF NOT EXISTS private_dns_vnet_links (
+        id                   TEXT PRIMARY KEY,
+        subscription_id      TEXT NOT NULL,
+        zone_name            TEXT NOT NULL,
+        link_name            TEXT NOT NULL,
+        vnet_id              TEXT,
+        vnet_name            TEXT,
+        registration_enabled INTEGER DEFAULT 0,  -- auto-register VM DNS names
+        link_state           TEXT,               -- Completed | InProgress
+        last_synced          DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_pdns_links_sub  ON private_dns_vnet_links(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_pdns_links_zone ON private_dns_vnet_links(zone_name);
 """
 
 # Setup logging for database operations
@@ -1406,6 +1581,31 @@ def _ensure_schema(conn: sqlite3.Connection):
         )
 
         apply_topology_backfills(conn)
+
+        # Migration: add first_detected and status columns to provisioned_assets (if table exists)
+        pa_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provisioned_assets'"
+        ).fetchone()
+        if pa_exists:
+            pa_columns = {row[1] for row in conn.execute("PRAGMA table_info(provisioned_assets)").fetchall()}
+            for col_name, col_type in (
+                ("first_detected", "DATETIME"),
+                ("status", "TEXT DEFAULT 'active'"),
+            ):
+                if col_name not in pa_columns:
+                    conn.execute(f"ALTER TABLE provisioned_assets ADD COLUMN {col_name} {col_type}")
+            # Back-fill first_detected from last_synced for existing rows
+            conn.execute(
+                "UPDATE provisioned_assets SET first_detected = last_synced "
+                "WHERE first_detected IS NULL AND last_synced IS NOT NULL"
+            )
+            conn.execute(
+                "UPDATE provisioned_assets SET status = 'active' WHERE status IS NULL"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_provisioned_assets_status "
+                "ON provisioned_assets(subscription_id, status)"
+            )
 
         # Migration: drop NOT NULL constraint on resource_connections.target_resource_id.
         # External-service connections use target_external instead and have no resource row.

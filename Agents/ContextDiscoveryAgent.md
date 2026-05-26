@@ -178,6 +178,20 @@ See `Templates/RepoFinding.md` for complete Traffic Flow template structure.
   - `Output/Summary/Cloud/Architecture_<Provider>.md` created/updated with cloud architecture diagram
 - Audit log entries with timing and findings count
 
+**Live Asset Cross-Reference (if harvested):**
+After IaC discovery, query `provisioned_asset_repo_links` to enrich the architecture diagram with live Azure context:
+```sql
+SELECT pa.name, pa.type, pa.fqdn, pa.is_public, parl.match_method
+FROM provisioned_assets pa
+JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
+JOIN repositories r ON r.id = parl.repository_id
+WHERE r.repo_name = '<repo_name>';
+```
+If linked live assets exist, add a **"Live Assets"** section to `Architecture_<Provider>.md` noting:
+- Which live resources correspond to IaC-declared resources (confirmed running)
+- Any live resource with no IaC counterpart (shadow/unmanaged — flag for security review)
+- Public exposure status from `is_public` field
+
 **IMPORTANT: Context Discovery vs Security Review**
 - **Phase 1 & 2 (This Agent):** Document security observations in repo summary ONLY
 - **Phase 3 (SecurityAgent):** Extract MEDIUM+ findings as individual files with POC scripts

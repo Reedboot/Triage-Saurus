@@ -435,10 +435,39 @@ Update `Agents/Instructions.md` to reference this agent:
 - If sparse/missing: offer to invoke **CloudContextAgent**
 - Use the data flow map throughout triage to contextualize findings
 
+## Live Asset Context (provisioned_assets)
+
+Before asking survey questions, check whether live assets have already been harvested for this subscription:
+
+```sql
+-- Check for harvested subscriptions
+SELECT id, display_name, environment, last_synced FROM subscriptions ORDER BY environment;
+
+-- Check for live assets linked to this experiment's repos
+SELECT pa.name, pa.type, pa.fqdn, pa.is_public, parl.match_method, parl.confidence
+FROM provisioned_assets pa
+JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
+JOIN repositories r ON r.id = parl.repository_id
+WHERE r.experiment_id = '<experiment_id>';
+```
+
+If results exist, incorporate live asset data into the context summary:
+- Note any **publicly exposed** resources (`is_public = 1`) — these raise severity
+- Flag drift: resources in `provisioned_assets` with no IaC counterpart in `resources` = shadow/unmanaged infrastructure
+- Flag drift the other way: IaC declares a resource that has no matching `provisioned_asset` = possibly decommissioned but code not cleaned up
+
+If no live assets exist, prompt the user:
+> "No live assets harvested for this subscription yet. Run:
+> `python Scripts/Harvest/harvest_azure_assets.py --subscription "<name>"`
+> to enrich findings with real cloud context."
+
 ## See Also
 - Main workflow: `Agents/Instructions.md`
 - Knowledge structure: `Output/Knowledge/<Provider>.md`
 - Architecture diagrams: `Output/Summary/Cloud/Architecture_<Provider>.md`
+- Live asset harvest: `Scripts/Harvest/harvest_azure_assets.py`
+- Asset correlation: `Scripts/Harvest/correlate_assets.py`
+- Web UI subscription view: Subscriptions tab in the web UI
 
 
 ## Conditional Access Impact Examples

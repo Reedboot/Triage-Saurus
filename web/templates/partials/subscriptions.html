@@ -1,0 +1,155 @@
+{# partials/subscriptions.html — Live Azure subscriptions and architecture view #}
+<div id="subscriptions-panel" class="subscriptions-panel">
+
+  <div class="subscriptions-header">
+    <h3 style="margin:0; font-size:1.1rem;">Azure Subscriptions</h3>
+    <span class="subscriptions-hint" style="font-size:0.8rem; color:var(--text-muted);">
+      Live assets harvested via Azure CLI &mdash;
+      run <code>python Scripts/Harvest/harvest_azure_assets.py --subscription &lt;name&gt;</code> to populate.
+    </span>
+  </div>
+
+  <div id="subscriptions-loading" style="padding:16px; color:var(--text-muted);">Loading subscriptions…</div>
+  <div id="subscriptions-empty" style="display:none; padding:16px; color:var(--text-muted);">
+    No subscriptions found. Run the harvest script to populate this view.
+    <pre style="margin-top:8px; font-size:0.8rem; background:var(--bg-code,#1e1e1e); padding:10px; border-radius:6px;">az login
+python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub"
+python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
+  </div>
+
+  <div id="subscriptions-list" style="display:none;">
+    <table class="section-table" id="subscriptions-table">
+      <thead>
+        <tr>
+          <th>Subscription</th>
+          <th>Environment</th>
+          <th>Total Assets</th>
+          <th>Public</th>
+          <th>State</th>
+          <th>Last Synced</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="subscriptions-tbody"></tbody>
+    </table>
+  </div>
+
+  {# Architecture diagram panel #}
+  <div id="subscription-diagram-wrap" style="display:none; margin-top:20px;">
+    <div class="subscription-diagram-header">
+      <span id="subscription-diagram-title" style="font-weight:600;"></span>
+      <button id="subscription-diagram-close" class="btn btn-sm" style="margin-left:auto;">✕ Close</button>
+    </div>
+    <div id="subscription-diagram-loading" style="padding:12px; color:var(--text-muted);">Generating diagram…</div>
+    <div id="subscription-diagram-container" class="diagram-container" style="display:none;"></div>
+  </div>
+
+</div>
+
+<style>
+.subscriptions-panel { padding: 16px; }
+.subscriptions-header { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+.subscription-diagram-header { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border-color,#333); margin-bottom:8px; }
+</style>
+
+<script>
+(function() {
+  const panel = document.getElementById('subscriptions-panel');
+  if (!panel) return;
+
+  function renderBadge(env, badge) {
+    const colours = { danger:'#dc2626', warning:'#d97706', info:'#2563eb', secondary:'#6b7280' };
+    const c = colours[badge] || colours.secondary;
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;background:${c};color:#fff;">${env}</span>`;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
+  }
+
+  async function loadSubscriptions() {
+    try {
+      const resp = await fetch('/api/subscriptions');
+      const data = await resp.json();
+      const subs = data.subscriptions || [];
+
+      document.getElementById('subscriptions-loading').style.display = 'none';
+
+      if (!subs.length) {
+        document.getElementById('subscriptions-empty').style.display = 'block';
+        return;
+      }
+
+      const tbody = document.getElementById('subscriptions-tbody');
+      tbody.innerHTML = subs.map(s => `
+        <tr>
+          <td><strong>${s.display_name || s.id}</strong><br/>
+              <small style="color:var(--text-muted);font-size:0.75rem;">${s.id}</small></td>
+          <td>${renderBadge(s.environment, s.env_badge)}</td>
+          <td>${s.asset_count}</td>
+          <td>${s.public_count > 0 ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${s.public_count}</span>` : '0'}</td>
+          <td>${s.state || '—'}</td>
+          <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
+          <td><button class="btn btn-sm view-diagram-btn" data-sub-id="${s.id}" data-sub-name="${s.display_name}">
+            View Architecture
+          </button></td>
+        </tr>
+      `).join('');
+
+      document.getElementById('subscriptions-list').style.display = 'block';
+
+      tbody.querySelectorAll('.view-diagram-btn').forEach(btn => {
+        btn.addEventListener('click', () => loadDiagram(btn.dataset.subId, btn.dataset.subName));
+      });
+
+    } catch(e) {
+      document.getElementById('subscriptions-loading').textContent = 'Failed to load subscriptions.';
+    }
+  }
+
+  async function loadDiagram(subId, subName) {
+    const wrap = document.getElementById('subscription-diagram-wrap');
+    const loading = document.getElementById('subscription-diagram-loading');
+    const container = document.getElementById('subscription-diagram-container');
+    const title = document.getElementById('subscription-diagram-title');
+
+    wrap.style.display = 'block';
+    loading.style.display = 'block';
+    container.style.display = 'none';
+    title.textContent = subName || subId;
+
+    // Scroll into view
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    try {
+      const resp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/diagram`);
+      const data = await resp.json();
+
+      if (data.error) {
+        loading.textContent = data.error;
+        return;
+      }
+
+      loading.style.display = 'none';
+      container.style.display = 'block';
+
+      // Render via mermaid if available, otherwise show raw code
+      if (window.mermaid) {
+        container.innerHTML = `<div class="mermaid">${data.mermaid}</div>`;
+        window.mermaid.init(undefined, container.querySelector('.mermaid'));
+      } else {
+        container.innerHTML = `<pre style="font-size:0.75rem;overflow:auto;">${data.mermaid}</pre>`;
+      }
+    } catch(e) {
+      loading.textContent = 'Failed to load diagram.';
+    }
+  }
+
+  document.getElementById('subscription-diagram-close').addEventListener('click', () => {
+    document.getElementById('subscription-diagram-wrap').style.display = 'none';
+  });
+
+  loadSubscriptions();
+})();
+</script>

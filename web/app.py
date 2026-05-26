@@ -57,24 +57,121 @@ GENERATE_PROJECT_OVERVIEW = SCRIPTS / "Enrich" / "generate_project_overview.py"
 EXPERIMENTS_DIR = REPO_ROOT / "Output" / "Learning" / "experiments"
 INTAKE_REPOS = REPO_ROOT / "Intake" / "ReposToScan.txt"
 DB_PATH = REPO_ROOT / "Output" / "Data" / "cozo.db"
+APP_SETTINGS_PATH = REPO_ROOT / "Settings" / "app_settings.json"
+
+# ── App settings (Settings/app_settings.json) ────────────────────────────────
+
+_APP_SETTINGS_DEFAULT: dict = {
+    "ai_models": {
+        "global_default":     "gpt-5.4-mini",
+        "architecture":       "",
+        "overview":           "",
+        "rules":              "",
+        "themes":             "",
+        "image_summaries":    "",
+    },
+    "ai_behaviour": {
+        "review_mode":                "minimal",
+        "enable_themes":              False,
+        "enable_image_summaries":     False,
+        "stream_timeout_seconds":     600,
+        "job_timeout_seconds":        3600,
+    },
+    "performance": {
+        "module_scan_concurrency":      1,
+        "pipeline_parallel_mode":       True,
+        "single_writer_queue_enabled":  True,
+    },
+}
+
+_app_settings_cache: dict | None = None
+
+
+def _load_app_settings(force: bool = False) -> dict:
+    """Load Settings/app_settings.json, merging over defaults. Result is cached."""
+    global _app_settings_cache
+    if _app_settings_cache is not None and not force:
+        return _app_settings_cache
+    import copy
+    result = copy.deepcopy(_APP_SETTINGS_DEFAULT)
+    if APP_SETTINGS_PATH.exists():
+        try:
+            data = json.loads(APP_SETTINGS_PATH.read_text(encoding="utf-8"))
+            for section, values in data.items():
+                if section.startswith("_"):
+                    continue
+                if isinstance(values, dict) and section in result:
+                    result[section].update(values)
+        except Exception:
+            pass
+    _app_settings_cache = result
+    return result
+
+
+def _save_app_settings(data: dict) -> None:
+    """Persist settings to Settings/app_settings.json and invalidate cache."""
+    global _app_settings_cache
+    APP_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict = {}
+    if APP_SETTINGS_PATH.exists():
+        try:
+            existing = json.loads(APP_SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    notes = existing.get("_notes", "Triage-Saurus runtime settings. Edit via ⚙ Settings in the web UI.")
+    out = {"_notes": notes}
+    out.update(data)
+    APP_SETTINGS_PATH.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    _app_settings_cache = None  # invalidate
+
+
+def _settings_get(section: str, key: str):
+    """Return a setting value from the loaded settings dict."""
+    return _load_app_settings().get(section, {}).get(key)
 
 
 def _feature_flag_enabled(name: str, default: bool = True) -> bool:
+    """Check env var first, then settings file, then coded default."""
     raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if raw is not None:
+        return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    # Map known env var names to settings keys
+    _env_to_setting: dict[str, tuple[str, str]] = {
+        "TRIAGE_SINGLE_WRITER_QUEUE_ENABLED": ("performance", "single_writer_queue_enabled"),
+        "TRIAGE_PIPELINE_PARALLEL_MODE":       ("performance", "pipeline_parallel_mode"),
+        "TRIAGE_AI_ENABLE_THEMES":             ("ai_behaviour", "enable_themes"),
+        "TRIAGE_AI_ENABLE_IMAGE_SUMMARIES":    ("ai_behaviour", "enable_image_summaries"),
+    }
+    if name in _env_to_setting:
+        section, key = _env_to_setting[name]
+        val = _settings_get(section, key)
+        if val is not None:
+            return bool(val)
+    return default
 
 
 def _feature_flag_int(name: str, default: int, minimum: int = 1) -> int:
+    """Check env var first, then settings file, then coded default."""
     raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        parsed = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, parsed)
+    if raw is not None:
+        try:
+            return max(minimum, int(raw))
+        except (TypeError, ValueError):
+            return default
+    _env_to_setting: dict[str, tuple[str, str]] = {
+        "TRIAGE_MODULE_SCAN_CONCURRENCY": ("performance", "module_scan_concurrency"),
+        "AI_STREAM_TIMEOUT":              ("ai_behaviour", "stream_timeout_seconds"),
+        "AI_JOB_TIMEOUT":                 ("ai_behaviour", "job_timeout_seconds"),
+    }
+    if name in _env_to_setting:
+        section, key = _env_to_setting[name]
+        val = _settings_get(section, key)
+        if val is not None:
+            try:
+                return max(minimum, int(val))
+            except (TypeError, ValueError):
+                pass
+    return default
 
 
 def _scan_feature_flags() -> dict[str, object]:
@@ -86,13 +183,33 @@ def _scan_feature_flags() -> dict[str, object]:
 
 
 def _env_model(name: str, fallback: str = "gpt-5.4-mini") -> str:
-    """Resolve a model override from env with a safe fallback."""
+    """Resolve a model: env var → settings file → global default → coded fallback."""
+    # 1. Explicit env var for this model slot
     value = (os.environ.get(name) or "").strip()
     if value:
         return value
-    global_fallback = (os.environ.get("COPILOT_MODEL") or "").strip()
-    if global_fallback:
-        return global_fallback
+    # 2. Settings file per-slot
+    _env_to_setting: dict[str, tuple[str, str]] = {
+        "COPILOT_MODEL":                  ("ai_models", "global_default"),
+        "COPILOT_MODEL_ARCHITECTURE":     ("ai_models", "architecture"),
+        "COPILOT_MODEL_OVERVIEW":         ("ai_models", "overview"),
+        "COPILOT_MODEL_RULES":            ("ai_models", "rules"),
+        "COPILOT_MODEL_THEMES":           ("ai_models", "themes"),
+        "COPILOT_MODEL_IMAGE_SUMMARIES":  ("ai_models", "image_summaries"),
+    }
+    if name in _env_to_setting:
+        section, key = _env_to_setting[name]
+        slot_val = (_settings_get(section, key) or "").strip()
+        if slot_val:
+            return slot_val
+    # 3. Global fallback from env
+    global_env = (os.environ.get("COPILOT_MODEL") or "").strip()
+    if global_env:
+        return global_env
+    # 4. Global fallback from settings
+    global_setting = (_settings_get("ai_models", "global_default") or "").strip()
+    if global_setting:
+        return global_setting
     return fallback
 
 
@@ -113,7 +230,7 @@ def _overview_reviewer_agents() -> list[tuple[str, str, str]]:
     - standard: ContextDiscoveryAgent + SecurityAgent
     - full: ContextDiscoveryAgent + SecurityAgent + DevSkeptic + PlatformSkeptic
     """
-    mode = (os.environ.get("TRIAGE_AI_REVIEW_MODE") or "minimal").strip().lower()
+    mode = (os.environ.get("TRIAGE_AI_REVIEW_MODE") or _settings_get("ai_behaviour", "review_mode") or "minimal").strip().lower()
     if mode == "full":
         return [
             ("ContextDiscoveryAgent", "🔍 Context extraction", "context_extraction"),
@@ -1585,6 +1702,23 @@ def _get_db() -> sqlite3.Connection | None:
     try:
         conn = sqlite3.connect(str(DB_PATH), timeout=10)
         conn.row_factory = sqlite3.Row
+        return conn
+    except Exception:
+        return None
+
+
+def _get_db_with_schema() -> sqlite3.Connection | None:
+    """Like _get_db() but ensures the full schema (including harvest tables) exists.
+
+    Used by subscription/provisioned-asset routes which may be hit before any
+    harvest script has run, guaranteeing the tables are present.
+    """
+    if not DB_PATH.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=30)
+        conn.row_factory = sqlite3.Row
+        db_helpers._ensure_schema(conn)
         return conn
     except Exception:
         return None
@@ -11947,14 +12081,8 @@ def scan():
     )
 
 
-if __name__ == "__main__":
-    # Clean up stale lock files from previous server crashes/restarts
-    print("[Startup] Cleaning up stale lock files...", file=sys.stderr)
-    _cleanup_stale_locks()
-    
-    debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
-    debug = debug_env in ("1", "true", "yes", "on")
-    app.run(debug=debug, host="0.0.0.0", port=9000, threaded=True)
+
+
 @app.route("/api/analysis/stop/<experiment_id>/<repo_name>", methods=["POST"])
 def api_analysis_stop(experiment_id: str, repo_name: str):
     """Stop a running Copilot/AI job for this experiment+repo."""
@@ -11987,3 +12115,474 @@ def api_analysis_stop(experiment_id: str, repo_name: str):
         except Exception:
             pass
     return jsonify({"status": "stopped"})
+
+
+# ---------------------------------------------------------------------------
+# Azure Subscriptions API
+# ---------------------------------------------------------------------------
+
+def _get_subscription_env_badge(environment: str) -> str:
+    badges = {
+        "prod": "danger",
+        "staging": "warning",
+        "dev": "info",
+        "shared": "secondary",
+    }
+    return badges.get(environment or "unknown", "secondary")
+
+
+@app.route("/api/repo-subscriptions/<experiment_id>/<path:repo_name>")
+def api_repo_subscriptions_get(experiment_id: str, repo_name: str):
+    """Return Azure subscriptions linked to a specific repo."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        repo = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
+            (experiment_id, repo_name),
+        ).fetchone()
+        if not repo:
+            return jsonify({"linked": [], "available": _get_available_subscriptions(conn)})
+
+        rows = conn.execute(
+            """
+            SELECT rs.subscription_id, rs.deploy_role, rs.notes, rs.created_at,
+                   s.display_name, s.environment, s.state, s.last_synced,
+                   COUNT(pa.id) AS asset_count
+            FROM repository_subscriptions rs
+            JOIN subscriptions s ON s.id = rs.subscription_id
+            LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
+            WHERE rs.repository_id = ?
+            GROUP BY rs.subscription_id
+            ORDER BY rs.deploy_role, s.display_name
+            """,
+            (repo[0],),
+        ).fetchall()
+
+        linked = [
+            {
+                "subscription_id": r[0],
+                "deploy_role": r[1] or "primary",
+                "notes": r[2],
+                "created_at": r[3],
+                "display_name": r[4],
+                "environment": r[5] or "unknown",
+                "env_badge": _get_subscription_env_badge(r[5]),
+                "state": r[6],
+                "last_synced": r[7],
+                "asset_count": r[8] or 0,
+            }
+            for r in rows
+        ]
+        return jsonify({"linked": linked, "available": _get_available_subscriptions(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/repo-subscriptions/<experiment_id>/<path:repo_name>", methods=["POST"])
+def api_repo_subscriptions_add(experiment_id: str, repo_name: str):
+    """Link a repo to an Azure subscription."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    data = request.get_json(silent=True) or {}
+    sub_id = data.get("subscription_id", "").strip()
+    deploy_role = data.get("deploy_role", "primary").strip() or "primary"
+    notes = data.get("notes", "")
+    if not sub_id:
+        return jsonify({"error": "subscription_id required"}), 400
+    try:
+        repo = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
+            (experiment_id, repo_name),
+        ).fetchone()
+        if not repo:
+            return jsonify({"error": "Repository not found"}), 404
+        conn.execute(
+            """
+            INSERT INTO repository_subscriptions (repository_id, subscription_id, deploy_role, notes)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(repository_id, subscription_id) DO UPDATE SET
+                deploy_role = excluded.deploy_role,
+                notes = excluded.notes
+            """,
+            (repo[0], sub_id, deploy_role, notes),
+        )
+        conn.commit()
+        return jsonify({"status": "linked"})
+    finally:
+        conn.close()
+
+
+@app.route("/api/repo-subscriptions/<experiment_id>/<path:repo_name>/<path:sub_id>", methods=["DELETE"])
+def api_repo_subscriptions_remove(experiment_id: str, repo_name: str, sub_id: str):
+    """Unlink a repo from an Azure subscription."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        repo = conn.execute(
+            "SELECT id FROM repositories WHERE experiment_id=? AND repo_name=?",
+            (experiment_id, repo_name),
+        ).fetchone()
+        if not repo:
+            return jsonify({"error": "Repository not found"}), 404
+        conn.execute(
+            "DELETE FROM repository_subscriptions WHERE repository_id=? AND subscription_id=?",
+            (repo[0], sub_id),
+        )
+        conn.commit()
+        return jsonify({"status": "unlinked"})
+    finally:
+        conn.close()
+
+
+def _get_available_subscriptions(conn) -> list:
+    """Return all harvested subscriptions for dropdown population."""
+    rows = conn.execute(
+        "SELECT id, display_name, environment FROM subscriptions ORDER BY environment, display_name"
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "display_name": r[1] or r[0],
+            "environment": r[2] or "unknown",
+            "env_badge": _get_subscription_env_badge(r[2]),
+        }
+        for r in rows
+    ]
+
+
+@app.route("/cloud")
+def cloud_subscriptions_page():
+    """Render the Cloud Subscriptions view as a standalone page."""
+    from flask import render_template as _rt
+    return _rt("cloud.html")
+
+
+@app.route("/api/view/subscriptions")
+def api_view_subscriptions():
+    """Render the subscriptions partial for inline loading."""
+    return _db_render("subscriptions.html")
+
+
+# ── Cloud Assets page ─────────────────────────────────────────────────────────
+
+@app.route("/cloud/assets")
+def cloud_assets_page():
+    """Render the All Cloud Assets page (all subscriptions, all providers)."""
+    from flask import render_template as _rt
+    return _rt("cloud_assets.html")
+
+
+@app.route("/api/cloud/assets")
+def api_cloud_assets_all():
+    """Return all provisioned assets across all subscriptions, grouped for the UI."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        # Summary counts per subscription
+        subs = conn.execute(
+            """
+            SELECT s.id, s.display_name, s.environment, s.cloud_provider, s.state,
+                   s.last_synced,
+                   COUNT(pa.id)                            AS total,
+                   SUM(CASE WHEN pa.is_public=1 THEN 1 ELSE 0 END) AS public_count,
+                   SUM(CASE WHEN pa.status='potentially_removed' THEN 1 ELSE 0 END) AS stale_count
+            FROM subscriptions s
+            LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
+            GROUP BY s.id
+            ORDER BY s.environment, s.display_name
+            """
+        ).fetchall()
+
+        # All assets with subscription context
+        rows = conn.execute(
+            """
+            SELECT pa.id, pa.name, pa.type, pa.resource_group, pa.location,
+                   pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
+                   pa.first_detected, pa.last_synced,
+                   s.id AS sub_id, s.display_name AS sub_name,
+                   s.environment, s.cloud_provider,
+                   r.repo_name
+            FROM provisioned_assets pa
+            JOIN subscriptions s ON s.id = pa.subscription_id
+            LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
+            LEFT JOIN repositories r ON r.id = parl.repository_id
+            ORDER BY s.environment, s.display_name, pa.type, pa.name
+            """
+        ).fetchall()
+
+        subscriptions = []
+        for s in subs:
+            subscriptions.append({
+                "id": s[0], "display_name": s[1], "environment": s[2],
+                "cloud_provider": s[3] or "Azure", "state": s[4],
+                "last_synced": s[5], "total": s[6] or 0,
+                "public_count": s[7] or 0, "stale_count": s[8] or 0,
+            })
+
+        assets = []
+        for r in rows:
+            assets.append({
+                "id": r[0], "name": r[1], "type": r[2],
+                "type_label": _friendly_type(r[2]),
+                "resource_group": r[3], "location": r[4],
+                "sku": r[5], "fqdn": r[6],
+                "is_public": bool(r[7]), "status": r[8] or "active",
+                "pipeline_tag": r[9], "first_detected": r[10], "last_synced": r[11],
+                "sub_id": r[12], "sub_name": r[13],
+                "environment": r[14], "cloud_provider": r[15] or "Azure",
+                "linked_repo": r[16],
+            })
+
+        # Type summary for the filter bar
+        type_counts: dict[str, int] = {}
+        for a in assets:
+            lbl = a["type_label"]
+            type_counts[lbl] = type_counts.get(lbl, 0) + 1
+        type_summary = sorted(
+            [{"label": k, "count": v} for k, v in type_counts.items()],
+            key=lambda x: -x["count"],
+        )
+
+        return jsonify({
+            "subscriptions": subscriptions,
+            "assets": assets,
+            "type_summary": type_summary,
+            "totals": {
+                "assets": len(assets),
+                "public": sum(1 for a in assets if a["is_public"]),
+                "stale": sum(1 for a in assets if a["status"] == "potentially_removed"),
+                "linked": sum(1 for a in assets if a["linked_repo"]),
+            },
+        })
+    finally:
+        conn.close()
+
+
+# ── Settings page ─────────────────────────────────────────────────────────────
+
+@app.route("/settings")
+def settings_page():
+    """Render the Settings page."""
+    from flask import render_template as _rt
+    settings = _load_app_settings()
+    return _rt("settings.html", settings=settings)
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    """Return current effective settings as JSON."""
+    return jsonify(_load_app_settings(force=True))
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_post():
+    """Save settings from JSON body and return the updated effective settings."""
+    payload = request.get_json(force=True, silent=True) or {}
+    # Validate / sanitise known sections only — ignore unknown keys
+    _VALID_SECTIONS = {"ai_models", "ai_behaviour", "performance"}
+    sanitised: dict = {}
+    for section in _VALID_SECTIONS:
+        if section in payload and isinstance(payload[section], dict):
+            sanitised[section] = payload[section]
+    _save_app_settings(sanitised)
+    return jsonify({"ok": True, "settings": _load_app_settings(force=True)})
+
+
+@app.route("/api/subscriptions")
+def api_subscriptions_list():
+    """List all harvested Azure subscriptions with asset counts."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.display_name, s.environment, s.state, s.last_synced,
+                   COUNT(pa.id) AS asset_count,
+                   SUM(pa.is_public) AS public_count
+            FROM subscriptions s
+            LEFT JOIN provisioned_assets pa ON pa.subscription_id = s.id
+            GROUP BY s.id
+            ORDER BY s.environment, s.display_name
+            """
+        ).fetchall()
+        subs = []
+        for r in rows:
+            subs.append({
+                "id": r[0],
+                "display_name": r[1],
+                "environment": r[2] or "unknown",
+                "env_badge": _get_subscription_env_badge(r[2]),
+                "state": r[3],
+                "last_synced": r[4],
+                "asset_count": r[5] or 0,
+                "public_count": r[6] or 0,
+            })
+        return jsonify({"subscriptions": subs})
+    finally:
+        conn.close()
+
+
+@app.route("/api/subscriptions/<sub_id>/assets")
+def api_subscription_assets(sub_id: str):
+    """List provisioned assets for a subscription, with optional type filter."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    type_filter = request.args.get("type")
+    try:
+        query = """
+            SELECT pa.id, pa.name, pa.type, pa.resource_group, pa.location,
+                   pa.sku, pa.fqdn, pa.is_public, pa.pipeline_tag, pa.last_synced,
+                   parl.repository_id, parl.match_method, parl.confidence,
+                   r.repo_name
+            FROM provisioned_assets pa
+            LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
+            LEFT JOIN repositories r ON r.id = parl.repository_id
+            WHERE pa.subscription_id = ?
+        """
+        params: list = [sub_id]
+        if type_filter:
+            query += " AND pa.type = ?"
+            params.append(type_filter)
+        query += " ORDER BY pa.type, pa.name"
+        rows = conn.execute(query, params).fetchall()
+        assets = []
+        for r in rows:
+            assets.append({
+                "id": r[0],
+                "name": r[1],
+                "type": r[2],
+                "resource_group": r[3],
+                "location": r[4],
+                "sku": r[5],
+                "fqdn": r[6],
+                "is_public": bool(r[7]),
+                "pipeline_tag": r[8],
+                "last_synced": r[9],
+                "linked_repo_id": r[10],
+                "match_method": r[11],
+                "confidence": r[12],
+                "linked_repo_name": r[13],
+            })
+        return jsonify({"assets": assets, "total": len(assets)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/subscriptions/<sub_id>/diagram")
+def api_subscription_diagram(sub_id: str):
+    """Generate a Mermaid architecture diagram for a subscription's live assets."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        sub_row = conn.execute(
+            "SELECT display_name, environment FROM subscriptions WHERE id = ?", (sub_id,)
+        ).fetchone()
+        if not sub_row:
+            return jsonify({"error": "Subscription not found. Run harvest_azure_assets.py first."}), 404
+
+        sub_name, environment = sub_row
+
+        rows = conn.execute(
+            """
+            SELECT name, type, resource_group, fqdn, is_public, sku
+            FROM provisioned_assets
+            WHERE subscription_id = ?
+            ORDER BY resource_group, type, name
+            """,
+            (sub_id,),
+        ).fetchall()
+
+        if not rows:
+            return jsonify({"error": "No assets harvested for this subscription yet."}), 404
+
+        mermaid = _build_subscription_mermaid(sub_name, environment, rows)
+        return jsonify({"mermaid": mermaid, "subscription_name": sub_name})
+    finally:
+        conn.close()
+
+
+def _sanitise_node_id(value: str) -> str:
+    import re as _re
+    return _re.sub(r"[^A-Za-z0-9_]", "_", value)
+
+
+def _friendly_type(arm_type: str) -> str:
+    labels = {
+        "microsoft.web/sites": "App Service",
+        "microsoft.network/applicationgateways": "App Gateway",
+        "microsoft.apimanagement/service": "APIM",
+        "microsoft.containerservice/managedclusters": "AKS",
+        "microsoft.storage/storageaccounts": "Storage",
+        "microsoft.keyvault/vaults": "Key Vault",
+        "microsoft.sql/servers": "SQL Server",
+        "microsoft.network/virtualnetworks": "VNet",
+        "microsoft.network/networksecuritygroups": "NSG",
+    }
+    return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
+
+
+def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> str:
+    """Build a Mermaid graph grouping live assets by resource group."""
+    from collections import defaultdict as _dd
+    import re as _re
+
+    lines = ["graph TD", f'    subgraph SUB["{sub_name} ({environment})"]']
+    groups: dict[str, list] = _dd(list)
+    for name, rtype, rg, fqdn, is_public, sku in rows:
+        groups[rg or "default"].append((name, rtype, fqdn, is_public, sku))
+
+    for rg, assets in sorted(groups.items()):
+        rg_id = _sanitise_node_id(rg)
+        lines.append(f'        subgraph {rg_id}["{rg}"]')
+        for name, rtype, fqdn, is_public, sku in assets:
+            node_id = _sanitise_node_id(f"{rg}_{name}")
+            label_parts = [_friendly_type(rtype), name]
+            if fqdn:
+                label_parts.append(fqdn)
+            if is_public:
+                label_parts.append("🌐 public")
+            label = "<br/>".join(label_parts)
+            shape_open, shape_close = ("([", "])") if is_public else ("[", "]")
+            lines.append(f'            {node_id}{shape_open}"{label}"{shape_close}')
+        lines.append("        end")
+
+    lines.append("    end")
+    lines.append("")
+    lines.append("    classDef publicNode fill:#f59e0b,stroke:#b45309,color:#fff;")
+    for name, rtype, rg, fqdn, is_public, sku in rows:
+        if is_public:
+            node_id = _sanitise_node_id(f"{rg or 'default'}_{name}")
+            lines.append(f"    class {node_id} publicNode;")
+
+    return "\n".join(lines)
+
+
+# ── Diagnostic route ─────────────────────────────────────────────────────────
+@app.route("/__DEBUG_ROUTES__")
+def debug_routes():
+    """Debug endpoint to list all registered routes."""
+    routes = sorted([r.rule for r in app.url_map.iter_rules()])
+    cloud_routes = [r for r in routes if 'cloud' in r.lower()]
+    return jsonify({
+        "total_routes": len(routes),
+        "cloud_routes": cloud_routes,
+        "all_routes": routes,
+    })
+
+
+if __name__ == "__main__":
+    # Clean up stale lock files from previous server crashes/restarts
+    print("[Startup] Cleaning up stale lock files...", file=sys.stderr)
+    _cleanup_stale_locks()
+    
+    debug_env = os.getenv("TRIAGE_DEBUG", "0").lower()
+    debug = debug_env in ("1", "true", "yes", "on")
+    app.run(debug=debug, host="0.0.0.0", port=9000, threaded=True)

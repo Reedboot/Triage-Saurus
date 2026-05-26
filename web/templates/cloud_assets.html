@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Assets — Triage-Saurus</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <style>
+    body { background: var(--bg-base); color: var(--text); font-family: system-ui, sans-serif; margin: 0; }
+
+    /* ── Top bar ── */
+    .ca-topbar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 20px;
+      background: var(--bg-surface); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 20;
+      flex-wrap: wrap;
+    }
+    .ca-topbar a         { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
+    .ca-topbar a:hover   { color: var(--accent); }
+    .ca-topbar .sep      { color: var(--text-faint); }
+    .ca-topbar .page-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+    .ca-topbar .topbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+    /* ── Layout ── */
+    .ca-shell { display: flex; height: calc(100vh - 45px); overflow: hidden; }
+
+    /* ── Left sidebar ── */
+    .ca-sidebar {
+      width: 240px; flex-shrink: 0;
+      background: var(--bg-surface); border-right: 1px solid var(--border);
+      overflow-y: auto; padding: 0;
+    }
+    .ca-sidebar-section { padding: 12px 14px 6px; }
+    .ca-sidebar-section-title {
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px;
+    }
+    .ca-sub-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 0.82rem; color: var(--text-muted); margin-bottom: 2px;
+      transition: background 0.1s, color 0.1s;
+    }
+    .ca-sub-item:hover  { background: var(--bg-hover); color: var(--text); }
+    .ca-sub-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+    .ca-sub-item .sub-badge {
+      margin-left: auto; font-size: 0.7rem; background: var(--bg-subtle);
+      color: var(--text-muted); border-radius: 10px; padding: 1px 7px;
+    }
+    .ca-sub-item.active .sub-badge { background: var(--accent-dim); color: var(--accent); }
+    .ca-sub-item .env-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .env-dot-prod    { background: var(--red); }
+    .env-dot-staging { background: var(--yellow); }
+    .env-dot-dev     { background: var(--green); }
+    .env-dot-default { background: var(--text-faint); }
+
+    .ca-sidebar-divider { height: 1px; background: var(--border); margin: 6px 0; }
+
+    /* Type filter pills */
+    .ca-type-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 9px; border-radius: 12px; font-size: 0.75rem; cursor: pointer;
+      background: var(--bg-subtle); color: var(--text-muted); border: 1px solid transparent;
+      margin: 2px; transition: all 0.1s;
+    }
+    .ca-type-pill:hover  { border-color: var(--border); color: var(--text); }
+    .ca-type-pill.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-border); font-weight: 600; }
+    .ca-type-pill .pill-count { font-size: 0.7rem; opacity: 0.8; }
+
+    /* ── Main panel ── */
+    .ca-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+    /* ── Stats bar ── */
+    .ca-statsbar {
+      display: flex; gap: 0; border-bottom: 1px solid var(--border);
+      background: var(--bg-surface); flex-shrink: 0;
+    }
+    .ca-stat {
+      flex: 1; padding: 12px 18px; border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .ca-stat:last-child { border-right: none; }
+    .ca-stat-val  { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+    .ca-stat-val.warn { color: var(--yellow); }
+    .ca-stat-val.danger { color: var(--red); }
+    .ca-stat-val.info   { color: var(--accent); }
+    .ca-stat-label { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* ── Search + filter bar ── */
+    .ca-toolbar {
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 16px; border-bottom: 1px solid var(--border);
+      background: var(--bg-base); flex-shrink: 0; flex-wrap: wrap;
+    }
+    .ca-search {
+      flex: 1; min-width: 180px;
+      background: var(--bg-subtle); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: 0.85rem; padding: 6px 10px;
+    }
+    .ca-search:focus { outline: none; border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-dim); }
+    .ca-filter-select {
+      background: var(--bg-subtle); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: 0.82rem; padding: 6px 8px;
+    }
+    .ca-count-label { font-size: 0.8rem; color: var(--text-muted); margin-left: auto; white-space: nowrap; }
+
+    /* ── Asset table ── */
+    .ca-table-wrap { flex: 1; overflow-y: auto; }
+    .ca-table {
+      width: 100%; border-collapse: collapse; font-size: 0.82rem;
+    }
+    .ca-table thead th {
+      position: sticky; top: 0; z-index: 5;
+      background: var(--bg-subtle); color: var(--text-muted);
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+      padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border);
+      cursor: pointer; user-select: none; white-space: nowrap;
+    }
+    .ca-table thead th:hover { color: var(--text); }
+    .ca-table thead th .sort-arrow { margin-left: 4px; opacity: 0.4; }
+    .ca-table thead th.sort-asc  .sort-arrow { opacity: 1; }
+    .ca-table thead th.sort-desc .sort-arrow { opacity: 1; }
+    .ca-table tbody tr { border-bottom: 1px solid var(--border-subtle); transition: background 0.1s; }
+    .ca-table tbody tr:hover { background: var(--bg-hover); }
+    .ca-table tbody td { padding: 9px 12px; vertical-align: middle; }
+
+    .asset-name { font-weight: 600; color: var(--text); }
+    .asset-fqdn { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; word-break: break-all; }
+    .asset-rg   { font-size: 0.75rem; color: var(--text-faint); margin-top: 1px; }
+
+    /* Type badge */
+    .type-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+      background: var(--bg-subtle); color: var(--text-muted); border: 1px solid var(--border);
+    }
+
+    /* Public indicator */
+    .public-yes  { color: var(--yellow); font-weight: 700; }
+    .public-no   { color: var(--text-faint); }
+
+    /* Status badge */
+    .status-active            { color: var(--green); }
+    .status-potentially_removed { color: var(--yellow); font-weight: 600; }
+    .status-removed           { color: var(--red); }
+
+    /* Env badge */
+    .env-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 0.72rem; font-weight: 600; white-space: nowrap; color: #fff;
+    }
+    .env-production { background: var(--red); }
+    .env-staging    { background: var(--yellow); color: #000; }
+    .env-dev        { background: var(--green); }
+    .env-default    { background: var(--text-faint); }
+
+    /* Linked repo chip */
+    .repo-chip {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 0.72rem; background: var(--accent-dim); color: var(--accent);
+      border: 1px solid var(--accent-border); white-space: nowrap;
+    }
+
+    /* Empty / loading */
+    .ca-empty {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 60px 24px; gap: 16px; color: var(--text-muted); text-align: center;
+    }
+    .ca-empty-icon { font-size: 2.5rem; }
+    .ca-empty pre  {
+      font-size: 0.78rem; background: var(--bg-subtle);
+      padding: 12px 16px; border-radius: 8px; text-align: left;
+      border: 1px solid var(--border);
+    }
+
+    /* Group header rows */
+    .ca-group-row td {
+      background: var(--bg-subtle); font-size: 0.75rem; font-weight: 700;
+      color: var(--text-muted); padding: 6px 12px; letter-spacing: 0.04em;
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+    }
+
+    @media (max-width: 900px) {
+      .ca-sidebar { display: none; }
+      .ca-shell { height: auto; overflow: visible; }
+      .ca-main  { overflow: visible; }
+      .ca-table-wrap { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="ca-topbar">
+  <a href="/">🦖 Triage-Saurus</a>
+  <span class="sep">›</span>
+  <a href="/cloud">☁ Cloud</a>
+  <span class="sep">›</span>
+  <span class="page-title">All Cloud Assets</span>
+  <div class="topbar-actions">
+    <span id="last-refresh" style="font-size:0.78rem;color:var(--text-muted);"></span>
+    <button class="btn-diagram" onclick="loadData()">↺ Refresh</button>
+  </div>
+</div>
+
+<div class="ca-shell">
+
+  <!-- ── Sidebar ── -->
+  <aside class="ca-sidebar" id="ca-sidebar">
+    <div class="ca-sidebar-section">
+      <div class="ca-sidebar-section-title">Subscriptions</div>
+      <div id="sidebar-subs-loading" style="padding:8px; font-size:0.8rem; color:var(--text-muted);">Loading…</div>
+      <div id="sidebar-subs"></div>
+    </div>
+    <div class="ca-sidebar-divider"></div>
+    <div class="ca-sidebar-section">
+      <div class="ca-sidebar-section-title">Resource Types</div>
+      <div id="sidebar-types" style="padding: 2px 0;"></div>
+    </div>
+  </aside>
+
+  <!-- ── Main content ── -->
+  <div class="ca-main" id="ca-main">
+
+    <!-- Stats bar -->
+    <div class="ca-statsbar" id="ca-statsbar" style="display:none;">
+      <div class="ca-stat">
+        <span class="ca-stat-val" id="stat-total">—</span>
+        <span class="ca-stat-label">Total Assets</span>
+      </div>
+      <div class="ca-stat">
+        <span class="ca-stat-val warn" id="stat-public">—</span>
+        <span class="ca-stat-label">⚠ Public</span>
+      </div>
+      <div class="ca-stat">
+        <span class="ca-stat-val danger" id="stat-stale">—</span>
+        <span class="ca-stat-label">Potentially Removed</span>
+      </div>
+      <div class="ca-stat">
+        <span class="ca-stat-val info" id="stat-linked">—</span>
+        <span class="ca-stat-label">Linked to Repos</span>
+      </div>
+      <div class="ca-stat">
+        <span class="ca-stat-val" id="stat-subs">—</span>
+        <span class="ca-stat-label">Subscriptions</span>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="ca-toolbar">
+      <input class="ca-search" id="ca-search" type="search" placeholder="🔍 Search name, FQDN, resource group…" oninput="applyFilters()">
+      <select class="ca-filter-select" id="filter-status" onchange="applyFilters()">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="potentially_removed">Potentially removed</option>
+      </select>
+      <select class="ca-filter-select" id="filter-public" onchange="applyFilters()">
+        <option value="">All visibility</option>
+        <option value="public">Public only</option>
+        <option value="private">Private only</option>
+      </select>
+      <select class="ca-filter-select" id="filter-sort" onchange="applyFilters()">
+        <option value="type">Sort: Type</option>
+        <option value="name">Sort: Name</option>
+        <option value="rg">Sort: Resource Group</option>
+        <option value="env">Sort: Environment</option>
+      </select>
+      <span class="ca-count-label" id="ca-count"></span>
+    </div>
+
+    <!-- Table -->
+    <div class="ca-table-wrap" id="ca-table-wrap">
+      <div class="ca-empty" id="ca-loading">
+        <span class="ca-empty-icon">☁</span>
+        <span>Loading cloud assets…</span>
+      </div>
+      <div class="ca-empty" id="ca-empty" style="display:none;">
+        <span class="ca-empty-icon">🏜</span>
+        <strong>No assets harvested yet</strong>
+        <span style="color:var(--text-muted); font-size:0.85rem;">Run the harvest script to populate this view.</span>
+        <pre>az login
+python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub"</pre>
+      </div>
+      <table class="ca-table" id="ca-table" style="display:none;">
+        <thead>
+          <tr>
+            <th data-col="name">Name <span class="sort-arrow">↕</span></th>
+            <th data-col="type">Type <span class="sort-arrow">↕</span></th>
+            <th data-col="rg">Resource Group <span class="sort-arrow">↕</span></th>
+            <th data-col="location">Location <span class="sort-arrow">↕</span></th>
+            <th>Public</th>
+            <th data-col="env">Environment <span class="sort-arrow">↕</span></th>
+            <th>Status</th>
+            <th>Linked Repo</th>
+          </tr>
+        </thead>
+        <tbody id="ca-tbody"></tbody>
+      </table>
+    </div>
+
+  </div><!-- /ca-main -->
+</div><!-- /ca-shell -->
+
+<script>
+let _allAssets = [];
+let _subscriptions = [];
+let _activeSubId = null;   // null = show all
+let _activeType  = null;   // null = show all
+let _sortCol     = null;
+let _sortAsc     = true;
+
+// ── Env helpers ──────────────────────────────────────────────────────────────
+function envClass(env) {
+  const e = (env || '').toLowerCase();
+  if (e.includes('prod'))    return 'production';
+  if (e.includes('stag') || e.includes('uat')) return 'staging';
+  if (e.includes('dev') || e.includes('test')) return 'dev';
+  return 'default';
+}
+function envDotClass(env) {
+  const c = envClass(env);
+  return 'env-dot env-dot-' + c;
+}
+function envBadgeHtml(env) {
+  return `<span class="env-badge env-${envClass(env)}">${env || 'unknown'}</span>`;
+}
+function statusHtml(s) {
+  if (s === 'potentially_removed') return `<span class="status-potentially_removed" title="Not seen on last harvest — may have been deleted">⚠ check</span>`;
+  if (s === 'removed')             return `<span class="status-removed">✗ removed</span>`;
+  return `<span class="status-active">✓</span>`;
+}
+
+// ── Load data ────────────────────────────────────────────────────────────────
+async function loadData() {
+  document.getElementById('ca-loading').style.display = 'flex';
+  document.getElementById('ca-empty').style.display   = 'none';
+  document.getElementById('ca-table').style.display   = 'none';
+  document.getElementById('ca-statsbar').style.display = 'none';
+
+  try {
+    const resp = await fetch('/api/cloud/assets');
+    const data = await resp.json();
+
+    if (data.error) { showEmpty(); return; }
+
+    _allAssets     = data.assets || [];
+    _subscriptions = data.subscriptions || [];
+
+    if (!_allAssets.length) { showEmpty(); return; }
+
+    // Stats
+    const t = data.totals || {};
+    document.getElementById('stat-total').textContent  = t.assets  ?? _allAssets.length;
+    document.getElementById('stat-public').textContent = t.public  ?? 0;
+    document.getElementById('stat-stale').textContent  = t.stale   ?? 0;
+    document.getElementById('stat-linked').textContent = t.linked  ?? 0;
+    document.getElementById('stat-subs').textContent   = _subscriptions.length;
+    document.getElementById('ca-statsbar').style.display = '';
+
+    // Sidebar subscriptions
+    buildSidebarSubs(_subscriptions);
+
+    // Sidebar type pills
+    buildTypePills(data.type_summary || []);
+
+    // Last refresh
+    document.getElementById('last-refresh').textContent =
+      'Last refreshed ' + new Date().toLocaleTimeString();
+
+    document.getElementById('ca-loading').style.display = 'none';
+    applyFilters();
+
+  } catch(e) {
+    document.getElementById('ca-loading').innerHTML =
+      `<span class="ca-empty-icon">⚠</span><span>Failed to load assets: ${e.message}</span>`;
+  }
+}
+
+function showEmpty() {
+  document.getElementById('ca-loading').style.display = 'none';
+  document.getElementById('ca-empty').style.display   = 'flex';
+}
+
+// ── Sidebar ──────────────────────────────────────────────────────────────────
+function buildSidebarSubs(subs) {
+  document.getElementById('sidebar-subs-loading').style.display = 'none';
+  const el = document.getElementById('sidebar-subs');
+  const allItem = makeSubItem(null, 'All Subscriptions', _allAssets.length, null);
+  el.innerHTML = '';
+  el.appendChild(allItem);
+  subs.forEach(s => el.appendChild(makeSubItem(s.id, s.display_name, s.total, s.environment)));
+}
+function makeSubItem(id, name, count, env) {
+  const div = document.createElement('div');
+  div.className = 'ca-sub-item' + (id === _activeSubId ? ' active' : '');
+  div.innerHTML = env
+    ? `<span class="${envDotClass(env)}"></span>
+       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
+       <span class="sub-badge">${count}</span>`
+    : `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
+       <span class="sub-badge">${count}</span>`;
+  div.addEventListener('click', () => { _activeSubId = id; _activeType = null; applyFilters(); refreshSidebarActive(); });
+  return div;
+}
+function refreshSidebarActive() {
+  document.querySelectorAll('.ca-sub-item').forEach(el => el.classList.remove('active'));
+  const items = document.querySelectorAll('.ca-sub-item');
+  // first item is "all"
+  if (_activeSubId === null) { items[0]?.classList.add('active'); return; }
+  _subscriptions.forEach((s, i) => { if (s.id === _activeSubId) items[i+1]?.classList.add('active'); });
+}
+
+function buildTypePills(typeSummary) {
+  const el = document.getElementById('sidebar-types');
+  el.innerHTML = '';
+  typeSummary.forEach(({ label, count }) => {
+    const pill = document.createElement('span');
+    pill.className = 'ca-type-pill' + (label === _activeType ? ' active' : '');
+    pill.innerHTML = `${label} <span class="pill-count">${count}</span>`;
+    pill.addEventListener('click', () => {
+      _activeType = (_activeType === label) ? null : label;
+      document.querySelectorAll('.ca-type-pill').forEach(p => p.classList.remove('active'));
+      if (_activeType) pill.classList.add('active');
+      applyFilters();
+    });
+    el.appendChild(pill);
+  });
+}
+
+// ── Filter + render ──────────────────────────────────────────────────────────
+function applyFilters() {
+  const search     = (document.getElementById('ca-search').value || '').toLowerCase();
+  const statusF    = document.getElementById('filter-status').value;
+  const publicF    = document.getElementById('filter-public').value;
+  const sortKey    = document.getElementById('filter-sort').value;
+
+  let filtered = _allAssets.filter(a => {
+    if (_activeSubId && a.sub_id !== _activeSubId) return false;
+    if (_activeType   && a.type_label !== _activeType)  return false;
+    if (statusF && a.status !== statusF) return false;
+    if (publicF === 'public'  && !a.is_public) return false;
+    if (publicF === 'private' &&  a.is_public) return false;
+    if (search) {
+      const haystack = [a.name, a.fqdn, a.resource_group, a.type_label, a.sub_name, a.location]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Sort
+  const sortFn = {
+    name: (a, b) => (a.name||'').localeCompare(b.name||''),
+    type: (a, b) => (a.type_label||'').localeCompare(b.type_label||'') || (a.name||'').localeCompare(b.name||''),
+    rg:   (a, b) => (a.resource_group||'').localeCompare(b.resource_group||''),
+    env:  (a, b) => (a.environment||'').localeCompare(b.environment||'') || (a.sub_name||'').localeCompare(b.sub_name||''),
+  };
+  if (sortFn[sortKey]) filtered.sort(sortFn[sortKey]);
+
+  renderTable(filtered, sortKey);
+  document.getElementById('ca-count').textContent =
+    `${filtered.length.toLocaleString()} of ${_allAssets.length.toLocaleString()} assets`;
+}
+
+function renderTable(assets, groupBy) {
+  const tbody = document.getElementById('ca-tbody');
+  const table = document.getElementById('ca-table');
+
+  if (!assets.length) {
+    table.style.display = 'none';
+    // show inline no-results if data was loaded
+    document.getElementById('ca-count').textContent = 'No matching assets';
+    return;
+  }
+
+  table.style.display = '';
+
+  // Grouping
+  const groupKey = { type: 'type_label', env: 'environment', rg: 'resource_group' }[groupBy] || 'type_label';
+  let lastGroup = null;
+  const rows = [];
+
+  assets.forEach(a => {
+    const g = a[groupKey] || '—';
+    if (g !== lastGroup) {
+      lastGroup = g;
+      rows.push(`<tr class="ca-group-row"><td colspan="8">${g}</td></tr>`);
+    }
+    rows.push(`
+      <tr>
+        <td>
+          <div class="asset-name">${esc(a.name)}</div>
+          ${a.fqdn ? `<div class="asset-fqdn">${esc(a.fqdn)}</div>` : ''}
+          <div class="asset-rg">${esc(a.sub_name || '')}</div>
+        </td>
+        <td><span class="type-badge">${esc(a.type_label)}</span></td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">${esc(a.resource_group||'—')}</td>
+        <td style="font-size:0.78rem; color:var(--text-muted);">${esc(a.location||'—')}</td>
+        <td class="${a.is_public ? 'public-yes' : 'public-no'}">${a.is_public ? '🌐 Yes' : '—'}</td>
+        <td>${envBadgeHtml(a.environment)}</td>
+        <td>${statusHtml(a.status)}</td>
+        <td>${a.linked_repo ? `<span class="repo-chip">🔗 ${esc(a.linked_repo)}</span>` : '<span style="color:var(--text-faint)">—</span>'}</td>
+      </tr>
+    `);
+  });
+
+  tbody.innerHTML = rows.join('');
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+loadData();
+</script>
+</body>
+</html>

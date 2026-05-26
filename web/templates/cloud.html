@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloud Subscriptions — Triage-Saurus</title>
+  <link rel="stylesheet" href="/static/tailwind.css?v=1" />
+  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <script src="/static/js/mermaid-loader.js"></script>
+</head>
+<body>
+
+  <header>
+    <div class="header-scan-form">
+      <div class="header-left-controls">
+        <a href="/" class="btn-diagram" title="Back to Triage-Saurus">← Triage-Saurus</a>
+      </div>
+      <div class="header-brand">
+        <span class="dino">☁</span>
+        <h1>Cloud Subscriptions</h1>
+        <span class="dino">☁</span>
+      </div>
+      <div class="header-right-controls">
+        <a href="/cloud/assets" class="btn-diagram" title="View all assets across all subscriptions">📦 All Assets</a>
+        <span style="font-size:0.78rem; color:var(--text-muted); padding-right:8px;">
+          Live assets — run <code>harvest_azure_assets.py</code> to populate
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <div class="container" style="padding: 16px 24px; max-width: 100%;">
+    {% include "partials/subscriptions.html" %}
+  </div>
+
+</body>
+</html>
