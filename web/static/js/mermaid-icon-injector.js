@@ -331,6 +331,23 @@ const MermaidIconInjector = (() => {
       node.insertBefore(groupElement, node.firstChild);
     }
 
+    // Add a title element to the entire node group for hover tooltip on the whole resource
+    // Format: "Resource Type (e.g. Storage Account)"
+    // Only add if there isn't already a direct title child of the node
+    if (!Array.from(node.childNodes).some(child => child.tagName === 'title')) {
+      const nodeTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      // Convert resource type from snake_case to Title Case (e.g. "azurerm_storage_account" -> "Storage Account")
+      const formattedName = resourceType
+        .split('_')
+        .slice(1)  // Skip provider prefix (e.g. 'azurerm')
+        .join(' ')
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+      nodeTitle.textContent = `${formattedName} (${resourceType})`;
+      node.insertBefore(nodeTitle, node.firstChild);
+    }
+
     return true;
   }
 
