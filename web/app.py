@@ -12061,6 +12061,28 @@ def view_diagram(experiment_id: str):
         return f"Error loading diagram: {str(e)}", 500
 
 
+@app.route("/diagrams/latest")
+def view_latest_diagram():
+    """Redirect to the latest experiment's diagrams."""
+    try:
+       with db_helpers.get_db_connection() as conn:
+           # Get the most recent experiment from cloud_diagrams
+           row = conn.execute("""
+               SELECT DISTINCT experiment_id 
+               FROM cloud_diagrams 
+               ORDER BY experiment_id DESC 
+               LIMIT 1
+           """).fetchone()
+            
+           if not row or not row['experiment_id']:
+               return "No diagrams found. Run a scan first.", 404
+            
+           latest_id = row['experiment_id']
+           return redirect(f"/diagrams/{latest_id}", code=302)
+    except Exception as e:
+       return f"Error finding latest diagram: {str(e)}", 500
+
+
 @app.route("/scan", methods=["POST"])
 def scan():
     repo_path = request.form.get("repo_path", "").strip()
