@@ -325,6 +325,105 @@ function toggleFullscreen() {
   setTimeout(autoFit, 60);
 }
 
+// ── Diagram autocomplete selector ────────────────────────────────────────────
+
+(function initDiagramSelector() {
+  const input   = document.getElementById('diagram-search-input');
+  const results = document.getElementById('diagram-search-results');
+  if (!input || !results) return;
+
+  let allDiagrams = [];
+
+  async function loadDiagrams() {
+    try {
+      const res = await fetch('/api/diagrams/list');
+      const data = await res.json();
+      allDiagrams = data.diagrams || [];
+    } catch (_) {}
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch (_) { return iso.slice(0, 10); }
+  }
+
+  function renderResults(query) {
+    const q = query.trim().toLowerCase();
+    const matches = q
+      ? allDiagrams.filter(d =>
+          d.experiment_id.toLowerCase().includes(q) ||
+          d.repo_name.toLowerCase().includes(q) ||
+          d.providers.join(' ').toLowerCase().includes(q)
+        )
+      : allDiagrams;
+
+    results.innerHTML = '';
+    if (!matches.length) {
+      results.innerHTML = '<li class="px-3 py-2 text-[#7d8590]">No diagrams found</li>';
+    } else {
+      matches.forEach(d => {
+        const li = document.createElement('li');
+        li.className = 'px-3 py-2 cursor-pointer hover:bg-[#21262d] transition-colors border-b border-[#21262d] last:border-0';
+        li.innerHTML = `
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-[#388bfd] font-semibold">${d.experiment_id}</span>
+            <span class="text-[#484f58]">${formatDate(d.created_at)}</span>
+          </div>
+          <div class="mt-0.5 flex items-center gap-2 text-[#7d8590]">
+            ${d.repo_name ? `<span class="truncate">${d.repo_name}</span>` : ''}
+            <span class="text-[#484f58]">${d.providers.join(', ')}</span>
+          </div>`;
+        li.addEventListener('click', () => {
+          const url = new URL(`/diagrams/${encodeURIComponent(d.experiment_id)}`, window.location.origin);
+          window.location.href = url.toString();
+        });
+        results.appendChild(li);
+      });
+    }
+    results.classList.remove('hidden');
+  }
+
+  input.addEventListener('focus', async () => {
+    if (!allDiagrams.length) await loadDiagrams();
+    renderResults(input.value);
+  });
+
+  input.addEventListener('input', () => renderResults(input.value));
+
+  // Keyboard navigation
+  input.addEventListener('keydown', e => {
+    const items = Array.from(results.querySelectorAll('li'));
+    const active = results.querySelector('li.bg-\\[\\#21262d\\]') || results.querySelector('li[data-active]');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const idx = items.indexOf(active);
+      const next = e.key === 'ArrowDown'
+        ? items[Math.min(idx + 1, items.length - 1)]
+        : items[Math.max(idx - 1, 0)];
+      items.forEach(li => li.removeAttribute('data-active') || li.classList.remove('!bg-[#21262d]'));
+      if (next) { next.setAttribute('data-active', ''); next.scrollIntoView({ block: 'nearest' }); }
+    } else if (e.key === 'Enter') {
+      const activeItem = results.querySelector('li[data-active]');
+      if (activeItem) activeItem.click();
+    } else if (e.key === 'Escape') {
+      results.classList.add('hidden');
+      input.blur();
+    }
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', e => {
+    if (!document.getElementById('diagram-selector-wrap')?.contains(e.target)) {
+      results.classList.add('hidden');
+    }
+  });
+
+  // Pre-load in background so first focus is instant
+  loadDiagrams();
+})();
+
 // ── Back button ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-back')?.addEventListener('click', () => {

@@ -12061,6 +12061,35 @@ def view_diagram(experiment_id: str):
         return f"Error loading diagram: {str(e)}", 500
 
 
+@app.route("/api/diagrams/list")
+def list_diagrams():
+    """Return all experiments that have architecture diagrams, for autocomplete."""
+    try:
+        with db_helpers.get_db_connection() as conn:
+            rows = conn.execute("""
+                SELECT
+                    cd.experiment_id,
+                    cd.repo_name,
+                    GROUP_CONCAT(cd.provider ORDER BY cd.display_order) AS providers,
+                    MAX(cd.created_at) AS created_at
+                FROM cloud_diagrams cd
+                GROUP BY cd.experiment_id, cd.repo_name
+                ORDER BY cd.experiment_id DESC
+            """).fetchall()
+        results = [
+            {
+                "experiment_id": r["experiment_id"],
+                "repo_name":     r["repo_name"] or "",
+                "providers":     (r["providers"] or "").split(","),
+                "created_at":    r["created_at"] or "",
+            }
+            for r in rows
+        ]
+        return jsonify({"diagrams": results})
+    except Exception as e:
+        return jsonify({"diagrams": [], "error": str(e)}), 500
+
+
 @app.route("/diagrams/latest")
 def view_latest_diagram():
     """Redirect to the latest experiment's diagrams."""

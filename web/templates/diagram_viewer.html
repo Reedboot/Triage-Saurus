@@ -168,6 +168,27 @@
 
             {# Action buttons #}
             <div class="flex items-center gap-2 flex-shrink-0">
+
+                {# Diagram autocomplete selector #}
+                <div id="diagram-selector-wrap" class="relative">
+                    <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs
+                                bg-[#21262d] border border-[#30363d] focus-within:border-[#388bfd]
+                                transition-colors">
+                        <svg class="w-3.5 h-3.5 text-[#7d8590] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <circle cx="11" cy="11" r="8"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35"/>
+                        </svg>
+                        <input id="diagram-search-input"
+                               type="text"
+                               placeholder="Switch diagram…"
+                               autocomplete="off"
+                               class="bg-transparent text-[#e6edf3] placeholder-[#484f58] outline-none w-40 text-xs" />
+                    </div>
+                    <ul id="diagram-search-results"
+                        class="hidden absolute right-0 mt-1 w-72 max-h-64 overflow-y-auto
+                               bg-[#161b22] border border-[#30363d] rounded-md shadow-lg z-50 text-xs">
+                    </ul>
+                </div>
+
                 <button id="btn-export-png"
                         title="Export diagram as PNG"
                         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
