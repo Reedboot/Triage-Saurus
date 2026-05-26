@@ -12477,7 +12477,11 @@ def api_subscription_assets(sub_id: str):
 
 @app.route("/api/subscriptions/<sub_id>/diagram")
 def api_subscription_diagram(sub_id: str):
-    """Generate a Mermaid architecture diagram for a subscription's live assets."""
+    """Generate Mermaid architecture diagrams for a subscription, split by resource group.
+    
+    Returns multiple smaller diagrams to avoid exceeding Mermaid's text size limit.
+    Each resource group gets its own collapsible diagram.
+    """
     conn = _get_db_with_schema()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
@@ -12503,8 +12507,13 @@ def api_subscription_diagram(sub_id: str):
         if not rows:
             return jsonify({"error": "No assets harvested for this subscription yet."}), 404
 
-        mermaid = _build_subscription_mermaid(sub_name, environment, rows)
-        return jsonify({"mermaid": mermaid, "subscription_name": sub_name})
+        # Build separate diagrams per resource group to avoid size limits
+        diagrams = _build_subscription_diagrams_by_rg(sub_name, environment, rows)
+        return jsonify({
+            "subscription_name": sub_name,
+            "diagrams": diagrams,  # List of {rg, mermaid, asset_count, public_count}
+            "total_assets": len(rows),
+        })
     finally:
         conn.close()
 
@@ -12527,6 +12536,58 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.network/networksecuritygroups": "NSG",
     }
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
+
+
+def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: list) -> list:
+    """Build separate Mermaid diagrams per resource group to avoid size limits.
+    
+    Returns a list of {rg, mermaid, asset_count, public_count} dicts.
+    Each resource group gets its own smaller diagram.
+    """
+    from collections import defaultdict as _dd
+
+    groups: dict[str, list] = _dd(list)
+    for name, rtype, rg, fqdn, is_public, sku in rows:
+        groups[rg or "default"].append((name, rtype, fqdn, is_public, sku))
+
+    diagrams = []
+    for rg in sorted(groups.keys()):
+        assets = groups[rg]
+        public_count = sum(1 for _, _, _, is_public, _ in assets if is_public)
+        
+        # Build a small diagram for this resource group only
+        lines = [
+            "graph TD",
+            f'    subgraph RG["{rg}"]'
+        ]
+        
+        for name, rtype, fqdn, is_public, sku in assets:
+            node_id = _sanitise_node_id(f"{rg}_{name}")
+            label_parts = [_friendly_type(rtype), name]
+            if fqdn:
+                label_parts.append(fqdn)
+            if is_public:
+                label_parts.append("🌐 public")
+            label = "<br/>".join(label_parts)
+            shape_open, shape_close = ("([", "])") if is_public else ("[", "]")
+            lines.append(f'        {node_id}{shape_open}"{label}"{shape_close}')
+        
+        lines.append("    end")
+        lines.append("")
+        lines.append("    classDef publicNode fill:#f59e0b,stroke:#b45309,color:#fff;")
+        for name, rtype, fqdn, is_public, sku in assets:
+            if is_public:
+                node_id = _sanitise_node_id(f"{rg}_{name}")
+                lines.append(f"    class {node_id} publicNode;")
+
+        diagrams.append({
+            "rg": rg,
+            "mermaid": "\n".join(lines),
+            "asset_count": len(assets),
+            "public_count": public_count,
+        })
+
+    return diagrams
 
 
 def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> str:

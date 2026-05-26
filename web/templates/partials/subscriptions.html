@@ -117,6 +117,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     wrap.style.display = 'block';
     loading.style.display = 'block';
     container.style.display = 'none';
+    container.innerHTML = ''; // Clear previous diagrams
     title.textContent = subName || subId;
 
     // Scroll into view
@@ -134,15 +135,88 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       loading.style.display = 'none';
       container.style.display = 'block';
 
-      // Render via mermaid if available, otherwise show raw code
+      // Render multiple diagrams (one per resource group)
+      const diagrams = data.diagrams || [];
+      if (!diagrams.length) {
+        container.innerHTML = '<p>No diagrams available.</p>';
+        return;
+      }
+
+      // Create a collapsible section for each resource group
+      diagrams.forEach((d, idx) => {
+        const isOpen = idx === 0; // First one open by default
+        const id = `diagram_${idx}`;
+        
+        const section = document.createElement('div');
+        section.style.marginBottom = '16px';
+        section.style.borderTop = '1px solid var(--border-color, #333)';
+        section.style.paddingTop = '12px';
+        
+        const header = document.createElement('div');
+        header.style.display = 'flex';
+        header.style.alignItems = 'center';
+        header.style.gap = '8px';
+        header.style.cursor = 'pointer';
+        header.style.padding = '8px';
+        header.style.background = 'var(--bg-hover, #2a2a2a)';
+        header.style.borderRadius = '4px';
+        header.style.marginBottom = '8px';
+        
+        const toggle = document.createElement('span');
+        toggle.textContent = isOpen ? '▼' : '▶';
+        toggle.style.fontSize = '0.8rem';
+        toggle.style.width = '16px';
+        toggle.style.display = 'inline-block';
+        
+        const label = document.createElement('span');
+        label.innerHTML = `<strong>${d.rg}</strong> <span style="color:var(--text-muted); font-size:0.85rem;">(${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''})</span>`;
+        
+        header.appendChild(toggle);
+        header.appendChild(label);
+        
+        const diagramDiv = document.createElement('div');
+        diagramDiv.id = id;
+        diagramDiv.style.display = isOpen ? 'block' : 'none';
+        diagramDiv.style.overflow = 'auto';
+        
+        if (window.mermaid) {
+          diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
+        } else {
+          diagramDiv.innerHTML = `<pre style="font-size:0.75rem;overflow:auto;">${d.mermaid}</pre>`;
+        }
+        
+        header.addEventListener('click', () => {
+          const isVisible = diagramDiv.style.display !== 'none';
+          diagramDiv.style.display = isVisible ? 'none' : 'block';
+          toggle.textContent = isVisible ? '▶' : '▼';
+          
+          // Render Mermaid when opened if not already done
+          if (!isVisible && window.mermaid) {
+            setTimeout(() => {
+              window.mermaid.init(undefined, diagramDiv.querySelector('.mermaid'));
+            }, 50);
+          }
+        });
+        
+        section.appendChild(header);
+        section.appendChild(diagramDiv);
+        container.appendChild(section);
+      });
+
+      // Initialize Mermaid for initially visible diagrams
       if (window.mermaid) {
-        container.innerHTML = `<div class="mermaid">${data.mermaid}</div>`;
-        window.mermaid.init(undefined, container.querySelector('.mermaid'));
-      } else {
-        container.innerHTML = `<pre style="font-size:0.75rem;overflow:auto;">${data.mermaid}</pre>`;
+        setTimeout(() => {
+          container.querySelectorAll('.mermaid').forEach(el => {
+            try {
+              window.mermaid.init(undefined, el);
+            } catch(e) {
+              console.warn('Mermaid render error:', e.message);
+            }
+          });
+        }, 100);
       }
     } catch(e) {
-      loading.textContent = 'Failed to load diagram.';
+      loading.textContent = 'Failed to load diagram: ' + e.message;
     }
   }
 
