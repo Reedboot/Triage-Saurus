@@ -353,9 +353,17 @@ UPDATE provisioned_assets SET status='active' WHERE id='/subscriptions/.../my-ap
 
 1. Start the web server: `python3 web/app.py`
 2. Open http://localhost:9000
-3. Navigate to the **Subscriptions** tab (global panel)
-4. Click **View Architecture** on any subscription → live Mermaid diagram grouped by resource group (public assets highlighted in amber 🌐)
-5. Open any repo → **Subscription tab** → use the **"Linked Azure Subscriptions"** widget to declare which subscription(s) this repo deploys into
+3. **Navigation:** Click the hamburger menu (≡) in the top-left corner for:
+   - **☁ Cloud Subscriptions** — List all harvested Azure subscriptions
+   - **📦 All Cloud Assets** — Browse all harvested resources across subscriptions
+   - **⚙ Settings** — Configure AI models per scan phase and performance tuning
+4. From **Cloud Subscriptions** tab: Click **View Architecture** on any subscription → live Mermaid diagram grouped by resource group (public assets highlighted in amber 🌐)
+5. From the repo page → **Subscription tab** → use the **"Linked Azure Subscriptions"** widget to declare which subscription(s) this repo deploys into
+
+**Settings page features:**
+- **AI Models**: Choose which LLM model to use globally or override per scan phase (Architecture, Overview, Rules, Themes, Image Summaries)
+- **AI Behaviour**: Configure review mode (minimal, standard, thorough) and enable/disable cross-finding pattern detection
+- **Performance**: Tune module scan concurrency and pipeline parallelism (respects `TRIAGE_*` env vars)
 
 ### Service principal login (CI/CD)
 
@@ -403,6 +411,8 @@ What the web UI does:
   - `TRIAGE_AI_ENABLE_IMAGE_SUMMARIES` (default `false`) — optional container image summaries
   - `COPILOT_MODEL_OVERVIEW` / `COPILOT_MODEL_ARCHITECTURE` / `COPILOT_MODEL_RULES` — per-task model overrides
   - `COPILOT_MODEL_THEMES` / `COPILOT_MODEL_IMAGE_SUMMARIES` — optional-step model overrides
+
+**Web UI Settings:** All feature flags above can also be configured via the web UI **Settings** page (accessible from the hamburger menu). The web UI settings are persisted in `Settings/app_settings.json` and take priority over environment variables.
 
 Usage-based billing recommendations (lowest-cost mode):
 - Keep `TRIAGE_AI_REVIEW_MODE=minimal` for routine scans; use `full` only for high-risk repos.
