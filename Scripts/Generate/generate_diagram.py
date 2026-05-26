@@ -436,6 +436,9 @@ class HierarchicalDiagramBuilder:
                 seen_ids.add(r['id'])
                 unique_resources.append(r)
         self.resources = unique_resources
+        
+        # Build set of included resource names for connection filtering
+        included_resource_names = {r['resource_name'] for r in self.resources}
 
         # ── Test-variant dedup (DISABLED) ──────────────────────────────────────
         # Architecture diagrams now show all assets without condensation.
@@ -443,10 +446,20 @@ class HierarchicalDiagramBuilder:
         #
         # Deduplication of connections still applies to prevent duplicate edges
         # via different code paths (contains + data_access).
+        # CRITICAL: Also filter connections to only include endpoints that are in the
+        # included resources. This prevents excluded resource types (e.g. aws_route_table)
+        # from being added back into the diagram via connections.
         seen_edges: set = set()
         deduped: list = []
         for c in self.connections:
-            edge_key = (c.get('source'), c.get('target'), c.get('connection_type', ''))
+            src = c.get('source')
+            tgt = c.get('target')
+            
+            # Filter out connections where either endpoint is an excluded resource type
+            if src not in included_resource_names or tgt not in included_resource_names:
+                continue
+                
+            edge_key = (src, tgt, c.get('connection_type', ''))
             if edge_key not in seen_edges:
                 seen_edges.add(edge_key)
                 deduped.append(c)
@@ -4768,9 +4781,101 @@ class HierarchicalDiagramBuilder:
                     'confirmed': has_existing_sql_link,
                 })
                 connected_pairs.add(pair_key)
-        
+         
         return has_internet
-    
+     
+    def _add_internet_ingress_connections(self) -> None:
+        """Add Internet → Entry Point connections for exposed resources (API gateways, load balancers, etc.).
+         
+        Detects public-facing ingress resources and creates connections from the Internet node
+        to them, ensuring diagrams show how external traffic enters the architecture.
+        """
+        if not self.resources:
+            return
+         
+        # Track pairs to avoid duplicates
+        connected_pairs = {(c.get('source'), c.get('target')) for c in self.connections}
+         
+        # Identify ingress resource types per provider
+        ingress_resource_types = {
+            # Azure
+            'azurerm_application_gateway',
+            'azurerm_api_management_service',
+            'azurerm_api_management',
+            'azurerm_app_service',
+            'azurerm_app_service_web_app',
+            'azurerm_function_app',
+            'azurerm_public_ip',
+            # AWS
+            'aws_lb',
+            'aws_alb',
+            'aws_elb',
+            'aws_api_gateway_rest_api',
+            'aws_apigatewayv2_api',
+            'aws_elastic_beanstalk_environment',
+            'aws_cloudfront_distribution',
+            'aws_instance',  # EC2 with public IP
+            # GCP
+            'google_compute_instance',
+            'google_compute_instance_group',
+            'google_compute_instance_from_template',
+            'google_cloud_run_service',
+            'google_api_gateway_api',
+            'google_lb',
+            'google_cloud_load_balancing',
+            # Kubernetes
+            'kubernetes_ingress',
+            'kubernetes_service',  # LoadBalancer or NodePort services
+            'kubernetes_pod',
+            # Alicloud
+            'alicloud_slb',
+            'alicloud_api_gateway_instance',
+            'alicloud_ecs_instance',
+            # Oracle
+            'oci_core_instance',
+            'oci_load_balancer',
+        }
+         
+        # Find all exposed/ingress resources
+        ingress_resources = [
+            r for r in self.resources
+            if (r.get('resource_type') or '').lower() in ingress_resource_types
+        ]
+         
+        # Also check for resources explicitly marked as exposed
+        exposed_names = set(self.exposed_resources.keys())
+        exposed_resources = [
+            r for r in self.resources
+            if r['resource_name'] in exposed_names and r not in ingress_resources
+        ]
+        ingress_resources.extend(exposed_resources)
+         
+        # Add Internet → each ingress resource connection
+        for resource in ingress_resources:
+            pair_key = ('Internet', resource['resource_name'])
+             
+            # Avoid duplicates
+            if pair_key in connected_pairs:
+                continue
+             
+            # Skip if already has Internet connection via existing connections
+            has_internet_connection = any(
+                c.get('source', '').lower() == 'internet' and c.get('target') == resource['resource_name']
+                for c in self.connections
+            )
+            if has_internet_connection:
+                continue
+             
+            # Add the connection
+            self.connections.append({
+                'source': 'Internet',
+                'target': resource['resource_name'],
+                'connection_type': 'internet_ingress',
+                'protocol': 'https',
+                'confirmed': True
+            })
+            connected_pairs.add(pair_key)
+     
     def _detect_external_resource_references(self) -> None:
         """Scan resources for variable references to external services and create placeholder nodes.
         
@@ -5080,6 +5185,9 @@ class HierarchicalDiagramBuilder:
         # Infer connections if resource_connections table is empty/sparse.
         # Internet node emission is handled by render_connections so it only appears once.
         self.infer_connections()
+        
+        # Add Internet ingress connections for exposed resources (load balancers, API gateways, etc.)
+        self._add_internet_ingress_connections()
 
         # Track resources that actually participate in at least one *visible* edge
         # (excluding administrative edge types that are not drawn as arrows) so we
