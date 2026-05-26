@@ -11,13 +11,11 @@ rules:
           - pattern: |
               new ServiceBusClient($CONN_STR)
           - pattern: |
-              _$CLIENT.CreateSender($QUEUE_NAME)
+              $CLIENT.CreateSender($QUEUE_NAME)
           # Java Azure SDK
-          - pattern: |
-              com.azure.messaging.servicebus.*
+          - pattern-regex: "com\\.azure\\.messaging\\.servicebus"
           # Python Azure SDK
-          - pattern: |
-              from azure.servicebus import $CLIENT
+          - pattern-regex: "from azure\\.servicebus import "
           # Node.js Azure SDK
           - pattern: |
               require("@azure/service-bus")
@@ -40,18 +38,14 @@ rules:
     patterns:
       - pattern-either:
           # Java AWS SDK
-          - pattern: |
-              software.amazon.awssdk.services.sqs.*
+          - pattern-regex: "software\\.amazon\\.awssdk\\.services\\.sqs"
           # Python boto3
-          - pattern: |
-              import boto3
-              $CLIENT = boto3.client("sqs")
+          - pattern-regex: "boto3\\.client\\(\"sqs\"\\)"
           # Node.js AWS SDK
           - pattern: |
               require("@aws-sdk/client-sqs")
           # C# AWS SDK
-          - pattern: |
-              Amazon.SQS.*
+          - pattern-regex: "Amazon\\.SQS\\."
     metadata:
       finding_kind: Architecture
       cloud_service: AWS
@@ -69,11 +63,9 @@ rules:
     patterns:
       - pattern-either:
           # Python
-          - pattern: |
-              from google.cloud import pubsub_v1
+          - pattern-regex: "from google\\.cloud import pubsub_v1"
           # Java
-          - pattern: |
-              com.google.cloud.pubsub.*
+          - pattern-regex: "com\\.google\\.cloud\\.pubsub"
           # Node.js
           - pattern: |
               require("@google-cloud/pubsub")
@@ -105,8 +97,7 @@ rules:
           - pattern: |
               services.AddSqlServer(...)
           # JDBC SQL Server
-          - pattern: |
-              com.microsoft.sqlserver.jdbc.*
+          - pattern-regex: "com\\.microsoft\\.sqlserver\\.jdbc"
           - pattern: |
               jdbc:sqlserver://
           # Python pyodbc
@@ -137,19 +128,15 @@ rules:
     patterns:
       - pattern-either:
           # Azure Cosmos DB
-          - pattern: |
-              Azure.Cosmos.*
+          - pattern-regex: "Azure\\.Cosmos\\."
           - pattern: |
               CosmosClient($CONNECTION)
           # AWS RDS
-          - pattern: |
-              AWS.*RDS.*
+          - pattern-regex: "AWS.*RDS"
           # GCP Cloud SQL
-          - pattern: |
-              google.cloud.sql.*
+          - pattern-regex: "google\\.cloud\\.sql"
           # PostgreSQL (cloud providers)
-          - pattern: |
-              Npgsql.*
+          - pattern-regex: "Npgsql"
           - pattern: |
               new NpgsqlConnection(...)
     metadata:
@@ -167,18 +154,15 @@ rules:
     patterns:
       - pattern-either:
           # Azure Blob Storage
-          - pattern: |
-              Azure.Storage.*
+          - pattern-regex: "Azure\\.Storage\\."
           - pattern: |
               BlobClient($URL)
           # AWS S3
-          - pattern: |
-              Amazon.S3.*
+          - pattern-regex: "Amazon\\.S3\\."
           - pattern: |
               s3_client = boto3.client("s3")
           # GCP Cloud Storage
-          - pattern: |
-              google.cloud.storage.*
+          - pattern-regex: "google\\.cloud\\.storage"
     metadata:
       finding_kind: Architecture
       cloud_service: Multiple
@@ -194,18 +178,13 @@ rules:
     patterns:
       - pattern-either:
           # Azure API Management
-          - pattern: |
-              using Azure.Identity;
-              HttpClient.*apim.*
+          - pattern-regex: "Azure\\.Identity"
           # AWS API Gateway
           - pattern: |
               apigateway_client = boto3.client("apigateway")
           # Generic API client to cloud domain
           - pattern: |
               $CLIENT.get($DOMAIN)
-          - metavariable-regex:
-              metavariable: $DOMAIN
-              regex: ".*\\.azure\\.com.*"
     metadata:
       finding_kind: Architecture
       cloud_service: Multiple
@@ -217,23 +196,18 @@ rules:
     message: Repository appears to be application code with cloud service dependencies
     severity: INFO
     languages: [csharp, java, python, typescript, javascript]
-    pattern: |
-      $IMPORT_CLOUD_SDK
     patterns:
       - pattern-either:
           - patterns:
-              - pattern: |
-                  using Azure.*
+              - pattern-regex: "using Azure\\."
               - pattern: |
                   new $CLIENT(...)
           - patterns:
-              - pattern: |
-                  import boto3
+              - pattern-regex: "import boto3"
               - pattern: |
                   client = boto3.client(...)
           - patterns:
-              - pattern: |
-                  from google.cloud import $SERVICE
+              - pattern-regex: "from google\\.cloud import "
               - pattern: |
                   $CLIENT = $SERVICE.client(...)
     metadata:
