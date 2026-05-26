@@ -1,12 +1,12 @@
 rules:
-  - id: gcp-database-detection
+  - id: gcp-allow_all-detection
     message: |
-      Diagram coverage gap detected for 'database'.
+      Diagram coverage gap detected for 'allow_all'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
     patterns:
-      - pattern-regex: '(?i)database'
+      - pattern-regex: '(?i)allow\ all'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]

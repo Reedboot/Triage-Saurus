@@ -1,16 +1,16 @@
 rules:
-  - id: gcp-database-detection
+  - id: azure-example_247-detection
     message: |
-      Diagram coverage gap detected for 'database'.
+      Diagram coverage gap detected for 'example_247'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
     patterns:
-      - pattern-regex: '(?i)database'
+      - pattern-regex: '(?i)example\ 247'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]
-      technology: [gcp]
+      technology: [azure]
       finding_kind: asset_detection
       generated_by: web_parallel_scan_validator
       note: placeholder_rule - consider mapping to existing context-detection rule

@@ -1,16 +1,16 @@
 rules:
-  - id: gcp-database-detection
+  - id: alicloud-connect_timeout-detection
     message: |
-      Diagram coverage gap detected for 'database'.
+      Diagram coverage gap detected for 'connect_timeout'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
     patterns:
-      - pattern-regex: '(?i)database'
+      - pattern-regex: '(?i)connect\ timeout'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]
-      technology: [gcp]
+      technology: [alicloud]
       finding_kind: asset_detection
       generated_by: web_parallel_scan_validator
       note: placeholder_rule - consider mapping to existing context-detection rule

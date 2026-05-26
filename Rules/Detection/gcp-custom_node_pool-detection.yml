@@ -1,12 +1,12 @@
 rules:
-  - id: gcp-database-detection
+  - id: gcp-custom_node_pool-detection
     message: |
-      Diagram coverage gap detected for 'database'.
+      Diagram coverage gap detected for 'custom_node_pool'.
       Resource appears in repo evidence but diagram is missing a required connection or representation.
     severity: WARNING
     languages: [regex]
     patterns:
-      - pattern-regex: '(?i)database'
+      - pattern-regex: '(?i)custom\ node\ pool'
     metadata:
       category: security
       subcategory: [asset-discovery-gap]
