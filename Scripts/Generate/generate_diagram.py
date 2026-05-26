@@ -357,7 +357,7 @@ class HierarchicalDiagramBuilder:
                 text = parts[-1]
 
         normalized = text.replace('_', ' ')
-        if len(normalized) >= 40:
+        if len(normalized) > 40:
             normalized = normalized[:39].rstrip() + '…'
         if len(normalized) <= width:
             return normalized
@@ -378,9 +378,7 @@ class HierarchicalDiagramBuilder:
         safe = re.sub(r'\s+', ' ', safe.strip())
         # Mermaid is less tolerant of escaped double-quotes in node labels;
         # prefer apostrophes to keep labels parse-safe.
-        safe = re.sub(r'\\(?!")', r'\\\\', safe)
-        safe = safe.replace('"', '\\"')
-        return f'"{safe}"'
+        return json.dumps(safe, ensure_ascii=False)
 
     def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:
         """Return Mermaid class suffix for a subgraph resource when an icon exists."""
@@ -5911,14 +5909,24 @@ class HierarchicalDiagramBuilder:
             return lines
 
         adjusted: List[str] = []
-        linkstyle_re = re.compile(r'^(\s*linkStyle\s+)(\d+(?:\s*,\s*\d+)*)(\s+.*)$', re.IGNORECASE)
         for line in lines:
-            m = linkstyle_re.match(line)
-            if not m:
+            leading_ws_len = len(line) - len(line.lstrip())
+            stripped = line.lstrip()
+            if not stripped.lower().startswith('linkstyle '):
                 adjusted.append(line)
                 continue
 
-            prefix, idx_blob, suffix = m.groups()
+            body = stripped[len('linkstyle '):]
+            idx_end = 0
+            while idx_end < len(body) and body[idx_end] in '0123456789, \t':
+                idx_end += 1
+            idx_blob = body[:idx_end].strip()
+            suffix = body[idx_end:]
+            if not idx_blob or not suffix:
+                adjusted.append(line)
+                continue
+
+            prefix = f"{line[:leading_ws_len]}linkStyle "
             idx_parts = [p.strip() for p in idx_blob.split(',') if p.strip()]
             shifted_parts: List[str] = []
             for part in idx_parts:
