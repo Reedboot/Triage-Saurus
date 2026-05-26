@@ -356,7 +356,9 @@ class HierarchicalDiagramBuilder:
             if parts:
                 text = parts[-1]
 
-        normalized = text.replace('_', ' ').replace('"', "'")
+        normalized = text.replace('_', ' ')
+        if len(normalized) > 40:
+            normalized = normalized[:39].rstrip() + '…'
         if len(normalized) <= width:
             return normalized
 
@@ -376,8 +378,8 @@ class HierarchicalDiagramBuilder:
         safe = re.sub(r'\s+', ' ', safe.strip())
         # Mermaid is less tolerant of escaped double-quotes in node labels;
         # prefer apostrophes to keep labels parse-safe.
-        safe = safe.replace('"', "'")
         safe = safe.replace('\\', '\\\\')
+        safe = safe.replace('"', '\\"')
         return f'"{safe}"'
 
     def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:
@@ -5634,7 +5636,11 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in all_children
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
-            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
+            and (
+                self._is_connected_resource(r)
+                or self._is_exposed_resource(r)
+                or bool(self.children_by_parent.get(r['id']))
+            )
         ]
         app_related_ids = {r['id'] for r in app_resources}
         for app in app_resources:
