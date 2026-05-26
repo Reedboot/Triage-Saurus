@@ -12499,10 +12499,12 @@ def api_subscription_assets(sub_id: str):
 
 @app.route("/api/subscriptions/<sub_id>/diagram")
 def api_subscription_diagram(sub_id: str):
-    """Generate Mermaid architecture diagrams for a subscription, split by resource group.
+    """Generate hierarchical architecture diagrams for a subscription.
     
-    Returns multiple smaller diagrams to avoid exceeding Mermaid's text size limit.
-    Each resource group gets its own collapsible diagram.
+    Returns:
+    - A high-level ingress flow diagram (HTTP → WAF → Gateway → APIM → Backend)
+    - Grouped diagrams by resource group for detailed view
+    - Drilldown data for interactive exploration
     """
     conn = _get_db_with_schema()
     if conn is None:
@@ -12518,7 +12520,7 @@ def api_subscription_diagram(sub_id: str):
 
         rows = conn.execute(
             """
-            SELECT name, type, resource_group, fqdn, is_public, sku
+            SELECT name, type, resource_group, fqdn, is_public, sku, id
             FROM provisioned_assets
             WHERE subscription_id = ?
             ORDER BY resource_group, type, name
@@ -12529,12 +12531,22 @@ def api_subscription_diagram(sub_id: str):
         if not rows:
             return jsonify({"error": "No assets harvested for this subscription yet."}), 404
 
-        # Build separate diagrams per resource group to avoid size limits
-        diagrams = _build_subscription_diagrams_by_rg(sub_name, environment, rows)
+        # Build high-level ingress diagram (simplified for readability)
+        ingress_diagram = _build_ingress_diagram(rows)
+        
+        # Build detailed diagrams grouped by resource group
+        detailed_diagrams = _build_subscription_diagrams_by_rg(sub_name, environment, rows)
+        
+        # Build drilldown data (grouped by resource type for exploration)
+        drilldown_data = _build_drilldown_data(rows)
+        
         return jsonify({
             "subscription_name": sub_name,
-            "diagrams": diagrams,  # List of {rg, mermaid, asset_count, public_count}
+            "environment": environment,
             "total_assets": len(rows),
+            "ingress_diagram": ingress_diagram,  # High-level entry point diagram
+            "diagrams": detailed_diagrams,  # Detailed per-RG diagrams
+            "drilldown": drilldown_data,  # Data for double-click exploration
         })
     finally:
         conn.close()
@@ -12560,6 +12572,199 @@ def _friendly_type(arm_type: str) -> str:
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
 
 
+def _build_ingress_diagram(rows: list) -> dict:
+    """Build a high-level ingress flow diagram showing entry points and key services.
+    
+    Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
+    This avoids Mermaid text size limits by only showing critical path elements.
+    Double-clicking elements allows drill-down to details.
+    """
+    from collections import defaultdict as _dd
+    
+    # Categorize resources by type to show entry point flow
+    entry_points = []  # Public IPs, App Gateways, WAFs
+    api_layer = []     # APIM instances
+    backends = []      # App Services, AKS, etc.
+    data_stores = []   # Databases, Storage
+    
+    type_groups = _dd(list)
+    
+    for row in rows:
+        name, rtype, rg, fqdn, is_public, sku = row[:6]
+        item = {"name": name, "type": rtype, "fqdn": fqdn, "public": is_public, "rg": rg}
+        type_key = (rtype or "").lower()
+        type_groups[type_key].append(item)
+        
+        # Classify for ingress flow
+        if "applicationgateway" in type_key or "frontdoor" in type_key or "publicip" in type_key:
+            entry_points.append(item)
+        elif "apimanagement" in type_key:
+            api_layer.append(item)
+        elif "sites" in type_key or "managedcluster" in type_key or "containerinstance" in type_key:
+            backends.append(item)
+        elif "sql" in type_key or "cosmosdb" in type_key or "storage" in type_key:
+            data_stores.append(item)
+    
+    # Build simplified Mermaid diagram focusing on entry flow
+    lines = [
+        "graph LR",
+        '    Internet["🌐 Internet<br/>(inbound requests)"]',
+    ]
+    
+    # Build a simplified flow: Internet → representative entry points → API layer → representative backends
+    # Only show a few representative nodes to avoid diagram bloat
+    max_shown = 3  # Max nodes per category to show
+    
+    # Entry points (show up to max_shown)
+    shown_entry = entry_points[:max_shown]
+    shown_api = api_layer[:max_shown]
+    shown_backend = backends[:max_shown]
+    shown_data = data_stores[:max_shown]
+    
+    # Add nodes
+    for item in shown_entry:
+        node_id = _sanitise_node_id(item["name"])
+        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        lines.append(f'    {node_id}["{label}"]')
+    
+    for item in shown_api:
+        node_id = _sanitise_node_id(item["name"])
+        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        lines.append(f'    {node_id}["{label}"]')
+    
+    for item in shown_backend:
+        node_id = _sanitise_node_id(item["name"])
+        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        lines.append(f'    {node_id}["{label}"]')
+    
+    for item in shown_data:
+        node_id = _sanitise_node_id(item["name"])
+        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        lines.append(f'    {node_id}["{label}"]')
+    
+    # Add a summary node if there are more items than shown
+    if len(entry_points) > max_shown:
+        lines.append(f'    more_entry["...+{len(entry_points) - max_shown} more<br/>entry points"]')
+        shown_entry.append({"name": "more_entry", "type": "summary"})
+    
+    if len(api_layer) > max_shown:
+        lines.append(f'    more_api["...+{len(api_layer) - max_shown} more<br/>API services"]')
+        shown_api.append({"name": "more_api", "type": "summary"})
+    
+    if len(backends) > max_shown:
+        lines.append(f'    more_backend["...+{len(backends) - max_shown} more<br/>backend services"]')
+        shown_backend.append({"name": "more_backend", "type": "summary"})
+    
+    if len(data_stores) > max_shown:
+        lines.append(f'    more_data["...+{len(data_stores) - max_shown} more<br/>data stores"]')
+        shown_data.append({"name": "more_data", "type": "summary"})
+    
+    # Add connections
+    lines.append("")
+    
+    # Internet → Entry Points
+    if shown_entry:
+        for item in shown_entry:
+            lines.append(f'    Internet --> {_sanitise_node_id(item["name"])}')
+    
+    # Entry Points → API Layer
+    if shown_entry and shown_api:
+        # Connect first entry point to first API node
+        lines.append(f'    {_sanitise_node_id(shown_entry[0]["name"])} --> {_sanitise_node_id(shown_api[0]["name"])}')
+        # Show some alternatives
+        if len(shown_entry) > 1 and len(shown_api) > 1:
+            lines.append(f'    {_sanitise_node_id(shown_entry[1]["name"])} -.-> {_sanitise_node_id(shown_api[1]["name"])}')
+    
+    # API Layer → Backends
+    if shown_api and shown_backend:
+        lines.append(f'    {_sanitise_node_id(shown_api[0]["name"])} --> {_sanitise_node_id(shown_backend[0]["name"])}')
+        if len(shown_backend) > 1:
+            lines.append(f'    {_sanitise_node_id(shown_api[0]["name"])} -.-> {_sanitise_node_id(shown_backend[1]["name"])}')
+    
+    # Backends → Data Stores
+    if shown_backend and shown_data:
+        lines.append(f'    {_sanitise_node_id(shown_backend[0]["name"])} -->|queries| {_sanitise_node_id(shown_data[0]["name"])}')
+        if len(shown_data) > 1:
+            lines.append(f'    {_sanitise_node_id(shown_backend[0]["name"])} -.->|queries| {_sanitise_node_id(shown_data[1]["name"])}')
+    
+    # Styling
+    lines.append("")
+    lines.append('    classDef entryPoint fill:#ef4444,stroke:#991b1b,color:#fff;')
+    lines.append('    classDef apiGateway fill:#f97316,stroke:#ea580c,color:#fff;')
+    lines.append('    classDef backend fill:#3b82f6,stroke:#1e40af,color:#fff;')
+    lines.append('    classDef dataStore fill:#8b5cf6,stroke:#5b21b6,color:#fff;')
+    lines.append('    classDef internet fill:#06b6d4,stroke:#0369a1,color:#fff;')
+    lines.append('    classDef summary fill:#6b7280,stroke:#374151,color:#fff;')
+    
+    for item in shown_entry:
+        if item["type"] != "summary":
+            lines.append(f'    class {_sanitise_node_id(item["name"])} entryPoint;')
+    if "more_entry" in [_sanitise_node_id(item["name"]) for item in shown_entry]:
+        lines.append('    class more_entry summary;')
+    
+    for item in shown_api:
+        if item["type"] != "summary":
+            lines.append(f'    class {_sanitise_node_id(item["name"])} apiGateway;')
+    if "more_api" in [_sanitise_node_id(item["name"]) for item in shown_api]:
+        lines.append('    class more_api summary;')
+    
+    for item in shown_backend:
+        if item["type"] != "summary":
+            lines.append(f'    class {_sanitise_node_id(item["name"])} backend;')
+    if "more_backend" in [_sanitise_node_id(item["name"]) for item in shown_backend]:
+        lines.append('    class more_backend summary;')
+    
+    for item in shown_data:
+        if item["type"] != "summary":
+            lines.append(f'    class {_sanitise_node_id(item["name"])} dataStore;')
+    if "more_data" in [_sanitise_node_id(item["name"]) for item in shown_data]:
+        lines.append('    class more_data summary;')
+    
+    lines.append('    class Internet internet;')
+    
+    return {
+        "mermaid": "\n".join(lines),
+        "asset_summary": {
+            "entry_points": len(entry_points),
+            "api_layer": len(api_layer),
+            "backends": len(backends),
+            "data_stores": len(data_stores),
+        }
+    }
+
+
+def _build_drilldown_data(rows: list) -> dict:
+    """Build drilldown data grouped by resource type for interactive exploration.
+    
+    This data is used when user double-clicks a resource type to see details.
+    Returns organized by type: APIM, App Services, Databases, etc.
+    """
+    from collections import defaultdict as _dd
+    
+    by_type = _dd(list)
+    for row in rows:
+        name, rtype, rg, fqdn, is_public, sku, asset_id = row[:7] if len(row) > 6 else list(row) + [None]
+        type_key = (rtype or "").lower()
+        by_type[type_key].append({
+            "name": name,
+            "type": rtype,
+            "friendly_type": _friendly_type(rtype),
+            "resource_group": rg,
+            "fqdn": fqdn,
+            "is_public": is_public,
+            "sku": sku,
+            "asset_id": asset_id,
+        })
+    
+    return {
+        "by_type": dict(by_type),
+        "summary": {
+            type_key: len(items)
+            for type_key, items in by_type.items()
+        }
+    }
+
+
 def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: list) -> list:
     """Build separate Mermaid diagrams per resource group to avoid size limits.
     
@@ -12569,7 +12774,9 @@ def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: li
     from collections import defaultdict as _dd
 
     groups: dict[str, list] = _dd(list)
-    for name, rtype, rg, fqdn, is_public, sku in rows:
+    for row in rows:
+        # Unpack only first 6 fields (id is optional)
+        name, rtype, rg, fqdn, is_public, sku = row[:6]
         groups[rg or "default"].append((name, rtype, fqdn, is_public, sku))
 
     diagrams = []

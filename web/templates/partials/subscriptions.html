@@ -135,16 +135,67 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       loading.style.display = 'none';
       container.style.display = 'block';
 
-      // Render multiple diagrams (one per resource group)
+      // First, render the high-level ingress diagram
+      const ingressDiag = data.ingress_diagram;
+      if (ingressDiag && ingressDiag.mermaid) {
+        const ingressSection = document.createElement('div');
+        ingressSection.style.marginBottom = '24px';
+        ingressSection.style.padding = '16px';
+        ingressSection.style.background = 'var(--bg-code, #1a1a1a)';
+        ingressSection.style.borderRadius = '6px';
+        ingressSection.style.border = '2px solid var(--border-color, #333)';
+        
+        const ingressTitle = document.createElement('h4');
+        ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
+        ingressTitle.style.margin = '0 0 12px 0';
+        ingressSection.appendChild(ingressTitle);
+        
+        const ingressDiv = document.createElement('div');
+        ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
+        ingressDiv.style.maxWidth = '100%';
+        ingressDiv.style.overflow = 'auto';
+        ingressDiv.title = 'Double-click elements to explore details';
+        ingressSection.appendChild(ingressDiv);
+        
+        container.appendChild(ingressSection);
+        
+        // Render Mermaid for ingress diagram
+        if (window.mermaid) {
+          setTimeout(() => {
+            try {
+              window.mermaid.init(undefined, ingressDiv.querySelector('.mermaid'));
+            } catch(e) {
+              console.warn('Mermaid ingress render error:', e.message);
+            }
+          }, 100);
+        }
+      }
+
+      // Then render the detailed diagrams (one per resource group)
       const diagrams = data.diagrams || [];
       if (!diagrams.length) {
-        container.innerHTML = '<p>No diagrams available.</p>';
+        if (!ingressDiag) {
+          container.innerHTML = '<p>No diagrams available.</p>';
+        }
         return;
+      }
+
+      // Add a separator
+      if (ingressDiag) {
+        const sep = document.createElement('div');
+        sep.style.borderTop = '2px solid var(--border-color, #333)';
+        sep.style.margin = '24px 0';
+        sep.style.paddingTop = '16px';
+        const sepLabel = document.createElement('h4');
+        sepLabel.textContent = '📊 Detailed Resource Group Views';
+        sepLabel.style.margin = '0 0 12px 0';
+        container.appendChild(sep);
+        container.appendChild(sepLabel);
       }
 
       // Create a collapsible section for each resource group
       diagrams.forEach((d, idx) => {
-        const isOpen = idx === 0; // First one open by default
+        const isOpen = idx === 0 && !ingressDiag; // First one open by default only if no ingress
         const id = `diagram_${idx}`;
         
         const section = document.createElement('div');
