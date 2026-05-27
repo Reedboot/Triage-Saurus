@@ -12478,6 +12478,7 @@ def api_subscriptions_list():
                 "display_name": r[1],
                 "environment": r[2] or "unknown",
                 "env_badge": _get_subscription_env_badge(r[2]),
+                "provider": "Azure",
                 "state": r[3],
                 "last_synced": r[4],
                 "asset_count": r[5] or 0,
@@ -12558,10 +12559,18 @@ def api_subscription_diagram(sub_id: str):
 
         rows = conn.execute(
             """
-            SELECT name, type, resource_group, fqdn, is_public, sku, id
-            FROM provisioned_assets
+            SELECT pa.name, pa.type, pa.resource_group, pa.fqdn, pa.is_public, pa.sku, pa.id,
+                   (SELECT COUNT(*) > 0 FROM appgw_waf_policies pwp 
+                    WHERE pwp.subscription_id = pa.subscription_id 
+                    AND EXISTS (
+                        SELECT 1 FROM appgw_routing_rules ar 
+                        WHERE ar.subscription_id = pa.subscription_id 
+                        AND ar.gateway_name = pa.name 
+                        AND ar.waf_policy_name = pwp.name
+                    )) AS has_waf
+            FROM provisioned_assets pa
             WHERE subscription_id = ?
-            ORDER BY resource_group, type, name
+            ORDER BY pa.resource_group, pa.type, pa.name
             """,
             (sub_id,),
         ).fetchall()
@@ -12615,9 +12624,17 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
     This avoids Mermaid text size limits by only showing critical path elements.
+    Groups data stores by type AND access level (public vs. IP-restricted).
     Double-clicking elements allows drill-down to details.
     """
     from collections import defaultdict as _dd
+    
+    # Helper to create unique node IDs using resource group + name
+    # This handles duplicate names across different resource groups
+    def _get_node_id(item):
+        """Generate unique node ID from resource group and name."""
+        combined = f"{item.get('rg', 'default')}_{item.get('name', 'resource')}"
+        return _sanitise_node_id(combined)
     
     # Categorize resources by type to show entry point flow
     entry_points = []  # Public IPs, App Gateways, WAFs
@@ -12629,7 +12646,8 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
-        item = {"name": name, "type": rtype, "fqdn": fqdn, "public": is_public, "rg": rg}
+        has_waf = row[7] if len(row) > 7 else False  # New WAF column
+        item = {"name": name, "type": rtype, "fqdn": fqdn, "public": is_public, "rg": rg, "has_waf": has_waf}
         type_key = (rtype or "").lower()
         type_groups[type_key].append(item)
         
@@ -12640,7 +12658,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             api_layer.append(item)
         elif "sites" in type_key or "managedcluster" in type_key or "containerinstance" in type_key:
             backends.append(item)
-        elif "sql" in type_key or "cosmosdb" in type_key or "storage" in type_key:
+        elif "sql" in type_key or "cosmosdb" in type_key or "storage" in type_key or "keyvault" in type_key:
             data_stores.append(item)
     
     # Build simplified Mermaid diagram focusing on entry flow
@@ -12653,48 +12671,237 @@ def _build_ingress_diagram(rows: list) -> dict:
     # Only show a few representative nodes to avoid diagram bloat
     max_shown = 3  # Max nodes per category to show
     
-    # Entry points (show up to max_shown)
-    shown_entry = entry_points[:max_shown]
-    shown_api = api_layer[:max_shown]
-    shown_backend = backends[:max_shown]
-    shown_data = data_stores[:max_shown]
+    # Prioritize AKS clusters and container services in backends (they're critical infrastructure)
+    def _prioritize_backends(backend_items):
+        """Separate AKS/container services from app services to ensure AKS is always visible."""
+        aks = [b for b in backend_items if "managedcluster" in (b.get("type") or "").lower() or "containerinstance" in (b.get("type") or "").lower()]
+        others = [b for b in backend_items if b not in aks]
+        return aks + others
+    
+    # Group entry points by TYPE + WAF status (entry points show what's listening publicly)
+    def _group_entry_points(entry_items):
+        """Group entry points by resource type and WAF protection status."""
+        from collections import defaultdict
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "waf_status": None, "names": []})
+        
+        for item in entry_items:
+            type_key = (item.get("type") or "").lower()
+            
+            # Get friendly type name
+            if "applicationgateway" in type_key:
+                category = "App Gateway"
+            elif "frontdoor" in type_key:
+                category = "Front Door"
+            elif "publicip" in type_key:
+                category = "Public IP"
+            else:
+                category = item.get("type", "Gateway").split("/")[-1]
+            
+            # For entry points, group by WAF protection status
+            waf_status = "🛡️ WAF Protected" if item.get("has_waf") else "Unprotected"
+            group_key = f"{category}|{waf_status}"
+            
+            grouped[group_key]["count"] += 1
+            grouped[group_key]["type"] = category
+            grouped[group_key]["waf_status"] = waf_status
+            grouped[group_key]["names"].append(item.get("name"))
+        
+        result = []
+        for group_key, info in sorted(grouped.items()):
+            consolidated = {
+                "name": f"{info['type']} ({info['waf_status']})",
+                "count": info["count"],
+                "type": info["type"],
+                "waf_status": info["waf_status"],
+                "is_group": True,
+                "names": info["names"],
+                "has_waf": "🛡️" in info["waf_status"]
+            }
+            result.append(consolidated)
+        
+        return result
+    
+    # Group API layer by TYPE + exposure
+    def _group_api_services(api_items):
+        """Group API services by resource type and public/private exposure."""
+        from collections import defaultdict
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        
+        for item in api_items:
+            type_key = (item.get("type") or "").lower()
+            category = "APIM" if "apimanagement" in type_key else item.get("type", "API").split("/")[-1]
+            access = "🌐 Public" if item.get("public") else "Restricted"
+            group_key = f"{category}|{access}"
+            
+            grouped[group_key]["count"] += 1
+            grouped[group_key]["type"] = category
+            grouped[group_key]["access"] = access
+            grouped[group_key]["names"].append(item.get("name"))
+        
+        result = []
+        for group_key, info in sorted(grouped.items()):
+            consolidated = {
+                "name": f"{info['type']} ({info['access']})",
+                "count": info["count"],
+                "type": info["type"],
+                "access": info["access"],
+                "is_group": True,
+                "names": info["names"],
+                "public": "public" in info["access"].lower()
+            }
+            result.append(consolidated)
+        
+        return result
+    
+    # Group backends by TYPE + exposure
+    def _group_backends_by_type(backend_items):
+        """Group backends by resource type and public/private exposure."""
+        from collections import defaultdict
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        
+        for item in backend_items:
+            type_key = (item.get("type") or "").lower()
+            
+            # Get friendly type name
+            if "managedcluster" in type_key:
+                category = "AKS"
+            elif "sites" in type_key:
+                category = "App Service"
+            elif "containerinstance" in type_key:
+                category = "Container Instance"
+            else:
+                category = item.get("type", "Backend").split("/")[-1]
+            
+            access = "🌐 Public" if item.get("public") else "Restricted"
+            group_key = f"{category}|{access}"
+            
+            grouped[group_key]["count"] += 1
+            grouped[group_key]["type"] = category
+            grouped[group_key]["access"] = access
+            grouped[group_key]["names"].append(item.get("name"))
+        
+        result = []
+        for group_key, info in sorted(grouped.items()):
+            consolidated = {
+                "name": f"{info['type']} ({info['access']})",
+                "count": info["count"],
+                "type": info["type"],
+                "access": info["access"],
+                "is_group": True,
+                "names": info["names"],
+                "public": "public" in info["access"].lower()
+            }
+            result.append(consolidated)
+        
+        return result
+    
+    # Group data stores by TYPE + exposure (already good, just refactor slightly)
+    def _group_data_stores_by_type(store_items):
+        """Group data stores by resource type and access level."""
+        from collections import defaultdict
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        
+        for item in store_items:
+            type_key = (item.get("type") or "").lower()
+            
+            # Determine resource category
+            if "sql" in type_key:
+                category = "SQL"
+            elif "cosmos" in type_key or "documentdb" in type_key:
+                category = "Cosmos DB"
+            elif "storage" in type_key:
+                category = "Storage"
+            elif "keyvault" in type_key:
+                category = "Key Vault"
+            else:
+                category = item.get("type", "Database").split("/")[-1]
+            
+            # Group by category + access level
+            access = "🌐 Public" if item.get("public") else "Restricted"
+            group_key = f"{category}|{access}"
+            
+            grouped[group_key]["count"] += 1
+            grouped[group_key]["type"] = category
+            grouped[group_key]["access"] = access
+            grouped[group_key]["names"].append(item.get("name"))
+        
+        # Convert to list of consolidated items
+        result = []
+        for group_key, info in sorted(grouped.items()):
+            consolidated = {
+                "name": f"{info['type']} ({info['access']})",
+                "count": info["count"],
+                "type": info["type"],
+                "access": info["access"],
+                "is_group": True,
+                "names": info["names"],
+                "public": "public" in info["access"].lower()
+            }
+            result.append(consolidated)
+        
+        return result
+    
+    # Group resources by type + exposure (only show unique combinations)
+    grouped_entry_points = _group_entry_points(entry_points)
+    grouped_api_layer = _group_api_services(api_layer)
+    grouped_backends = _group_backends_by_type(backends)
+    grouped_data_stores = _group_data_stores_by_type(data_stores)
+    
+    # Show up to max_shown from each grouped set
+    shown_entry = grouped_entry_points[:max_shown]
+    shown_api = grouped_api_layer[:max_shown]
+    shown_backend = grouped_backends[:max_shown]
+    shown_data = grouped_data_stores[:max_shown]
     
     # Add nodes
     for item in shown_entry:
-        node_id = _sanitise_node_id(item["name"])
-        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        node_id = _get_node_id(item)
+        friendly_type = _friendly_type(item["type"])
+        # Show WAF status for gateways
+        waf_indicator = " 🛡️" if item.get("has_waf") else ""
+        label = f'{friendly_type}{waf_indicator}<br/>{item["name"][:25]}'
         lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_api:
-        node_id = _sanitise_node_id(item["name"])
+        node_id = _get_node_id(item)
         label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
         lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_backend:
-        node_id = _sanitise_node_id(item["name"])
+        node_id = _get_node_id(item)
         label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
         lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_data:
-        node_id = _sanitise_node_id(item["name"])
-        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
+        node_id = _get_node_id(item)
+        # For grouped items, show count if multiple
+        if item.get("is_group") and item.get("count", 0) > 1:
+            label = f'{item["type"]} ({item["access"]})<br/>({item["count"]} instances)'
+        else:
+            label = f'{item.get("type", "Database")}<br/>({item["access"]})'
         lines.append(f'    {node_id}["{label}"]')
     
-    # Add a summary node if there are more items than shown
-    if len(entry_points) > max_shown:
-        lines.append(f'    more_entry["...+{len(entry_points) - max_shown} more<br/>entry points"]')
+    # Track summary node ids for connection logic before adding them
+    has_more_entry = len(grouped_entry_points) > max_shown
+    has_more_api = len(grouped_api_layer) > max_shown
+    has_more_backend = len(grouped_backends) > max_shown
+    has_more_data = len(grouped_data_stores) > max_shown
+    
+    # Add a summary node if there are more grouped types than shown
+    if has_more_entry:
+        lines.append(f'    more_entry["...+{len(grouped_entry_points) - max_shown} more<br/>entry types"]')
         shown_entry.append({"name": "more_entry", "type": "summary"})
     
-    if len(api_layer) > max_shown:
-        lines.append(f'    more_api["...+{len(api_layer) - max_shown} more<br/>API services"]')
+    if has_more_api:
+        lines.append(f'    more_api["...+{len(grouped_api_layer) - max_shown} more<br/>API types"]')
         shown_api.append({"name": "more_api", "type": "summary"})
     
-    if len(backends) > max_shown:
-        lines.append(f'    more_backend["...+{len(backends) - max_shown} more<br/>backend services"]')
+    if has_more_backend:
+        lines.append(f'    more_backend["...+{len(grouped_backends) - max_shown} more<br/>backend types"]')
         shown_backend.append({"name": "more_backend", "type": "summary"})
     
-    if len(data_stores) > max_shown:
-        lines.append(f'    more_data["...+{len(data_stores) - max_shown} more<br/>data stores"]')
+    if has_more_data:
+        lines.append(f'    more_data["...+{len(grouped_data_stores) - max_shown} more<br/>data store types"]')
         shown_data.append({"name": "more_data", "type": "summary"})
     
     # Add connections
@@ -12702,60 +12909,91 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     # Internet → Entry Points
     if shown_entry:
-        for item in shown_entry:
-            lines.append(f'    Internet --> {_sanitise_node_id(item["name"])}')
+        for item in shown_entry[:max_shown]:  # Only direct connection for actual nodes
+            lines.append(f'    Internet --> {_get_node_id(item)}')
+        # Connect summary node if it exists
+        if has_more_entry:
+            lines.append(f'    Internet -.-> more_entry')
     
     # Entry Points → API Layer
     if shown_entry and shown_api:
+        actual_entry = shown_entry[:max_shown]
         # Connect first entry point to first API node
-        lines.append(f'    {_sanitise_node_id(shown_entry[0]["name"])} --> {_sanitise_node_id(shown_api[0]["name"])}')
+        if actual_entry:
+            lines.append(f'    {_get_node_id(actual_entry[0])} --> {_get_node_id(shown_api[0])}')
         # Show some alternatives
-        if len(shown_entry) > 1 and len(shown_api) > 1:
-            lines.append(f'    {_sanitise_node_id(shown_entry[1]["name"])} -.-> {_sanitise_node_id(shown_api[1]["name"])}')
+        if len(actual_entry) > 1 and len(shown_api) > 1:
+            lines.append(f'    {_get_node_id(actual_entry[1])} -.-> {_get_node_id(shown_api[1])}')
+        # Connect summary entry node to summary API node if both exist
+        if has_more_entry and has_more_api:
+            lines.append(f'    more_entry -.-> more_api')
+        # Or connect summary entry to first API if no summary API
+        elif has_more_entry and shown_api:
+            lines.append(f'    more_entry -.-> {_get_node_id(shown_api[0])}')
     
     # API Layer → Backends
     if shown_api and shown_backend:
-        lines.append(f'    {_sanitise_node_id(shown_api[0]["name"])} --> {_sanitise_node_id(shown_backend[0]["name"])}')
-        if len(shown_backend) > 1:
-            lines.append(f'    {_sanitise_node_id(shown_api[0]["name"])} -.-> {_sanitise_node_id(shown_backend[1]["name"])}')
+        actual_api = shown_api[:max_shown]
+        if actual_api:
+            lines.append(f'    {_get_node_id(actual_api[0])} --> {_get_node_id(shown_backend[0])}')
+        if len(actual_api) > 1 and len(shown_backend) > 1:
+            lines.append(f'    {_get_node_id(actual_api[0])} -.-> {_get_node_id(shown_backend[1])}')
+        # Connect summary nodes if they exist
+        if has_more_api and has_more_backend:
+            lines.append(f'    more_api -.-> more_backend')
+        elif has_more_api and shown_backend:
+            lines.append(f'    more_api -.-> {_get_node_id(shown_backend[0])}')
     
     # Backends → Data Stores
     if shown_backend and shown_data:
-        lines.append(f'    {_sanitise_node_id(shown_backend[0]["name"])} -->|queries| {_sanitise_node_id(shown_data[0]["name"])}')
-        if len(shown_data) > 1:
-            lines.append(f'    {_sanitise_node_id(shown_backend[0]["name"])} -.->|queries| {_sanitise_node_id(shown_data[1]["name"])}')
+        actual_backend = shown_backend[:max_shown]
+        if actual_backend:
+            lines.append(f'    {_get_node_id(actual_backend[0])} -->|queries| {_get_node_id(shown_data[0])}')
+        if len(actual_backend) > 0 and len(shown_data) > 1:
+            lines.append(f'    {_get_node_id(actual_backend[0])} -.->|queries| {_get_node_id(shown_data[1])}')
+        # Connect summary nodes if they exist
+        if has_more_backend and has_more_data:
+            lines.append(f'    more_backend -.->|queries| more_data')
+        elif has_more_backend and shown_data:
+            lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
     
     # Styling
     lines.append("")
-    lines.append('    classDef entryPoint fill:#ef4444,stroke:#991b1b,color:#fff;')
+    lines.append('    classDef entryPoint fill:#ef4444,stroke:#991b1b,color:#fff;')  # Red = no WAF
+    lines.append('    classDef entryPointProtected fill:#10b981,stroke:#047857,color:#fff;')  # Green = with WAF
     lines.append('    classDef apiGateway fill:#f97316,stroke:#ea580c,color:#fff;')
     lines.append('    classDef backend fill:#3b82f6,stroke:#1e40af,color:#fff;')
     lines.append('    classDef dataStore fill:#8b5cf6,stroke:#5b21b6,color:#fff;')
+    lines.append('    classDef dataStorePublic fill:#d97706,stroke:#b45309,color:#fff;')  # Orange for public/exposed
     lines.append('    classDef internet fill:#06b6d4,stroke:#0369a1,color:#fff;')
     lines.append('    classDef summary fill:#6b7280,stroke:#374151,color:#fff;')
     
     for item in shown_entry:
         if item["type"] != "summary":
-            lines.append(f'    class {_sanitise_node_id(item["name"])} entryPoint;')
-    if "more_entry" in [_sanitise_node_id(item["name"]) for item in shown_entry]:
+            # Color by WAF protection status
+            style_class = "entryPointProtected" if item.get("has_waf") else "entryPoint"
+            lines.append(f'    class {_get_node_id(item)} {style_class};')
+    if "more_entry" in [_get_node_id(item) for item in shown_entry]:
         lines.append('    class more_entry summary;')
     
     for item in shown_api:
         if item["type"] != "summary":
-            lines.append(f'    class {_sanitise_node_id(item["name"])} apiGateway;')
-    if "more_api" in [_sanitise_node_id(item["name"]) for item in shown_api]:
+            lines.append(f'    class {_get_node_id(item)} apiGateway;')
+    if "more_api" in [_get_node_id(item) for item in shown_api]:
         lines.append('    class more_api summary;')
     
     for item in shown_backend:
         if item["type"] != "summary":
-            lines.append(f'    class {_sanitise_node_id(item["name"])} backend;')
-    if "more_backend" in [_sanitise_node_id(item["name"]) for item in shown_backend]:
+            lines.append(f'    class {_get_node_id(item)} backend;')
+    if "more_backend" in [_get_node_id(item) for item in shown_backend]:
         lines.append('    class more_backend summary;')
     
     for item in shown_data:
         if item["type"] != "summary":
-            lines.append(f'    class {_sanitise_node_id(item["name"])} dataStore;')
-    if "more_data" in [_sanitise_node_id(item["name"]) for item in shown_data]:
+            # Use different color for public/exposed data stores
+            style_class = "dataStorePublic" if "public" in (item.get("access") or "").lower() else "dataStore"
+            lines.append(f'    class {_get_node_id(item)} {style_class};')
+    if "more_data" in [_get_node_id(item) for item in shown_data]:
         lines.append('    class more_data summary;')
     
     lines.append('    class Internet internet;')
