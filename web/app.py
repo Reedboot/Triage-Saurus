@@ -12011,28 +12011,31 @@ def view_diagram(experiment_id: str):
         if not db_diagrams:
             return f"Diagram not found: {experiment_id}", 404
 
+        # Check if clean mode requested
+        clean_mode = request.args.get("clean", "false").lower() == "true"
+
         # Active provider from query string; default to first
         active_provider = request.args.get("provider", db_diagrams[0].get("provider", "azure"))
         # Ensure requested provider exists in this experiment
         providers_in_experiment = [d.get("provider") for d in db_diagrams]
         if active_provider not in providers_in_experiment:
-            active_provider = db_diagrams[0].get("provider", "azure")
+           active_provider = db_diagrams[0].get("provider", "azure")
 
         # Build list of all diagrams for tab rendering (preserve full code with CSS/icons)
         diagrams = [
-            {
-                "code": _strip_orphan_styles(d.get("mermaid_code") or ""),
-                "title": d.get("diagram_title"),
-                "provider": d.get("provider"),
-                "css_code": d.get("css_code", "")
-            }
-            for d in db_diagrams
+           {
+               "code": _strip_orphan_styles(d.get("mermaid_code") or ""),
+               "title": d.get("diagram_title"),
+               "provider": d.get("provider"),
+               "css_code": d.get("css_code", "")
+           }
+           for d in db_diagrams
         ]
 
         # Active diagram
         active_diagram = next(
-            (d for d in diagrams if d["provider"] == active_provider),
-            diagrams[0]
+           (d for d in diagrams if d["provider"] == active_provider),
+           diagrams[0]
         )
 
         mermaid_code = _strip_orphan_styles(active_diagram.get("code") or "")
@@ -12040,20 +12043,24 @@ def view_diagram(experiment_id: str):
         css_code = active_diagram.get("css_code", "")
 
         icon_type = (
-            "SVG Icons (Base64 Data URIs)"
-            if "data:image/svg+xml;base64" in mermaid_code
-            else "Inline SVG Icons"
+           "SVG Icons (Base64 Data URIs)"
+           if "data:image/svg+xml;base64" in mermaid_code
+           else "Inline SVG Icons"
         )
 
+        # Use clean template if requested
+        template_name = "diagram_viewer_clean.html" if clean_mode else "diagram_viewer.html"
+
         return render_template(
-            "diagram_viewer.html",
-            experiment_id=experiment_id,
-            diagram_title=title or "Architecture Diagram",
-            provider=active_provider,
-            icon_type=icon_type,
-            mermaid_code=mermaid_code,
-            diagrams=diagrams,
-            active_provider=active_provider,
+           template_name,
+           experiment_id=experiment_id,
+           diagram_title=title or "Architecture Diagram",
+           provider=active_provider,
+           icon_type=icon_type,
+           mermaid_code=mermaid_code,
+           diagrams=diagrams,
+           active_provider=active_provider,
+           css_code=css_code,
         )
     except Exception as e:
         import traceback
@@ -12107,7 +12114,9 @@ def view_latest_diagram():
                return "No diagrams found. Run a scan first.", 404
             
            latest_id = row['experiment_id']
-           return redirect(f"/diagrams/{latest_id}", code=302)
+           clean = request.args.get("clean", "false").lower() == "true"
+           redirect_path = f"/diagrams/{latest_id}?clean={clean}"
+           return redirect(redirect_path, code=302)
     except Exception as e:
        return f"Error finding latest diagram: {str(e)}", 500
 
@@ -12750,9 +12759,22 @@ def _build_ingress_diagram(rows: list) -> dict:
         lines.append('    class more_data summary;')
     
     lines.append('    class Internet internet;')
-    
+     
+    # Generate CSS styling for the diagram (matches architecture diagram styling)
+    css_lines = [
+        "/* Ingress Diagram Styling */",
+        ".internet { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
+        ".entry-point { stroke: #ff6b6b; stroke-width: 2px; fill: #ffe0e0; }",
+        ".api-gateway { stroke: #ff8c00; stroke-width: 2px; fill: #ffe8cc; }",
+        ".api-layer { stroke: #f97316; stroke-width: 2px; fill: #ffedd5; }",
+        ".backend { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
+        ".dataStore { stroke: #8b5cf6; stroke-width: 2px; fill: #ede9fe; }",
+        ".summary { stroke: #666666; stroke-width: 2px; fill: #f0f0f0; }",
+    ]
+     
     return {
         "mermaid": "\n".join(lines),
+        "css_code": "\n".join(css_lines),
         "asset_summary": {
             "entry_points": len(entry_points),
             "api_layer": len(api_layer),
@@ -12841,6 +12863,7 @@ def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: li
         diagrams.append({
             "rg": rg,
             "mermaid": "\n".join(lines),
+            "css_code": "/* Resource Group Diagram Styling */\n.publicNode { fill: #f59e0b; stroke: #b45309; color: #fff; stroke-width: 2px; }",
             "asset_count": len(assets),
             "public_count": public_count,
         })

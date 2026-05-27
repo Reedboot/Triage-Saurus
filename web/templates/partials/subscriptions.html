@@ -140,6 +140,24 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       loading.style.display = 'none';
       container.style.display = 'block';
 
+      // Wait for Mermaid to be ready
+      const waitForMermaid = async () => {
+        let attempts = 0;
+        while (!window.mermaid && attempts < 100) {
+          await new Promise(r => setTimeout(r, 50));
+          attempts++;
+        }
+        if (!window.mermaid) {
+          console.error('[subscriptions] Mermaid failed to load');
+          return false;
+        }
+        if (typeof window.mermaid.run !== 'function') {
+          console.error('[subscriptions] Mermaid.run() not available');
+          return false;
+        }
+        return true;
+      };
+
       // First, render the high-level ingress diagram
       const ingressDiag = data.ingress_diagram;
       if (ingressDiag && ingressDiag.mermaid) {
@@ -150,35 +168,41 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         ingressSection.style.background = 'var(--bg-code, #1a1a1a)';
         ingressSection.style.borderRadius = '6px';
         ingressSection.style.border = '2px solid var(--border-color, #333)';
-        
+         
         const ingressTitle = document.createElement('h4');
         ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
         ingressTitle.style.margin = '0 0 12px 0';
-        ingressSection.appendChild(ingressTitle);
+       ingressSection.appendChild(ingressTitle);
+         
+       const ingressDiv = document.createElement('div');
+       ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
+       ingressDiv.style.maxWidth = '100%';
+       ingressDiv.style.overflow = 'auto';
+       ingressDiv.title = 'Double-click elements to explore details';
+       ingressSection.appendChild(ingressDiv);
         
-        const ingressDiv = document.createElement('div');
-        ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
-        ingressDiv.style.maxWidth = '100%';
-        ingressDiv.style.overflow = 'auto';
-        ingressDiv.title = 'Double-click elements to explore details';
-        ingressSection.appendChild(ingressDiv);
-        
-        container.appendChild(ingressSection);
-        
-        // Render ingress diagram  
-        setTimeout(async () => {
-          console.log('[subscriptions] Rendering ingress diagram');
-          if (window.mermaid && typeof window.mermaid.run === 'function') {
-            try {
-              await window.mermaid.run();
-              console.log('[subscriptions] Ingress render complete');
-            } catch (e) {
-              console.warn('[subscriptions] Ingress render error:', e.message);
-            }
-          } else {
-            console.warn('[subscriptions] Mermaid not ready');
-          }
-        }, 100);
+       // Inject CSS styling if provided
+       if (ingressDiag.css_code) {
+         const styleTag = document.createElement('style');
+         styleTag.textContent = ingressDiag.css_code;
+         document.head.appendChild(styleTag);
+         console.log('[subscriptions] Applied ingress diagram CSS');
+       }
+         
+       container.appendChild(ingressSection);
+         
+       // Render ingress diagram after Mermaid is ready
+       if (await waitForMermaid()) {
+         console.log('[subscriptions] Rendering ingress diagram');
+         try {
+           await window.mermaid.run();
+           console.log('[subscriptions] Ingress render complete');
+         } catch (e) {
+           console.warn('[subscriptions] Ingress render error:', e.message);
+         }
+       } else {
+        console.warn('[subscriptions] Mermaid not available for ingress diagram');
+       }
       }
 
       // Then render the detailed diagrams (one per resource group)
@@ -222,16 +246,17 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         header.style.background = 'var(--bg-hover, #2a2a2a)';
         header.style.borderRadius = '4px';
         header.style.marginBottom = '8px';
-        
+        header.setAttribute('data-diagram-header', id);
+         
         const toggle = document.createElement('span');
         toggle.textContent = isOpen ? '▼' : '▶';
         toggle.style.fontSize = '0.8rem';
         toggle.style.width = '16px';
         toggle.style.display = 'inline-block';
-        
+         
         const label = document.createElement('span');
         label.innerHTML = `<strong>${d.rg}</strong> <span style="color:var(--text-muted); font-size:0.85rem;">(${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''})</span>`;
-        
+         
         header.appendChild(toggle);
         header.appendChild(label);
         
@@ -239,34 +264,38 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         diagramDiv.id = id;
         diagramDiv.style.display = isOpen ? 'block' : 'none';
         diagramDiv.style.overflow = 'auto';
-        
+         
         // Always wrap in mermaid div - rendering is handled by TriageMermaid.render()
         diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
-        
-        header.addEventListener('click', () => {
-          const isVisible = diagramDiv.style.display !== 'none';
-          diagramDiv.style.display = isVisible ? 'none' : 'block';
-          toggle.textContent = isVisible ? '▶' : '▼';
-          
-          // Render on expand
-          if (!isVisible && window.mermaid && typeof window.mermaid.run === 'function') {
-            setTimeout(() => {
-              window.mermaid.run().catch(e => console.warn('[subscriptions] Diagram render error:', e));
-            }, 50);
-          }
-        });
-        
+         
+        // Inject CSS styling if provided
+        if (d.css_code) {
+          const styleTag = document.createElement('style');
+          styleTag.textContent = d.css_code;
+          document.head.appendChild(styleTag);
+        }
+         
         section.appendChild(header);
         section.appendChild(diagramDiv);
         container.appendChild(section);
       });
 
-      // Initialize Mermaid for initially visible diagrams
-      if (window.mermaid && typeof window.mermaid.run === 'function') {
-        setTimeout(() => {
-          window.mermaid.run().catch(e => console.warn('[subscriptions] Final render error:', e));
-        }, 100);
-      }
+      // Initialize Mermaid for initially visible diagrams - wait for Mermaid to be ready
+      const renderMermaid = async () => {
+        if (await waitForMermaid()) {
+          try {
+            await window.mermaid.run();
+            console.log('[subscriptions] Final render complete');
+            // Initialize subscription diagram features (zoom, export, etc.)
+            if (window.initSubscriptionDiagrams && typeof window.initSubscriptionDiagrams === 'function') {
+              await window.initSubscriptionDiagrams();
+            }
+          } catch (e) {
+            console.warn('[subscriptions] Final render error:', e);
+          }
+        }
+      };
+      renderMermaid();
     } catch(e) {
       loading.textContent = 'Failed to load diagram: ' + e.message;
     }

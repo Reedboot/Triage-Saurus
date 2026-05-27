@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ diagram_title }}</title>
+    <link id="favicon-link" rel="icon" type="image/svg+xml" href="/static/assets/icons/favicon.svg">
+    <script src="/static/js/mermaid-loader.js?v=2"></script>
+    <script src="/static/js/mermaid-icon-injector.js?v=5" defer></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #ffffff;
+            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        main {
+            flex: 1;
+            overflow: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        #diagram-container {
+            display: inline-block;
+            max-width: 100%;
+            height: auto;
+            background: transparent;
+        }
+
+        #diagram-container svg {
+            background: transparent !important;
+            max-width: none !important;
+        }
+
+        #diagram-container svg foreignObject {
+            overflow: visible !important;
+            height: auto !important;
+            min-height: 80px !important;
+        }
+
+        #diagram-container svg foreignObject div,
+        #diagram-container svg foreignObject span,
+        #diagram-container svg foreignObject p,
+        #diagram-container svg .nodeLabel,
+        #diagram-container svg .edgeLabel,
+        #diagram-container svg .cluster-label text {
+            color: #333 !important;
+            fill: #333 !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            line-height: 1.2 !important;
+        }
+
+        #diagram-container svg foreignObject div,
+        #diagram-container svg foreignObject span,
+        #diagram-container svg foreignObject p {
+            display: block !important;
+        }
+
+        #diagram-container svg .fo-fallback-label {
+            display: none !important;
+        }
+
+        #diagram-container svg text,
+        #diagram-container svg tspan {
+            fill: #333 !important;
+        }
+    </style>
+</head>
+<body>
+    <main id="diagram-main">
+        <div id="diagram-container" role="img" aria-label="Architecture diagram"></div>
+    </main>
+
+    <script>
+        const mermaidCode = `{{ mermaid_code | safe }}`;
+        const cssCode = `{{ css_code | safe }}`;
+
+        async function renderDiagram() {
+            try {
+                if (!window.mermaid) {
+                    console.error('Mermaid not loaded');
+                    return;
+                }
+
+                const container = document.getElementById('diagram-container');
+                container.innerHTML = '';
+
+                // Inject CSS if provided
+                if (cssCode.trim()) {
+                    const style = document.createElement('style');
+                    style.textContent = cssCode;
+                    document.head.appendChild(style);
+                }
+
+                // Render diagram
+                const diagram = await window.mermaid.render('mermaid-diagram', mermaidCode);
+                container.innerHTML = diagram.svg;
+
+                // Inject provider icons
+                if (window.injectProviderIcons) {
+                    window.injectProviderIcons(container);
+                }
+            } catch (err) {
+                console.error('Diagram render error:', err);
+                const container = document.getElementById('diagram-container');
+                container.innerHTML = '<p style="color: red;">Error rendering diagram: ' + err.message + '</p>';
+            }
+        }
+
+        // Wait for mermaid to be ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', renderDiagram);
+        } else {
+            renderDiagram();
+        }
+    </script>
+</body>
+</html>
