@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloud Help — Triage-Saurus</title>
+  <link rel="stylesheet" href="/static/tailwind.css?v=1" />
+  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+</head>
+<body style="background: var(--bg-base); color: var(--text-base);">
+  {% include 'partials/burger_menu.html' %}
+
+  <div style="max-width:900px; margin:40px auto; padding:20px;">
+    <h1 style="font-size:2rem; margin-bottom:30px;">☁ Cloud Subscriptions Help</h1>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">What are Cloud Subscriptions?</h2>
+      <p style="line-height:1.6; margin-bottom:12px;">
+        Cloud Subscriptions displays live Azure cloud assets that have been harvested from your environment using the Azure CLI.
+        This provides a real-time view of your provisioned resources, their public exposure status, and architectural relationships.
+      </p>
+    </section>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">🚀 Getting Started</h2>
+      <p style="line-height:1.6; margin-bottom:12px;">
+        To populate the Cloud Subscriptions page, you need to run the harvest scripts:
+      </p>
+      
+      <div style="background:var(--bg-code,#1e1e1e); padding:16px; border-radius:6px; margin-bottom:16px; overflow-x:auto;">
+        <pre style="margin:0; font-family:monospace; font-size:0.85rem; color:var(--text-code,#d4d4d4);">
+# Login to Azure
+az login
+
+# Harvest subscriptions and assets
+python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub"
+
+# (Optional) Correlate assets with your repositories
+python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"
+        </pre>
+      </div>
+
+      <p style="line-height:1.6; margin-bottom:12px;">
+        <strong>Note:</strong> Replace <code style="background:var(--bg-code); padding:2px 6px; border-radius:3px;">My-Prod-Sub</code> 
+        with your actual Azure subscription name.
+      </p>
+    </section>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">📋 Harvest All Subscriptions</h2>
+      <p style="line-height:1.6; margin-bottom:12px;">
+        To harvest <strong>all</strong> accessible subscriptions at once:
+      </p>
+      
+      <div style="background:var(--bg-code,#1e1e1e); padding:16px; border-radius:6px; margin-bottom:16px; overflow-x:auto;">
+        <pre style="margin:0; font-family:monospace; font-size:0.85rem; color:var(--text-code,#d4d4d4);">
+python Scripts/Harvest/harvest_azure_assets.py --all
+        </pre>
+      </div>
+    </section>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">🏛️ Understanding the Table</h2>
+      <ul style="line-height:1.8; margin-left:20px;">
+        <li><strong>Subscription</strong> — Azure subscription name and ID</li>
+        <li><strong>Provider</strong> — Cloud provider (e.g., Azure)</li>
+        <li><strong>Environment</strong> — Environment type (prod, dev, test, etc.)</li>
+        <li><strong>Total Assets</strong> — Number of provisioned resources</li>
+        <li><strong>Public</strong> — Number of publicly exposed resources (⚠ indicates risk)</li>
+        <li><strong>State</strong> — Subscription state (Enabled, Disabled, etc.)</li>
+        <li><strong>Last Synced</strong> — When assets were last harvested</li>
+      </ul>
+    </section>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">📐 View Architecture</h2>
+      <p style="line-height:1.6; margin-bottom:12px;">
+        Click the <strong>View Architecture</strong> button on any subscription to see:
+      </p>
+      <ul style="line-height:1.8; margin-left:20px;">
+        <li>Resource Groups and their contents</li>
+        <li>Ingress routing and entry points</li>
+        <li>Network topology and connectivity</li>
+        <li>Interactive zoom, pan, and export controls for analysis</li>
+      </ul>
+    </section>
+
+    <section style="margin-bottom:40px; padding:20px; background:var(--bg-secondary); border-radius:8px;">
+      <h2 style="font-size:1.3rem; margin-bottom:12px;">⚙️ Prerequisites</h2>
+      <ul style="line-height:1.8; margin-left:20px;">
+        <li><strong>Azure CLI:</strong> <code style="background:var(--bg-code); padding:2px 6px; border-radius:3px;">az</code> command must be installed</li>
+        <li><strong>Authentication:</strong> Run <code style="background:var(--bg-code); padding:2px 6px; border-radius:3px;">az login</code> before harvesting</li>
+        <li><strong>Permissions:</strong> Your Azure account must have read access to subscriptions and resources</li>
+      </ul>
+    </section>
+
+    <div style="margin-top:60px; padding:16px; background:var(--bg-code,#1e1e1e); border-radius:8px; text-align:center;">
+      <p style="margin:0; color:var(--text-muted); font-size:0.9rem;">
+        For more information, visit the <a href="https://github.com/Reedboot/Triage-Saurus" target="_blank" rel="noopener" style="color:#2563eb; text-decoration:underline;">GitHub repository</a>
+      </p>
+    </div>
+  </div>
+
+  <style>
+    code {
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+  </style>
+</body>
+</html>

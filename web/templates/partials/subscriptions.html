@@ -1,14 +1,6 @@
 {# partials/subscriptions.html — Live Azure subscriptions and architecture view #}
 <div id="subscriptions-panel" class="subscriptions-panel">
 
-  <div class="subscriptions-header">
-    <h3 style="margin:0; font-size:1.1rem;">Azure Subscriptions</h3>
-    <span class="subscriptions-hint" style="font-size:0.8rem; color:var(--text-muted);">
-      Live assets harvested via Azure CLI &mdash;
-      run <code>python Scripts/Harvest/harvest_azure_assets.py --subscription &lt;name&gt;</code> to populate.
-    </span>
-  </div>
-
   <div id="subscriptions-loading" style="padding:16px; color:var(--text-muted);">Loading subscriptions…</div>
   <div id="subscriptions-empty" style="display:none; padding:16px; color:var(--text-muted);">
     No subscriptions found. Run the harvest script to populate this view.
@@ -89,25 +81,24 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
       const tbody = document.getElementById('subscriptions-tbody');
       tbody.innerHTML = subs.map(s => `
-        <tr>
-          <td><strong>${s.display_name || s.id}</strong><br/>
-              <small style="color:var(--text-muted);font-size:0.75rem;">${s.id}</small></td>
-          <td><span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.75rem;font-weight:600;background:#0066cc;color:#fff;">${s.provider}</span></td>
-          <td>${renderBadge(s.environment, s.env_badge)}</td>
-          <td>${s.asset_count}</td>
-          <td>${s.public_count > 0 ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${s.public_count}</span>` : '0'}</td>
-          <td>${s.state || '—'}</td>
-          <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
-          <td><button class="btn btn-sm view-diagram-btn" data-sub-id="${s.id}" data-sub-name="${s.display_name}">
-            View Architecture
-          </button></td>
-        </tr>
+       <tr>
+         <td style="cursor:pointer;" class="subscription-name-cell" data-sub-id="${s.id}" data-sub-name="${s.display_name}">
+           <strong style="color:#60a5fa; text-decoration:underline;">${s.display_name || s.id}</strong><br/>
+           <small style="color:var(--text-muted);font-size:0.75rem;">${s.id}</small>
+         </td>
+         <td><span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:0.75rem;font-weight:600;background:#0066cc;color:#fff;">${s.provider}</span></td>
+         <td>${renderBadge(s.environment, s.env_badge)}</td>
+         <td>${s.asset_count}</td>
+         <td>${s.public_count > 0 ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${s.public_count}</span>` : '0'}</td>
+         <td>${s.state || '—'}</td>
+         <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
+       </tr>
       `).join('');
 
       document.getElementById('subscriptions-list').style.display = 'block';
 
-      tbody.querySelectorAll('.view-diagram-btn').forEach(btn => {
-        btn.addEventListener('click', () => loadDiagram(btn.dataset.subId, btn.dataset.subName));
+      tbody.querySelectorAll('.subscription-name-cell').forEach(cell => {
+       cell.addEventListener('click', () => loadDiagram(cell.dataset.subId, cell.dataset.subName));
       });
 
     } catch(e) {

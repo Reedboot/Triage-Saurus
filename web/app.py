@@ -12336,6 +12336,13 @@ def cloud_assets_page():
     return _rt("cloud_assets.html")
 
 
+@app.route("/help/cloud")
+def help_cloud_page():
+    """Render the Cloud Subscriptions help page."""
+    from flask import render_template as _rt
+    return _rt("help_cloud.html")
+
+
 @app.route("/api/cloud/assets")
 def api_cloud_assets_all():
     """Return all provisioned assets across all subscriptions, grouped for the UI."""
@@ -12619,6 +12626,23 @@ def _friendly_type(arm_type: str) -> str:
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
 
 
+def _get_icon_path(resource_type: str) -> str | None:
+    """Map Azure resource type to icon SVG path."""
+    icon_map = {
+        "microsoft.network/applicationgateways": "azure/networking/app-gateway.svg",
+        "microsoft.apimanagement/service": "azure/integration/apim.svg",
+        "microsoft.containerservice/managedclusters": "azure/containers/kubernetes-service.svg",
+        "microsoft.storage/storageaccounts": "azure/storage/storage-account.svg",
+        "microsoft.keyvault/vaults": "azure/security/key-vault.svg",
+        "microsoft.sql/servers": "azure/databases/sql-server.svg",
+        "microsoft.documentdb/databaseaccounts": "azure/databases/cosmos-db.svg",
+        "microsoft.web/sites": "azure/web/app-service.svg",
+        "microsoft.network/virtualnetworks": "azure/networking/virtual-networks.svg",
+        "microsoft.cdn/profiles": "azure/networking/cdn.svg",
+    }
+    return icon_map.get((resource_type or "").lower())
+
+
 def _build_ingress_diagram(rows: list) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
@@ -12682,7 +12706,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_entry_points(entry_items):
         """Group entry points by resource type and WAF protection status."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "waf_status": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "waf_status": None, "names": []})
         
         for item in entry_items:
             type_key = (item.get("type") or "").lower()
@@ -12703,6 +12727,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             
             grouped[group_key]["count"] += 1
             grouped[group_key]["type"] = category
+            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
             grouped[group_key]["waf_status"] = waf_status
             grouped[group_key]["names"].append(item.get("name"))
         
@@ -12712,6 +12737,7 @@ def _build_ingress_diagram(rows: list) -> dict:
                 "name": f"{info['type']} ({info['waf_status']})",
                 "count": info["count"],
                 "type": info["type"],
+                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
                 "waf_status": info["waf_status"],
                 "is_group": True,
                 "names": info["names"],
@@ -12725,7 +12751,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_api_services(api_items):
         """Group API services by resource type and public/private exposure."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
         
         for item in api_items:
             type_key = (item.get("type") or "").lower()
@@ -12735,6 +12761,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             
             grouped[group_key]["count"] += 1
             grouped[group_key]["type"] = category
+            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
             grouped[group_key]["access"] = access
             grouped[group_key]["names"].append(item.get("name"))
         
@@ -12744,6 +12771,7 @@ def _build_ingress_diagram(rows: list) -> dict:
                 "name": f"{info['type']} ({info['access']})",
                 "count": info["count"],
                 "type": info["type"],
+                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
                 "access": info["access"],
                 "is_group": True,
                 "names": info["names"],
@@ -12757,7 +12785,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_backends_by_type(backend_items):
         """Group backends by resource type and public/private exposure."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
         
         for item in backend_items:
             type_key = (item.get("type") or "").lower()
@@ -12777,6 +12805,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             
             grouped[group_key]["count"] += 1
             grouped[group_key]["type"] = category
+            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
             grouped[group_key]["access"] = access
             grouped[group_key]["names"].append(item.get("name"))
         
@@ -12786,6 +12815,7 @@ def _build_ingress_diagram(rows: list) -> dict:
                 "name": f"{info['type']} ({info['access']})",
                 "count": info["count"],
                 "type": info["type"],
+                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
                 "access": info["access"],
                 "is_group": True,
                 "names": info["names"],
@@ -12799,7 +12829,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_data_stores_by_type(store_items):
         """Group data stores by resource type and access level."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "access": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
         
         for item in store_items:
             type_key = (item.get("type") or "").lower()
@@ -12822,6 +12852,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             
             grouped[group_key]["count"] += 1
             grouped[group_key]["type"] = category
+            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
             grouped[group_key]["access"] = access
             grouped[group_key]["names"].append(item.get("name"))
         
@@ -12832,6 +12863,7 @@ def _build_ingress_diagram(rows: list) -> dict:
                 "name": f"{info['type']} ({info['access']})",
                 "count": info["count"],
                 "type": info["type"],
+                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
                 "access": info["access"],
                 "is_group": True,
                 "names": info["names"],
@@ -12853,33 +12885,72 @@ def _build_ingress_diagram(rows: list) -> dict:
     shown_backend = grouped_backends[:max_shown]
     shown_data = grouped_data_stores[:max_shown]
     
-    # Add nodes
+    # Add nodes with icons
     for item in shown_entry:
         node_id = _get_node_id(item)
-        friendly_type = _friendly_type(item["type"])
-        # Show WAF status for gateways
+        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
+        
+        # Build label with icon if available
+        if icon_path:
+            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div></div>'
+        else:
+            label = f'{friendly_type}'
+        
+        # Show WAF status
         waf_indicator = " 🛡️" if item.get("has_waf") else ""
-        label = f'{friendly_type}{waf_indicator}<br/>{item["name"][:25]}'
-        lines.append(f'    {node_id}["{label}"]')
+        label_with_waf = label.replace('</div>', f'{waf_indicator}</div>') if waf_indicator and "</div>" in label else label + waf_indicator
+        
+        lines.append(f"    {node_id}['{label_with_waf}']")
     
     for item in shown_api:
         node_id = _get_node_id(item)
-        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
-        lines.append(f'    {node_id}["{label}"]')
+        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
+        
+        if icon_path:
+            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div></div>'
+        else:
+            label = f'{friendly_type}'
+        
+        lines.append(f"    {node_id}['{label}']")
     
     for item in shown_backend:
         node_id = _get_node_id(item)
-        label = f'{_friendly_type(item["type"])}<br/>{item["name"][:25]}'
-        lines.append(f'    {node_id}["{label}"]')
+        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
+        
+        # Show instance count if grouped
+        count_text = f"({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
+        
+        if icon_path:
+            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div><div style="font-size:0.75em">{count_text}</div></div>'
+        else:
+            label = f'{friendly_type}{count_text}'
+        
+        lines.append(f"    {node_id}['{label}']")
     
     for item in shown_data:
         node_id = _get_node_id(item)
+        arm_type = item.get("arm_type") or item.get("type")
+        icon_path = _get_icon_path(arm_type) if item.get("type") != "summary" else None
+        
         # For grouped items, show count if multiple
         if item.get("is_group") and item.get("count", 0) > 1:
-            label = f'{item["type"]} ({item["access"]})<br/>({item["count"]} instances)'
+            label_text = f'{item["type"]} ({item["access"]})<br/>({item["count"]} instances)'
         else:
-            label = f'{item.get("type", "Database")}<br/>({item["access"]})'
-        lines.append(f'    {node_id}["{label}"]')
+            label_text = f'{item.get("type", "Database")}<br/>({item["access"]})'
+        
+        if icon_path:
+            # Parse the type to get better label
+            type_name = item.get("type", "Database")
+            access_text = item["access"]
+            count_text = f"({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
+            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{type_name}</div><div style="font-size:0.75em">({access_text}) {count_text}</div></div>'
+        else:
+            label = label_text
+        
+        lines.append(f"    {node_id}['{label}']")
     
     # Track summary node ids for connection logic before adding them
     has_more_entry = len(grouped_entry_points) > max_shown
