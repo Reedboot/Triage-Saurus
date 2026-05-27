@@ -13119,62 +13119,49 @@ def _build_ingress_diagram(rows: list) -> dict:
         elif has_more_backend and shown_data:
             lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
     
-    # SECURITY: Internet → Public Resources (grouped by exposure type and resource type)
-    # Arrow per EXPOSURE TYPE → RESOURCE TYPE (not per individual resource)
-    if backends or api_layer or data_stores:
-        # Collect exposure types from public resources
-        exposure_types = {}  # {exposure_key: [(resource_type, count, examples)]}
-         
-        # Analyze backends
-        for backend in backends:
-            if backend.get("public"):
-                exp_type = backend.get("listeners") or "HTTP:80, HTTPS:443"
-                res_type = backend.get("type") or "Backend"
-                key = (exp_type, res_type)
-                if key not in exposure_types:
-                    exposure_types[key] = []
-                exposure_types[key].append(backend)
-         
-        # Analyze APIs
-        for api in api_layer:
-            if api.get("public"):
-                exp_type = api.get("listeners") or "HTTP:80, HTTPS:443"
-                res_type = api.get("type") or "API"
-                key = (exp_type, res_type)
-                if key not in exposure_types:
-                    exposure_types[key] = []
-                exposure_types[key].append(api)
-         
-        # Analyze data stores
-        for data in data_stores:
-            if data.get("public"):
-                exp_type = data.get("listeners") or "TCP"
-                res_type = data.get("type") or "Database"
-                key = (exp_type, res_type)
-                if key not in exposure_types:
-                    exposure_types[key] = []
-                exposure_types[key].append(data)
-         
-        # Create ONE arrow per exposure type to resource type combination
-        for (exp_type, res_type), resources in exposure_types.items():
-            if resources:
-                # Find the grouped node for this resource type (should already exist in shown_* lists)
-                target_node = None
-                target_count = len(resources)
-                 
-                if res_type in [b.get("type") for b in shown_backend]:
-                    target_node = _get_node_id(next((b for b in shown_backend if b.get("type") == res_type and b.get("public")), None))
-                elif res_type in [a.get("type") for a in shown_api]:
-                    target_node = _get_node_id(next((a for a in shown_api if a.get("type") == res_type and a.get("public")), None))
-                elif res_type in [d.get("type") for d in shown_data]:
-                    target_node = _get_node_id(next((d for d in shown_data if d.get("type") == res_type and d.get("public")), None))
-                 
-                if target_node:
-                    # Label: exposure type and count
-                    arrow_label = f"🔴 {exp_type}"
-                    if target_count > 1:
-                        arrow_label += f" ({target_count} resources)"
-                    lines.append(f'    Internet -.->|"{arrow_label}"| {target_node}')
+    # SECURITY: Internet → Public Resources (one arrow per resource type that has public resources)
+    # Determine which resource types have public endpoints
+    public_backend_types = set()
+    public_api_types = set()
+    public_data_types = set()
+     
+    for item in backends:
+        if item.get("public"):
+            public_backend_types.add(item.get("type"))
+    for item in api_layer:
+        if item.get("public"):
+            public_api_types.add(item.get("type"))
+    for item in data_stores:
+        if item.get("public"):
+            public_data_types.add(item.get("type"))
+     
+    # Create arrows to grouped nodes that have public resources
+    for item in shown_backend:
+        if item["type"] != "summary" and item.get("type") in public_backend_types:
+            node_id = _get_node_id(item)
+            count = item.get("count", 1)
+            arrow_label = "🔴 HTTP/HTTPS"
+            if count > 1:
+                arrow_label += f" ({count})"
+            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
+     
+    for item in shown_api:
+        if item["type"] != "summary" and item.get("type") in public_api_types:
+            node_id = _get_node_id(item)
+            count = item.get("count", 1)
+            arrow_label = "🔴 HTTP/HTTPS"
+            if count > 1:
+                arrow_label += f" ({count})"
+            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
+     
+    for item in shown_data:
+        if item["type"] != "summary" and item.get("type") in public_data_types:
+            node_id = _get_node_id(item)
+            count = item.get("count", 1)
+            arrow_label = "🔴 TCP/Database"
+            if count > 1:
+                arrow_label += f" ({count})"
+            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
