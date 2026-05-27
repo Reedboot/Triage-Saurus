@@ -13027,7 +13027,7 @@ def _build_ingress_diagram(rows: list) -> dict:
             if fqdn:
                 public_endpoints.append({"name": item["name"], "fqdn": fqdn, "type": item["type"]})
       
-    # Add direct Internet → Exposed Endpoints arrows (for visibility)
+    # Add direct Internet → Public Endpoints arrows (NOTE: "public" means public endpoint enabled, may have IP restrictions)
     if public_endpoints:
         for endpoint in public_endpoints[:5]:  # Show first 5 public endpoints
             endpoint_node_id = _sanitise_node_id(f"endpoint_{endpoint['fqdn']}")
@@ -13119,7 +13119,7 @@ def _build_ingress_diagram(rows: list) -> dict:
         elif has_more_backend and shown_data:
             lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
     
-    # SECURITY: Internet → Public Backends (direct exposure!)
+    # SECURITY: Internet → Public Backends (public endpoint enabled - may have IP restrictions)
     if shown_backend:
         public_backend = [item for item in shown_backend[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_backend:
@@ -13133,11 +13133,11 @@ def _build_ingress_diagram(rows: list) -> dict:
                     endpoint_label = endpoint_fqdn.replace("'", "&#39;")
                     lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
                 else:
-                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
             else:
-                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
     
-    # SECURITY: Internet → Public APIs (direct exposure!)
+    # SECURITY: Internet → Public APIs (public endpoint enabled - may have IP restrictions)
     if shown_api:
         public_api = [item for item in shown_api[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_api:
@@ -13151,11 +13151,11 @@ def _build_ingress_diagram(rows: list) -> dict:
                     endpoint_label = endpoint_fqdn.replace("'", "&#39;")
                     lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
                 else:
-                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
             else:
-                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
      
-    # CRITICAL: Internet → Public Data Stores (direct exposure!)
+    # CRITICAL: Internet → Public Data Stores (public endpoint enabled - may have IP restrictions!)
     if shown_data:
         public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_data:
@@ -13169,9 +13169,9 @@ def _build_ingress_diagram(rows: list) -> dict:
                     endpoint_label = endpoint_fqdn.replace("'", "&#39;")
                     lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
                 else:
-                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
             else:
-                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
@@ -13214,6 +13214,11 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     lines.append('    class Internet internet;')
      
+    # Add disclaimer and legend about public endpoint meaning
+    lines.append("")
+    lines.append("    disclaimer[\"⚠️ 'PUBLIC' = endpoint enabled, NOT necessarily internet-accessible.<br/>Check firewall rules, IP restrictions, NSGs, and WAF policies.\"]")
+    lines.append("    class disclaimer disclaimer;")
+     
     # Generate CSS styling for the diagram (matches architecture diagram styling)
     css_lines = [
         "/* Ingress Diagram Styling */",
@@ -13224,6 +13229,7 @@ def _build_ingress_diagram(rows: list) -> dict:
         ".backend { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
         ".dataStore { stroke: #8b5cf6; stroke-width: 2px; fill: #ede9fe; }",
         ".summary { stroke: #666666; stroke-width: 2px; fill: #f0f0f0; }",
+        ".disclaimer { stroke: #ff9800; stroke-width: 2px; fill: #fff3e0; color: #333; }",
     ]
      
     return {

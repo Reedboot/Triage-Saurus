@@ -162,19 +162,35 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         ingressSection.style.background = 'var(--bg-code, #1a1a1a)';
         ingressSection.style.borderRadius = '6px';
         ingressSection.style.border = '2px solid var(--border-color, #333)';
-         
+          
+        // Add security caveat banner
+        const caveatBanner = document.createElement('div');
+        caveatBanner.style.background = '#fff3e0';
+        caveatBanner.style.border = '1px solid #ff9800';
+        caveatBanner.style.borderRadius = '4px';
+        caveatBanner.style.padding = '12px';
+        caveatBanner.style.marginBottom = '12px';
+        caveatBanner.style.fontSize = '0.85rem';
+        caveatBanner.style.color = '#333';
+        caveatBanner.innerHTML = `
+          <strong>⚠️ Security Note:</strong> 'PUBLIC ENDPOINT' means the public endpoint is <strong>enabled</strong>, 
+          not necessarily <strong>internet-accessible</strong>. Always verify firewall rules, NSG restrictions, WAF policies, 
+          and IP allowlists before assuming a resource is exposed.
+        `;
+        ingressSection.appendChild(caveatBanner);
+          
         const ingressTitle = document.createElement('h4');
         ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
         ingressTitle.style.margin = '0 0 12px 0';
        ingressSection.appendChild(ingressTitle);
-         
+          
        const ingressDiv = document.createElement('div');
        ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
        ingressDiv.style.maxWidth = '100%';
        ingressDiv.style.overflow = 'auto';
        ingressDiv.title = 'Double-click elements to explore details';
        ingressSection.appendChild(ingressDiv);
-        
+         
        // Inject CSS styling if provided
        if (ingressDiag.css_code) {
          const styleTag = document.createElement('style');
@@ -182,9 +198,9 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
          document.head.appendChild(styleTag);
          console.log('[subscriptions] Applied ingress diagram CSS');
        }
-         
+          
        container.appendChild(ingressSection);
-         
+          
        // Render ingress diagram after Mermaid is ready
        if (await waitForMermaid()) {
          console.log('[subscriptions] Rendering ingress diagram');
