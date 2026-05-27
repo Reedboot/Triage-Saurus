@@ -12574,7 +12574,14 @@ def api_subscription_diagram(sub_id: str):
                         WHERE ar.subscription_id = pa.subscription_id 
                         AND ar.gateway_name = pa.name 
                         AND ar.waf_policy_name = pwp.name
-                    )) AS has_waf
+                    )) AS has_waf,
+                   (SELECT GROUP_CONCAT(protocol_port, ', ')
+                    FROM (SELECT DISTINCT protocol || ':' || COALESCE(
+                       CASE WHEN protocol = 'HTTPS' THEN '443' WHEN protocol = 'HTTP' THEN '80' ELSE '' END, '') AS protocol_port
+                    FROM appgw_routing_rules ar
+                    WHERE ar.subscription_id = pa.subscription_id
+                    AND ar.gateway_name = pa.name)
+                    LIMIT 1) AS listeners
             FROM provisioned_assets pa
             WHERE subscription_id = ?
             ORDER BY pa.resource_group, pa.type, pa.name
@@ -12643,6 +12650,19 @@ def _get_icon_path(resource_type: str) -> str | None:
     return icon_map.get((resource_type or "").lower())
 
 
+def _get_icon_class(resource_type: str) -> str:
+    """Convert ARM resource type to mermaid icon class name for icon-injector."""
+    if not resource_type:
+        return ""
+    parts = resource_type.lower().split("/")
+    if len(parts) >= 2:
+        name = parts[-1]
+        import re
+        kebab = re.sub(r'(?<!^)(?=[A-Z])', '-', name).lower()
+        return f"icon-{kebab}"
+    return ""
+
+
 def _build_ingress_diagram(rows: list) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
@@ -12670,8 +12690,9 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
-        has_waf = row[7] if len(row) > 7 else False  # New WAF column
-        item = {"name": name, "type": rtype, "fqdn": fqdn, "public": is_public, "rg": rg, "has_waf": has_waf}
+        has_waf = row[7] if len(row) > 7 else False
+        listeners = row[8] if len(row) > 8 else None
+        item = {"name": name, "type": rtype, "fqdn": fqdn, "public": is_public, "rg": rg, "has_waf": has_waf, "listeners": listeners}
         type_key = (rtype or "").lower()
         type_groups[type_key].append(item)
         
@@ -12706,7 +12727,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_entry_points(entry_items):
         """Group entry points by resource type and WAF protection status."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "waf_status": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "waf_status": None, "names": [], "listeners": None})
         
         for item in entry_items:
             type_key = (item.get("type") or "").lower()
@@ -12730,6 +12751,9 @@ def _build_ingress_diagram(rows: list) -> dict:
             grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
             grouped[group_key]["waf_status"] = waf_status
             grouped[group_key]["names"].append(item.get("name"))
+            # Preserve listener info from first item
+            if grouped[group_key]["listeners"] is None and item.get("listeners"):
+                grouped[group_key]["listeners"] = item.get("listeners")
         
         result = []
         for group_key, info in sorted(grouped.items()):
@@ -12741,7 +12765,8 @@ def _build_ingress_diagram(rows: list) -> dict:
                 "waf_status": info["waf_status"],
                 "is_group": True,
                 "names": info["names"],
-                "has_waf": "🛡️" in info["waf_status"]
+                "has_waf": "🛡️" in info["waf_status"],
+                "listeners": info["listeners"]  # Preserve HTTP/HTTPS listener info
             }
             result.append(consolidated)
         
@@ -12885,33 +12910,65 @@ def _build_ingress_diagram(rows: list) -> dict:
     shown_backend = grouped_backends[:max_shown]
     shown_data = grouped_data_stores[:max_shown]
     
-    # Add nodes (simplified text labels without HTML to avoid Mermaid parsing errors)
+    # Build icon map for frontend icon injection
+    icon_map = {}
+    
+    # Add nodes with icon classes
     for item in shown_entry:
         node_id = _get_node_id(item)
-        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        arm_type = item.get("arm_type") or item["type"]
+        friendly_type = _friendly_type(arm_type)
         
         # Show WAF status in label
         waf_indicator = " 🛡️" if item.get("has_waf") else ""
         label = f"{friendly_type}{waf_indicator}"
-        
-        # Escape single quotes in label
         label = label.replace("'", "&#39;")
-        lines.append(f'    {node_id}["{label}"]')
+        
+        # Add icon class
+        icon_class = _get_icon_class(arm_type)
+        if icon_class:
+            lines.append(f'    {node_id}["{label}"]')
+            lines.append(f'    class {node_id} {icon_class};')
+            icon_path = _get_icon_path(arm_type)
+            if icon_path:
+                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
+        else:
+            lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_api:
         node_id = _get_node_id(item)
-        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        arm_type = item.get("arm_type") or item["type"]
+        friendly_type = _friendly_type(arm_type)
         label = friendly_type.replace("'", "&#39;")
-        lines.append(f'    {node_id}["{label}"]')
+        
+        icon_class = _get_icon_class(arm_type)
+        if icon_class:
+            lines.append(f'    {node_id}["{label}"]')
+            lines.append(f'    class {node_id} {icon_class};')
+            icon_path = _get_icon_path(arm_type)
+            if icon_path:
+                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
+        else:
+            lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_backend:
         node_id = _get_node_id(item)
-        friendly_type = _friendly_type(item.get("arm_type") or item["type"])
+        arm_type = item.get("arm_type") or item["type"]
+        friendly_type = _friendly_type(arm_type)
         
         # Show instance count if grouped
         count_text = f" ({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
         label = f"{friendly_type}{count_text}".replace("'", "&#39;")
-        lines.append(f'    {node_id}["{label}"]')
+        
+        icon_class = _get_icon_class(arm_type)
+        if icon_class:
+            lines.append(f'    {node_id}["{label}"]')
+            lines.append(f'    class {node_id} {icon_class};')
+            icon_path = _get_icon_path(arm_type)
+            if icon_path:
+                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
+        else:
+            lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_data:
         node_id = _get_node_id(item)
@@ -12923,7 +12980,18 @@ def _build_ingress_diagram(rows: list) -> dict:
             label = f'{item.get("type", "Database")} ({item["access"]})'
         
         label = label.replace("'", "&#39;")
-        lines.append(f'    {node_id}["{label}"]')
+        
+        # Try to get icon for data store type
+        arm_type = item.get("arm_type")
+        icon_class = _get_icon_class(arm_type) if arm_type else ""
+        if icon_class:
+            lines.append(f'    {node_id}["{label}"]')
+            lines.append(f'    class {node_id} {icon_class};')
+            icon_path = _get_icon_path(arm_type)
+            if icon_path:
+                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
+        else:
+            lines.append(f'    {node_id}["{label}"]')
     
     # Track summary node ids for connection logic before adding them
     has_more_entry = len(grouped_entry_points) > max_shown
@@ -12948,26 +13016,53 @@ def _build_ingress_diagram(rows: list) -> dict:
         lines.append(f'    more_data["...+{len(grouped_data_stores) - max_shown} more<br/>data store types"]')
         shown_data.append({"name": "more_data", "type": "summary"})
     
-    # Add connections
+    # Add connections with color-coded arrows and HTTP endpoint labels
     lines.append("")
     
-    # Internet → Entry Points
+    # Internet → Entry Points (with HTTP/HTTPS protocol labels and WAF status)
     if shown_entry:
-        for item in shown_entry[:max_shown]:  # Only direct connection for actual nodes
-            lines.append(f'    Internet --> {_get_node_id(item)}')
+        for item in shown_entry[:max_shown]:
+            node_id = _get_node_id(item)
+            arm_type = (item.get("arm_type") or item["type"]).lower()
+            
+            # Build arrow label with protocol/port and WAF status
+            label = ""
+            if item.get("listeners"):
+                label = item.get("listeners")
+            else:
+                label = "HTTP:80, HTTPS:443"
+            
+            # Add WAF indicator if protected
+            if item.get("has_waf"):
+                label = f'"{label} 🛡️ WAF"'
+            else:
+                label = f'"{label}"'
+            
+            lines.append(f'    Internet -->|{label}| {node_id}')
+        
         # Connect summary node if it exists
         if has_more_entry:
             lines.append(f'    Internet -.-> more_entry')
     
-    # Entry Points → API Layer
+    # Entry Points → API Layer (with routing information)
     if shown_entry and shown_api:
         actual_entry = shown_entry[:max_shown]
         # Connect first entry point to first API node
         if actual_entry:
-            lines.append(f'    {_get_node_id(actual_entry[0])} --> {_get_node_id(shown_api[0])}')
+            first_entry = actual_entry[0]
+            first_api = shown_api[0]
+            arm_type = (first_entry.get("arm_type") or first_entry["type"]).lower()
+            
+            # Show routing details with WAF status if protected
+            if first_entry.get("has_waf"):
+                lines.append(f'    {_get_node_id(first_entry)} -->|"Routing (WAF ✓)"| {_get_node_id(first_api)}')
+            else:
+                lines.append(f'    {_get_node_id(first_entry)} -->|"Routing"| {_get_node_id(first_api)}')
+        
         # Show some alternatives
         if len(actual_entry) > 1 and len(shown_api) > 1:
             lines.append(f'    {_get_node_id(actual_entry[1])} -.-> {_get_node_id(shown_api[1])}')
+        
         # Connect summary entry node to summary API node if both exist
         if has_more_entry and has_more_api:
             lines.append(f'    more_entry -.-> more_api')
@@ -13001,16 +13096,34 @@ def _build_ingress_diagram(rows: list) -> dict:
         elif has_more_backend and shown_data:
             lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
     
-    # Styling
+    # SECURITY: Internet → Public Backends (direct exposure!)
+    if shown_backend:
+        public_backend = [item for item in shown_backend[:max_shown] if item.get("public") and item["type"] != "summary"]
+        for item in public_backend:
+            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+    
+    # SECURITY: Internet → Public APIs (direct exposure!)
+    if shown_api:
+        public_api = [item for item in shown_api[:max_shown] if item.get("public") and item["type"] != "summary"]
+        for item in public_api:
+            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+    
+    # CRITICAL: Internet → Public Data Stores (direct exposure!)
+    if shown_data:
+        public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary"]
+        for item in public_data:
+            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+    
+    # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
-    lines.append('    classDef entryPoint fill:#ef4444,stroke:#991b1b,color:#fff;')  # Red = no WAF
-    lines.append('    classDef entryPointProtected fill:#10b981,stroke:#047857,color:#fff;')  # Green = with WAF
-    lines.append('    classDef apiGateway fill:#f97316,stroke:#ea580c,color:#fff;')
-    lines.append('    classDef backend fill:#3b82f6,stroke:#1e40af,color:#fff;')
-    lines.append('    classDef dataStore fill:#8b5cf6,stroke:#5b21b6,color:#fff;')
-    lines.append('    classDef dataStorePublic fill:#d97706,stroke:#b45309,color:#fff;')  # Orange for public/exposed
-    lines.append('    classDef internet fill:#06b6d4,stroke:#0369a1,color:#fff;')
-    lines.append('    classDef summary fill:#6b7280,stroke:#374151,color:#fff;')
+    lines.append('    classDef entryPoint stroke:#cc0000,stroke-width:2px;')  # Red = Internet entry (no WAF)
+    lines.append('    classDef entryPointProtected stroke:#2ab7a9,stroke-width:2px;')  # Teal = WAF-protected
+    lines.append('    classDef apiGateway stroke:#2ab7a9,stroke-width:2px;')  # Teal = APIM
+    lines.append('    classDef backend stroke:#5a9e5a,stroke-width:2px;')  # Green = Compute (AKS, App Service)
+    lines.append('    classDef dataStore stroke:#4a90d9,stroke-width:2px;')  # Blue = Data services
+    lines.append('    classDef dataStorePublic stroke:#cc0000,stroke-width:2px;')  # Red = Public/exposed data
+    lines.append('    classDef internet stroke:#cc0000,stroke-width:2px;')  # Red = Internet entry
+    lines.append('    classDef summary stroke:#8b5cf6,stroke-width:2px;')  # Purple = Summary nodes
     
     for item in shown_entry:
         if item["type"] != "summary":
@@ -13057,6 +13170,7 @@ def _build_ingress_diagram(rows: list) -> dict:
     return {
         "mermaid": "\n".join(lines),
         "css_code": "\n".join(css_lines),
+        "icon_map": icon_map,
         "asset_summary": {
             "entry_points": len(entry_points),
             "api_layer": len(api_layer),

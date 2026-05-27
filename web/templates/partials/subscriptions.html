@@ -191,6 +191,19 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
          try {
            await window.mermaid.run();
            console.log('[subscriptions] Ingress render complete');
+            
+           // Inject icons if icon map is available
+           if (ingressDiag.icon_map && typeof MermaidIconInjector !== 'undefined') {
+             console.log('[subscriptions] Injecting icons into ingress diagram');
+             const svgElements = ingressDiv.querySelectorAll('svg');
+             if (svgElements.length > 0) {
+               const svgElement = svgElements[svgElements.length - 1];
+               if (typeof MermaidIconInjector.injectIcons === 'function') {
+                 await MermaidIconInjector.injectIcons(svgElement, ingressDiag.icon_map);
+                 console.log('[subscriptions] Icons injected successfully');
+               }
+             }
+           }
          } catch (e) {
            console.warn('[subscriptions] Ingress render error:', e.message);
          }
