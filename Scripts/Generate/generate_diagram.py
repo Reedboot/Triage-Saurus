@@ -5655,6 +5655,7 @@ class HierarchicalDiagramBuilder:
             lines.append("")
 
         # Render Data Tier (SQL, Cosmos DB, Storage)
+        # Collect all database and storage resources exactly once to avoid duplicates
         sql_resources = [
             r for r in self.resources
             if self.is_database_resource(r)
@@ -5739,28 +5740,8 @@ class HierarchicalDiagramBuilder:
             for child in self.children_by_parent.get(vm['id'], []):
                 compute_related_ids.add(child['id'])
 
-        sql_resources = [
-            r for r in self.resources
-            if self.is_database_resource(r)
-            and r['id'] not in all_children
-            and r['id'] not in apim_related_ids
-            and r['id'] not in sb_related_ids
-            and r['id'] not in k8s_related_ids
-            and r['id'] not in monitoring_related_ids
-            and r['id'] not in compute_related_ids
-            and r['id'] not in data_related_ids
-            and not r.get('resource_name', '').startswith('${var.')
-            and not r.get('resource_name', '').startswith('${local.')
-            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
-        ]
-
-        # Note: Compute and K8s resources are already rendered in network hierarchy above
-        # No need to render them again
-
-        sql_lines = self.render_sql_hierarchy(sql_resources)
-        if sql_lines:
-            lines.extend(sql_lines)
-            lines.append("")
+        # Note: SQL and storage resources already rendered in data tier above
+        # Do not render them again to avoid duplicates
 
         # Refresh connected names to include any synthetic nodes/edges added above
         _ADMIN_EDGE_TYPES_REFRESH = frozenset({'contains', 'grants_access_to', 'parent_of', 'child_of', 'resource_group_member', 'has_role', 'depends_on'})
