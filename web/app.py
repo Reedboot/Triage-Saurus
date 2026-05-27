@@ -13018,28 +13018,51 @@ def _build_ingress_diagram(rows: list) -> dict:
     
     # Add connections with color-coded arrows and HTTP endpoint labels
     lines.append("")
-    
+     
+    # Collect publicly exposed endpoints for direct Internet arrows
+    public_endpoints = []
+    for item in entry_points:
+        if item.get("public"):
+            fqdn = item.get("fqdn") or item.get("name")
+            if fqdn:
+                public_endpoints.append({"name": item["name"], "fqdn": fqdn, "type": item["type"]})
+      
+    # Add direct Internet → Exposed Endpoints arrows (for visibility)
+    if public_endpoints:
+        for endpoint in public_endpoints[:5]:  # Show first 5 public endpoints
+            endpoint_node_id = _sanitise_node_id(f"endpoint_{endpoint['fqdn']}")
+            fqdn_label = endpoint['fqdn'].replace("'", "&#39;")
+            lines.append(f'    {endpoint_node_id}["🌐 {fqdn_label}"]')
+            lines.append(f'    Internet -->|"{endpoint["name"]}"| {endpoint_node_id}')
+          
+        # Add summary for more endpoints
+        if len(public_endpoints) > 5:
+            lines.append(f'    more_endpoints["...+{len(public_endpoints) - 5} more<br/>public endpoints"]')
+            lines.append(f'    Internet -.-> more_endpoints')
+     
+    lines.append("")
+     
     # Internet → Entry Points (with HTTP/HTTPS protocol labels and WAF status)
     if shown_entry:
         for item in shown_entry[:max_shown]:
             node_id = _get_node_id(item)
             arm_type = (item.get("arm_type") or item["type"]).lower()
-            
+             
             # Build arrow label with protocol/port and WAF status
             label = ""
             if item.get("listeners"):
                 label = item.get("listeners")
             else:
                 label = "HTTP:80, HTTPS:443"
-            
+             
             # Add WAF indicator if protected
             if item.get("has_waf"):
                 label = f'"{label} 🛡️ WAF"'
             else:
                 label = f'"{label}"'
-            
+             
             lines.append(f'    Internet -->|{label}| {node_id}')
-        
+         
         # Connect summary node if it exists
         if has_more_entry:
             lines.append(f'    Internet -.-> more_entry')
@@ -13100,19 +13123,55 @@ def _build_ingress_diagram(rows: list) -> dict:
     if shown_backend:
         public_backend = [item for item in shown_backend[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_backend:
-            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+            # Get endpoint info from original backend items that match this group
+            endpoints_for_group = [b for b in backends if b.get("public") and b["type"] == item.get("arm_type")]
+            if endpoints_for_group:
+                # Show first exposed endpoint with FQDN
+                endpoint = endpoints_for_group[0]
+                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
+                if endpoint_fqdn:
+                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
+                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
+                else:
+                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+            else:
+                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
     
     # SECURITY: Internet → Public APIs (direct exposure!)
     if shown_api:
         public_api = [item for item in shown_api[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_api:
-            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
-    
+            # Get endpoint info from original api items that match this group
+            endpoints_for_group = [a for a in api_layer if a.get("public") and a["type"] == item.get("arm_type")]
+            if endpoints_for_group:
+                # Show first exposed endpoint with FQDN
+                endpoint = endpoints_for_group[0]
+                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
+                if endpoint_fqdn:
+                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
+                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
+                else:
+                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+            else:
+                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+     
     # CRITICAL: Internet → Public Data Stores (direct exposure!)
     if shown_data:
         public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary"]
         for item in public_data:
-            lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+            # Get endpoint info from original data items that match this group
+            endpoints_for_group = [d for d in data_stores if d.get("public") and d["type"] == item.get("arm_type")]
+            if endpoints_for_group:
+                # Show first exposed endpoint with FQDN
+                endpoint = endpoints_for_group[0]
+                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
+                if endpoint_fqdn:
+                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
+                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
+                else:
+                    lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
+            else:
+                lines.append(f'    Internet -.->|"🔴 EXPOSED (public)"| {_get_node_id(item)}')
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
