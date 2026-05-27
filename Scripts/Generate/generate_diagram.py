@@ -378,6 +378,7 @@ class HierarchicalDiagramBuilder:
         safe = re.sub(r'\s+', ' ', safe.strip())
         # Mermaid is less tolerant of escaped double-quotes in node labels;
         # prefer apostrophes to keep labels parse-safe.
+        safe = safe.replace('"', "'")
         return json.dumps(safe, ensure_ascii=False)
 
     def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:
@@ -2196,7 +2197,8 @@ class HierarchicalDiagramBuilder:
                 # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
                 lines.append(f"{indent}subgraph {server_id}[{self._quote_mermaid_label(label)}]")
                 if database_name:
-                    lines.append(f"{child_indent}{db_node_id}[\"{database_name}\"]")
+                    db_label = self._wrap_mermaid_label(database_name)
+                    lines.append(f"{child_indent}{db_node_id}[{self._quote_mermaid_label(db_label)}]")
                 lines.extend(rendered_children)
                 lines.append(f"{indent}end")
                 self.emitted_nodes.add(server_name)
@@ -5934,7 +5936,8 @@ class HierarchicalDiagramBuilder:
                     shifted_parts.append(str(int(part) + offset))
                 except ValueError:
                     shifted_parts.append(part)
-            adjusted.append(f"{prefix}{','.join(shifted_parts)}{suffix}")
+            delimiter = '' if suffix[:1].isspace() else ' '
+            adjusted.append(f"{prefix}{','.join(shifted_parts)}{delimiter}{suffix}")
         return adjusted
 
     
