@@ -356,7 +356,9 @@ class HierarchicalDiagramBuilder:
             if parts:
                 text = parts[-1]
 
-        normalized = text.replace('_', ' ').replace('"', "'")
+        normalized = text.replace('_', ' ')
+        if len(normalized) > 40:
+            normalized = normalized[:39].rstrip() + '…'
         if len(normalized) <= width:
             return normalized
 
@@ -377,8 +379,7 @@ class HierarchicalDiagramBuilder:
         # Mermaid is less tolerant of escaped double-quotes in node labels;
         # prefer apostrophes to keep labels parse-safe.
         safe = safe.replace('"', "'")
-        safe = safe.replace('\\', '\\\\')
-        return f'"{safe}"'
+        return json.dumps(safe, ensure_ascii=False)
 
     def _subgraph_icon_suffix(self, resource: Optional[dict]) -> str:
         """Return Mermaid class suffix for a subgraph resource when an icon exists."""
@@ -2196,7 +2197,8 @@ class HierarchicalDiagramBuilder:
                 # Don't apply class suffix to subgraph - Mermaid 11.12.0 doesn't support it
                 lines.append(f"{indent}subgraph {server_id}[{self._quote_mermaid_label(label)}]")
                 if database_name:
-                    lines.append(f"{child_indent}{db_node_id}[\"{database_name}\"]")
+                    db_label = self._wrap_mermaid_label(database_name)
+                    lines.append(f"{child_indent}{db_node_id}[{self._quote_mermaid_label(db_label)}]")
                 lines.extend(rendered_children)
                 lines.append(f"{indent}end")
                 self.emitted_nodes.add(server_name)
@@ -5634,7 +5636,11 @@ class HierarchicalDiagramBuilder:
             and r['id'] not in all_children
             and not r.get('resource_name', '').startswith('${var.')
             and not r.get('resource_name', '').startswith('${local.')
-            and (self._is_connected_resource(r) or self._is_exposed_resource(r))
+            and (
+                self._is_connected_resource(r)
+                or self._is_exposed_resource(r)
+                or self.children_by_parent.get(r['id'])
+            )
         ]
         app_related_ids = {r['id'] for r in app_resources}
         for app in app_resources:
@@ -5905,14 +5911,24 @@ class HierarchicalDiagramBuilder:
             return lines
 
         adjusted: List[str] = []
-        linkstyle_re = re.compile(r'^(\s*linkStyle\s+)([0-9,\s]+)(\s+.*)$', re.IGNORECASE)
         for line in lines:
-            m = linkstyle_re.match(line)
-            if not m:
+            leading_ws_len = len(line) - len(line.lstrip())
+            stripped = line.lstrip()
+            if not stripped.lower().startswith('linkstyle '):
                 adjusted.append(line)
                 continue
 
-            prefix, idx_blob, suffix = m.groups()
+            body = stripped[len('linkstyle '):]
+            idx_end = 0
+            while idx_end < len(body) and body[idx_end] in '0123456789, \t':
+                idx_end += 1
+            idx_blob = body[:idx_end].strip()
+            suffix = body[idx_end:]
+            if not idx_blob or not suffix:
+                adjusted.append(line)
+                continue
+
+            prefix = f"{line[:leading_ws_len]}linkStyle "
             idx_parts = [p.strip() for p in idx_blob.split(',') if p.strip()]
             shifted_parts: List[str] = []
             for part in idx_parts:
@@ -5920,7 +5936,8 @@ class HierarchicalDiagramBuilder:
                     shifted_parts.append(str(int(part) + offset))
                 except ValueError:
                     shifted_parts.append(part)
-            adjusted.append(f"{prefix}{','.join(shifted_parts)}{suffix}")
+            delimiter = '' if suffix[:1].isspace() else ' '
+            adjusted.append(f"{prefix}{','.join(shifted_parts)}{delimiter}{suffix}")
         return adjusted
 
     
