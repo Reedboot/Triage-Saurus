@@ -38,12 +38,28 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 
 def _is_public(app: dict[str, Any]) -> int:
-    """Web apps are public by default unless vnet-integrated or private endpoint only."""
+    """App Service is truly internet-accessible only if public network access is enabled AND no access restrictions."""
     props = app.get("properties") or {}
-    vnet_name = props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId")
+    
+    # Check public network access setting
     public_network_access = props.get("publicNetworkAccess") or app.get("publicNetworkAccess", "Enabled")
-    if vnet_name and public_network_access == "Disabled":
+    if public_network_access == "Disabled":
+        return 0  # Public network access disabled
+    
+    # Check for access restrictions (IP ranges, VNet rules)
+    site_config = props.get("siteConfig") or {}
+    ip_restrictions = site_config.get("ipSecurityRestrictions") or []
+    scm_ip_restrictions = site_config.get("scmIpSecurityRestrictions") or []
+    
+    # If there are ANY access restrictions, it's not truly public
+    if ip_restrictions or scm_ip_restrictions:
         return 0
+    
+    # Check VNet integration
+    vnet_name = props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId")
+    if vnet_name:
+        return 0  # VNet-integrated = not internet-facing
+    
     return 1
 
 

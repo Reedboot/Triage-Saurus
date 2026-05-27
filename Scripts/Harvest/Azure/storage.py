@@ -53,12 +53,30 @@ def _get_primary_endpoint(props: dict[str, Any]) -> str | None:
 
 
 def _is_public(props: dict[str, Any]) -> int:
-    # Public if blob public access is allowed OR network default action is Allow
-    if props.get("allowBlobPublicAccess"):
-        return 1
-    if _get_network_default_action(props) == "Allow":
-        return 1
-    return 0
+    # INTERNET-ACCESSIBLE only if: public endpoint enabled AND no IP restrictions
+    # Has public endpoint enabled?
+    has_public_endpoint = props.get("allowBlobPublicAccess", False)
+    if not has_public_endpoint:
+        return 0
+    
+    # Check if there are IP restrictions in place
+    network_acls = props.get("networkAcls") or {}
+    default_action = network_acls.get("defaultAction", "Allow")
+    
+    # If default action is "Deny", it's restricted (IP allowlist mode)
+    if default_action == "Deny":
+        return 0  # IP-restricted, not internet-accessible
+    
+    # If default action is "Allow", check for specific IP allowlist rules
+    virtual_network_rules = network_acls.get("virtualNetworkRules") or []
+    ip_rules = network_acls.get("ipRules") or []
+    
+    # If there are ANY rules (VNet or IP rules), access is restricted
+    if virtual_network_rules or ip_rules:
+        return 0  # IP-restricted
+    
+    # Only truly public if: public endpoint enabled + no restrictions
+    return 1
 
 
 def _get_network_default_action(props: dict[str, Any]) -> str:

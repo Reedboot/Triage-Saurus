@@ -13119,70 +13119,73 @@ def _build_ingress_diagram(rows: list) -> dict:
         elif has_more_backend and shown_data:
             lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
     
-    # SECURITY: Internet → Public Backends (public endpoint enabled - may have IP restrictions)
-    if shown_backend:
-        public_backend = [item for item in shown_backend[:max_shown] if item.get("public") and item["type"] != "summary"]
-        for item in public_backend:
-            # Get endpoint info from original backend items that match this group
-            endpoints_for_group = [b for b in backends if b.get("public") and b["type"] == item.get("arm_type")]
-            if endpoints_for_group:
-                # Show first exposed endpoint with FQDN
-                endpoint = endpoints_for_group[0]
-                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
-                if endpoint_fqdn:
-                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
-                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
-                else:
-                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-            else:
-                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-    
-    # SECURITY: Internet → Public APIs (public endpoint enabled - may have IP restrictions)
-    if shown_api:
-        public_api = [item for item in shown_api[:max_shown] if item.get("public") and item["type"] != "summary"]
-        for item in public_api:
-            # Get endpoint info from original api items that match this group
-            endpoints_for_group = [a for a in api_layer if a.get("public") and a["type"] == item.get("arm_type")]
-            if endpoints_for_group:
-                # Show first exposed endpoint with FQDN
-                endpoint = endpoints_for_group[0]
-                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
-                if endpoint_fqdn:
-                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
-                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
-                else:
-                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-            else:
-                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-     
-    # CRITICAL: Internet → Public Data Stores (public endpoint enabled - may have IP restrictions!)
-    if shown_data:
-        public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary"]
-        for item in public_data:
-            # Get endpoint info from original data items that match this group
-            endpoints_for_group = [d for d in data_stores if d.get("public") and d["type"] == item.get("arm_type")]
-            if endpoints_for_group:
-                # Show first exposed endpoint with FQDN
-                endpoint = endpoints_for_group[0]
-                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
-                if endpoint_fqdn:
-                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
-                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
-                else:
-                    lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-            else:
-                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
+    # SECURITY: Internet → Public Resources (grouped by exposure type and resource type)
+    # Arrow per EXPOSURE TYPE → RESOURCE TYPE (not per individual resource)
+    if backends or api_layer or data_stores:
+        # Collect exposure types from public resources
+        exposure_types = {}  # {exposure_key: [(resource_type, count, examples)]}
+         
+        # Analyze backends
+        for backend in backends:
+            if backend.get("public"):
+                exp_type = backend.get("listeners") or "HTTP:80, HTTPS:443"
+                res_type = backend.get("type") or "Backend"
+                key = (exp_type, res_type)
+                if key not in exposure_types:
+                    exposure_types[key] = []
+                exposure_types[key].append(backend)
+         
+        # Analyze APIs
+        for api in api_layer:
+            if api.get("public"):
+                exp_type = api.get("listeners") or "HTTP:80, HTTPS:443"
+                res_type = api.get("type") or "API"
+                key = (exp_type, res_type)
+                if key not in exposure_types:
+                    exposure_types[key] = []
+                exposure_types[key].append(api)
+         
+        # Analyze data stores
+        for data in data_stores:
+            if data.get("public"):
+                exp_type = data.get("listeners") or "TCP"
+                res_type = data.get("type") or "Database"
+                key = (exp_type, res_type)
+                if key not in exposure_types:
+                    exposure_types[key] = []
+                exposure_types[key].append(data)
+         
+        # Create ONE arrow per exposure type to resource type combination
+        for (exp_type, res_type), resources in exposure_types.items():
+            if resources:
+                # Find the grouped node for this resource type (should already exist in shown_* lists)
+                target_node = None
+                target_count = len(resources)
+                 
+                if res_type in [b.get("type") for b in shown_backend]:
+                    target_node = _get_node_id(next((b for b in shown_backend if b.get("type") == res_type and b.get("public")), None))
+                elif res_type in [a.get("type") for a in shown_api]:
+                    target_node = _get_node_id(next((a for a in shown_api if a.get("type") == res_type and a.get("public")), None))
+                elif res_type in [d.get("type") for d in shown_data]:
+                    target_node = _get_node_id(next((d for d in shown_data if d.get("type") == res_type and d.get("public")), None))
+                 
+                if target_node:
+                    # Label: exposure type and count
+                    arrow_label = f"🔴 {exp_type}"
+                    if target_count > 1:
+                        arrow_label += f" ({target_count} resources)"
+                    lines.append(f'    Internet -.->|"{arrow_label}"| {target_node}')
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
-    lines.append('    classDef entryPoint stroke:#cc0000,stroke-width:2px;')  # Red = Internet entry (no WAF)
-    lines.append('    classDef entryPointProtected stroke:#2ab7a9,stroke-width:2px;')  # Teal = WAF-protected
-    lines.append('    classDef apiGateway stroke:#2ab7a9,stroke-width:2px;')  # Teal = APIM
-    lines.append('    classDef backend stroke:#5a9e5a,stroke-width:2px;')  # Green = Compute (AKS, App Service)
-    lines.append('    classDef dataStore stroke:#4a90d9,stroke-width:2px;')  # Blue = Data services
-    lines.append('    classDef dataStorePublic stroke:#cc0000,stroke-width:2px;')  # Red = Public/exposed data
-    lines.append('    classDef internet stroke:#cc0000,stroke-width:2px;')  # Red = Internet entry
-    lines.append('    classDef summary stroke:#8b5cf6,stroke-width:2px;')  # Purple = Summary nodes
+    lines.append('    classDef entryPoint stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry (no WAF)
+    lines.append('    classDef entryPointProtected stroke:#00897b,stroke-width:2px;')  # Dark teal = WAF-protected
+    lines.append('    classDef apiGateway stroke:#00897b,stroke-width:2px;')  # Dark teal = APIM
+    lines.append('    classDef backend stroke:#388e3c,stroke-width:2px;')  # Dark green = Compute (AKS, App Service)
+    lines.append('    classDef dataStore stroke:#1565c0,stroke-width:2px;')  # Dark blue = Data services
+    lines.append('    classDef dataStorePublic stroke:#d32f2f,stroke-width:2px;')  # Deep red = Public/exposed data
+    lines.append('    classDef internet stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry
+    lines.append('    classDef summary stroke:#6a1b9a,stroke-width:2px;')  # Dark purple = Summary nodes
     
     for item in shown_entry:
         if item["type"] != "summary":

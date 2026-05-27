@@ -49,8 +49,22 @@ def _get_network_default_action(props: dict[str, Any]) -> str:
 
 
 def _is_public(props: dict[str, Any]) -> int:
+    # Public only if network access is enabled AND not IP-restricted
     if props.get("publicNetworkAccess") == "Disabled":
         return 0
-    if _get_network_default_action(props) == "Allow":
-        return 1
-    return 0
+    
+    network_acls = props.get("networkAcls") or {}
+    default_action = network_acls.get("defaultAction", "Allow")
+    
+    # If default action is "Deny", it's IP-restricted
+    if default_action == "Deny":
+        return 0
+    
+    # Check for VNet or IP rules restricting access
+    virtual_network_rules = network_acls.get("virtualNetworkRules") or []
+    ip_rules = network_acls.get("ipRules") or []
+    
+    if virtual_network_rules or ip_rules:
+        return 0  # IP-restricted
+    
+    return 1

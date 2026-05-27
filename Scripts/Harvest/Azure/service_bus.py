@@ -19,6 +19,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                         .replace("https://", "").replace(":443/", "").rstrip("/")) or None
 
         sku = (ns.get("sku") or {}).get("name")
+        is_public = _is_public(props)
 
         extra = {
             "sku": sku,
@@ -29,8 +30,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "minimum_tls_version": props.get("minimumTlsVersion"),
             "local_auth_disabled": props.get("disableLocalAuth", False),
         }
-
-        is_public = 1 if props.get("publicNetworkAccess", "Enabled") == "Enabled" else 0
 
         results.append({
             "id": ns["id"],
@@ -48,3 +47,21 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         })
 
     return results
+
+
+def _is_public(props: dict[str, Any]) -> int:
+    """Check if Service Bus namespace is truly internet-accessible."""
+    # If public network access is disabled, not public
+    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
+        return 0
+    
+    # Check for network rules (virtual network or IP rules)
+    network_rules = props.get("networkRuleSets") or {}
+    virtual_network_rules = network_rules.get("virtualNetworkRules") or []
+    ip_rules = network_rules.get("ipRules") or []
+    
+    # If there are any network rules, access is restricted
+    if virtual_network_rules or ip_rules:
+        return 0
+    
+    return 1

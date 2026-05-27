@@ -44,8 +44,16 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _is_public(props: dict[str, Any]) -> int:
     api_access = props.get("apiServerAccessProfile") or {}
+    
+    # Private cluster = definitely not internet-accessible
     if api_access.get("enablePrivateCluster"):
         return 0
+    
+    # Check for authorized IP ranges (restricts access)
+    authorized_ip_ranges = api_access.get("authorizedIPRanges") or []
+    if authorized_ip_ranges:
+        return 0  # IP-restricted
+    
     return 1
 
 

@@ -16,6 +16,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     for r in raw:
         props = r.get("properties") or {}
         host = safe_str(props.get("hostName"))
+        is_public = _is_public(r, subscription_id)
 
         extra = {
             "sku_name": (r.get("sku") or {}).get("name"),
@@ -27,8 +28,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "public_network_access": props.get("publicNetworkAccess", "Enabled"),
             "replication_mode": props.get("replicationMode"),
         }
-
-        is_public = 1 if props.get("publicNetworkAccess", "Enabled") == "Enabled" else 0
 
         results.append({
             "id": r["id"],
@@ -46,3 +45,28 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         })
 
     return results
+
+
+def _is_public(cache: dict[str, Any], subscription_id: str) -> int:
+    """Check if Redis Cache is truly internet-accessible."""
+    props = cache.get("properties") or {}
+    
+    # If public network access is disabled, not public
+    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
+        return 0
+    
+    # Check for firewall rules restricting access
+    cache_name = cache.get("name")
+    resource_group = cache.get("resourceGroup")
+    if cache_name and resource_group:
+        try:
+            firewall_rules = az(["redis", "firewall-rules", "list",
+                                "--name", cache_name, "--resource-group", resource_group],
+                               subscription_id)
+            # If there are firewall rules, access is restricted
+            if firewall_rules:
+                return 0
+        except Exception:
+            pass  # If we can't fetch rules, assume public
+    
+    return 1

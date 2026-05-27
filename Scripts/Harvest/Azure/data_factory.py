@@ -22,6 +22,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     for factory in raw:
         props = factory.get("properties") or {}
+        is_public = _is_public(props)
 
         extra = {
             "provisioning_state": props.get("provisioningState"),
@@ -32,8 +33,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             ),
             "git_config_type": (props.get("repoConfiguration") or {}).get("type"),
         }
-
-        is_public = 1 if props.get("publicNetworkAccess", "Enabled") == "Enabled" else 0
 
         results.append({
             "id": factory["id"],
@@ -51,3 +50,16 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         })
 
     return results
+
+
+def _is_public(props: dict[str, Any]) -> int:
+    """Check if Data Factory is truly internet-accessible."""
+    # If public network access is disabled, not public
+    if props.get("publicNetworkAccess", "Enabled") == "Disabled":
+        return 0
+    
+    # If managed VNet is enabled, it's not internet-facing
+    if (props.get("managedVirtualNetwork") or {}).get("type"):
+        return 0
+    
+    return 1
