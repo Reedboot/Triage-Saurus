@@ -1,26 +1,27 @@
 /**
  * diagram-viewer.js — Standalone fullscreen diagram viewer logic (/diagrams/<id>).
  *
- * Used exclusively by diagram_viewer.html. Imports shared utilities from
- * diagram-shared.js so config, SVG helpers, and sanitisation stay in one place.
+ * Used exclusively by diagram_viewer.html. Imports base diagram utilities
+ * and provider-specific rendering logic from diagram-base.js.
  */
 
 import {
-  getMermaidConfig,
+  PROVIDER_META,
+  ensureMermaidInitialized,
+  waitForMermaid,
+  applyDiagramScale,
+  autoFitDiagram,
+  patchForeignObjectLabels,
+  enhancePlaceholderGlyphs,
+  applyEmojiIconFallback,
+  exportDiagramPNG,
+  renderDiagramCore,
+} from './diagram-base.js';
+
+import {
   sanitizeMermaidSource,
   stampSvgDimensions,
 } from './diagram-shared.js';
-
-// ── Provider metadata ─────────────────────────────────────────────────────────
-
-const PROVIDER_META = {
-  aws:        { label: 'AWS',        color: '#f97316', icon: '/static/assets/icons/aws/account.svg' },
-  azure:      { label: 'Azure',      color: '#3b82f6', icon: '/static/assets/icons/azure/compute/aks.svg' },
-  gcp:        { label: 'GCP',        color: '#22c55e', icon: '/static/assets/icons/gcp/Cloud_Storage/SVG/cloud-storage.svg' },
-  kubernetes: { label: 'Kubernetes', color: '#6366f1', icon: '/static/assets/icons/kubernetes/cluster.svg' },
-  alicloud:   { label: 'AliCloud',   color: '#f59e0b', icon: null },
-  oci:        { label: 'OCI',        color: '#e11d48', icon: '/static/assets/icons/oci/cloud.svg' },
-};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -41,27 +42,6 @@ const headerProv  = document.getElementById('header-provider');
 const iconImg     = document.getElementById('provider-icon-img');
 const iconDot     = document.getElementById('provider-icon-dot');
 
-// ── Mermaid initialisation ────────────────────────────────────────────────────
-
-let mermaidInitialized = false;
-function ensureMermaidInitialized() {
-  if (mermaidInitialized) return true;
-  if (!window.mermaid) return false;
-  window.mermaid.initialize(getMermaidConfig());
-  mermaidInitialized = true;
-  return true;
-}
-
-async function waitForMermaid(timeoutMs = 10000) {
-  const started = Date.now();
-  while (!ensureMermaidInitialized()) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error(window.__triageMermaidLoadError || 'Mermaid failed to initialize.');
-    }
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-}
-
 // ── Read embedded diagram code ────────────────────────────────────────────────
 
 function getDiagramCode(provider) {
@@ -74,129 +54,17 @@ function getDiagramCode(provider) {
   return cssCode ? (cssCode + '\n' + code) : code;
 }
 
-// ── Scale helpers ─────────────────────────────────────────────────────────────
+// ── Scale helpers (wrap base module functions with local state) ───────────────
 
 function applyScale(s) {
-  currentScale = Math.min(4, Math.max(0.1, s));
-  container.style.transform = `scale(${currentScale})`;
+  currentScale = applyDiagramScale(container, s);
 }
 
 function autoFit() {
-  const svgEl = container.querySelector('svg');
-  if (!svgEl) return;
-
-  const cw = scrollEl.clientWidth  - 48;
-  const ch = scrollEl.clientHeight - 48;
-  if (cw <= 0 || ch <= 0) return;
-
-  let sw = parseFloat(svgEl.getAttribute('width'))  || 0;
-  let sh = parseFloat(svgEl.getAttribute('height')) || 0;
-  if (!sw || !sh) {
-    const vb = svgEl.viewBox.baseVal;
-    sw = vb.width  || svgEl.scrollWidth;
-    sh = vb.height || svgEl.scrollHeight;
-  }
-
-  if (sw > 0 && sh > 0) {
-    fitScale = Math.min(cw / sw, ch / sh) * 0.90;
-    fitScale = Math.min(4, Math.max(0.40, fitScale));
-  } else {
-    fitScale = 1;
-  }
-  applyScale(fitScale);
-  scrollEl.scrollLeft = 0;
-  scrollEl.scrollTop  = 0;
+  fitScale = autoFitDiagram(container, scrollEl);
 }
 
-// ── SVG post-processing ───────────────────────────────────────────────────────
-
-// Some browsers fail to paint foreignObject labels reliably — create SVG text fallbacks.
-function patchForeignObjectLabels(svgEl) {
-  if (!svgEl) return;
-  const ns = 'http://www.w3.org/2000/svg';
-  Array.from(svgEl.querySelectorAll('foreignObject')).forEach((fo, idx) => {
-    if (fo.querySelector('img, image, svg')) return; // keep icon-bearing FOs intact
-    const text = (fo.textContent || '').trim();
-    if (!text) return;
-
-    const x = parseFloat(fo.getAttribute('x') || '0');
-    const y = parseFloat(fo.getAttribute('y') || '0');
-    const w = parseFloat(fo.getAttribute('width') || '0');
-    const hAttr = parseFloat(fo.getAttribute('height') || '0');
-    const h = Number.isFinite(hAttr) && hAttr > 0 ? hAttr : 18;
-
-    fo.setAttribute('height', String(h));
-    fo.style.height = `${h}px`;
-
-    if (fo.parentNode?.querySelector(`.fo-fallback-label[data-fo-fallback="${idx}"]`)) return;
-
-    const fallback = document.createElementNS(ns, 'text');
-    fallback.setAttribute('class', 'fo-fallback-label');
-    fallback.setAttribute('data-fo-fallback', String(idx));
-    fallback.setAttribute('x', String(x + (w > 0 ? (w / 2) : 0)));
-    fallback.setAttribute('y', String(y + 10));
-    fallback.setAttribute('text-anchor', 'middle');
-    fallback.setAttribute('dominant-baseline', 'middle');
-    fallback.textContent = text;
-    fo.parentNode?.appendChild(fallback);
-
-    fo.style.opacity = '0';
-    fo.style.pointerEvents = 'none';
-  });
-}
-
-function iconEmojiForClassString(classString) {
-  const cls = (classString || '').toLowerCase();
-  if (!cls.includes('icon-') && !cls.includes('icon_')) return '';
-  if (cls.includes('cluster'))   return '☸️';
-  if (cls.includes('namespace')) return '🧭';
-  if (cls.includes('deployment')) return '📦';
-  if (cls.includes('service'))   return '🔌';
-  if (cls.includes('pod'))       return '🧩';
-  if (cls.includes('ingress'))   return '🌐';
-  return '🔷';
-}
-
-function applyEmojiIconFallback(svgEl) {
-  if (!svgEl) return;
-  const PREFIXES = ['☸️','🧭','📦','🔌','🧩','🌐','🔷'];
-  for (const node of svgEl.querySelectorAll('g.node, g.cluster')) {
-    const classParts = [node.getAttribute('class') || ''];
-    node.querySelectorAll('[class]').forEach(el => classParts.push(el.getAttribute('class') || ''));
-    const emoji = iconEmojiForClassString(classParts.join(' '));
-    if (!emoji) continue;
-    const label = node.querySelector('text.fo-fallback-label, text.nodeLabel, text');
-    if (!label) continue;
-    const current = (label.textContent || '').trim();
-    if (!current || PREFIXES.some(p => current.startsWith(p))) continue;
-    label.textContent = `${emoji} ${current}`;
-  }
-}
-
-function enhancePlaceholderGlyphs(svgEl) {
-  if (!svgEl) return;
-  for (const node of svgEl.querySelectorAll('g.node')) {
-    node.querySelectorAll('text').forEach(textEl => {
-      const val = (textEl.textContent || '').trim();
-      if (val !== 'S' && val !== 'NS') return;
-      const descriptor = (
-        (node.querySelector('text.fo-fallback-label')?.textContent || '') + ' ' +
-        (node.textContent || '')
-      ).toLowerCase();
-      let icon = '🔹';
-      if (val === 'NS' || descriptor.includes('namespace')) icon = '🧭';
-      else if (descriptor.includes('(service'))             icon = '🔌';
-      else if (descriptor.includes('(deployment'))          icon = '📦';
-      else if (descriptor.includes('(pod'))                 icon = '🧩';
-      else if (descriptor.includes('internet'))             icon = '🌐';
-      if (val !== icon) {
-        textEl.textContent = icon;
-        textEl.style.fontSize  = '16px';
-        textEl.style.fontWeight = '600';
-      }
-    });
-  }
-}
+// ── SVG post-processing (viewer-specific emoji icon fallback) ────────────────
 
 // ── Header / provider icon ────────────────────────────────────────────────────
 

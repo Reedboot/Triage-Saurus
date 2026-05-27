@@ -20,7 +20,6 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
           <th>Public</th>
           <th>State</th>
           <th>Last Synced</th>
-          <th></th>
         </tr>
       </thead>
       <tbody id="subscriptions-tbody"></tbody>
@@ -43,6 +42,8 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 .subscriptions-panel { padding: 16px; }
 .subscriptions-header { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
 .subscription-diagram-header { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border-color,#333); margin-bottom:8px; }
+#subscription-diagram-wrap { max-height: 70vh; overflow-y: auto; overflow-x: hidden; }
+.diagram-container { display:block !important; }
 </style>
 
 <script>

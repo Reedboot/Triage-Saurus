@@ -12885,72 +12885,45 @@ def _build_ingress_diagram(rows: list) -> dict:
     shown_backend = grouped_backends[:max_shown]
     shown_data = grouped_data_stores[:max_shown]
     
-    # Add nodes with icons
+    # Add nodes (simplified text labels without HTML to avoid Mermaid parsing errors)
     for item in shown_entry:
         node_id = _get_node_id(item)
         friendly_type = _friendly_type(item.get("arm_type") or item["type"])
-        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
         
-        # Build label with icon if available
-        if icon_path:
-            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div></div>'
-        else:
-            label = f'{friendly_type}'
-        
-        # Show WAF status
+        # Show WAF status in label
         waf_indicator = " 🛡️" if item.get("has_waf") else ""
-        label_with_waf = label.replace('</div>', f'{waf_indicator}</div>') if waf_indicator and "</div>" in label else label + waf_indicator
+        label = f"{friendly_type}{waf_indicator}"
         
-        lines.append(f"    {node_id}['{label_with_waf}']")
+        # Escape single quotes in label
+        label = label.replace("'", "&#39;")
+        lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_api:
         node_id = _get_node_id(item)
         friendly_type = _friendly_type(item.get("arm_type") or item["type"])
-        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
-        
-        if icon_path:
-            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div></div>'
-        else:
-            label = f'{friendly_type}'
-        
-        lines.append(f"    {node_id}['{label}']")
+        label = friendly_type.replace("'", "&#39;")
+        lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_backend:
         node_id = _get_node_id(item)
         friendly_type = _friendly_type(item.get("arm_type") or item["type"])
-        icon_path = _get_icon_path(item.get("arm_type") or item["type"])
         
         # Show instance count if grouped
-        count_text = f"({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
-        
-        if icon_path:
-            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{friendly_type}</div><div style="font-size:0.75em">{count_text}</div></div>'
-        else:
-            label = f'{friendly_type}{count_text}'
-        
-        lines.append(f"    {node_id}['{label}']")
+        count_text = f" ({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
+        label = f"{friendly_type}{count_text}".replace("'", "&#39;")
+        lines.append(f'    {node_id}["{label}"]')
     
     for item in shown_data:
         node_id = _get_node_id(item)
-        arm_type = item.get("arm_type") or item.get("type")
-        icon_path = _get_icon_path(arm_type) if item.get("type") != "summary" else None
         
         # For grouped items, show count if multiple
         if item.get("is_group") and item.get("count", 0) > 1:
-            label_text = f'{item["type"]} ({item["access"]})<br/>({item["count"]} instances)'
+            label = f'{item["type"]} ({item["access"]}) x{item["count"]}'
         else:
-            label_text = f'{item.get("type", "Database")}<br/>({item["access"]})'
+            label = f'{item.get("type", "Database")} ({item["access"]})'
         
-        if icon_path:
-            # Parse the type to get better label
-            type_name = item.get("type", "Database")
-            access_text = item["access"]
-            count_text = f"({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
-            label = f'<div style="text-align:center"><div style="margin-bottom:4px;height:40px;display:flex;align-items:center;justify-content:center"><img src="/static/assets/icons/{icon_path}" style="height:32px;width:auto;max-width:40px;"/></div><div style="font-size:0.85em;font-weight:500">{type_name}</div><div style="font-size:0.75em">({access_text}) {count_text}</div></div>'
-        else:
-            label = label_text
-        
-        lines.append(f"    {node_id}['{label}']")
+        label = label.replace("'", "&#39;")
+        lines.append(f'    {node_id}["{label}"]')
     
     # Track summary node ids for connection logic before adding them
     has_more_entry = len(grouped_entry_points) > max_shown

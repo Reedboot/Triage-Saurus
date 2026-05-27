@@ -2,111 +2,28 @@
  * subscription-diagrams.js — Handles interactive diagram rendering for subscription page (/cloud).
  * 
  * Features:
- * - Mermaid diagram rendering with proper initialization
+ * - Uses diagram-base.js for core mermaid rendering and post-processing
  * - CSS styling injection for architectural colors
- * - SVG post-processing (icon injection, label fallbacks)
  * - Zoom and pan controls
  * - PNG export functionality
- * - Provider icon injection
  */
 
 import {
-  getMermaidConfig,
+  waitForMermaid,
+  applyDiagramScale,
+  autoFitDiagram,
+  patchForeignObjectLabels,
+  enhancePlaceholderGlyphs,
+  applyEmojiIconFallback,
+  exportDiagramPNG,
+} from './diagram-base.js';
+
+import {
   sanitizeMermaidSource,
   stampSvgDimensions,
 } from './diagram-shared.js';
 
-// ── Mermaid initialization ────────────────────────────────────────────────────
-
-let mermaidInitialized = false;
-function ensureMermaidInitialized() {
-  if (mermaidInitialized) return true;
-  if (!window.mermaid) return false;
-  window.mermaid.initialize(getMermaidConfig());
-  mermaidInitialized = true;
-  return true;
-}
-
-async function waitForMermaid(timeoutMs = 10000) {
-  const started = Date.now();
-  while (!ensureMermaidInitialized()) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error(window.__triageMermaidLoadError || 'Mermaid failed to initialize.');
-    }
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-}
-
 // ── Scale & transform helpers ─────────────────────────────────────────────────
-
-function applyDiagramScale(container, scale) {
-  if (!container) return;
-  container.style.transform = `scale(${Math.min(4, Math.max(0.1, scale))})`;
-}
-
-function autoFitDiagram(container, scrollEl) {
-  if (!container || !scrollEl) return;
-  
-  const svgEl = container.querySelector('svg');
-  if (!svgEl) return;
-
-  const cw = scrollEl.clientWidth - 48;
-  const ch = scrollEl.clientHeight - 48;
-  if (cw <= 0 || ch <= 0) return;
-
-  let sw = parseFloat(svgEl.getAttribute('width')) || 0;
-  let sh = parseFloat(svgEl.getAttribute('height')) || 0;
-  if (!sw || !sh) {
-    const vb = svgEl.viewBox.baseVal;
-    sw = vb.width || svgEl.scrollWidth;
-    sh = vb.height || svgEl.scrollHeight;
-  }
-
-  if (sw > 0 && sh > 0) {
-    const fitScale = Math.min(cw / sw, ch / sh) * 0.90;
-    applyDiagramScale(container, fitScale);
-  }
-  scrollEl.scrollLeft = 0;
-  scrollEl.scrollTop = 0;
-}
-
-// ── SVG post-processing ───────────────────────────────────────────────────────
-
-function patchForeignObjectLabels(svgEl) {
-  if (!svgEl) return;
-  const ns = 'http://www.w3.org/2000/svg';
-  Array.from(svgEl.querySelectorAll('foreignObject')).forEach((fo, idx) => {
-    if (fo.querySelector('img, image, svg')) return;
-    const text = (fo.textContent || '').trim();
-    if (!text) return;
-
-    const x = parseFloat(fo.getAttribute('x') || '0');
-    const y = parseFloat(fo.getAttribute('y') || '0');
-    const w = parseFloat(fo.getAttribute('width') || '0');
-    const hAttr = parseFloat(fo.getAttribute('height') || '0');
-    const h = Number.isFinite(hAttr) && hAttr > 0 ? hAttr : 18;
-
-    fo.setAttribute('height', String(h));
-    fo.style.height = `${h}px`;
-
-    if (fo.parentNode?.querySelector(`.fo-fallback-label[data-fo-fallback="${idx}"]`)) return;
-
-    const fallback = document.createElementNS(ns, 'text');
-    fallback.setAttribute('class', 'fo-fallback-label');
-    fallback.setAttribute('data-fo-fallback', String(idx));
-    fallback.setAttribute('x', String(x + (w > 0 ? (w / 2) : 0)));
-    fallback.setAttribute('y', String(y + 10));
-    fallback.setAttribute('text-anchor', 'middle');
-    fallback.setAttribute('dominant-baseline', 'middle');
-    fallback.textContent = text;
-    fo.parentNode?.appendChild(fallback);
-
-    fo.style.opacity = '0';
-    fo.style.pointerEvents = 'none';
-  });
-}
-
-// ── SVG dimension stamping ────────────────────────────────────────────────────
 
 function postProcessSvg(svgEl) {
   if (!svgEl) return;
