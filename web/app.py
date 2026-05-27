@@ -13118,6 +13118,29 @@ def _build_ingress_diagram(rows: list) -> dict:
             lines.append(f'    more_backend -.->|queries| more_data')
         elif has_more_backend and shown_data:
             lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
+     
+    # Group backends by security posture (public vs private)
+    if backends:
+        lines.append("")
+        public_backends = [b for b in backends if b.get("public")]
+        private_backends = [b for b in backends if not b.get("public")]
+         
+        if public_backends:
+            lines.append("    subgraph PublicBackends[\"🔴 Public Backends (exposed)\"]")
+            # Show up to 5 public backends with individual nodes
+            for backend in public_backends[:5]:
+                backend_node_id = _sanitise_node_id(f"backend_{backend['name']}")
+                backend_fqdn = backend.get("fqdn") or backend.get("name", "unknown")
+                backend_label = backend_fqdn.replace("'", "&#39;")
+                lines.append(f'        {backend_node_id}["🏢 {backend_label}"]')
+            if len(public_backends) > 5:
+                lines.append(f'        more_pub_backends["...+{len(public_backends) - 5} more<br/>public backends"]')
+            lines.append("    end")
+         
+        if private_backends:
+            lines.append("    subgraph PrivateBackends[\"✓ Private Backends (internal only)\"]")
+            lines.append(f'        private_backend_group["🏢 Private Backend Services ({len(private_backends)} resources)"]')
+            lines.append("    end")
     
     # SECURITY: Internet → Public Backends (public endpoint enabled - may have IP restrictions)
     if shown_backend:
@@ -13156,22 +13179,55 @@ def _build_ingress_diagram(rows: list) -> dict:
                 lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
      
     # CRITICAL: Internet → Public Data Stores (public endpoint enabled - may have IP restrictions!)
-    if shown_data:
-        public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary"]
-        for item in public_data:
-            # Get endpoint info from original data items that match this group
-            endpoints_for_group = [d for d in data_stores if d.get("public") and d["type"] == item.get("arm_type")]
-            if endpoints_for_group:
-                # Show first exposed endpoint with FQDN
-                endpoint = endpoints_for_group[0]
-                endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
-                if endpoint_fqdn:
-                    endpoint_label = endpoint_fqdn.replace("'", "&#39;")
-                    lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
+    # For storage accounts, show INDIVIDUAL arrows - not grouped
+    # Group other data stores by type and security posture
+    if data_stores:
+        # Separate storage accounts from other data stores
+        storage_accounts = [d for d in data_stores if 'storage' in d["type"].lower()]
+        other_data = [d for d in data_stores if 'storage' not in d["type"].lower()]
+         
+        # Show INDIVIDUAL public storage accounts with arrows
+        public_storage = [s for s in storage_accounts if s.get("public")]
+        if public_storage:
+            lines.append("")
+            lines.append("    subgraph StorageAccounts[\"🔴 Public Storage Accounts (review individually)\"]")
+            for storage in public_storage[:20]:  # Show first 20 individual storage accounts
+                storage_node_id = _sanitise_node_id(f"storage_{storage['name']}")
+                storage_fqdn = storage.get("fqdn") or storage.get("name", "unknown")
+                if storage_fqdn:
+                    storage_label = storage_fqdn.replace("'", "&#39;")
+                    lines.append(f'        {storage_node_id}["📦 {storage_label}"]')
+                    lines.append(f'        Internet -->|"🔴 {storage_label}"| {storage_node_id}')
+             
+            if len(public_storage) > 20:
+                lines.append(f'        more_storage["...+{len(public_storage) - 20} more<br/>public storage accounts"]')
+                lines.append(f'        Internet -.-> more_storage')
+             
+            lines.append("    end")
+         
+        # Show secure (private) storage accounts grouped
+        private_storage = [s for s in storage_accounts if not s.get("public")]
+        if private_storage:
+            lines.append("")
+            lines.append("    subgraph PrivateStorage[\"✓ Private Storage Accounts\"]")
+            lines.append(f'        private_storage["📦 Private Storage ({len(private_storage)} accounts)"]')
+            lines.append("    end")
+         
+        # Handle other data stores (databases, etc.)
+        if shown_data:
+            public_data = [item for item in shown_data[:max_shown] if item.get("public") and item["type"] != "summary" and 'storage' not in item.get("type", "").lower()]
+            for item in public_data:
+                endpoints_for_group = [d for d in other_data if d.get("public") and d["type"] == item.get("arm_type")]
+                if endpoints_for_group:
+                    endpoint = endpoints_for_group[0]
+                    endpoint_fqdn = endpoint.get("fqdn") or endpoint.get("name", "unknown")
+                    if endpoint_fqdn:
+                        endpoint_label = endpoint_fqdn.replace("'", "&#39;")
+                        lines.append(f'    Internet -.->|"🔴 {endpoint_label}"| {_get_node_id(item)}')
+                    else:
+                        lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
                 else:
                     lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
-            else:
-                lines.append(f'    Internet -.->|"🔴 PUBLIC ENDPOINT"| {_get_node_id(item)}')
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
@@ -13183,6 +13239,14 @@ def _build_ingress_diagram(rows: list) -> dict:
     lines.append('    classDef dataStorePublic stroke:#cc0000,stroke-width:2px;')  # Red = Public/exposed data
     lines.append('    classDef internet stroke:#cc0000,stroke-width:2px;')  # Red = Internet entry
     lines.append('    classDef summary stroke:#8b5cf6,stroke-width:2px;')  # Purple = Summary nodes
+    lines.append('    classDef publicStorageGroup fill:#ffe0e0,stroke:#cc0000,stroke-width:2px;')  # Red box = public storage
+    lines.append('    classDef secureStorageGroup fill:#e0ffe0,stroke:#4caf50,stroke-width:2px;')  # Green box = secure storage
+    lines.append('    classDef publicBackendGroup fill:#ffe0e0,stroke:#cc0000,stroke-width:2px;')  # Red = public backends
+    lines.append('    classDef privateBackendGroup fill:#e0ffe0,stroke:#4caf50,stroke-width:2px;')  # Green = private backends
+    lines.append('    class StorageAccounts publicStorageGroup;')
+    lines.append('    class PrivateStorage secureStorageGroup;')
+    lines.append('    class PublicBackends publicBackendGroup;')
+    lines.append('    class PrivateBackends privateBackendGroup;')
     
     for item in shown_entry:
         if item["type"] != "summary":
@@ -13230,6 +13294,10 @@ def _build_ingress_diagram(rows: list) -> dict:
         ".dataStore { stroke: #8b5cf6; stroke-width: 2px; fill: #ede9fe; }",
         ".summary { stroke: #666666; stroke-width: 2px; fill: #f0f0f0; }",
         ".disclaimer { stroke: #ff9800; stroke-width: 2px; fill: #fff3e0; color: #333; }",
+        ".publicStorageGroup { stroke: #cc0000; stroke-width: 2px; fill: #ffe0e0; }",
+        ".secureStorageGroup { stroke: #4caf50; stroke-width: 2px; fill: #e0ffe0; }",
+        ".publicBackendGroup { stroke: #cc0000; stroke-width: 2px; fill: #ffe0e0; }",
+        ".privateBackendGroup { stroke: #4caf50; stroke-width: 2px; fill: #e0ffe0; }",
     ]
      
     return {
