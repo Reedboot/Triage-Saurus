@@ -231,12 +231,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       diagrams.forEach((d, idx) => {
         const isOpen = idx === 0 && !ingressDiag; // First one open by default only if no ingress
         const id = `diagram_${idx}`;
-        
+         
         const section = document.createElement('div');
         section.style.marginBottom = '16px';
         section.style.borderTop = '1px solid var(--border-color, #333)';
         section.style.paddingTop = '12px';
-        
+         
         const header = document.createElement('div');
         header.style.display = 'flex';
         header.style.alignItems = 'center';
@@ -259,11 +259,59 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
          
         header.appendChild(toggle);
         header.appendChild(label);
-        
+         
+        // Add control buttons for zoom, fit, export
+        const controls = document.createElement('div');
+        controls.style.marginLeft = 'auto';
+        controls.style.display = 'flex';
+        controls.style.gap = '4px';
+         
+        const btnStyle = `
+          padding: 4px 8px;
+          font-size: 0.75rem;
+          background: var(--btn-bg, #333);
+          border: 1px solid var(--border-color, #555);
+          border-radius: 3px;
+          cursor: pointer;
+          color: var(--text-primary, #ccc);
+        `;
+         
+        const zoomInBtn = document.createElement('button');
+        zoomInBtn.textContent = '🔍+';
+        zoomInBtn.style.cssText = btnStyle;
+        zoomInBtn.setAttribute('data-diagram-zoom-in', id);
+        zoomInBtn.title = 'Zoom in';
+         
+        const zoomOutBtn = document.createElement('button');
+        zoomOutBtn.textContent = '🔍−';
+        zoomOutBtn.style.cssText = btnStyle;
+        zoomOutBtn.setAttribute('data-diagram-zoom-out', id);
+        zoomOutBtn.title = 'Zoom out';
+         
+        const fitBtn = document.createElement('button');
+        fitBtn.textContent = '⊡ Fit';
+        fitBtn.style.cssText = btnStyle;
+        fitBtn.setAttribute('data-diagram-fit', id);
+        fitBtn.title = 'Fit to screen';
+         
+        const exportBtn = document.createElement('button');
+        exportBtn.textContent = '💾';
+        exportBtn.style.cssText = btnStyle;
+        exportBtn.setAttribute('data-diagram-export', id);
+        exportBtn.title = 'Download as PNG';
+         
+        controls.appendChild(zoomInBtn);
+        controls.appendChild(zoomOutBtn);
+        controls.appendChild(fitBtn);
+        controls.appendChild(exportBtn);
+         
+        header.appendChild(controls);
+         
         const diagramDiv = document.createElement('div');
         diagramDiv.id = id;
         diagramDiv.style.display = isOpen ? 'block' : 'none';
         diagramDiv.style.overflow = 'auto';
+        diagramDiv.style.maxHeight = '600px';
          
         // Always wrap in mermaid div - rendering is handled by TriageMermaid.render()
         diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
