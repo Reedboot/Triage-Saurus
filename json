@@ -1,0 +1,478 @@
+                    
+                    
+┌──────────────────┐
+│ 80 Code Findings │
+└──────────────────┘
+                                              
+    Rules/Detection/cloud_client_detection.yml
+    ❯❱ Rules.Detection.alicloud-sql_server-detection
+          Diagram coverage gap detected for 'SQL_Server'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                                
+                                                                                                          
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+           81┆ message: Application connects to SQL Server database
+   
+    ❯❱ Rules.Detection.alicloud-sql_server-detection
+          Diagram coverage gap detected for 'SQL_Server'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                                
+                                                                                                          
+           99┆ # JDBC SQL Server
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          116┆ service_type: Relational Database
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          116┆ service_type: Relational Database
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          116┆ service_type: Relational Database
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          116┆ service_type: Relational Database
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          116┆ service_type: Relational Database
+   
+    ❯❱ Rules.Detection.alicloud-sql_server-detection
+          Diagram coverage gap detected for 'SQL_Server'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                                
+                                                                                                          
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          118┆ Detects applications that connect to SQL Server databases.
+   
+    ❯❱ Rules.Detection.alicloud-sql_server-detection
+          Diagram coverage gap detected for 'SQL_Server'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                                
+                                                                                                          
+          119┆ Indicates dependency on SQL Server infrastructure (Azure SQL or on-premises).
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          122┆ - azurerm_mssql_database
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          122┆ - azurerm_mssql_database
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          122┆ - azurerm_mssql_database
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          122┆ - azurerm_mssql_database
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          122┆ - azurerm_mssql_database
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          124┆ - id: detect-cloud-database-client
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          124┆ - id: detect-cloud-database-client
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          124┆ - id: detect-cloud-database-client
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          124┆ - id: detect-cloud-database-client
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          124┆ - id: detect-cloud-database-client
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          125┆ message: Application connects to cloud database service
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          125┆ message: Application connects to cloud database service
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          125┆ message: Application connects to cloud database service
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          125┆ message: Application connects to cloud database service
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          125┆ message: Application connects to cloud database service
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          145┆ service_type: Database
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          145┆ service_type: Database
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          145┆ service_type: Database
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          145┆ service_type: Database
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          145┆ service_type: Database
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          147┆ Detects applications that connect to managed cloud databases.
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          147┆ Detects applications that connect to managed cloud databases.
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          147┆ Detects applications that connect to managed cloud databases.
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          147┆ Detects applications that connect to managed cloud databases.
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          147┆ Detects applications that connect to managed cloud databases.
+   
+    ❯❱ Rules.Detection.azure-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          148┆ Indicates dependency on cloud database infrastructure.
+   
+    ❯❱ Rules.Detection.context-aws-database
+          Diagram coverage gap detected for 'aws-database' in repo 'lirshindalman__terragoat1'. Resource
+          appears in repo evidence but diagram is missing a required connection or representation.      
+                                                                                                        
+          148┆ Indicates dependency on cloud database infrastructure.
+   
+    ❯❱ Rules.Detection.gcp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          148┆ Indicates dependency on cloud database infrastructure.
+   
+    ❯❱ Rules.Detection.hashicorp-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          148┆ Indicates dependency on cloud database infrastructure.
+   
+    ❯❱ Rules.Detection.unknown-database-detection
+          Diagram coverage gap detected for 'database'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                              
+                                                                                                        
+          148┆ Indicates dependency on cloud database infrastructure.
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          150┆ - id: detect-cloud-storage-client
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          150┆ - id: detect-cloud-storage-client
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          150┆ - id: detect-cloud-storage-client
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          151┆ message: Application uses cloud storage service
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          151┆ message: Application uses cloud storage service
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          151┆ message: Application uses cloud storage service
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          156┆ # Azure Blob Storage
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          156┆ # Azure Blob Storage
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          156┆ # Azure Blob Storage
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          157┆ - pattern-regex: "Azure\\.Storage\\."
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          157┆ - pattern-regex: "Azure\\.Storage\\."
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          157┆ - pattern-regex: "Azure\\.Storage\\."
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          164┆ # GCP Cloud Storage
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          164┆ # GCP Cloud Storage
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          164┆ # GCP Cloud Storage
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          165┆ - pattern-regex: "google\\.cloud\\.storage"
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          165┆ - pattern-regex: "google\\.cloud\\.storage"
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          165┆ - pattern-regex: "google\\.cloud\\.storage"
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          169┆ service_type: Object Storage
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          169┆ service_type: Object Storage
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          169┆ service_type: Object Storage
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          171┆ Detects applications that use cloud storage services.
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          171┆ Detects applications that use cloud storage services.
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          171┆ Detects applications that use cloud storage services.
+   
+    ❯❱ Rules.Detection.gcp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          172┆ Indicates dependency on cloud storage infrastructure.
+   
+    ❯❱ Rules.Detection.hashicorp-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          172┆ Indicates dependency on cloud storage infrastructure.
+   
+    ❯❱ Rules.Detection.unknown-storage-detection
+          Diagram coverage gap detected for 'storage'. Resource appears in repo evidence but diagram is
+          missing a required connection or representation.                                             
+                                                                                                       
+          172┆ Indicates dependency on cloud storage infrastructure.
+   
+    ❯❱ Rules.Detection.azure-main-detection
+          Diagram coverage gap detected for 'main' in repo 'terraform-network'. Resource appears in repo
+          evidence but diagram is missing a required connection or representation.                      
+                                                                                                        
+          185┆ # Generic API client to cloud domain
+            ⋮┆----------------------------------------
+          187┆ $CLIENT.get($DOMAIN)
+   
+    ❯❱ Rules.Detection.azure-this-detection
+          Diagram coverage gap detected for 'this'. Resource appears in repo evidence but diagram is missing a
+          required connection or representation.                                                              
+                                                                                                              
+          218┆ Indicates this is an APPLICATION REPOSITORY (not IaC) that connects to
+            ⋮┆----------------------------------------
+          222┆ - This code depends on cloud infrastructure
