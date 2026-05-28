@@ -45,6 +45,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(vnet.get("tags") or {}),
             "is_public": 0,  # VNets themselves aren't public-facing
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": json.dumps([]),
+            "auth_methods": json.dumps([]),
             "fqdn": None,
             "pipeline_tag": None,
             "raw_json": json.dumps({**vnet, "_extra": extra}),

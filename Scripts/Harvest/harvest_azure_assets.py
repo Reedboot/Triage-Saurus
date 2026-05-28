@@ -41,6 +41,7 @@ from Azure import app_gateway, apim, web_apps, function_apps, aks, storage, key_
 from Azure import cosmos_db, app_service_plan, service_bus, container_registry, virtual_network
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
+from Azure._helpers import set_probe_enabled
 
 # ---------------------------------------------------------------------------
 # Providers registry — order matters: gateways/APIM first for correlation
@@ -209,8 +210,9 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
         """
         INSERT INTO provisioned_assets
             (id, subscription_id, resource_group, name, type, location, sku,
-             tags, is_public, fqdn, pipeline_tag, raw_json, first_detected, last_synced, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+             tags, is_public, fqdn, pipeline_tag, raw_json, first_detected, last_synced, status,
+             is_restricted, ip_restrictions, endpoints, auth_methods)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             subscription_id = excluded.subscription_id,
             resource_group  = excluded.resource_group,
@@ -225,7 +227,11 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
             raw_json        = excluded.raw_json,
             last_synced     = excluded.last_synced,
             status          = 'active',
-            first_detected  = COALESCE(provisioned_assets.first_detected, excluded.first_detected)
+            first_detected  = COALESCE(provisioned_assets.first_detected, excluded.first_detected),
+            is_restricted   = excluded.is_restricted,
+            ip_restrictions = excluded.ip_restrictions,
+            endpoints       = excluded.endpoints,
+            auth_methods    = excluded.auth_methods
         """,
         (
             asset["id"],
@@ -242,6 +248,10 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
             asset.get("raw_json"),
             now,  # first_detected — preserved by COALESCE on conflict
             now,  # last_synced
+            asset.get("is_restricted", 0),
+            asset.get("ip_restrictions"),
+            asset.get("endpoints"),
+            asset.get("auth_methods"),
         ),
     )
 
@@ -353,7 +363,11 @@ def main() -> None:
     group.add_argument("--all", action="store_true", dest="all_subs", help="Harvest all accessible subscriptions")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be harvested without writing to DB")
     parser.add_argument("--skip-prereq-check", action="store_true", help="Skip prerequisites check")
+    parser.add_argument("--skip-probes", action="store_true",
+                        help="Skip active connectivity probes (faster, no network connections made)")
     args = parser.parse_args()
+
+    set_probe_enabled(not args.skip_probes)
 
     if not args.skip_prereq_check:
         print("[prereq] Checking prerequisites...")

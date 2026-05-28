@@ -322,6 +322,27 @@
       </div>
     </div>
 
+    <div class="settings-section" id="cloud-integration-section">
+      <div class="settings-section-header">
+        <span class="section-icon">☁️</span>
+        <h2>Cloud Integration</h2>
+        <span class="settings-section-desc">Pre-select a default Azure subscription for new repo scans.</span>
+      </div>
+
+      <div class="settings-row">
+        <div>
+          <div class="settings-row-label">Default Cloud Subscription</div>
+          <div class="settings-row-hint">
+            Pre-selects this subscription in the cloud-link prompt before each scan.
+            Stored in browser localStorage — override per-repo in the scan prompt.
+          </div>
+        </div>
+        <select class="settings-select" id="default-cloud-sub-select">
+          <option value="">None (always ask)</option>
+        </select>
+      </div>
+    </div>
+
     <div style="display:flex; gap:12px; align-items:center;">
       <button class="settings-save-btn" id="save-btn" onclick="saveSettings()">💾 Save Settings</button>
       <span style="font-size:0.8rem;color:var(--text-muted)">Applied immediately to the next scan — no restart required.</span>
@@ -331,6 +352,39 @@
 </div><!-- /settings-shell -->
 
 <script>
+  // ── Cloud subscription dropdown ─────────────────────────────────────────────
+  const CLOUD_SUB_LS_KEY = 'triageSaurusDefaultCloudSub';
+
+  function populateCloudSubDropdowns(subs) {
+    ['default-cloud-sub-select', 'default-cloud-sub-select-2'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const saved = localStorage.getItem(CLOUD_SUB_LS_KEY) || '';
+      el.innerHTML = '<option value="">None (always ask)</option>';
+      subs.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id || s.subscription_id;
+        opt.textContent = (s.display_name || s.id || s.subscription_id)
+          + (s.environment ? ` (${s.environment})` : '');
+        if (opt.value === saved) opt.selected = true;
+        el.appendChild(opt);
+      });
+      el.addEventListener('change', () => {
+        localStorage.setItem(CLOUD_SUB_LS_KEY, el.value);
+        // keep both dropdowns in sync
+        ['default-cloud-sub-select', 'default-cloud-sub-select-2'].forEach(otherId => {
+          const other = document.getElementById(otherId);
+          if (other && other !== el) other.value = el.value;
+        });
+      });
+    });
+  }
+
+  fetch('/api/subscriptions')
+    .then(r => r.json())
+    .then(d => populateCloudSubDropdowns(d.subscriptions || []))
+    .catch(() => {});
+
   // Update toggle On/Off labels
   document.querySelectorAll('input[type="checkbox"][data-label]').forEach(cb => {
     cb.addEventListener('change', () => {
@@ -748,6 +802,27 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+      </div>
+    </div>
+
+    <div class="settings-section" id="cloud-integration-section-2">
+      <div class="settings-section-header">
+        <span class="section-icon">☁️</span>
+        <h2>Cloud Integration</h2>
+        <span class="settings-section-desc">Pre-select a default Azure subscription for new repo scans.</span>
+      </div>
+
+      <div class="settings-row">
+        <div>
+          <div class="settings-row-label">Default Cloud Subscription</div>
+          <div class="settings-row-hint">
+            Pre-selects this subscription in the cloud-link prompt before each scan.
+            Stored in browser localStorage — override per-repo in the scan prompt.
+          </div>
+        </div>
+        <select class="settings-select" id="default-cloud-sub-select-2">
+          <option value="">None (always ask)</option>
+        </select>
       </div>
     </div>
 

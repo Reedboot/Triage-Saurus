@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, safe_str
 
 RESOURCE_TYPE = "Microsoft.ServiceFabric/clusters"
 
@@ -20,6 +20,12 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         fqdn = safe_str(
             mgmt.replace("https://", "").replace("http://", "").split(":")[0]
         ) or None
+
+        # Service Fabric management port 19080 (HTTP/REST) and 19000 (TCP client)
+        endpoints = build_endpoints([
+            (fqdn, 19080, "https"),
+            (fqdn, 19000, "tcp"),
+        ] if fqdn else [])
 
         node_types = props.get("nodeTypes") or []
         extra = {
@@ -51,6 +57,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(cluster.get("tags") or {}),
             "is_public": 0,  # SF management endpoints should be locked down
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": endpoints,
+            "auth_methods": json.dumps(["azure_ad", "client_certificate"]),
             "fqdn": fqdn,
             "pipeline_tag": (cluster.get("tags") or {}).get("pipeline") or (cluster.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**cluster, "_extra": extra}),

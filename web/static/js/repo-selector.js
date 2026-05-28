@@ -169,6 +169,18 @@ function initializeRepoSelector() {
 
   // Initial render
   renderOptions('');
+
+  // Expose programmatic selection so external callers (e.g. loadRecentScan) can drive the UI
+  window.repoSelector = window.repoSelector || {};
+  window.repoSelector.selectByPath = function(path) {
+    const repo = repos.find(r => r.path === path);
+    if (repo) { selectRepo(repo); return true; }
+    // Fallback: match by folder name
+    const name = path.split('/').filter(Boolean).pop() || '';
+    const byName = repos.find(r => r.name.toLowerCase() === name.toLowerCase());
+    if (byName) { selectRepo(byName); return true; }
+    return false;
+  };
 }
 
 // Initialize when DOM is ready

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str, infer_sku
+from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.ContainerRegistry/registries"
 
@@ -16,6 +16,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     for reg in raw:
         props = reg.get("properties") or {}
         login_server = safe_str(props.get("loginServer"))
+        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+
+        endpoints = build_endpoints([(login_server, 443, "https")] if login_server else [])
+        auth_methods = json.dumps(_get_auth_methods(props))
 
         extra = {
             "sku": (reg.get("sku") or {}).get("name"),
@@ -27,14 +31,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "network_default_action": (props.get("networkRuleSet") or {}).get("defaultAction", "Allow"),
         }
 
-        # Public if public network access is Enabled and no restrictions
-        network_default = (props.get("networkRuleSet") or {}).get("defaultAction", "Allow")
-        is_public = (
-            1 if props.get("publicNetworkAccess", "Enabled") == "Enabled"
-            and network_default == "Allow"
-            else 0
-        )
-
         results.append({
             "id": reg["id"],
             "subscription_id": subscription_id,
@@ -45,9 +41,42 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": infer_sku(reg),
             "tags": json.dumps(reg.get("tags") or {}),
             "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": login_server,
             "pipeline_tag": (reg.get("tags") or {}).get("pipeline") or (reg.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**reg, "_extra": extra}),
         })
 
     return results
+
+
+def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
+    if props.get("publicNetworkAccess", "Enabled") != "Enabled":
+        return 0, 0, []
+
+    network_rule_set = props.get("networkRuleSet") or {}
+    default_action = network_rule_set.get("defaultAction", "Allow")
+
+    if default_action == "Deny":
+        cidrs = extract_ip_restrictions(network_acls=network_rule_set)
+        return 0, 1, cidrs
+
+    ip_rules = network_rule_set.get("ipRules") or []
+    vnet_rules = network_rule_set.get("virtualNetworkRules") or []
+    if ip_rules or vnet_rules:
+        cidrs = extract_ip_restrictions(network_acls=network_rule_set)
+        return 0, 1, cidrs
+
+    return 1, 0, []
+
+
+def _get_auth_methods(props: dict[str, Any]) -> list[str]:
+    methods = ["azure_ad_token"]
+    if props.get("adminUserEnabled", False):
+        methods.append("admin_password")
+    if props.get("anonymousPullEnabled", False):
+        methods.append("anonymous_pull")
+    return methods

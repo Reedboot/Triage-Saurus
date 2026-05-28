@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.DocumentDB/databaseAccounts"
 
@@ -15,7 +15,12 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     for acct in raw:
         props = acct.get("properties") or {}
-        fqdn = safe_str(props.get("documentEndpoint", "").replace("https://", "").rstrip("/")) or None
+        doc_endpoint = props.get("documentEndpoint", "")
+        fqdn = safe_str(doc_endpoint.replace("https://", "").rstrip("/")) or None
+
+        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+        endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
+        auth_methods = json.dumps(_get_auth_methods(props))
 
         extra = {
             "kind": acct.get("kind"),
@@ -28,15 +33,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "ip_rules_count": len(props.get("ipRules") or []),
         }
 
-        # Public if network access is Enabled AND no IP rules and no VNet rules
-        ip_rules = props.get("ipRules") or []
-        vnet_rules = props.get("virtualNetworkRules") or []
-        is_public = (
-            1 if props.get("publicNetworkAccess", "Enabled") == "Enabled"
-            and not ip_rules and not vnet_rules
-            else 0
-        )
-
         results.append({
             "id": acct["id"],
             "subscription_id": subscription_id,
@@ -47,12 +43,41 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(acct.get("tags") or {}),
             "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": (acct.get("tags") or {}).get("pipeline") or (acct.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**acct, "_extra": extra}),
         })
 
     return results
+
+
+def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
+    if props.get("publicNetworkAccess", "Enabled") != "Enabled":
+        return 0, 0, []
+
+    ip_rules = props.get("ipRules") or []
+    vnet_rules = props.get("virtualNetworkRules") or []
+
+    if ip_rules or vnet_rules:
+        cidrs = extract_ip_restrictions(ip_rules=ip_rules, vnet_rules=vnet_rules,
+                                        rule_value_key="ipAddressOrRange")
+        return 0, 1, cidrs
+
+    return 1, 0, []
+
+
+def _get_auth_methods(props: dict[str, Any]) -> list[str]:
+    methods: list[str] = []
+    # Azure AD (RBAC) is always available; local auth (primary key) can be disabled
+    disable_local = props.get("disableLocalAuth", False)
+    if not disable_local:
+        methods.append("primary_key")
+    methods.append("azure_ad")
+    return methods
 
 
 def _infer_api(acct: dict[str, Any]) -> str:

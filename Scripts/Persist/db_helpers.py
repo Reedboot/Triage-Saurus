@@ -558,13 +558,17 @@ _BASE_TABLES_SQL = """
         location        TEXT,
         sku             TEXT,
         tags            TEXT,               -- JSON blob of Azure resource tags
-        is_public       INTEGER DEFAULT 0,  -- 1 if publicly internet-accessible
+        is_public       INTEGER DEFAULT 0,  -- 1 if publicly internet-accessible (no IP restrictions)
         fqdn            TEXT,               -- primary hostname / default domain
         pipeline_tag    TEXT,               -- ADO pipeline link from deployment source tags
         raw_json        TEXT,               -- full az CLI response as JSON (for re-enrichment)
         first_detected  DATETIME,           -- timestamp of first ever harvest (never overwritten)
         last_synced     DATETIME,           -- timestamp of most recent successful harvest
         status          TEXT DEFAULT 'active',  -- active | potentially_removed | removed
+        is_restricted   INTEGER DEFAULT 0,  -- 1 if endpoint exists but IP-restricted (partially exposed)
+        ip_restrictions TEXT,               -- JSON array of allowed CIDRs e.g. ["10.0.0.0/8"]
+        endpoints       TEXT,               -- JSON array of {address,port,protocol,reachable,...}
+        auth_methods    TEXT,               -- JSON array of auth mechanisms e.g. ["azure_ad","api_key"]
         FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
     );
 
@@ -1606,6 +1610,22 @@ def _ensure_schema(conn: sqlite3.Connection):
                 "CREATE INDEX IF NOT EXISTS idx_provisioned_assets_status "
                 "ON provisioned_assets(subscription_id, status)"
             )
+            # Migration: add exposure / endpoint / auth columns
+            for col_name, col_type in (
+                ("is_restricted", "INTEGER DEFAULT 0"),
+                ("ip_restrictions", "TEXT"),
+                ("endpoints",      "TEXT"),
+                ("auth_methods",   "TEXT"),
+            ):
+                if col_name not in pa_columns:
+                    conn.execute(
+                        f"ALTER TABLE provisioned_assets ADD COLUMN {col_name} {col_type}"
+                    )
+
+        # Migration: add cloud_adjusted_score to findings (cloud posture risk adjustment)
+        findings_cols_late = {row[1] for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+        if "cloud_adjusted_score" not in findings_cols_late:
+            conn.execute("ALTER TABLE findings ADD COLUMN cloud_adjusted_score INTEGER")
 
         # Migration: drop NOT NULL constraint on resource_connections.target_resource_id.
         # External-service connections use target_external instead and have no resource row.

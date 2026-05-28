@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, safe_str
 
 RESOURCE_TYPE = "Microsoft.AppConfiguration/configurationStores"
 
@@ -17,6 +17,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         props = store.get("properties") or {}
         endpoint = safe_str(props.get("endpoint", "").replace("https://", "").rstrip("/")) or None
 
+        is_public = 1 if props.get("publicNetworkAccess", "Enabled") == "Enabled" else 0
+        endpoints = build_endpoints([(endpoint, 443, "https")] if endpoint else [])
+        auth_methods = json.dumps(_get_auth_methods(props))
+
         extra = {
             "sku": (store.get("sku") or {}).get("name"),
             "public_network_access": props.get("publicNetworkAccess", "Enabled"),
@@ -25,8 +29,6 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "enable_purge_protection": props.get("enablePurgeProtection", False),
             "creation_date": props.get("creationDate"),
         }
-
-        is_public = 1 if props.get("publicNetworkAccess", "Enabled") == "Enabled" else 0
 
         results.append({
             "id": store["id"],
@@ -38,9 +40,20 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": (store.get("sku") or {}).get("name"),
             "tags": json.dumps(store.get("tags") or {}),
             "is_public": is_public,
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": endpoint,
             "pipeline_tag": (store.get("tags") or {}).get("pipeline") or (store.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**store, "_extra": extra}),
         })
 
     return results
+
+
+def _get_auth_methods(props: dict[str, Any]) -> list[str]:
+    methods: list[str] = ["azure_ad"]
+    if not props.get("disableLocalAuth", False):
+        methods.append("access_key")
+    return methods

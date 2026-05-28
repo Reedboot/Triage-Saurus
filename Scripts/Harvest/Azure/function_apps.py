@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, infer_fqdn, infer_sku, safe_str
+from ._helpers import az, build_endpoints, infer_fqdn, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.Web/sites"  # function apps share the same ARM type
+
+_DEFAULT_ALLOW_ALL_PRIORITY = 65000
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -22,7 +24,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                 pipeline_tag = safe_str(tags[key])
                 break
 
-        is_public = _is_public(app)
+        is_public, is_restricted, ip_restrictions = _classify_exposure(app)
+        endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
+        auth_methods = json.dumps(_get_auth_methods(app))
 
         results.append({
             "id": app["id"],
@@ -34,6 +38,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": infer_sku(app),
             "tags": json.dumps(tags),
             "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": pipeline_tag,
             "raw_json": json.dumps(app),
@@ -42,27 +50,49 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _is_public(app: dict[str, Any]) -> int:
-    """Function App is truly internet-accessible only if public network access is enabled AND no access restrictions."""
+def _classify_exposure(app: dict[str, Any]) -> tuple[int, int, list[str]]:
+    """Return (is_public, is_restricted, ip_restriction_cidrs)."""
     props = app.get("properties") or {}
-    
-    # Check public network access setting
+
     public_network_access = props.get("publicNetworkAccess") or app.get("publicNetworkAccess", "Enabled")
     if public_network_access == "Disabled":
-        return 0  # Public network access disabled
-    
-    # Check for access restrictions (IP ranges, VNet rules)
+        return 0, 0, []
+
+    if props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId"):
+        return 0, 0, []
+
     site_config = props.get("siteConfig") or {}
-    ip_restrictions = site_config.get("ipSecurityRestrictions") or []
-    scm_ip_restrictions = site_config.get("scmIpSecurityRestrictions") or []
-    
-    # If there are ANY access restrictions, it's not truly public
-    if ip_restrictions or scm_ip_restrictions:
-        return 0
-    
-    # Check VNet integration
-    vnet_name = props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId")
-    if vnet_name:
-        return 0  # VNet-integrated = not internet-facing
-    
-    return 1
+    raw_rules = (site_config.get("ipSecurityRestrictions") or []) + (
+        site_config.get("scmIpSecurityRestrictions") or []
+    )
+    meaningful_rules = [
+        r for r in raw_rules
+        if r.get("priority") != _DEFAULT_ALLOW_ALL_PRIORITY
+        and r.get("action", "").lower() == "allow"
+    ]
+
+    if meaningful_rules:
+        cidrs = [
+            r.get("ipAddress") or r.get("vnetSubnetResourceId") or ""
+            for r in meaningful_rules
+            if r.get("ipAddress") or r.get("vnetSubnetResourceId")
+        ]
+        return 0, 1, cidrs
+
+    return 1, 0, []
+
+
+def _get_auth_methods(app: dict[str, Any]) -> list[str]:
+    props = app.get("properties") or {}
+    methods: list[str] = []
+
+    auth_settings = props.get("siteAuthSettings") or {}
+    if auth_settings.get("enabled"):
+        methods.append("azure_ad")
+    else:
+        methods.append("azure_ad_optional")
+
+    # Function apps also support function-level API keys
+    methods.append("function_key")
+
+    return methods

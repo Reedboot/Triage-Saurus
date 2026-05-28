@@ -2,8 +2,22 @@
 from __future__ import annotations
 
 import json
+import socket
+import ssl
 import subprocess
+import time
+import urllib.request
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Global probe toggle — set by harvest_azure_assets.py via set_probe_enabled()
+# ---------------------------------------------------------------------------
+_PROBES_ENABLED: bool = True
+
+
+def set_probe_enabled(enabled: bool) -> None:
+    global _PROBES_ENABLED
+    _PROBES_ENABLED = enabled
 
 
 def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
@@ -62,3 +76,194 @@ def infer_sku(resource: dict[str, Any]) -> str | None:
         name = sku.get("name") or sku.get("tier")
         return safe_str(name)
     return safe_str(sku)
+
+
+# ---------------------------------------------------------------------------
+# Exposure helpers
+# ---------------------------------------------------------------------------
+
+def extract_ip_restrictions(
+    network_acls: dict[str, Any] | None = None,
+    ip_rules: list[dict[str, Any]] | None = None,
+    vnet_rules: list[dict[str, Any]] | None = None,
+    rule_value_key: str = "value",
+) -> list[str]:
+    """Return a de-duplicated list of allowed CIDRs/IP ranges from network ACL structures.
+
+    Handles both Azure Storage/KeyVault networkAcls format and generic
+    ipRules/vnetRules lists.  Returns an empty list when no restrictions apply.
+    """
+    cidrs: list[str] = []
+
+    if network_acls:
+        for rule in network_acls.get("ipRules") or []:
+            v = rule.get(rule_value_key) or rule.get("ipAddressOrRange") or rule.get("value")
+            if v:
+                cidrs.append(v)
+        for rule in network_acls.get("virtualNetworkRules") or []:
+            v = (
+                rule.get("virtualNetworkResourceId")
+                or rule.get("id")
+                or rule.get("subnet", {}).get("id")
+            )
+            if v:
+                cidrs.append(f"vnet:{v.split('/')[-1]}")
+
+    if ip_rules:
+        for rule in ip_rules:
+            if isinstance(rule, dict):
+                v = rule.get("ipAddressOrRange") or rule.get("value") or rule.get("ip")
+                if v:
+                    cidrs.append(v)
+            elif isinstance(rule, str):
+                cidrs.append(rule)
+
+    if vnet_rules:
+        for rule in vnet_rules:
+            if isinstance(rule, dict):
+                v = rule.get("id") or rule.get("virtualNetworkResourceId")
+                if v:
+                    cidrs.append(f"vnet:{v.split('/')[-1]}")
+
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    result: list[str] = []
+    for c in cidrs:
+        if c not in seen:
+            seen.add(c)
+            result.append(c)
+    return result
+
+
+def build_endpoint(
+    address: str | None,
+    port: int,
+    protocol: str,
+    probe: bool = True,
+    timeout: int = 5,
+) -> dict[str, Any] | None:
+    """Build a single endpoint dict, optionally probing connectivity.
+
+    Returns None if address is empty/None.
+    """
+    addr = safe_str(address)
+    if not addr:
+        return None
+    ep: dict[str, Any] = {"address": addr, "port": port, "protocol": protocol}
+    if probe and _PROBES_ENABLED:
+        ep.update(_probe_endpoint(addr, port, protocol, timeout))
+    return ep
+
+
+def build_endpoints(
+    entries: list[tuple[str | None, int, str]],
+    timeout: int = 5,
+) -> str:
+    """Build a JSON-encoded list of endpoint dicts from (address, port, protocol) tuples.
+
+    Probes are run for each endpoint if probing is enabled.
+    """
+    results: list[dict[str, Any]] = []
+    for address, port, protocol in entries:
+        ep = build_endpoint(address, port, protocol, timeout=timeout)
+        if ep is not None:
+            results.append(ep)
+    return json.dumps(results)
+
+
+# ---------------------------------------------------------------------------
+# Connectivity probe
+# ---------------------------------------------------------------------------
+
+def _probe_endpoint(
+    address: str,
+    port: int,
+    protocol: str,
+    timeout: int = 5,
+) -> dict[str, Any]:
+    """Attempt a connection to the endpoint and return probe metadata.
+
+    Always returns a dict with at least: reachable (bool), probe_latency_ms (int|None),
+    probe_error (str|None), probe_note (str|None).
+    """
+    result: dict[str, Any] = {
+        "reachable": False,
+        "probe_latency_ms": None,
+        "probe_error": None,
+        "probe_note": None,
+    }
+
+    try:
+        if protocol == "dns":
+            t0 = time.monotonic()
+            try:
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(timeout)
+                infos = socket.getaddrinfo(address, None)
+                socket.setdefaulttimeout(old_timeout)
+            except socket.gaierror as e:
+                result["probe_error"] = str(e)[:120]
+                return result
+            latency = int((time.monotonic() - t0) * 1000)
+            result["reachable"] = bool(infos)
+            result["probe_latency_ms"] = latency
+            result["probe_note"] = f"dns_resolved:{infos[0][4][0]}" if infos else "dns_nxdomain"
+            return result
+
+        # TCP-level connect (works for all TCP-based protocols)
+        t0 = time.monotonic()
+        with socket.create_connection((address, port), timeout=timeout) as sock:
+            latency = int((time.monotonic() - t0) * 1000)
+            result["reachable"] = True
+            result["probe_latency_ms"] = latency
+
+            # For HTTPS: attempt TLS handshake and optional HTTP GET
+            if protocol == "https":
+                ctx = ssl.create_default_context()
+                try:
+                    with ctx.wrap_socket(sock, server_hostname=address) as tls_sock:
+                        result["probe_note"] = "tls_ok"
+                        # Fire a minimal HTTP GET to see the status code
+                        http_note = _http_get_status(address, port, timeout)
+                        if http_note:
+                            result["probe_note"] = http_note
+                except ssl.SSLError as tls_err:
+                    result["probe_note"] = f"tls_error:{tls_err.reason}"
+            elif protocol == "http":
+                http_note = _http_get_status(address, port, timeout, use_tls=False)
+                result["probe_note"] = http_note or "tcp_ok"
+            else:
+                result["probe_note"] = "tcp_ok"
+
+    except socket.timeout:
+        result["probe_error"] = "timeout"
+    except ConnectionRefusedError:
+        result["probe_error"] = "connection_refused"
+    except OSError as exc:
+        result["probe_error"] = str(exc)[:120]
+
+    return result
+
+
+def _http_get_status(
+    address: str,
+    port: int,
+    timeout: int,
+    use_tls: bool = True,
+) -> str | None:
+    """Fire a HEAD/GET to the address and return a short note like 'http_200'."""
+    scheme = "https" if use_tls else "http"
+    url = f"{scheme}://{address}:{port}/"
+    req = urllib.request.Request(
+        url,
+        method="HEAD",
+        headers={"User-Agent": "Triage-Saurus-Harvest/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return f"http_{resp.status}"
+    except urllib.error.HTTPError as exc:
+        # 4xx/5xx still means the port is open and serving HTTP
+        return f"http_{exc.code}"
+    except Exception:
+        return None

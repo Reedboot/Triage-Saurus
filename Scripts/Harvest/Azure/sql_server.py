@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.Sql/servers"
 
@@ -16,12 +16,16 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     for server in raw:
         props = server.get("properties") or {}
         fqdn = safe_str(props.get("fullyQualifiedDomainName"))
-        is_public = _is_public(server, subscription_id)
+        is_public, is_restricted, ip_restrictions, firewall_rules = _classify_exposure(server, subscription_id)
+
+        endpoints = build_endpoints([(fqdn, 1433, "tds/tcp")] if fqdn else [])
+        auth_methods = json.dumps(_get_auth_methods(server, subscription_id))
 
         extra = {
             "public_network_access": props.get("publicNetworkAccess", "Enabled"),
             "minimal_tls_version": props.get("minimalTlsVersion"),
             "admin_login": props.get("administratorLogin"),
+            "firewall_rule_count": len(firewall_rules),
         }
 
         results.append({
@@ -34,6 +38,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(server.get("tags") or {}),
             "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": None,
             "raw_json": json.dumps({**server, "_extra": extra}),
@@ -42,26 +50,61 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _is_public(server: dict[str, Any], subscription_id: str) -> int:
-    """Check if SQL Server is truly internet-accessible."""
+def _classify_exposure(
+    server: dict[str, Any], subscription_id: str
+) -> tuple[int, int, list[str], list[dict]]:
+    """Return (is_public, is_restricted, ip_cidrs, raw_firewall_rules)."""
     props = server.get("properties") or {}
-    
-    # If public network access is disabled, it's not public
+
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
-        return 0
-    
-    # Check firewall rules
+        return 0, 0, [], []
+
     server_name = server.get("name")
     resource_group = server.get("resourceGroup")
+    firewall_rules: list[dict] = []
     if server_name and resource_group:
         try:
-            firewall_rules = az(["sql", "server", "firewall-rule", "list", 
-                                "--name", server_name, "--resource-group", resource_group], 
-                               subscription_id)
-            # If there are firewall rules, access is restricted
-            if firewall_rules:
-                return 0
+            firewall_rules = az(
+                ["sql", "server", "firewall-rule", "list",
+                 "--name", server_name, "--resource-group", resource_group],
+                subscription_id,
+            )
         except Exception:
-            pass  # If we can't fetch rules, assume public
-    
-    return 1
+            pass
+
+    if not firewall_rules:
+        return 1, 0, [], []
+
+    cidrs: list[str] = []
+    for rule in firewall_rules:
+        start = rule.get("startIpAddress", "")
+        end = rule.get("endIpAddress", "")
+        if start == "0.0.0.0" and end == "0.0.0.0":
+            cidrs.append("0.0.0.0/32 (Allow Azure services)")
+        elif start and end:
+            cidrs.append(f"{start}-{end}")
+    return 0, 1, cidrs, firewall_rules
+
+
+def _get_auth_methods(server: dict[str, Any], subscription_id: str) -> list[str]:
+    props = server.get("properties") or {}
+    methods = ["sql_auth"]
+
+    # Check for AAD admin configured
+    admin = props.get("administrators") or {}
+    if admin.get("administratorType") == "ActiveDirectory" or admin.get("login"):
+        methods.append("azure_ad")
+    else:
+        # Try az sql server ad-admin list (may not always be populated inline)
+        server_name = server.get("name")
+        rg = server.get("resourceGroup")
+        if server_name and rg:
+            ad_admins = az(
+                ["sql", "server", "ad-admin", "list",
+                 "--server", server_name, "--resource-group", rg],
+                subscription_id,
+            )
+            if ad_admins:
+                methods.append("azure_ad")
+
+    return methods

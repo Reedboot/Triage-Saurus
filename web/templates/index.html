@@ -33,11 +33,12 @@
           <option value="" disabled selected>— choose a repo —</option>
           {% for repo in repos %}
           {% if repo.found %}
-          <option value="{{ repo.path }}" data-name="{{ repo.name }}">{{ repo.name }} — {{ repo.path }}</option>
-          {% else %}
-          <option value="" disabled>No repos in Intake/ReposToScan.txt</option>
+          <option value="{{ repo.path }}" data-name="{{ repo.name }}" data-source="{{ repo.source | default('intake') }}">{{ repo.name }}{% if repo.source == 'db' %} 📦{% endif %} — {{ repo.path }}</option>
           {% endif %}
           {% endfor %}
+          {% if not repos or not repos | selectattr('found') | list %}
+          <option value="" disabled>No repos found — check Intake/ReposToScan.txt</option>
+          {% endif %}
         </select>
         <button type="submit" id="scan-btn">▶ Run Scan</button>
       </div>
@@ -431,7 +432,67 @@
     </div>
   </div>
 
-  <!-- Modal styles -->
+  <!-- ── Cloud Subscription Modal (pre-scan) ──────────────────────────────── -->
+  <div x-data x-show="$store.scan.cloudSubModalVisible"
+       x-transition:enter="transition ease-out duration-150"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-end="opacity-0"
+       id="cloud-sub-modal" class="modal" style="display:none"
+       @keydown.escape.window="$store.scan.skipCloudSubs()">
+    <div class="modal-content"
+         x-transition:enter="transition ease-out duration-150"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100">
+      <h3>☁️ Link to Azure Subscription</h3>
+      <p class="text-sm text-gray-400 mb-3">
+        Does this repository deploy into one of the scanned Azure subscriptions?
+        Linking lets Triage-Saurus adjust finding scores based on your cloud posture
+        (WAF, App Gateway, APIM, AKS IP restrictions, etc.).
+      </p>
+
+      <div style="max-height: 320px; overflow-y: auto; margin: 12px 0; padding: 8px; border: 1px solid #374151; border-radius: 4px; background: #111827;">
+        <template x-for="sub in $store.scan.availableSubscriptions" :key="sub.subscription_id || sub.id">
+          <div style="padding: 8px; margin-bottom: 6px; border: 1px solid #1f2937; border-radius: 3px; background: #0f1419;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+              <input type="checkbox" :checked="sub.selected" @change="sub.selected = !sub.selected" style="margin-top: 4px; cursor: pointer;">
+              <div style="flex: 1; min-width: 0;">
+                <strong x-text="sub.display_name || sub.subscription_id || sub.id" style="display: block;"></strong>
+                <span x-show="sub.environment" x-text="sub.environment"
+                      style="display: inline-block; margin-top: 3px; padding: 1px 6px; font-size: 0.7rem; border-radius: 3px; background: #1e3a5f; color: #93c5fd;"></span>
+                <span x-show="sub.asset_count" x-text="(sub.asset_count || 0) + ' assets'"
+                      style="display: inline-block; margin-left: 4px; font-size: 0.75rem; color: #6b7280;"></span>
+                <div x-show="sub.selected" style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
+                  <label style="font-size: 0.8rem; color: #9ca3af;">Deploy role:</label>
+                  <select x-model="sub.deploy_role"
+                          style="padding: 3px 8px; background: #1f2937; border: 1px solid #374151; border-radius: 3px; color: #c9d1d9; font-size: 0.8rem;">
+                    <option value="prod">Production</option>
+                    <option value="staging">Staging</option>
+                    <option value="dev">Development</option>
+                    <option value="dr">Disaster Recovery</option>
+                    <option value="shared">Shared Services</option>
+                    <option value="primary">Primary</option>
+                  </select>
+                </div>
+              </div>
+            </label>
+          </div>
+        </template>
+      </div>
+
+      <div class="modal-buttons">
+        <button class="modal-btn primary"
+                @click="$store.scan.confirmCloudSubs()"
+                :disabled="!$store.scan.hasSelectedSubs()"
+                style="cursor: pointer;">
+          ☁️ Link &amp; Scan
+        </button>
+        <button class="modal-btn" @click="$store.scan.skipCloudSubs()">⊘ Skip for Now</button>
+        <button class="modal-btn cancel" @click="$store.scan.dismissCloudSubs()">✕ Not Part of Any Subscription</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     window._triage = window._triage || {};

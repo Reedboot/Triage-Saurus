@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, infer_fqdn, infer_sku, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_fqdn, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.Web/sites"
+
+# App Service default "Allow all" catch-all rule — not a real restriction
+_DEFAULT_ALLOW_ALL_PRIORITY = 65000
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -15,9 +18,12 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for app in raw_apps:
-        props = app.get("properties") or app  # az webapp list inlines some props at top level
         fqdn = safe_str(app.get("defaultHostName")) or infer_fqdn(app)
         pipeline_tag = _get_pipeline_tag(app, subscription_id)
+        is_public, is_restricted, ip_restrictions = _classify_exposure(app)
+
+        endpoints = build_endpoints(_get_endpoint_entries(app, fqdn))
+        auth_methods = json.dumps(_get_auth_methods(app))
 
         results.append({
             "id": app["id"],
@@ -28,7 +34,11 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "location": app.get("location"),
             "sku": infer_sku(app),
             "tags": json.dumps(app.get("tags") or {}),
-            "is_public": _is_public(app),
+            "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": pipeline_tag,
             "raw_json": json.dumps(app),
@@ -37,36 +47,83 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _is_public(app: dict[str, Any]) -> int:
-    """App Service is truly internet-accessible only if public network access is enabled AND no access restrictions."""
+def _classify_exposure(app: dict[str, Any]) -> tuple[int, int, list[str]]:
+    """Return (is_public, is_restricted, ip_restriction_cidrs)."""
     props = app.get("properties") or {}
-    
-    # Check public network access setting
+
+    # Public network access disabled → private
     public_network_access = props.get("publicNetworkAccess") or app.get("publicNetworkAccess", "Enabled")
     if public_network_access == "Disabled":
-        return 0  # Public network access disabled
-    
-    # Check for access restrictions (IP ranges, VNet rules)
+        return 0, 0, []
+
+    # VNet integration → private
+    if props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId"):
+        return 0, 0, []
+
+    # Collect IP restrictions (ignore the default "Allow all" catch-all rule)
     site_config = props.get("siteConfig") or {}
-    ip_restrictions = site_config.get("ipSecurityRestrictions") or []
-    scm_ip_restrictions = site_config.get("scmIpSecurityRestrictions") or []
-    
-    # If there are ANY access restrictions, it's not truly public
-    if ip_restrictions or scm_ip_restrictions:
-        return 0
-    
-    # Check VNet integration
-    vnet_name = props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId")
-    if vnet_name:
-        return 0  # VNet-integrated = not internet-facing
-    
-    return 1
+    raw_rules = (site_config.get("ipSecurityRestrictions") or []) + (
+        site_config.get("scmIpSecurityRestrictions") or []
+    )
+    meaningful_rules = [
+        r for r in raw_rules
+        if r.get("priority") != _DEFAULT_ALLOW_ALL_PRIORITY
+        and r.get("action", "").lower() == "allow"
+    ]
+
+    if meaningful_rules:
+        cidrs = [
+            r.get("ipAddress") or r.get("vnetSubnetResourceId") or ""
+            for r in meaningful_rules
+            if r.get("ipAddress") or r.get("vnetSubnetResourceId")
+        ]
+        return 0, 1, cidrs  # partially exposed
+
+    return 1, 0, []  # fully public
+
+
+def _get_endpoint_entries(app: dict[str, Any], primary_fqdn: str | None) -> list[tuple[str | None, int, str]]:
+    entries: list[tuple[str | None, int, str]] = []
+    if primary_fqdn:
+        entries.append((primary_fqdn, 443, "https"))
+    # Additional custom hostnames
+    props = app.get("properties") or {}
+    for hostname in (props.get("hostNames") or app.get("hostNames") or []):
+        host = safe_str(hostname)
+        if host and host != primary_fqdn:
+            entries.append((host, 443, "https"))
+    return entries
+
+
+def _get_auth_methods(app: dict[str, Any]) -> list[str]:
+    """Infer auth methods from app configuration (best-effort)."""
+    methods: list[str] = []
+    props = app.get("properties") or {}
+    site_config = props.get("siteConfig") or {}
+
+    # App Service supports AAD/OAuth2 authentication if auth is configured
+    # We check for the authSettings hint in kind or config
+    auth_settings = props.get("siteAuthSettings") or {}
+    if auth_settings.get("enabled"):
+        methods.append("azure_ad")
+    else:
+        methods.append("azure_ad_optional")
+
+    # Function keys / basic auth
+    if site_config.get("ftpsState") not in ("Disabled", "FtpsOnly"):
+        pass  # FTPS state doesn't directly indicate function keys
+
+    # Check if basic auth is enabled (publishingCredentials)
+    basic_auth_enabled = (props.get("basicPublishingCredentialsPolicies") or {}).get("allow", True)
+    if basic_auth_enabled:
+        methods.append("basic_publishing_credentials")
+
+    return methods
 
 
 def _get_pipeline_tag(app: dict[str, Any], subscription_id: str) -> str | None:
     """Try to read the ADO pipeline deployment source tag for this web app."""
     tags = app.get("tags") or {}
-    # Check common tag keys first (fast path, no extra az call)
     for key in ("pipeline", "Pipeline", "ado-pipeline", "build-pipeline", "deploymentPipeline"):
         if key in tags:
             return safe_str(tags[key])

@@ -39,6 +39,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": infer_sku(plan),
             "tags": json.dumps(plan.get("tags") or {}),
             "is_public": 0,  # App Service Plans are control-plane resources, not directly public
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": json.dumps([]),
+            "auth_methods": json.dumps([]),
             "fqdn": None,
             "pipeline_tag": (plan.get("tags") or {}).get("pipeline") or (plan.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**plan, "_extra": extra}),

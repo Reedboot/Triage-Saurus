@@ -511,6 +511,13 @@ function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Check for subscription filter in URL parameters
+const urlParams = new URLSearchParams(window.location.search);
+const subParam = urlParams.get('sub');
+if (subParam) {
+  _activeSubId = decodeURIComponent(subParam);
+}
+
 loadData();
 </script>
 </body>

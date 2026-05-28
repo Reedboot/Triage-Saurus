@@ -52,6 +52,12 @@ document.addEventListener('alpine:init', () => {
     _moduleScanCb: null,
     _moduleSkipCb: null,
 
+    // Cloud subscription modal (pre-scan)
+    cloudSubModalVisible: false,
+    availableSubscriptions: [],
+    _cloudSubConfirmCb: null,
+    _cloudSubSkipCb: null,
+
     // Pipeline actions
     startPipeline(forceReset = false) {
       if (this.pipelineVisible && !forceReset) return;
@@ -230,6 +236,34 @@ document.addEventListener('alpine:init', () => {
       this.moduleModalVisible = false;
     },
 
+    // Cloud subscription modal actions
+    showCloudSubModal(subscriptions, onConfirm, onSkip) {
+      this.availableSubscriptions = subscriptions.map(s => ({
+        ...s,
+        selected: !!s._preselected,  // pre-select if default is set in settings
+        deploy_role: s.environment === 'production' ? 'prod' : (s.environment || 'primary'),
+      }));
+      this._cloudSubConfirmCb = onConfirm;
+      this._cloudSubSkipCb = onSkip;
+      this.cloudSubModalVisible = true;
+    },
+    hasSelectedSubs() {
+      return this.availableSubscriptions.some(s => s.selected);
+    },
+    confirmCloudSubs() {
+      this.cloudSubModalVisible = false;
+      const selected = this.availableSubscriptions.filter(s => s.selected);
+      if (this._cloudSubConfirmCb) this._cloudSubConfirmCb(selected);
+    },
+    skipCloudSubs() {
+      this.cloudSubModalVisible = false;
+      if (this._cloudSubSkipCb) this._cloudSubSkipCb(false);  // false = not "none" marker
+    },
+    dismissCloudSubs() {
+      this.cloudSubModalVisible = false;
+      if (this._cloudSubSkipCb) this._cloudSubSkipCb(true);   // true = "not part of any sub" marker
+    },
+
     // CSS helper for each pipeline bar
     phaseClass(phase) {
       if (phase.state === 'done')   return 'pipeline-phase pipeline-phase--done';
@@ -255,5 +289,6 @@ document.addEventListener('alpine:init', () => {
     onModuleScanState: (moduleName, state) => Alpine.store('scan').updateModuleScan(moduleName, state),
     showModal:      (msg, onWatch, onNew) => Alpine.store('scan').showModal(msg, onWatch, onNew),
     showModuleModal: (modules, onScan, onSkip) => Alpine.store('scan').showModuleModal(modules, onScan, onSkip),
+    showCloudSubModal: (subs, onConfirm, onSkip) => Alpine.store('scan').showCloudSubModal(subs, onConfirm, onSkip),
   };
 });

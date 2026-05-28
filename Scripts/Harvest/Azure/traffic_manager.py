@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, safe_str
 
 RESOURCE_TYPE = "Microsoft.Network/trafficmanagerprofiles"
 
@@ -18,7 +18,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         dns_config = props.get("dnsConfig") or {}
         fqdn = safe_str(dns_config.get("fqdn"))
 
-        endpoints = props.get("endpoints") or []
+        # Traffic Manager is DNS-level routing — probe the DNS resolution
+        tm_endpoints = build_endpoints([(fqdn, None, "dns")] if fqdn else [])
+
+        raw_endpoints = props.get("endpoints") or []
         extra = {
             "routing_method": props.get("trafficRoutingMethod"),
             "profile_status": props.get("profileStatus"),
@@ -27,7 +30,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "monitor_protocol": (props.get("monitorConfig") or {}).get("protocol"),
             "monitor_port": (props.get("monitorConfig") or {}).get("port"),
             "monitor_path": (props.get("monitorConfig") or {}).get("path"),
-            "endpoint_count": len(endpoints),
+            "endpoint_count": len(raw_endpoints),
             "endpoints": [
                 {
                     "name": ep.get("name"),
@@ -37,7 +40,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                     "priority": (ep.get("properties") or {}).get("priority"),
                     "endpoint_status": (ep.get("properties") or {}).get("endpointStatus"),
                 }
-                for ep in endpoints
+                for ep in raw_endpoints
             ],
         }
 
@@ -51,6 +54,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(profile.get("tags") or {}),
             "is_public": 1,  # Traffic Manager profiles are DNS-level, publicly resolvable
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": tm_endpoints,
+            "auth_methods": json.dumps([]),
             "fqdn": fqdn,
             "pipeline_tag": (profile.get("tags") or {}).get("pipeline") or (profile.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**profile, "_extra": extra}),

@@ -1505,7 +1505,6 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         ("generate_project_overview", [sys.executable, str(GENERATE_PROJECT_OVERVIEW), "--experiment", experiment_id, "--repo", repo_name]),
     ]
 
-    # Friendly names so UI can treat skeptics as a subtask/status flag.
     step_labels = {
         "enrich_findings": "Enriching findings",
         "run_skeptics": "Running skeptics",
@@ -1526,6 +1525,29 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         }
 
     _append_ai_job_log(key, f"AI analysis started for repo '{repo_name}' (experiment {experiment_id})")
+
+    # ── Step 0: compute cloud posture (must run before enrichment so prompts ──
+    # ── get the infrastructure context block) ────────────────────────────────
+    cloud_posture = None
+    try:
+        conn0 = _get_db_with_schema()
+        if conn0:
+            try:
+                cloud_posture = _compute_cloud_posture(conn0, experiment_id, repo_name)
+                if cloud_posture:
+                    _append_ai_job_log(
+                        key,
+                        f"Cloud posture computed: waf={cloud_posture.get('behind_waf')}, "
+                        f"apim={cloud_posture.get('behind_apim')}, "
+                        f"aks={cloud_posture.get('aks_cluster')}, "
+                        f"exposure={cloud_posture.get('endpoint_exposure')}",
+                    )
+                else:
+                    _append_ai_job_log(key, "No cloud subscription linked — skipping posture computation")
+            finally:
+                conn0.close()
+    except Exception as _e:
+        _append_ai_job_log(key, f"Cloud posture computation failed (non-fatal): {_e}")
 
     # Mirror pipeline subprocess imports: include Scripts paths on PYTHONPATH
     # so internal modules (for example db_helpers) resolve consistently.
@@ -1602,6 +1624,20 @@ def _run_ai_analysis_job(experiment_id: str, repo_name: str) -> None:
         job["active_step_label"] = None
         job["skeptics_running"] = False
         _AI_ANALYSIS_JOBS[key] = job
+
+    # ── Post-pass: apply deterministic cloud posture score adjustments ────────
+    if cloud_posture:
+        try:
+            conn_adj = _get_db_with_schema()
+            if conn_adj:
+                try:
+                    n_adjusted = _apply_cloud_score_adjustments(conn_adj, experiment_id, cloud_posture)
+                    _append_ai_job_log(key, f"Cloud posture score adjustment: {n_adjusted} finding(s) adjusted")
+                finally:
+                    conn_adj.close()
+        except Exception as _e:
+            _append_ai_job_log(key, f"Cloud score adjustment failed (non-fatal): {_e}")
+
     _append_ai_job_log(key, "AI analysis completed successfully")
 
 
@@ -1638,6 +1674,52 @@ def _resolve_repos() -> list[dict]:
     _RESOLVED_REPOS_CACHE["sig"] = sig
     _RESOLVED_REPOS_CACHE["entries"] = list(entries)
     return entries
+
+
+def _resolve_repos_merged() -> list[dict]:
+    """Return repos from ReposToScan.txt merged with all distinct paths from scanned experiments.
+
+    ReposToScan.txt entries come first and take precedence (clean names).
+    DB-only repos (e.g. scanned modules) are appended using the folder name as display name.
+    All entries have {name, path, found, source} where source is 'intake' or 'db'.
+    """
+    from_file = _resolve_repos()
+    known_paths: set[str] = {e["path"] for e in from_file if e["path"]}
+
+    db_extras: list[dict] = []
+    try:
+        import json as _json
+        with _get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT repos FROM experiments WHERE repos IS NOT NULL AND repos != '[]' ORDER BY id DESC"
+            ).fetchall()
+            seen_db: set[str] = set()
+            for row in rows:
+                try:
+                    paths = _json.loads(row["repos"]) if isinstance(row["repos"], str) else (row["repos"] or [])
+                except Exception:
+                    continue
+                for p in paths:
+                    p = str(p).strip()
+                    if not p or p in known_paths or p in seen_db:
+                        continue
+                    seen_db.add(p)
+                    on_disk = Path(p).is_dir()
+                    db_extras.append({
+                        "name": Path(p).name,
+                        "path": p if on_disk else "",
+                        "found": on_disk,
+                        "source": "db",
+                    })
+                    if on_disk:
+                        known_paths.add(p)
+    except Exception:
+        pass
+
+    for e in from_file:
+        e.setdefault("source", "intake")
+
+    return from_file + db_extras
 
 
 def _get_base_images_from_dockerfile(df_path: Path) -> list[dict]:
@@ -8546,7 +8628,32 @@ def api_view_overview(experiment_id: str, repo_name: str):
         ai_new_assets = None
         ai_fixed_information = None
 
-    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information, module_deps=module_deps_data, available_repos=available_repos, analysis_completed_at=analysis_completed_at, analysis_recovered=analysis_recovered)
+    # Load cloud posture for the banner
+    cloud_posture_data = None
+    try:
+        posture_raw = db_helpers.get_context_metadata(resolved_exp_id, repo_name, 'posture_json', namespace='cloud_posture')
+        if posture_raw:
+            cloud_posture_data = json.loads(posture_raw)
+    except Exception:
+        cloud_posture_data = None
+
+    # Count findings that received a cloud-adjusted score
+    cloud_adjusted_count = 0
+    try:
+        conn_cp = _get_db_with_schema()
+        if conn_cp:
+            try:
+                r = conn_cp.execute(
+                    "SELECT COUNT(*) FROM findings WHERE experiment_id=? AND cloud_adjusted_score IS NOT NULL",
+                    (resolved_exp_id,),
+                ).fetchone()
+                cloud_adjusted_count = r[0] if r else 0
+            finally:
+                conn_cp.close()
+    except Exception:
+        cloud_adjusted_count = 0
+
+    return _db_render('tab_overview.html', overview_html=final_html, experiment_id=resolved_exp_id, repo_name=repo_name, ai_new_assets=ai_new_assets, ai_fixed_information=ai_fixed_information, module_deps=module_deps_data, available_repos=available_repos, analysis_completed_at=analysis_completed_at, analysis_recovered=analysis_recovered, cloud_posture=cloud_posture_data, cloud_adjusted_count=cloud_adjusted_count)
 
 
 @app.route("/api/module/mappings/<experiment_id>/<repo_name>", methods=["POST"])
@@ -11534,7 +11641,7 @@ def index():
         pass
     return render_template(
         "index.html",
-        repos=_resolve_repos(),
+        repos=_resolve_repos_merged(),
         experiments=experiments,
         scan_flags=_scan_feature_flags(),
     )
@@ -12314,6 +12421,339 @@ def _get_available_subscriptions(conn) -> list:
     ]
 
 
+def _compute_cloud_posture(conn, experiment_id: str, repo_name: str) -> dict:
+    """Analyse the cloud infrastructure position of a repo using its linked subscriptions.
+
+    Queries appgw_routing_rules, apim_api_routes, and provisioned_assets to determine:
+    - Whether traffic flows through App Gateway / WAF / APIM before reaching the service
+    - Which AKS cluster (if any) the service is deployed on and whether it is IP-restricted
+    - The aggregate endpoint exposure (public / restricted / private)
+
+    Returns a structured posture dict that is stored in context_metadata and injected into
+    AI enrichment prompts so findings can be scored in context.
+    """
+    import re as _re
+
+    # 1. Get linked subscriptions for this repo
+    repo_row = conn.execute(
+        "SELECT id FROM repositories WHERE experiment_id=? AND LOWER(repo_name)=LOWER(?) LIMIT 1",
+        (experiment_id, repo_name),
+    ).fetchone()
+    if not repo_row:
+        return {}
+
+    repo_id = repo_row["id"]
+    sub_rows = conn.execute(
+        "SELECT subscription_id, deploy_role FROM repository_subscriptions WHERE repository_id=?",
+        (repo_id,),
+    ).fetchall()
+    if not sub_rows:
+        return {}
+
+    sub_ids = [r["subscription_id"] for r in sub_rows]
+    deploy_roles = {r["subscription_id"]: r["deploy_role"] for r in sub_rows}
+    placeholders = ",".join("?" * len(sub_ids))
+
+    # 2. Normalise repo name for matching (strip common prefixes, lowercase)
+    def _norm(s: str) -> str:
+        return _re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+    repo_slug = _norm(repo_name.split("/")[-1])
+
+    # 3. Find provisioned assets that look like they belong to this repo
+    # Match by name similarity — e.g. repo "my-api" → asset "my-api-prod" or "myapi"
+    asset_rows = conn.execute(
+        f"""
+        SELECT id, name, type, fqdn, is_public, is_restricted, ip_restrictions,
+               endpoints, auth_methods, subscription_id
+        FROM provisioned_assets
+        WHERE subscription_id IN ({placeholders})
+          AND type NOT IN (
+              'Microsoft.Network/virtualNetworks',
+              'Microsoft.Network/networkSecurityGroups',
+              'Microsoft.Network/privateDnsZones',
+              'Microsoft.Network/privateEndpoints'
+          )
+        """,
+        sub_ids,
+    ).fetchall()
+
+    matched_assets = []
+    for row in asset_rows:
+        asset_slug = _norm(row["name"] or "")
+        # Direct slug match or repo slug is a substring of the asset slug (and vice versa)
+        if repo_slug and (
+            repo_slug in asset_slug
+            or asset_slug in repo_slug
+            or _sim_match(repo_slug, asset_slug)
+        ):
+            matched_assets.append(dict(row))
+
+    # Collect all known FQDNs for the matched assets
+    known_fqdns = set()
+    for a in matched_assets:
+        if a.get("fqdn"):
+            known_fqdns.add(a["fqdn"].lower())
+        try:
+            import json as _json
+            eps = _json.loads(a.get("endpoints") or "[]")
+            for ep in eps:
+                if ep.get("address"):
+                    known_fqdns.add(ep["address"].lower())
+        except Exception:
+            pass
+
+    # Also add repo name derivatives as FQDN hints
+    known_fqdns.add(repo_slug)
+
+    # 4. Check App Gateway routing rules for any backend pointing at our FQDNs
+    appgw_rows = conn.execute(
+        f"""
+        SELECT gateway_name, backend_fqdn, backend_pool_name, protocol, port,
+               waf_policy_name, listener_protocol, subscription_id
+        FROM appgw_routing_rules
+        WHERE subscription_id IN ({placeholders})
+        """,
+        sub_ids,
+    ).fetchall() if _table_exists(conn, "appgw_routing_rules") else []
+
+    behind_app_gateway = False
+    behind_waf = False
+    appgw_name = None
+    for r in appgw_rows:
+        backend = _norm(r["backend_fqdn"] or r["backend_pool_name"] or "")
+        if any(_norm(fqdn) in backend or backend in _norm(fqdn) for fqdn in known_fqdns if fqdn):
+            behind_app_gateway = True
+            appgw_name = r["gateway_name"]
+            if r["waf_policy_name"]:
+                behind_waf = True
+            break
+    # If no FQDN match but there's only one App Gateway in the subscription, assume it routes all traffic
+    if not behind_app_gateway and appgw_rows and matched_assets:
+        # Heuristic: single-gateway subscription almost certainly routes our service
+        gateways = {r["gateway_name"] for r in appgw_rows}
+        if len(gateways) == 1:
+            behind_app_gateway = True
+            appgw_name = list(gateways)[0]
+            behind_waf = any(r["waf_policy_name"] for r in appgw_rows)
+
+    # 5. Check APIM routing
+    apim_rows = conn.execute(
+        f"""
+        SELECT apim_name, api_name, backend_url
+        FROM apim_api_routes
+        WHERE subscription_id IN ({placeholders})
+        """,
+        sub_ids,
+    ).fetchall() if _table_exists(conn, "apim_api_routes") else []
+
+    behind_apim = False
+    apim_name = None
+    for r in apim_rows:
+        backend = _norm(r["backend_url"] or "")
+        if any(_norm(fqdn) in backend or backend in _norm(fqdn) for fqdn in known_fqdns if fqdn):
+            behind_apim = True
+            apim_name = r["apim_name"]
+            break
+    if not behind_apim and apim_rows and matched_assets:
+        # Single APIM in subscription — likely routes all services
+        apims = {r["apim_name"] for r in apim_rows}
+        if len(apims) == 1:
+            behind_apim = True
+            apim_name = list(apims)[0]
+
+    # 6. AKS cluster presence and security
+    aks_rows = conn.execute(
+        f"""
+        SELECT name, is_public, is_restricted, ip_restrictions, fqdn, subscription_id
+        FROM provisioned_assets
+        WHERE subscription_id IN ({placeholders})
+          AND LOWER(type) LIKE '%managedcluster%'
+        """,
+        sub_ids,
+    ).fetchall()
+
+    aks_cluster = None
+    aks_secured = False
+    if aks_rows:
+        # Prefer the first cluster (most subscriptions have one)
+        a = aks_rows[0]
+        aks_cluster = a["name"]
+        aks_secured = bool(a["is_restricted"])
+
+    # 7. Aggregate endpoint exposure from matched assets
+    if matched_assets:
+        has_public = any(a.get("is_public") for a in matched_assets)
+        has_restricted = any(a.get("is_restricted") for a in matched_assets)
+        if has_public:
+            endpoint_exposure = "restricted" if has_restricted and not has_public else "public"
+        elif has_restricted:
+            endpoint_exposure = "restricted"
+        else:
+            endpoint_exposure = "private"
+    else:
+        endpoint_exposure = "unknown"
+
+    # 8. Collect auth methods from matched assets
+    import json as _json2
+    all_auth = set()
+    for a in matched_assets:
+        try:
+            methods = _json2.loads(a.get("auth_methods") or "[]")
+            all_auth.update(methods)
+        except Exception:
+            pass
+
+    posture = {
+        "subscription_ids": sub_ids,
+        "deploy_roles": deploy_roles,
+        "matched_asset_count": len(matched_assets),
+        "matched_asset_names": [a["name"] for a in matched_assets[:10]],
+        "behind_app_gateway": behind_app_gateway,
+        "app_gateway_name": appgw_name,
+        "behind_waf": behind_waf,
+        "behind_apim": behind_apim,
+        "apim_name": apim_name,
+        "aks_cluster": aks_cluster,
+        "aks_secured": aks_secured,
+        "endpoint_exposure": endpoint_exposure,
+        "auth_methods": sorted(all_auth),
+        "computed_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    # Persist to context_metadata for enrichment scripts to read
+    repo_id_val = repo_row["id"]
+    try:
+        conn.execute(
+            """
+            INSERT INTO context_metadata (experiment_id, repo_id, namespace, key, value, source)
+            VALUES (?, ?, 'cloud_posture', 'posture_json', ?, 'system')
+            ON CONFLICT(experiment_id, repo_id, namespace, key)
+            DO UPDATE SET value=excluded.value, source=excluded.source
+            """,
+            (experiment_id, repo_id_val, _json2.dumps(posture)),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    return posture
+
+
+def _sim_match(a: str, b: str) -> bool:
+    """True if two slugs share a long enough common prefix (≥5 chars)."""
+    if not a or not b:
+        return False
+    for length in range(min(len(a), len(b)), 4, -1):
+        if a[:length] == b[:length]:
+            return True
+    return False
+
+
+def _apply_cloud_score_adjustments(conn, experiment_id: str, posture: dict) -> int:
+    """Deterministic cloud posture score adjustment pass.
+
+    Runs after AI enrichment + skeptic reviews.  Writes per-finding adjustments
+    into ``cloud_adjusted_score`` (does NOT overwrite ``severity_score``).
+
+    Returns the number of findings that received an adjustment.
+    """
+    if not posture:
+        return 0
+
+    behind_waf   = bool(posture.get("behind_waf"))
+    behind_apim  = bool(posture.get("behind_apim"))
+    aks_secured  = bool(posture.get("aks_secured"))
+    exposure     = posture.get("endpoint_exposure", "unknown")
+
+    rows = conn.execute(
+        """
+        SELECT id, severity_score, title, description, rule_id
+        FROM findings
+        WHERE experiment_id = ? AND llm_enriched_at IS NOT NULL
+        """,
+        (experiment_id,),
+    ).fetchall()
+
+    adjusted_count = 0
+    for row in rows:
+        score = int(row["severity_score"] or 5)
+        combined = " ".join(filter(None, [
+            (row["title"] or "").lower(),
+            (row["description"] or "").lower(),
+            (row["rule_id"] or "").lower(),
+        ]))
+
+        is_injection = any(k in combined for k in [
+            "injection", "xss", "cross-site", "sqli", "sql injection",
+            "command injection", "template injection", "ssrf", "rce",
+        ])
+        is_api_auth = any(k in combined for k in [
+            "authentication", "authorization", "api key", "access control",
+            "privilege escalation", "iam", "rbac", "oauth",
+        ])
+        is_secret = any(k in combined for k in [
+            "secret", "credential", "password", "token", "private key",
+            "hardcoded", "api key", "connection string",
+        ])
+        is_network_exposure = any(k in combined for k in [
+            "exposed", "public", "open port", "firewall", "network access", "internet",
+        ])
+
+        adj = 0
+
+        # ── Mitigations (downscore) ──────────────────────────────────────────
+        # WAF in front reduces exploitation risk for injection-class findings
+        if behind_waf and is_injection:
+            adj -= 1
+        # APIM enforces auth/rate-limit — reduces risk for API auth findings
+        if behind_apim and is_api_auth:
+            adj -= 1
+        # IP-restricted endpoint reduces exposure for secret/credential findings
+        if exposure == "restricted" and is_secret:
+            adj -= 1
+        # AKS with restricted API server reduces network-exposure findings
+        if aks_secured and is_network_exposure:
+            adj -= 1
+
+        # ── Escalations (upscore) ────────────────────────────────────────────
+        # No WAF + fully public + injection = attacker has a direct shot
+        if not behind_waf and exposure == "public" and is_injection:
+            adj += 1
+        # No APIM + fully public + API auth issue = directly exploitable
+        if not behind_apim and exposure == "public" and is_api_auth:
+            adj += 1
+
+        if adj == 0:
+            continue
+
+        cloud_score = max(1, min(10, score + adj))
+        conn.execute(
+            "UPDATE findings SET cloud_adjusted_score = ? WHERE id = ?",
+            (cloud_score, row["id"]),
+        )
+        adjusted_count += 1
+
+    conn.commit()
+    return adjusted_count
+
+
+@app.route("/api/cloud-posture/<experiment_id>/<path:repo_name>")
+def api_cloud_posture(experiment_id: str, repo_name: str):
+    """Compute (or refresh) and return the cloud infrastructure posture for a repo."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        resolved_exp_id = _get_experiment_for_repo(conn, repo_name, experiment_id) or experiment_id
+        posture = _compute_cloud_posture(conn, resolved_exp_id, repo_name)
+        if not posture:
+            return jsonify({"posture": None, "message": "No subscription links found for this repo."})
+        return jsonify({"posture": posture})
+    finally:
+        conn.close()
+
+
 @app.route("/cloud")
 def cloud_subscriptions_page():
     """Render the Cloud Subscriptions view as a standalone page."""
@@ -12543,6 +12983,54 @@ def api_subscription_assets(sub_id: str):
         conn.close()
 
 
+# Per-subscription routing-harvest background tasks: task_id → {status, output, error}
+_ROUTING_HARVEST_TASKS: dict = {}
+_ROUTING_HARVEST_LOCK = threading.Lock()
+
+
+def _run_routing_harvest(sub_id: str, task_id: str) -> None:
+    """Background worker: runs appgw_routing_map.py for the given subscription."""
+    import subprocess as _sp
+    script = str(Path(__file__).parent.parent / "Scripts" / "Harvest" / "appgw_routing_map.py")
+    try:
+        result = _sp.run(
+            [sys.executable, script, "--subscription", sub_id],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        status = "done" if result.returncode == 0 else "error"
+    except Exception as exc:
+        output = str(exc)
+        status = "error"
+    with _ROUTING_HARVEST_LOCK:
+        _ROUTING_HARVEST_TASKS[task_id] = {"status": status, "output": output}
+
+
+@app.route("/api/subscriptions/<sub_id>/harvest-routing", methods=["POST"])
+def api_harvest_routing(sub_id: str):
+    """Start a background harvest of App Gateway routing rules and WAF policies."""
+    import uuid as _uuid
+    task_id = _uuid.uuid4().hex
+    with _ROUTING_HARVEST_LOCK:
+        # If already running for this sub, return existing task
+        for tid, info in _ROUTING_HARVEST_TASKS.items():
+            if info.get("sub_id") == sub_id and info.get("status") == "running":
+                return jsonify({"task_id": tid, "status": "running"}), 202
+        _ROUTING_HARVEST_TASKS[task_id] = {"sub_id": sub_id, "status": "running", "output": ""}
+    t = threading.Thread(target=_run_routing_harvest, args=(sub_id, task_id), daemon=True)
+    t.start()
+    return jsonify({"task_id": task_id, "status": "started"}), 202
+
+
+@app.route("/api/subscriptions/<sub_id>/harvest-routing/<task_id>")
+def api_harvest_routing_status(sub_id: str, task_id: str):
+    """Poll status of a routing harvest task."""
+    info = _ROUTING_HARVEST_TASKS.get(task_id)
+    if not info:
+        return jsonify({"error": "Task not found"}), 404
+    return jsonify({"task_id": task_id, "status": info["status"], "output": info.get("output", "")})
+
+
 @app.route("/api/subscriptions/<sub_id>/diagram")
 def api_subscription_diagram(sub_id: str):
     """Generate hierarchical architecture diagrams for a subscription.
@@ -12621,46 +13109,214 @@ def _sanitise_node_id(value: str) -> str:
 def _friendly_type(arm_type: str) -> str:
     labels = {
         "microsoft.web/sites": "App Service",
+        "microsoft.web/serverfarms": "App Service Plan",
+        "microsoft.web/hostingenvironments": "App Service Env",
         "microsoft.network/applicationgateways": "App Gateway",
         "microsoft.apimanagement/service": "APIM",
         "microsoft.containerservice/managedclusters": "AKS",
+        "microsoft.containerregistry/registries": "Container Registry",
         "microsoft.storage/storageaccounts": "Storage",
         "microsoft.keyvault/vaults": "Key Vault",
         "microsoft.sql/servers": "SQL Server",
+        "microsoft.documentdb/databaseaccounts": "Cosmos DB",
+        "microsoft.servicebus/namespaces": "Service Bus",
+        "microsoft.eventhub/namespaces": "Event Hub",
+        "microsoft.cache/redis": "Redis Cache",
+        "microsoft.datafactory/factories": "Data Factory",
+        "microsoft.cognitiveservices/accounts": "AI Services",
+        "microsoft.insights/components": "App Insights",
+        "microsoft.appconfiguration/configurationstores": "App Config",
         "microsoft.network/virtualnetworks": "VNet",
         "microsoft.network/networksecuritygroups": "NSG",
+        "microsoft.network/trafficmanagerprofiles": "Traffic Manager",
+        "microsoft.servicefabric/clusters": "Service Fabric",
+        "microsoft.search/searchservices": "AI Search",
     }
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
 
 
 def _get_icon_path(resource_type: str) -> str | None:
-    """Map Azure resource type to icon SVG path."""
-    icon_map = {
-        "microsoft.network/applicationgateways": "azure/networking/app-gateway.svg",
-        "microsoft.apimanagement/service": "azure/integration/apim.svg",
-        "microsoft.containerservice/managedclusters": "azure/containers/kubernetes-service.svg",
-        "microsoft.storage/storageaccounts": "azure/storage/storage-account.svg",
-        "microsoft.keyvault/vaults": "azure/security/key-vault.svg",
-        "microsoft.sql/servers": "azure/databases/sql-server.svg",
-        "microsoft.documentdb/databaseaccounts": "azure/databases/cosmos-db.svg",
-        "microsoft.web/sites": "azure/web/app-service.svg",
-        "microsoft.network/virtualnetworks": "azure/networking/virtual-networks.svg",
-        "microsoft.cdn/profiles": "azure/networking/cdn.svg",
-    }
-    return icon_map.get((resource_type or "").lower())
+    """Map cloud resource type to icon SVG path using icon_resolver.
+    
+    Supports:
+    - Azure ARM types (microsoft.network/applicationgateways)
+    - Azure terraform types (azurerm_app_gateway)
+    - AWS terraform types (aws_s3)
+    - GCP terraform types (google_storage_bucket)
+    
+    Returns Flask-friendly URL path (e.g., '/static/assets/icons/azure/...')
+    """
+    if not resource_type:
+        return None
+    
+    try:
+        from Scripts.Generate.icon_resolver import get_icon_path as resolver_get_icon_path
+        
+        # Direct ARM type to icon mapping (for better coverage)
+        arm_to_icon_map = {
+            "microsoft.network/applicationgateways": "azurerm_app_gateway",
+            "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
+            "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
+            "microsoft.apimanagement/service": "azurerm_apim",
+            "microsoft.containerservice/managedclusters": "azurerm_aks",
+            "microsoft.storage/storageaccounts": "azurerm_storage_account",
+            "microsoft.keyvault/vaults": "azurerm_key_vault",
+            "microsoft.sql/servers": "azurerm_sql_server",
+            "microsoft.documentdb/databaseaccounts": "azurerm_cosmos_db",
+            "microsoft.web/sites": "azurerm_app_service",
+            "microsoft.web/functionapps": "azurerm_function_app",
+            "microsoft.web/serverfarms": "azurerm_app_service_plan",
+            "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
+            "microsoft.cdn/profiles": "azurerm_cdn_profile",
+            "microsoft.network/virtualnetworks": "azurerm_virtual_network",
+            "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
+            "microsoft.network/publicipaddresses": "azurerm_public_ip",
+            "microsoft.cache/redis": "azurerm_redis",
+            "microsoft.eventhub/namespaces": "azurerm_event_hub",
+            "microsoft.servicebus/namespaces": "azurerm_service_bus",
+            "microsoft.eventgrid/topics": "azurerm_eventgrid_topic",
+            "microsoft.datafactory/factories": "azurerm_data_factories",
+            "microsoft.cognitiveservices/accounts": "azurerm_cognitive_services",
+            "microsoft.containerregistry/registries": "azurerm_container_registries",
+            "microsoft.servicefabric/clusters": "azurerm_service_fabric_clusters",
+            "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
+            "microsoft.insights/components": "azurerm_app_insights",
+            "microsoft.search/searchservices": "azurerm_search",
+        }
+        
+        # Normalize resource type
+        rtype_lower = (resource_type or "").lower()
+        
+        # Check if it's a known ARM type with direct mapping
+        if rtype_lower in arm_to_icon_map:
+            rtype_normalized = arm_to_icon_map[rtype_lower]
+            provider = "azure"
+        elif rtype_lower.startswith("microsoft."):
+            # Try smart conversion for unmapped ARM types
+            parts_orig = (resource_type or "").split('/')
+            parts_lower = rtype_lower.split('/')
+            
+            if len(parts_orig) >= 2:
+                provider_part = parts_orig[-1]
+                
+                # Convert camelCase to snake_case
+                import re
+                snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', provider_part).lower()
+                
+                # Remove common plural suffixes
+                if snake_case.endswith('ies'):
+                    snake_case = snake_case[:-3] + 'y'
+                elif snake_case.endswith('s') and not snake_case.endswith('ss'):
+                    snake_case = snake_case[:-1]
+                
+                rtype_normalized = f"azurerm_{snake_case}"
+                provider = "azure"
+            else:
+                rtype_normalized = rtype_lower
+                provider = "azure"
+        elif rtype_lower.startswith("azurerm_"):
+            rtype_normalized = rtype_lower
+            provider = "azure"
+        elif rtype_lower.startswith("aws_"):
+            rtype_normalized = rtype_lower
+            provider = "aws"
+        elif rtype_lower.startswith("google_"):
+            rtype_normalized = rtype_lower
+            provider = "gcp"
+        else:
+            # Default to Azure for compatibility
+            rtype_normalized = rtype_lower
+            provider = "azure"
+        
+        # Get icon path from resolver
+        icon_path = resolver_get_icon_path(rtype_normalized, provider=provider)
+        if icon_path and icon_path.exists():
+            # Convert filesystem path to Flask URL
+            # Path is like: /repo/web/static/assets/icons/azure/compute/virtual-machine.svg
+            # Need to extract: /static/assets/icons/azure/compute/virtual-machine.svg
+            parts = icon_path.parts
+            if 'web' in parts:
+                web_idx = parts.index('web')
+                relative_parts = parts[web_idx + 1:]  # Skip 'web'
+                return '/' + '/'.join(relative_parts)
+    except Exception as e:
+        # Silently fail if icon_resolver not available or error occurs
+        pass
+    
+    return None
 
 
 def _get_icon_class(resource_type: str) -> str:
-    """Convert ARM resource type to mermaid icon class name for icon-injector."""
+    """Convert resource type to CSS icon class name for mermaid icon-injector.
+    
+    ARM types (microsoft.*) are first normalized to terraform-style names so the
+    resulting CSS class is valid (no dots or slashes).
+    Returns class name like 'icon-azurerm-app-service', 'icon-aws-lambda', etc.
+    """
     if not resource_type:
         return ""
-    parts = resource_type.lower().split("/")
-    if len(parts) >= 2:
-        name = parts[-1]
-        import re
-        kebab = re.sub(r'(?<!^)(?=[A-Z])', '-', name).lower()
-        return f"icon-{kebab}"
-    return ""
+    
+    try:
+        from Scripts.Generate.icon_resolver import get_icon_class as resolver_get_icon_class
+        
+        # Shared ARM → terraform-style map (kept in sync with _get_icon_path)
+        arm_to_icon_map = {
+            "microsoft.network/applicationgateways": "azurerm_app_gateway",
+            "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
+            "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
+            "microsoft.apimanagement/service": "azurerm_apim",
+            "microsoft.containerservice/managedclusters": "azurerm_aks",
+            "microsoft.storage/storageaccounts": "azurerm_storage_account",
+            "microsoft.keyvault/vaults": "azurerm_key_vault",
+            "microsoft.sql/servers": "azurerm_sql_server",
+            "microsoft.documentdb/databaseaccounts": "azurerm_cosmos_db",
+            "microsoft.web/sites": "azurerm_app_service",
+            "microsoft.web/functionapps": "azurerm_function_app",
+            "microsoft.web/serverfarms": "azurerm_app_service_plan",
+            "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
+            "microsoft.cdn/profiles": "azurerm_cdn_profile",
+            "microsoft.network/virtualnetworks": "azurerm_virtual_network",
+            "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
+            "microsoft.network/publicipaddresses": "azurerm_public_ip",
+            "microsoft.cache/redis": "azurerm_redis",
+            "microsoft.eventhub/namespaces": "azurerm_event_hub",
+            "microsoft.servicebus/namespaces": "azurerm_service_bus",
+            "microsoft.eventgrid/topics": "azurerm_eventgrid_topic",
+            "microsoft.datafactory/factories": "azurerm_data_factories",
+            "microsoft.cognitiveservices/accounts": "azurerm_cognitive_services",
+            "microsoft.containerregistry/registries": "azurerm_container_registries",
+            "microsoft.servicefabric/clusters": "azurerm_service_fabric_clusters",
+            "microsoft.appconfiguration/configurationstores": "azurerm_app_configuration",
+            "microsoft.insights/components": "azurerm_app_insights",
+            "microsoft.search/searchservices": "azurerm_search",
+        }
+        
+        rtype_lower = (resource_type or "").lower()
+        
+        if rtype_lower in arm_to_icon_map:
+            rtype_normalized = arm_to_icon_map[rtype_lower]
+        elif rtype_lower.startswith("microsoft."):
+            # Generic ARM → terraform conversion: take last path segment, snake_case it
+            import re
+            parts = resource_type.split("/")
+            snake = re.sub(r'(?<!^)(?=[A-Z])', '_', parts[-1]).lower()
+            if snake.endswith('ies'):
+                snake = snake[:-3] + 'y'
+            elif snake.endswith('s') and not snake.endswith('ss'):
+                snake = snake[:-1]
+            rtype_normalized = f"azurerm_{snake}"
+        else:
+            rtype_normalized = resource_type
+        
+        provider = "azure" if rtype_lower.startswith(("microsoft.", "azurerm_")) else (
+            "aws" if rtype_lower.startswith("aws_") else (
+                "gcp" if rtype_lower.startswith("google_") else "azure"
+            )
+        )
+        
+        return resolver_get_icon_class(rtype_normalized, provider=provider)
+    except Exception:
+        return ""
 
 
 def _build_ingress_diagram(rows: list) -> dict:
@@ -12677,13 +13333,31 @@ def _build_ingress_diagram(rows: list) -> dict:
     # This handles duplicate names across different resource groups
     def _get_node_id(item):
         """Generate unique node ID from resource group and name."""
-        combined = f"{item.get('rg', 'default')}_{item.get('name', 'resource')}"
+        rg = item.get('rg') or 'grp'
+        combined = f"{rg}_{item.get('name', 'resource')}"
         return _sanitise_node_id(combined)
+
+    def _short_name(name: str, max_len: int = 28) -> str:
+        """Strip common Azure env prefixes/location suffixes for readability."""
+        import re as _re
+        for prefix in ("cbuk-core-prodgreen-", "cbuk-core-prod-", "cbuk-", "pipeline-customer-production-"):
+            if name.lower().startswith(prefix):
+                name = name[len(prefix):]
+                break
+        name = _re.sub(r'-(uksouth|ukwest|eastus\d*|westeurope|northeurope|westus\d*)$', '', name, flags=_re.IGNORECASE)
+        if len(name) > max_len:
+            name = name[:max_len-1] + "…"
+        return name
+
+    def _is_function_app(item: dict) -> bool:
+        name = (item.get("name") or "").lower()
+        return "-fn-" in name or name.endswith("-fn") or "funcapp" in name or "functionapp" in name
     
     # Categorize resources by type to show entry point flow
     entry_points = []  # Public IPs, App Gateways, WAFs
     api_layer = []     # APIM instances
     backends = []      # App Services, AKS, etc.
+    function_apps = [] # Function Apps shown in backend tier
     data_stores = []   # Databases, Storage
     
     type_groups = _dd(list)
@@ -12697,24 +13371,32 @@ def _build_ingress_diagram(rows: list) -> dict:
         type_groups[type_key].append(item)
         
         # Classify for ingress flow
-        if "applicationgateway" in type_key or "frontdoor" in type_key or "publicip" in type_key:
+        if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key:
             entry_points.append(item)
         elif "apimanagement" in type_key:
             api_layer.append(item)
-        elif "sites" in type_key or "managedcluster" in type_key or "containerinstance" in type_key:
+        elif ("managedcluster" in type_key or "containerinstance" in type_key
+              or "serverfarms" in type_key or "hostingenvironment" in type_key
+              or "datafactory" in type_key or "cognitiveservices" in type_key
+              or "containerregistry" in type_key or "servicefabric" in type_key):
             backends.append(item)
-        elif "sql" in type_key or "cosmosdb" in type_key or "storage" in type_key or "keyvault" in type_key:
+        elif "sites" in type_key:
+            if _is_function_app(item):
+                function_apps.append(item)
+            else:
+                backends.append(item)
+        elif ("sql" in type_key or "documentdb" in type_key or "storage" in type_key
+              or "keyvault" in type_key or "servicebus" in type_key or "eventhub" in type_key
+              or "cache/redis" in type_key or "search/search" in type_key or "appconfiguration" in type_key):
             data_stores.append(item)
     
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
         "graph LR",
-        '    Internet["🌐 Internet<br/>(inbound requests)"]',
+        '    Internet["🌐 Internet"]',
     ]
     
-    # Build a simplified flow: Internet → representative entry points → API layer → representative backends
-    # Only show a few representative nodes to avoid diagram bloat
-    max_shown = 3  # Max nodes per category to show
+    NAME_THRESHOLD = 5
     
     # Prioritize AKS clusters and container services in backends (they're critical infrastructure)
     def _prioritize_backends(backend_items):
@@ -12727,444 +13409,408 @@ def _build_ingress_diagram(rows: list) -> dict:
     def _group_entry_points(entry_items):
         """Group entry points by resource type and WAF protection status."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "waf_status": None, "names": [], "listeners": None})
-        
+        grouped = defaultdict(list)
+
         for item in entry_items:
             type_key = (item.get("type") or "").lower()
-            
-            # Get friendly type name
+
             if "applicationgateway" in type_key:
                 category = "App Gateway"
             elif "frontdoor" in type_key:
                 category = "Front Door"
+            elif "trafficmanager" in type_key:
+                category = "Traffic Manager"
             elif "publicip" in type_key:
                 category = "Public IP"
             else:
                 category = item.get("type", "Gateway").split("/")[-1]
-            
-            # For entry points, group by WAF protection status
-            waf_status = "🛡️ WAF Protected" if item.get("has_waf") else "Unprotected"
-            group_key = f"{category}|{waf_status}"
-            
-            grouped[group_key]["count"] += 1
-            grouped[group_key]["type"] = category
-            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
-            grouped[group_key]["waf_status"] = waf_status
-            grouped[group_key]["names"].append(item.get("name"))
-            # Preserve listener info from first item
-            if grouped[group_key]["listeners"] is None and item.get("listeners"):
-                grouped[group_key]["listeners"] = item.get("listeners")
-        
+
+            grouped[category].append(item)
+
         result = []
-        for group_key, info in sorted(grouped.items()):
-            consolidated = {
-                "name": f"{info['type']} ({info['waf_status']})",
-                "count": info["count"],
-                "type": info["type"],
-                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
-                "waf_status": info["waf_status"],
-                "is_group": True,
-                "names": info["names"],
-                "has_waf": "🛡️" in info["waf_status"],
-                "listeners": info["listeners"]  # Preserve HTTP/HTTPS listener info
-            }
-            result.append(consolidated)
-        
+        for category, items in sorted(grouped.items()):
+            if len(items) <= NAME_THRESHOLD:
+                for item in items:
+                    result.append({
+                        "name": item["name"],
+                        "label": _short_name(item["name"]),
+                        "count": 1,
+                        "type": category,
+                        "arm_type": item["type"],
+                        "is_group": False,
+                        "resources": [{"rg": item.get("rg"), "name": item["name"]}],
+                        "fqdns": [item["fqdn"]] if item.get("fqdn") else [],
+                        "public": bool(item.get("public")),
+                        "rg": item.get("rg", ""),
+                        "has_waf": item.get("has_waf"),
+                        "listeners": item.get("listeners"),
+                    })
+            else:
+                result.append({
+                    "name": f"{category}_ep_group",
+                    "label": f"{category} ({len(items)}×)",
+                    "count": len(items),
+                    "type": category,
+                    "arm_type": items[0]["type"],
+                    "is_group": True,
+                    "resources": [{"rg": i.get("rg"), "name": i["name"]} for i in items],
+                    "fqdns": [i["fqdn"] for i in items if i.get("fqdn")],
+                    "public": any(i.get("public") for i in items),
+                    "rg": "",
+                    "has_waf": any(i.get("has_waf") for i in items),
+                    "listeners": next((i.get("listeners") for i in items if i.get("listeners")), None),
+                })
         return result
     
     # Group API layer by TYPE + exposure
     def _group_api_services(api_items):
         """Group API services by resource type and public/private exposure."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
+        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "resources": [], "fqdns": []})
         
         for item in api_items:
             type_key = (item.get("type") or "").lower()
-            category = "APIM" if "apimanagement" in type_key else item.get("type", "API").split("/")[-1]
-            access = "🌐 Public" if item.get("public") else "Restricted"
+            category = "APIM" if "apimanagement" in type_key else _friendly_type(item.get("type"))
+            access = "Public" if item.get("public") else "Private"
             group_key = f"{category}|{access}"
             
             grouped[group_key]["count"] += 1
             grouped[group_key]["type"] = category
-            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
+            grouped[group_key]["arm_type"] = item.get("type")
             grouped[group_key]["access"] = access
-            grouped[group_key]["names"].append(item.get("name"))
+            grouped[group_key]["resources"].append({"rg": item.get("rg"), "name": item.get("name")})
+            if item.get("fqdn"):
+                grouped[group_key]["fqdns"].append(item["fqdn"])
         
         result = []
         for group_key, info in sorted(grouped.items()):
-            consolidated = {
-                "name": f"{info['type']} ({info['access']})",
-                "count": info["count"],
+            count = info["count"]
+            unique_name = group_key.replace("|", "_")  # e.g. "APIM_Public" or "APIM_Private"
+            result.append({
+                "name": unique_name,
+                "label": f"{info['type']} ({count}×)" if count > 1 else info["type"],
+                "count": count,
                 "type": info["type"],
-                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
+                "arm_type": info["arm_type"],
                 "access": info["access"],
                 "is_group": True,
-                "names": info["names"],
-                "public": "public" in info["access"].lower()
-            }
-            result.append(consolidated)
-        
+                "resources": info["resources"],
+                "fqdns": info["fqdns"],
+                "public": info["access"] == "Public",
+                "rg": "",
+            })
         return result
     
     # Group backends by TYPE + exposure
     def _group_backends_by_type(backend_items):
         """Group backends by resource type and public/private exposure."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
-        
+        grouped = defaultdict(list)
+
         for item in backend_items:
             type_key = (item.get("type") or "").lower()
-            
-            # Get friendly type name
             if "managedcluster" in type_key:
                 category = "AKS"
+            elif "sites" in type_key and _is_function_app(item):
+                category = "Function App"
             elif "sites" in type_key:
                 category = "App Service"
+            elif "serverfarms" in type_key:
+                category = "App Service Plan"
+            elif "hostingenvironment" in type_key:
+                category = "App Service Env"
             elif "containerinstance" in type_key:
                 category = "Container Instance"
+            elif "containerregistry" in type_key:
+                category = "Container Registry"
+            elif "datafactory" in type_key:
+                category = "Data Factory"
+            elif "cognitiveservices" in type_key:
+                category = "AI Services"
+            elif "servicefabric" in type_key:
+                category = "Service Fabric"
             else:
-                category = item.get("type", "Backend").split("/")[-1]
-            
-            access = "🌐 Public" if item.get("public") else "Restricted"
-            group_key = f"{category}|{access}"
-            
-            grouped[group_key]["count"] += 1
-            grouped[group_key]["type"] = category
-            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
-            grouped[group_key]["access"] = access
-            grouped[group_key]["names"].append(item.get("name"))
-        
+                category = _friendly_type(item.get("type"))
+            grouped[category].append(item)
+
         result = []
-        for group_key, info in sorted(grouped.items()):
-            consolidated = {
-                "name": f"{info['type']} ({info['access']})",
-                "count": info["count"],
-                "type": info["type"],
-                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
-                "access": info["access"],
-                "is_group": True,
-                "names": info["names"],
-                "public": "public" in info["access"].lower()
-            }
-            result.append(consolidated)
-        
+        for category, items in sorted(grouped.items()):
+            # Use virtual ARM type for Function Apps so icon resolver returns function-app icon
+            effective_arm_type = lambda item, cat: (
+                "Microsoft.Web/functionApps" if cat == "Function App" else item["type"]
+            )
+            if len(items) <= NAME_THRESHOLD:
+                for item in items:
+                    result.append({
+                        "name": item["name"],
+                        "label": _short_name(item["name"]),
+                        "count": 1,
+                        "type": category,
+                        "arm_type": effective_arm_type(item, category),
+                        "is_group": False,
+                        "resources": [{"rg": item.get("rg"), "name": item["name"]}],
+                        "fqdns": [item["fqdn"]] if item.get("fqdn") else [],
+                        "public": bool(item.get("public")),
+                        "rg": item.get("rg", ""),
+                        "has_waf": item.get("has_waf"),
+                    })
+            else:
+                result.append({
+                    "name": f"{category}_group",
+                    "label": f"{category} ({len(items)}×)",
+                    "count": len(items),
+                    "type": category,
+                    "arm_type": "Microsoft.Web/functionApps" if category == "Function App" else items[0]["type"],
+                    "is_group": True,
+                    "resources": [{"rg": i.get("rg"), "name": i["name"]} for i in items],
+                    "fqdns": [i["fqdn"] for i in items if i.get("fqdn")],
+                    "public": any(i.get("public") for i in items),
+                    "rg": "",
+                })
         return result
     
     # Group data stores by TYPE + exposure (already good, just refactor slightly)
     def _group_data_stores_by_type(store_items):
         """Group data stores by resource type and access level."""
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "type": None, "arm_type": None, "access": None, "names": []})
-        
+        grouped = defaultdict(list)
+
         for item in store_items:
             type_key = (item.get("type") or "").lower()
-            
-            # Determine resource category
             if "sql" in type_key:
                 category = "SQL"
-            elif "cosmos" in type_key or "documentdb" in type_key:
+            elif "documentdb" in type_key:
                 category = "Cosmos DB"
             elif "storage" in type_key:
                 category = "Storage"
             elif "keyvault" in type_key:
                 category = "Key Vault"
+            elif "servicebus" in type_key:
+                category = "Service Bus"
+            elif "eventhub" in type_key:
+                category = "Event Hub"
+            elif "cache/redis" in type_key:
+                category = "Redis Cache"
+            elif "search/search" in type_key:
+                category = "AI Search"
+            elif "appconfiguration" in type_key:
+                category = "App Config"
             else:
-                category = item.get("type", "Database").split("/")[-1]
-            
-            # Group by category + access level
-            access = "🌐 Public" if item.get("public") else "Restricted"
-            group_key = f"{category}|{access}"
-            
-            grouped[group_key]["count"] += 1
-            grouped[group_key]["type"] = category
-            grouped[group_key]["arm_type"] = item.get("type")  # Store original ARM type
-            grouped[group_key]["access"] = access
-            grouped[group_key]["names"].append(item.get("name"))
-        
-        # Convert to list of consolidated items
+                category = _friendly_type(item.get("type")) if item.get("type") else "Data Store"
+            grouped[category].append(item)
+
         result = []
-        for group_key, info in sorted(grouped.items()):
-            consolidated = {
-                "name": f"{info['type']} ({info['access']})",
-                "count": info["count"],
-                "type": info["type"],
-                "arm_type": info["arm_type"],  # Keep ARM type for icon lookup
-                "access": info["access"],
-                "is_group": True,
-                "names": info["names"],
-                "public": "public" in info["access"].lower()
-            }
-            result.append(consolidated)
-        
+        for category, items in sorted(grouped.items()):
+            if len(items) <= NAME_THRESHOLD:
+                for item in items:
+                    result.append({
+                        "name": item["name"],
+                        "label": _short_name(item["name"]),
+                        "count": 1,
+                        "type": category,
+                        "arm_type": item["type"],
+                        "is_group": False,
+                        "resources": [{"rg": item.get("rg"), "name": item["name"]}],
+                        "fqdns": [item["fqdn"]] if item.get("fqdn") else [],
+                        "public": bool(item.get("public")),
+                        "rg": item.get("rg", ""),
+                    })
+            else:
+                result.append({
+                    "name": f"{category}_ds_group",
+                    "label": f"{category} ({len(items)}×)",
+                    "count": len(items),
+                    "type": category,
+                    "arm_type": items[0]["type"],
+                    "is_group": True,
+                    "resources": [{"rg": i.get("rg"), "name": i["name"]} for i in items],
+                    "fqdns": [i["fqdn"] for i in items if i.get("fqdn")],
+                    "public": any(i.get("public") for i in items),
+                    "rg": "",
+                })
         return result
     
     # Group resources by type + exposure (only show unique combinations)
     grouped_entry_points = _group_entry_points(entry_points)
     grouped_api_layer = _group_api_services(api_layer)
-    grouped_backends = _group_backends_by_type(backends)
+    grouped_backends = _group_backends_by_type(_prioritize_backends(backends + function_apps))
     grouped_data_stores = _group_data_stores_by_type(data_stores)
     
-    # Show up to max_shown from each grouped set
-    shown_entry = grouped_entry_points[:max_shown]
-    shown_api = grouped_api_layer[:max_shown]
-    shown_backend = grouped_backends[:max_shown]
-    shown_data = grouped_data_stores[:max_shown]
-    
-    # Build icon map for frontend icon injection
-    icon_map = {}
-    
+    shown_entry = grouped_entry_points
+    shown_api = grouped_api_layer
+    shown_backend = grouped_backends
+    shown_data = grouped_data_stores
+
+    def _node_line(node_id: str, label: str, arm_type: str) -> str:
+        """Build a node definition line with an inline icon <img> in the HTML label.
+
+        Uses the same format as ArchitectureAgent diagrams — embedding the icon
+        directly in the node HTML — instead of the :::class + icon-injector
+        pipeline, which requires an extra JS pass and doesn't work reliably for
+        cloud-harvested ARM types.
+        """
+        icon_path = _get_icon_path(arm_type)
+        if icon_path:
+            safe_label = label.replace("'", "&#39;").replace('"', "&quot;")
+            html = (
+                "<div style='text-align:center;padding:0'>"
+                f"<img src='{icon_path}' style='width:24px;height:24px;aspect-ratio:1/1;"
+                f"object-fit:contain;margin-bottom:0;border-radius:2px'/>"
+                f"<div style='font-size:0.75em;word-wrap:break-word;white-space:normal;"
+                f"line-height:1.1'>{safe_label}</div>"
+                "</div>"
+            )
+            return f'    {node_id}["{html}"]'
+        safe_label = label.replace('"', "&quot;")
+        return f'    {node_id}["{safe_label}"]'
+
     # Add nodes with icon classes
     for item in shown_entry:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
-        friendly_type = _friendly_type(arm_type)
-        
-        # Show WAF status in label
-        waf_indicator = " 🛡️" if item.get("has_waf") else ""
-        label = f"{friendly_type}{waf_indicator}"
-        label = label.replace("'", "&#39;")
-        
-        # Add icon class
-        icon_class = _get_icon_class(arm_type)
-        if icon_class:
-            lines.append(f'    {node_id}["{label}"]')
-            lines.append(f'    class {node_id} {icon_class};')
-            icon_path = _get_icon_path(arm_type)
-            if icon_path:
-                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
-        else:
-            lines.append(f'    {node_id}["{label}"]')
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        if item.get("has_waf"):
+            label = f"{label} 🛡️"
+        lines.append(_node_line(node_id, label, arm_type))
     
     for item in shown_api:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
-        friendly_type = _friendly_type(arm_type)
-        label = friendly_type.replace("'", "&#39;")
-        
-        icon_class = _get_icon_class(arm_type)
-        if icon_class:
-            lines.append(f'    {node_id}["{label}"]')
-            lines.append(f'    class {node_id} {icon_class};')
-            icon_path = _get_icon_path(arm_type)
-            if icon_path:
-                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
-        else:
-            lines.append(f'    {node_id}["{label}"]')
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        lines.append(_node_line(node_id, label, arm_type))
     
     for item in shown_backend:
         node_id = _get_node_id(item)
         arm_type = item.get("arm_type") or item["type"]
-        friendly_type = _friendly_type(arm_type)
-        
-        # Show instance count if grouped
-        count_text = f" ({item.get('count')} x)" if item.get("is_group") and item.get("count", 0) > 1 else ""
-        label = f"{friendly_type}{count_text}".replace("'", "&#39;")
-        
-        icon_class = _get_icon_class(arm_type)
-        if icon_class:
-            lines.append(f'    {node_id}["{label}"]')
-            lines.append(f'    class {node_id} {icon_class};')
-            icon_path = _get_icon_path(arm_type)
-            if icon_path:
-                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
-        else:
-            lines.append(f'    {node_id}["{label}"]')
+        label = item.get("label") or item.get("type") or _friendly_type(arm_type)
+        access_indicator = " 🌐" if item.get("public") else " 🔒"
+        lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
     
     for item in shown_data:
         node_id = _get_node_id(item)
-        
-        # For grouped items, show count if multiple
-        if item.get("is_group") and item.get("count", 0) > 1:
-            label = f'{item["type"]} ({item["access"]}) x{item["count"]}'
-        else:
-            label = f'{item.get("type", "Database")} ({item["access"]})'
-        
-        label = label.replace("'", "&#39;")
-        
-        # Try to get icon for data store type
+        label = item.get("label") or item.get("type") or "Data Store"
         arm_type = item.get("arm_type")
-        icon_class = _get_icon_class(arm_type) if arm_type else ""
-        if icon_class:
-            lines.append(f'    {node_id}["{label}"]')
-            lines.append(f'    class {node_id} {icon_class};')
-            icon_path = _get_icon_path(arm_type)
-            if icon_path:
-                icon_map[icon_class] = f"/static/assets/icons/{icon_path}"
+        if arm_type:
+            lines.append(_node_line(node_id, label, arm_type))
         else:
-            lines.append(f'    {node_id}["{label}"]')
+            safe_label = label.replace('"', "&quot;")
+            lines.append(f'    {node_id}["{safe_label}"]')
     
-    # Track summary node ids for connection logic before adding them
-    has_more_entry = len(grouped_entry_points) > max_shown
-    has_more_api = len(grouped_api_layer) > max_shown
-    has_more_backend = len(grouped_backends) > max_shown
-    has_more_data = len(grouped_data_stores) > max_shown
-    
-    # Add a summary node if there are more grouped types than shown
-    if has_more_entry:
-        lines.append(f'    more_entry["...+{len(grouped_entry_points) - max_shown} more<br/>entry types"]')
-        shown_entry.append({"name": "more_entry", "type": "summary"})
-    
-    if has_more_api:
-        lines.append(f'    more_api["...+{len(grouped_api_layer) - max_shown} more<br/>API types"]')
-        shown_api.append({"name": "more_api", "type": "summary"})
-    
-    if has_more_backend:
-        lines.append(f'    more_backend["...+{len(grouped_backends) - max_shown} more<br/>backend types"]')
-        shown_backend.append({"name": "more_backend", "type": "summary"})
-    
-    if has_more_data:
-        lines.append(f'    more_data["...+{len(grouped_data_stores) - max_shown} more<br/>data store types"]')
-        shown_data.append({"name": "more_data", "type": "summary"})
-    
-    # Add connections with color-coded arrows and HTTP endpoint labels
+    # Add connections — track link index so linkStyle can colour each arrow
+    # Convention: red = direct internet exposure, orange = internet-reachable path, white = internal/OK
     lines.append("")
-     
-    # Collect publicly exposed endpoints for direct Internet arrows
-    public_endpoints = []
-    for item in entry_points:
-        if item.get("public"):
-            fqdn = item.get("fqdn") or item.get("name")
-            if fqdn:
-                public_endpoints.append({"name": item["name"], "fqdn": fqdn, "type": item["type"]})
-      
-    # Add direct Internet → Public Endpoints arrows (NOTE: "public" means public endpoint enabled, may have IP restrictions)
-    if public_endpoints:
-        for endpoint in public_endpoints[:5]:  # Show first 5 public endpoints
-            endpoint_node_id = _sanitise_node_id(f"endpoint_{endpoint['fqdn']}")
-            fqdn_label = endpoint['fqdn'].replace("'", "&#39;")
-            lines.append(f'    {endpoint_node_id}["🌐 {fqdn_label}"]')
-            lines.append(f'    Internet -->|"{endpoint["name"]}"| {endpoint_node_id}')
-          
-        # Add summary for more endpoints
-        if len(public_endpoints) > 5:
-            lines.append(f'    more_endpoints["...+{len(public_endpoints) - 5} more<br/>public endpoints"]')
-            lines.append(f'    Internet -.-> more_endpoints')
-     
-    lines.append("")
-     
-    # Internet → Entry Points (with HTTP/HTTPS protocol labels and WAF status)
+    link_colors = []  # one color string per edge, in order appended
+
+    def _add_link(line, color):
+        link_colors.append(color)
+        lines.append(line)
+
+    def _fqdn_label(fqdns: list, suffix: str = "") -> str:
+        """Build a concise arrow label from a list of FQDNs."""
+        if not fqdns:
+            return suffix or "HTTPS"
+        first = fqdns[0]
+        if len(first) > 40:
+            first = first[:38] + "…"
+        label = first
+        if len(fqdns) > 1:
+            label += f" +{len(fqdns) - 1}"
+        if suffix:
+            label += f" {suffix}"
+        return label
+
+    def _data_exposure_label(arm_type: str, count: int) -> str:
+        """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
+        t = (arm_type or "").lower()
+        if "keyvault" in t or "storage" in t or "servicebus" in t or "eventhub" in t or "appconfiguration" in t:
+            proto = "HTTPS"
+        elif "sql" in t:
+            proto = "TCP:1433"
+        elif "cache/redis" in t:
+            proto = "TCP:6380"
+        elif "documentdb" in t:
+            proto = "HTTPS"
+        elif "sites" in t or "managedcluster" in t or "apimanagement" in t:
+            proto = "HTTP/HTTPS"
+        else:
+            proto = "TCP"
+        return f"🔴 {proto} x{count}" if count > 1 else f"🔴 {proto}"
+
+    def _internal_link_label(arm_type: str) -> str:
+        """Protocol label for internal backend→data-store arrows."""
+        t = (arm_type or "").lower()
+        if "keyvault" in t or "appconfiguration" in t:
+            return "HTTPS"
+        elif "storage" in t:
+            return "HTTPS"
+        elif "servicebus" in t or "eventhub" in t:
+            return "AMQP"
+        elif "sql" in t:
+            return "TCP:1433"
+        elif "cache/redis" in t:
+            return "TCP:6380"
+        elif "documentdb" in t:
+            return "HTTPS"
+        return "TCP/IP"
+
+    # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
-        for item in shown_entry[:max_shown]:
+        for item in shown_entry:
             node_id = _get_node_id(item)
-            arm_type = (item.get("arm_type") or item["type"]).lower()
-             
-            # Build arrow label with protocol/port and WAF status
-            label = ""
-            if item.get("listeners"):
-                label = item.get("listeners")
-            else:
-                label = "HTTP:80, HTTPS:443"
-             
-            # Add WAF indicator if protected
-            if item.get("has_waf"):
-                label = f'"{label} 🛡️ WAF"'
-            else:
-                label = f'"{label}"'
-             
-            lines.append(f'    Internet -->|{label}| {node_id}')
-         
-        # Connect summary node if it exists
-        if has_more_entry:
-            lines.append(f'    Internet -.-> more_entry')
-    
-    # Entry Points → API Layer (with routing information)
+            fqdns = item.get("fqdns") or []
+            waf_suffix = "🛡️ WAF" if item.get("has_waf") else ""
+            arrow_label = _fqdn_label(fqdns, waf_suffix)
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "orange")
+
+    # Entry Points → API Layer (orange — still part of the internet-reachable routing chain)
     if shown_entry and shown_api:
-        actual_entry = shown_entry[:max_shown]
-        # Connect first entry point to first API node
-        if actual_entry:
-            first_entry = actual_entry[0]
-            first_api = shown_api[0]
-            arm_type = (first_entry.get("arm_type") or first_entry["type"]).lower()
-            
-            # Show routing details with WAF status if protected
-            if first_entry.get("has_waf"):
-                lines.append(f'    {_get_node_id(first_entry)} -->|"Routing (WAF ✓)"| {_get_node_id(first_api)}')
-            else:
-                lines.append(f'    {_get_node_id(first_entry)} -->|"Routing"| {_get_node_id(first_api)}')
-        
-        # Show some alternatives
-        if len(actual_entry) > 1 and len(shown_api) > 1:
-            lines.append(f'    {_get_node_id(actual_entry[1])} -.-> {_get_node_id(shown_api[1])}')
-        
-        # Connect summary entry node to summary API node if both exist
-        if has_more_entry and has_more_api:
-            lines.append(f'    more_entry -.-> more_api')
-        # Or connect summary entry to first API if no summary API
-        elif has_more_entry and shown_api:
-            lines.append(f'    more_entry -.-> {_get_node_id(shown_api[0])}')
-    
-    # API Layer → Backends
+        api_nid = _get_node_id(shown_api[0])
+        for entry in shown_entry:
+            routing_label = '"Routing (WAF ✓)"' if entry.get("has_waf") else '"Routing"'
+            _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {api_nid}', "orange")
+
+    # API Layer → Backends (white — internal routing behind gateway, OK)
     if shown_api and shown_backend:
-        actual_api = shown_api[:max_shown]
-        if actual_api:
-            lines.append(f'    {_get_node_id(actual_api[0])} --> {_get_node_id(shown_backend[0])}')
-        if len(actual_api) > 1 and len(shown_backend) > 1:
-            lines.append(f'    {_get_node_id(actual_api[0])} -.-> {_get_node_id(shown_backend[1])}')
-        # Connect summary nodes if they exist
-        if has_more_api and has_more_backend:
-            lines.append(f'    more_api -.-> more_backend')
-        elif has_more_api and shown_backend:
-            lines.append(f'    more_api -.-> {_get_node_id(shown_backend[0])}')
-    
-    # Backends → Data Stores
+        api_node = _get_node_id(shown_api[0])
+        for backend in shown_backend:
+            _add_link(f'    {api_node} --> {_get_node_id(backend)}', "white")
+
+    # Backends → Data Stores (white — internal connections)
     if shown_backend and shown_data:
-        actual_backend = shown_backend[:max_shown]
-        if actual_backend:
-            lines.append(f'    {_get_node_id(actual_backend[0])} -->|queries| {_get_node_id(shown_data[0])}')
-        if len(actual_backend) > 0 and len(shown_data) > 1:
-            lines.append(f'    {_get_node_id(actual_backend[0])} -.->|queries| {_get_node_id(shown_data[1])}')
-        # Connect summary nodes if they exist
-        if has_more_backend and has_more_data:
-            lines.append(f'    more_backend -.->|queries| more_data')
-        elif has_more_backend and shown_data:
-            lines.append(f'    more_backend -.->|queries| {_get_node_id(shown_data[0])}')
-    
-    # SECURITY: Internet → Public Resources (one arrow per resource type that has public resources)
-    # Determine which resource types have public endpoints
-    public_backend_types = set()
-    public_api_types = set()
-    public_data_types = set()
-     
-    for item in backends:
-        if item.get("public"):
-            public_backend_types.add(item.get("type"))
-    for item in api_layer:
-        if item.get("public"):
-            public_api_types.add(item.get("type"))
-    for item in data_stores:
-        if item.get("public"):
-            public_data_types.add(item.get("type"))
-     
-    # Create arrows to grouped nodes that have public resources
+        backend_node = _get_node_id(shown_backend[0])
+        for store in shown_data:
+            store_proto = _internal_link_label(store.get("arm_type") or "")
+            _add_link(f'    {backend_node} -->|"{store_proto}"| {_get_node_id(store)}', "white")
+
+    # SECURITY: Internet → Public Resources (red — direct exposure, no gateway protection)
     for item in shown_backend:
-        if item["type"] != "summary" and item.get("type") in public_backend_types:
+        arm_type = (item.get("arm_type") or "").lower()
+        if item.get("public"):
             node_id = _get_node_id(item)
-            count = item.get("count", 1)
-            arrow_label = "🔴 HTTP/HTTPS"
-            if count > 1:
-                arrow_label += f" ({count})"
-            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
-     
+            arrow_label = _data_exposure_label(arm_type, item.get("count", 1))
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+
     for item in shown_api:
-        if item["type"] != "summary" and item.get("type") in public_api_types:
+        arm_type = (item.get("arm_type") or "").lower()
+        if item.get("public"):
             node_id = _get_node_id(item)
-            count = item.get("count", 1)
-            arrow_label = "🔴 HTTP/HTTPS"
-            if count > 1:
-                arrow_label += f" ({count})"
-            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
-     
+            arrow_label = _data_exposure_label(arm_type, item.get("count", 1))
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+
     for item in shown_data:
-        if item["type"] != "summary" and item.get("type") in public_data_types:
+        arm_type = (item.get("arm_type") or "").lower()
+        if item.get("public"):
             node_id = _get_node_id(item)
-            count = item.get("count", 1)
-            arrow_label = "🔴 TCP/Database"
-            if count > 1:
-                arrow_label += f" ({count})"
-            lines.append(f'    Internet -.->|"{arrow_label}"| {node_id}')
+            arrow_label = _data_exposure_label(arm_type, item.get("count", 1))
+            _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
+    # Apply per-link colours: red = direct exposure, orange = internet-reachable path, white = internal/OK
+    for idx, color in enumerate(link_colors):
+        lines.append(f'    linkStyle {idx} stroke:{color},stroke-width:2px')
+    lines.append("")
+    # classDef declarations for semantic node roles
     lines.append('    classDef entryPoint stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry (no WAF)
     lines.append('    classDef entryPointProtected stroke:#00897b,stroke-width:2px;')  # Dark teal = WAF-protected
     lines.append('    classDef apiGateway stroke:#00897b,stroke-width:2px;')  # Dark teal = APIM
@@ -13175,39 +13821,20 @@ def _build_ingress_diagram(rows: list) -> dict:
     lines.append('    classDef summary stroke:#6a1b9a,stroke-width:2px;')  # Dark purple = Summary nodes
     
     for item in shown_entry:
-        if item["type"] != "summary":
-            # Color by WAF protection status
-            style_class = "entryPointProtected" if item.get("has_waf") else "entryPoint"
-            lines.append(f'    class {_get_node_id(item)} {style_class};')
-    if "more_entry" in [_get_node_id(item) for item in shown_entry]:
-        lines.append('    class more_entry summary;')
+        style_class = "entryPointProtected" if item.get("has_waf") else "entryPoint"
+        lines.append(f'    class {_get_node_id(item)} {style_class};')
     
     for item in shown_api:
-        if item["type"] != "summary":
-            lines.append(f'    class {_get_node_id(item)} apiGateway;')
-    if "more_api" in [_get_node_id(item) for item in shown_api]:
-        lines.append('    class more_api summary;')
+        lines.append(f'    class {_get_node_id(item)} apiGateway;')
     
     for item in shown_backend:
-        if item["type"] != "summary":
-            lines.append(f'    class {_get_node_id(item)} backend;')
-    if "more_backend" in [_get_node_id(item) for item in shown_backend]:
-        lines.append('    class more_backend summary;')
+        lines.append(f'    class {_get_node_id(item)} backend;')
     
     for item in shown_data:
-        if item["type"] != "summary":
-            # Use different color for public/exposed data stores
-            style_class = "dataStorePublic" if "public" in (item.get("access") or "").lower() else "dataStore"
-            lines.append(f'    class {_get_node_id(item)} {style_class};')
-    if "more_data" in [_get_node_id(item) for item in shown_data]:
-        lines.append('    class more_data summary;')
+        style_class = "dataStorePublic" if item.get("public") else "dataStore"
+        lines.append(f'    class {_get_node_id(item)} {style_class};')
     
     lines.append('    class Internet internet;')
-     
-    # Add disclaimer and legend about public endpoint meaning
-    lines.append("")
-    lines.append("    disclaimer[\"⚠️ 'PUBLIC' = endpoint enabled, NOT necessarily internet-accessible.<br/>Check firewall rules, IP restrictions, NSGs, and WAF policies.\"]")
-    lines.append("    class disclaimer disclaimer;")
      
     # Generate CSS styling for the diagram (matches architecture diagram styling)
     css_lines = [
@@ -13219,23 +13846,351 @@ def _build_ingress_diagram(rows: list) -> dict:
         ".backend { stroke: #0066cc; stroke-width: 2px; fill: #cfe8ff; }",
         ".dataStore { stroke: #8b5cf6; stroke-width: 2px; fill: #ede9fe; }",
         ".summary { stroke: #666666; stroke-width: 2px; fill: #f0f0f0; }",
-        ".disclaimer { stroke: #ff9800; stroke-width: 2px; fill: #fff3e0; color: #333; }",
     ]
      
+    # Build node_drilldown_map — keyed by node ID in the Mermaid source.
+    # Types that support drill-down to child resources.
+    _drillable_arm_types = {
+        "microsoft.network/applicationgateways",
+        "microsoft.apimanagement/service",
+        "microsoft.keyvault/vaults",
+        "microsoft.storage/storageaccounts",
+        "microsoft.sql/servers",
+        "microsoft.containerservice/managedclusters",
+        "microsoft.documentdb/databaseaccounts",
+        "microsoft.web/sites",
+    }
+
+    node_drilldown_map: dict = {}
+
+    def _register_node(item: dict):
+        arm_type = (item.get("arm_type") or item.get("type") or "").lower()
+        node_id = _get_node_id(item)
+        resources = item.get("resources") or []
+        if not resources and item.get("name"):
+            resources = [{"rg": item.get("rg"), "name": item.get("name")}]
+        node_drilldown_map[node_id] = {
+            "title": item.get("name", node_id),
+            "arm_type": item.get("arm_type") or item.get("type"),
+            "resources": resources,
+            "can_drill": arm_type in _drillable_arm_types and bool(resources),
+        }
+
+    for item in shown_entry:
+        if item.get("type") != "summary":
+            _register_node(item)
+    for item in shown_api:
+        if item.get("type") != "summary":
+            _register_node(item)
+    for item in shown_backend:
+        if item.get("type") != "summary":
+            _register_node(item)
+    for item in shown_data:
+        if item.get("type") != "summary":
+            _register_node(item)
+
     return {
         "mermaid": "\n".join(lines),
         "css_code": "\n".join(css_lines),
-        "icon_map": icon_map,
+        "icon_map": {},
+        "node_drilldown_map": node_drilldown_map,
         "asset_summary": {
             "entry_points": len(entry_points),
             "api_layer": len(api_layer),
-            "backends": len(backends),
+            "backends": len(backends) + len(function_apps),
             "data_stores": len(data_stores),
         }
     }
 
 
-def _build_drilldown_data(rows: list) -> dict:
+def _build_child_diagram(conn, sub_id: str, arm_type: str, resources: list) -> dict:
+    """Build a drill-down Mermaid diagram for a specific resource type and set of named resources.
+
+    `resources` is a list of {rg, name} dicts (from node_drilldown_map).
+    Returns the same shape as `_build_ingress_diagram`: {title, mermaid, css_code, node_drilldown_map}.
+    """
+    import json as _json
+
+    arm_type_lc = (arm_type or "").lower()
+    names = [r["name"] for r in resources if r.get("name")]
+    placeholders = ",".join("?" * len(names)) if names else "''"
+
+    def _esc(s: str) -> str:
+        """Escape quotes for Mermaid labels."""
+        return (s or "").replace('"', "&quot;").replace("'", "&#39;")
+
+    node_drilldown_map: dict = {}
+    lines: list[str] = []
+    title = "Details"
+
+    # ── APIM → API routes ────────────────────────────────────────────────────
+    if "apimanagement" in arm_type_lc:
+        title = "APIM API Routes"
+        lines = ["graph LR"]
+        apim_rows = conn.execute(
+            f"""SELECT apim_name, api_name, api_display_name, api_path, backend_url,
+                       service_url, requires_subscription, api_protocols
+                FROM apim_api_routes
+                WHERE subscription_id = ? AND apim_name IN ({placeholders})
+                ORDER BY apim_name, api_path""",
+            [sub_id] + names,
+        ).fetchall() if names else []
+
+        if not apim_rows:
+            lines.append('    NO_DATA["⚠️ No API routes harvested yet<br/>Run: python Scripts/Harvest/appgw_routing_map.py"]')
+        else:
+            apim_nodes: dict = {}
+            for row in apim_rows:
+                apim_name, api_name, api_display, api_path, backend_url, svc_url, req_sub, protocols = row
+                apim_nid = _sanitise_node_id(f"apim_{apim_name}")
+                if apim_nid not in apim_nodes:
+                    fqdn_row = conn.execute(
+                        "SELECT fqdn FROM provisioned_assets WHERE subscription_id=? AND name=? LIMIT 1",
+                        (sub_id, apim_name),
+                    ).fetchone()
+                    fqdn_lbl = fqdn_row[0] if fqdn_row and fqdn_row[0] else apim_name
+                    lines.append(f'    {apim_nid}["🔷 {_esc(apim_name)}<br/>{_esc(fqdn_lbl)}"]')
+                    apim_nodes[apim_nid] = True
+
+                display = api_display or api_name or api_path or "?"
+                path_lbl = f"<br/>{_esc(api_path)}" if api_path else ""
+                sub_lbl = " 🔑" if req_sub else ""
+                api_nid = _sanitise_node_id(f"api_{apim_name}_{api_name}")
+                lines.append(f'    {api_nid}["🔌 {_esc(display)}{sub_lbl}{path_lbl}"]')
+                lines.append(f'    {apim_nid} --> {api_nid}')
+
+                be_url = backend_url or svc_url or ""
+                if be_url:
+                    be_nid = _sanitise_node_id(f"be_{api_nid}")
+                    short_be = be_url if len(be_url) <= 40 else be_url[:38] + "…"
+                    lines.append(f'    {be_nid}["⚙️ {_esc(short_be)}"]')
+                    lines.append(f'    {api_nid} --> {be_nid}')
+
+        css_lines = [
+            "/* APIM drill-down */",
+            ".apimNode { stroke:#0066cc; stroke-width:2px; fill:#cfe8ff; }",
+            ".apiNode  { stroke:#f97316; stroke-width:2px; fill:#ffedd5; }",
+            ".beNode   { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
+        ]
+
+    # ── App Gateway → listener/backend routing ───────────────────────────────
+    elif "applicationgateway" in arm_type_lc:
+        title = "App Gateway Routing"
+        lines = ["graph LR"]
+        gw_rows = conn.execute(
+            f"""SELECT gateway_name, listener_name, hostname, protocol, url_path,
+                       backend_pool_name, backend_fqdns, backend_port, waf_policy_name
+                FROM appgw_routing_rules
+                WHERE subscription_id = ? AND gateway_name IN ({placeholders})
+                ORDER BY gateway_name, hostname, url_path""",
+            [sub_id] + names,
+        ).fetchall() if names else []
+
+        if not gw_rows:
+            lines.append('    NO_DATA["⚠️ No routing rules harvested yet<br/>Run: python Scripts/Harvest/appgw_routing_map.py"]')
+        else:
+            gw_nodes: dict = {}
+            listener_nodes: dict = {}
+            for row in gw_rows:
+                gw_name, listener, hostname, protocol, url_path, pool_name, be_fqdns_json, be_port, waf_policy = row
+                gw_nid = _sanitise_node_id(f"gw_{gw_name}")
+                if gw_nid not in gw_nodes:
+                    waf_lbl = " 🛡️" if waf_policy else ""
+                    lines.append(f'    {gw_nid}["🔶 {_esc(gw_name)}{waf_lbl}"]')
+                    gw_nodes[gw_nid] = True
+
+                host_lbl = hostname or listener or "?"
+                proto_lbl = f"<br/>{_esc(protocol or 'HTTPS')}"
+                path_lbl = f"<br/>{_esc(url_path)}" if url_path and url_path != "/*" else ""
+                listener_nid = _sanitise_node_id(f"lis_{gw_name}_{listener}_{hostname}")
+                if listener_nid not in listener_nodes:
+                    lines.append(f'    {listener_nid}["🔊 {_esc(host_lbl)}{proto_lbl}{path_lbl}"]')
+                    lines.append(f'    {gw_nid} -->|"{_esc(protocol or "HTTPS")}"| {listener_nid}')
+                    listener_nodes[listener_nid] = True
+
+                try:
+                    be_fqdns = _json.loads(be_fqdns_json) if be_fqdns_json else []
+                except Exception:
+                    be_fqdns = []
+                if be_fqdns or pool_name:
+                    be_label_parts = [_esc(pool_name or "pool")]
+                    for f in be_fqdns[:2]:
+                        be_label_parts.append(_esc(str(f)))
+                    if len(be_fqdns) > 2:
+                        be_label_parts.append(f"+{len(be_fqdns)-2} more")
+                    if be_port:
+                        be_label_parts.append(f":{be_port}")
+                    be_nid = _sanitise_node_id(f"be_{gw_name}_{pool_name}")
+                    lines.append(f'    {be_nid}["🖥 {"<br/>".join(be_label_parts)}"]')
+                    lines.append(f'    {listener_nid} --> {be_nid}')
+
+        css_lines = [
+            "/* App Gateway drill-down */",
+            ".gwNode       { stroke:#d32f2f; stroke-width:2px; fill:#fde8e8; }",
+            ".listenerNode { stroke:#f97316; stroke-width:2px; fill:#ffedd5; }",
+            ".beNode       { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
+        ]
+
+    # ── Generic: show each resource with enriched properties ─────────────────
+    else:
+        type_label = _friendly_type(arm_type) if arm_type else "Resources"
+        title = f"{type_label} Details"
+        lines = ["graph TB"]
+
+        asset_rows = conn.execute(
+            f"""SELECT name, resource_group, fqdn, is_public, is_restricted,
+                       endpoints, auth_methods, sku, type
+                FROM provisioned_assets
+                WHERE subscription_id = ? AND name IN ({placeholders})
+                ORDER BY name""",
+            [sub_id] + names,
+        ).fetchall() if names else []
+
+        # Also fetch child assets (e.g. SQL databases under SQL servers)
+        child_rows = conn.execute(
+            f"""SELECT name, resource_group, fqdn, is_public, is_restricted,
+                       endpoints, auth_methods, sku, type
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND type LIKE ?
+                  AND (resource_group IN (
+                        SELECT resource_group FROM provisioned_assets
+                        WHERE subscription_id = ? AND name IN ({placeholders})
+                  ))
+                ORDER BY type, name""",
+            [sub_id, arm_type_lc.rstrip("/") + "/%", sub_id] + names,
+        ).fetchall() if names else []
+
+        parent_names_set = {r[0] for r in asset_rows}
+
+        if not asset_rows:
+            lines.append(f'    NO_DATA["⚠️ No {_esc(type_label)} found in provisioned assets"]')
+        else:
+            for row in asset_rows:
+                name, rg, fqdn, is_public, is_restricted, endpoints_json, auth_json, sku, rtype = row
+                nid = _sanitise_node_id(f"res_{name}")
+                try:
+                    endpoints = _json.loads(endpoints_json) if endpoints_json else []
+                except Exception:
+                    endpoints = []
+                try:
+                    auth_methods = _json.loads(auth_json) if auth_json else []
+                except Exception:
+                    auth_methods = []
+
+                # Exposure badge
+                if is_public:
+                    exposure = "🌐 Public"
+                elif is_restricted:
+                    exposure = "⚠️ IP-Restricted"
+                else:
+                    exposure = "🔒 Private"
+
+                # Build label lines
+                label_parts = [_esc(name)]
+                if fqdn:
+                    label_parts.append(_esc(fqdn))
+                label_parts.append(exposure)
+                if auth_methods:
+                    label_parts.append("🔐 " + _esc(", ".join(auth_methods[:3])))
+                if sku:
+                    label_parts.append(_esc(f"SKU: {sku}"))
+                label = "<br/>".join(label_parts)
+                lines.append(f'    {nid}["{label}"]')
+
+                # Register child drill if has children
+                child_count = sum(1 for c in child_rows if True)
+                node_drilldown_map[nid] = {
+                    "title": f"{type_label}: {name}",
+                    "arm_type": rtype,
+                    "resources": [{"rg": rg, "name": name}],
+                    "can_drill": False,
+                }
+
+                # Endpoint ports
+                for ep in endpoints[:3]:
+                    ep_addr = ep.get("address") or fqdn or name
+                    ep_port = ep.get("port")
+                    ep_proto = ep.get("protocol", "")
+                    if ep_port or ep_proto:
+                        ep_nid = _sanitise_node_id(f"ep_{name}_{ep_port}")
+                        port_lbl = f":{ep_port}" if ep_port else ""
+                        lines.append(f'    {ep_nid}["📡 {_esc(ep_addr)}{port_lbl}<br/>{_esc(ep_proto)}"]')
+                        lines.append(f'    {nid} --> {ep_nid}')
+
+            # Child resources (e.g. SQL databases, sub-resources)
+            child_by_parent: dict = {}
+            for crow in child_rows:
+                cname, crg, cfqdn, cis_public, cis_restricted, *_ = crow
+                # Group child under parent by resource group
+                parent_key = crg
+                child_by_parent.setdefault(parent_key, []).append(crow)
+
+            for prow in asset_rows:
+                pname, prg = prow[0], prow[1]
+                pnid = _sanitise_node_id(f"res_{pname}")
+                children = child_by_parent.get(prg, [])
+                for crow in children[:10]:
+                    cname = crow[0]
+                    cnid = _sanitise_node_id(f"child_{cname}")
+                    lines.append(f'    {cnid}["💾 {_esc(cname)}"]')
+                    lines.append(f'    {pnid} --> {cnid}')
+
+        css_lines = [
+            f"/* {type_label} drill-down */",
+            ".resNode  { stroke:#1565c0; stroke-width:2px; fill:#e3f2fd; }",
+            ".epNode   { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
+            ".childNode { stroke:#6a1b9a; stroke-width:2px; fill:#f3e5f5; }",
+        ]
+
+    return {
+        "title": title,
+        "mermaid": "\n".join(lines),
+        "css_code": "\n".join(css_lines),
+        "node_drilldown_map": node_drilldown_map,
+    }
+
+
+@app.route("/api/subscriptions/<sub_id>/drilldown", methods=["POST"])
+def api_subscription_drilldown(sub_id: str):
+    """Return a drill-down child diagram for a specific grouped resource node.
+
+    Request body JSON: {arm_type: str, resources: [{rg, name}]}
+    Response: {title, mermaid, css_code, node_drilldown_map}
+    """
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"error": "DB unavailable"}), 503
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        arm_type = (body.get("arm_type") or "").strip()
+        resources = body.get("resources") or []
+
+        if not arm_type:
+            return jsonify({"error": "arm_type is required"}), 400
+
+        # Whitelist of drillable ARM types
+        _drillable = {
+            "microsoft.network/applicationgateways",
+            "microsoft.apimanagement/service",
+            "microsoft.keyvault/vaults",
+            "microsoft.storage/storageaccounts",
+            "microsoft.sql/servers",
+            "microsoft.containerservice/managedclusters",
+            "microsoft.documentdb/databaseaccounts",
+            "microsoft.web/sites",
+        }
+        if arm_type.lower() not in _drillable:
+            return jsonify({"error": f"Drill-down not supported for type: {arm_type}"}), 400
+
+        result = _build_child_diagram(conn, sub_id, arm_type, resources)
+        return jsonify(result)
+    finally:
+        conn.close()
+
+
+
+def _build_drilldown_data(rows) -> dict:
     """Build drilldown data grouped by resource type for interactive exploration.
     
     This data is used when user double-clicks a resource type to see details.

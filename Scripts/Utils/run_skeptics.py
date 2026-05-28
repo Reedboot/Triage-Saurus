@@ -28,7 +28,45 @@ ROLE_INTROS = {
 }
 
 
-def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = None) -> str:
+def _load_cloud_posture(conn, experiment_id: str) -> dict | None:
+    """Load cloud infrastructure posture from context_metadata."""
+    try:
+        row = conn.execute(
+            """
+            SELECT value FROM context_metadata
+            WHERE experiment_id = ? AND namespace = 'cloud_posture' AND key = 'posture_json'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (experiment_id,),
+        ).fetchone()
+        if row and row["value"]:
+            return json.loads(row["value"])
+    except Exception:
+        pass
+    return None
+
+
+def _cloud_posture_block(posture: dict) -> str:
+    """Format cloud posture as a concise context block for skeptic prompts."""
+    if not posture:
+        return ""
+    parts = []
+    if posture.get("behind_waf"):
+        parts.append(f"WAF via App Gateway '{posture.get('app_gateway_name', '?')}': YES")
+    elif posture.get("behind_app_gateway"):
+        parts.append(f"App Gateway (no WAF) '{posture.get('app_gateway_name', '?')}': YES")
+    else:
+        parts.append("Direct internet exposure (no App Gateway/WAF): YES")
+    if posture.get("behind_apim"):
+        parts.append(f"APIM '{posture.get('apim_name', '?')}': YES")
+    if posture.get("aks_cluster"):
+        secured = "IP-restricted" if posture.get("aks_secured") else "public API server"
+        parts.append(f"AKS '{posture['aks_cluster']}' ({secured})")
+    parts.append(f"Endpoint exposure: {posture.get('endpoint_exposure', 'unknown')}")
+    return "Cloud infrastructure context: " + "; ".join(parts) + "\n"
+
+
+def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = None, cloud_posture: dict | None = None) -> str:
     snippet = (row.get("code_snippet") or "").strip()
     intro = ROLE_INTROS[reviewer]
     finding_title = row.get("title") or row.get("rule_id") or "Finding"
@@ -62,6 +100,8 @@ def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = No
                 "and note this as a false positive from the scanner.\n"
             )
 
+    posture_block = _cloud_posture_block(cloud_posture) if cloud_posture else ""
+
     return (
         f"{intro}\n\n"
         f"Title: {finding_title}\n"
@@ -71,6 +111,7 @@ def _build_prompt(row: dict, reviewer: str, peer_reviews: list[dict] | None = No
         f"Code snippet:\n```\n{snippet}\n```\n"
         f"Proposed fix: {row.get('proposed_fix') or ''}\n"
         f"{cred_block}\n"
+        f"{posture_block}"
         f"{peer_block}"
         "Return JSON only:\n"
         "{\n"
@@ -133,6 +174,10 @@ def main():
 
     with db_helpers.get_db_connection() as conn:
         findings = [dict(r) for r in conn.execute(query, params).fetchall()]
+        cloud_posture = _load_cloud_posture(conn, args.experiment)
+
+    if cloud_posture:
+        print(f"[cloud-posture] waf={cloud_posture.get('behind_waf')}, apim={cloud_posture.get('behind_apim')}, exposure={cloud_posture.get('endpoint_exposure')}")
 
     print(f"Found {len(findings)} enriched findings for experiment '{args.experiment}'")
 
@@ -160,7 +205,7 @@ def main():
                     adjusted_scores.append(score_row[0])
                 continue
 
-            prompt = _build_prompt(row, reviewer)
+            prompt = _build_prompt(row, reviewer, cloud_posture=cloud_posture)
 
             if args.dry_run:
                 print(f"\n--- {reviewer} prompt for finding {fid} ---\n{prompt}\n")

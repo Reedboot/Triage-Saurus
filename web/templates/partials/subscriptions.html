@@ -20,6 +20,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
           <th>Public</th>
           <th>State</th>
           <th>Last Synced</th>
+          <th style="text-align:center;">Actions</th>
         </tr>
       </thead>
       <tbody id="subscriptions-tbody"></tbody>
@@ -30,10 +31,23 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   <div id="subscription-diagram-wrap" style="display:none; margin-top:20px;">
     <div class="subscription-diagram-header">
       <span id="subscription-diagram-title" style="font-weight:600;"></span>
+      <button id="btn-refresh-routing" class="btn btn-sm" style="margin-left:12px; font-size:0.75rem;" title="Harvest App Gateway routing rules and WAF policies from Azure">🔄 Refresh WAF &amp; Routing</button>
+      <span id="routing-harvest-status" style="font-size:0.75rem; color:var(--text-muted); margin-left:8px; display:none;"></span>
       <button id="subscription-diagram-close" class="btn btn-sm" style="margin-left:auto;">✕ Close</button>
     </div>
     <div id="subscription-diagram-loading" style="padding:12px; color:var(--text-muted);">Generating diagram…</div>
     <div id="subscription-diagram-container" class="diagram-container" style="display:none;"></div>
+  </div>
+
+  {# Drill-down panel — shown when user double-clicks a node #}
+  <div id="drilldown-panel" style="display:none; margin-top:16px; border:2px solid #60a5fa; border-radius:8px; padding:16px; background:var(--bg-code,#111827);">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+      <button id="drilldown-back" class="btn btn-sm" style="padding:4px 10px; font-size:0.75rem;">← Back</button>
+      <nav id="drilldown-breadcrumb" style="font-size:0.85rem; color:var(--text-muted); display:flex; gap:4px; align-items:center; flex-wrap:wrap;"></nav>
+      <button id="drilldown-close" class="btn btn-sm" style="margin-left:auto; padding:4px 10px; font-size:0.75rem;">✕</button>
+    </div>
+    <div id="drilldown-loading" style="color:var(--text-muted); padding:8px;">Loading…</div>
+    <div id="drilldown-content" style="display:none; overflow:auto; max-height:70vh;"></div>
   </div>
 
 </div>
@@ -44,18 +58,34 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 .subscription-diagram-header { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border-color,#333); margin-bottom:8px; }
 #subscription-diagram-wrap { max-height: 70vh; overflow-y: auto; overflow-x: hidden; }
 .diagram-container { display:block !important; }
+
+/* Drillable node visual affordance — JavaScript adds these classes to SVG <g> elements */
+.node-drillable rect,
+.node-drillable polygon,
+.node-drillable path.label-container {
+  stroke: #60a5fa !important;
+  stroke-dasharray: 5,3 !important;
+  stroke-width: 2.5px !important;
+  cursor: pointer !important;
+}
+.node-drillable:hover rect,
+.node-drillable:hover polygon {
+  filter: brightness(1.15);
+}
 </style>
 
 <script>
 (function() {
   console.log('[subscriptions] Script starting');
   const panel = document.getElementById('subscriptions-panel');
-  if (!panel) {
-    console.warn('[subscriptions] Panel not found');
-    return;
-  }
-  console.log('[subscriptions] Panel found, initializing');
+  if (!panel) { console.warn('[subscriptions] Panel not found'); return; }
 
+  // ── State ─────────────────────────────────────────────────────────────────
+  let _currentSubId = null;
+  let _currentNodeMap = null;          // node_drilldown_map from ingress diagram
+  const _breadcrumb = [];              // [{title, arm_type, resources}] stack
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   function renderBadge(env, badge) {
     const colours = { danger:'#dc2626', warning:'#d97706', info:'#2563eb', secondary:'#6b7280' };
     const c = colours[badge] || colours.secondary;
@@ -67,6 +97,183 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
   }
 
+  async function waitForMermaid() {
+    let attempts = 0;
+    while (!window.mermaid && attempts < 100) {
+      await new Promise(r => setTimeout(r, 50));
+      attempts++;
+    }
+    return !!(window.mermaid && typeof window.mermaid.run === 'function');
+  }
+
+  /**
+   * After a Mermaid SVG renders, attach dblclick handlers to drillable nodes.
+   * Mermaid v11 flowchart nodes render as:  <g class="node" id="flowchart-{nodeId}-{seq}">
+   * We recover nodeId by stripping prefix/suffix.
+   */
+  function _attachDrilldownHandlers(svgEl, nodeMap, subId) {
+    if (!svgEl || !nodeMap) return;
+    const nodeEls = svgEl.querySelectorAll('g.node[id]');
+    nodeEls.forEach(el => {
+      // Extract original nodeId: "flowchart-someNodeId-3" → "someNodeId"
+      const rawId = el.getAttribute('id') || '';
+      const nodeId = rawId.replace(/^flowchart-/, '').replace(/-\d+$/, '');
+      const entry = nodeMap[nodeId];
+      if (!entry || !entry.can_drill) return;
+
+      // Visual affordance — dashed coloured border on the rect/polygon inside the node
+      el.classList.add('node-drillable');
+      el.title = `Double-click to explore ${entry.title}`;
+
+      // Also show a small badge near the node
+      const rect = el.querySelector('rect, polygon');
+      if (rect) {
+        // Inject a tiny ▸ indicator as SVG text near top-right of node bounding box
+        try {
+          const bbox = rect.getBBox();
+          const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          badge.setAttribute('x', String(bbox.x + bbox.width - 4));
+          badge.setAttribute('y', String(bbox.y + 10));
+          badge.setAttribute('font-size', '10');
+          badge.setAttribute('fill', '#60a5fa');
+          badge.setAttribute('text-anchor', 'end');
+          badge.setAttribute('pointer-events', 'none');
+          badge.textContent = '⊕';
+          el.appendChild(badge);
+        } catch(_) { /* getBBox may fail in some browsers */ }
+      }
+
+      el.style.cursor = 'pointer';
+      el.addEventListener('dblclick', (evt) => {
+        evt.stopPropagation();
+        openDrilldown(entry, subId);
+      });
+      // Accessibility: also allow Enter key when focused
+      el.setAttribute('tabindex', '0');
+      el.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter') openDrilldown(entry, subId);
+      });
+    });
+  }
+
+  // ── Drill-down panel ──────────────────────────────────────────────────────
+  function _renderBreadcrumb() {
+    const bc = document.getElementById('drilldown-breadcrumb');
+    if (!bc) return;
+    bc.innerHTML = _breadcrumb
+      .map((entry, i) => {
+        const isLast = i === _breadcrumb.length - 1;
+        if (isLast) return `<strong style="color:var(--text-primary,#e5e7eb);">${entry.title}</strong>`;
+        return `<span style="color:#60a5fa; cursor:pointer; text-decoration:underline;"
+                      data-bc-index="${i}">${entry.title}</span> ›`;
+      })
+      .join(' ');
+    // Clicking a breadcrumb item navigates back to that level
+    bc.querySelectorAll('[data-bc-index]').forEach(span => {
+      span.addEventListener('click', () => {
+        const idx = parseInt(span.getAttribute('data-bc-index'), 10);
+        _breadcrumb.splice(idx + 1);
+        const entry = _breadcrumb[idx];
+        _loadDrilldownContent(entry, _currentSubId, false);
+        _renderBreadcrumb();
+      });
+    });
+  }
+
+  async function openDrilldown(entry, subId) {
+    _breadcrumb.push(entry);
+    _renderBreadcrumb();
+    _loadDrilldownContent(entry, subId, true);
+  }
+
+  async function _loadDrilldownContent(entry, subId, scrollIntoView) {
+    const panel = document.getElementById('drilldown-panel');
+    const loading = document.getElementById('drilldown-loading');
+    const content = document.getElementById('drilldown-content');
+
+    panel.style.display = 'block';
+    loading.style.display = 'block';
+    content.style.display = 'none';
+    content.innerHTML = '';
+
+    if (scrollIntoView) {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    try {
+      const resp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/drilldown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arm_type: entry.arm_type, resources: entry.resources }),
+      });
+      const data = await resp.json();
+
+      if (data.error) {
+        loading.textContent = `⚠️ ${data.error}`;
+        return;
+      }
+
+      loading.style.display = 'none';
+      content.style.display = 'block';
+
+      // Inject CSS
+      if (data.css_code) {
+        const st = document.createElement('style');
+        st.textContent = data.css_code;
+        document.head.appendChild(st);
+      }
+
+      // Hint bar
+      const hint = document.createElement('div');
+      hint.style.cssText = 'font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;padding:6px 10px;background:rgba(96,165,250,0.08);border-radius:4px;border-left:3px solid #60a5fa;';
+      hint.textContent = `📊 ${entry.title} — ${Object.keys(data.node_drilldown_map || {}).filter(k => data.node_drilldown_map[k].can_drill).length > 0 ? 'Nodes with ⊕ can be double-clicked to drill deeper.' : 'Showing all harvested details.'}`;
+      content.appendChild(hint);
+
+      // Mermaid container
+      const mermaidWrap = document.createElement('div');
+      mermaidWrap.style.cssText = 'overflow:auto; max-height:60vh;';
+      const mermaidDiv = document.createElement('div');
+      mermaidDiv.className = 'mermaid';
+      mermaidDiv.textContent = data.mermaid;
+      mermaidWrap.appendChild(mermaidDiv);
+      content.appendChild(mermaidWrap);
+
+      // Render
+      if (await waitForMermaid()) {
+        try {
+          await window.mermaid.run();
+          // Attach next-level drilldown handlers
+          const childMap = data.node_drilldown_map || {};
+          const svgEls = mermaidWrap.querySelectorAll('svg');
+          svgEls.forEach(svg => _attachDrilldownHandlers(svg, childMap, subId));
+        } catch(e) {
+          console.warn('[drilldown] Mermaid render error:', e.message);
+          content.innerHTML += `<pre style="color:#f87171;font-size:0.8rem;margin-top:8px">${e.message}</pre>`;
+        }
+      }
+    } catch(e) {
+      loading.textContent = `Failed: ${e.message}`;
+    }
+  }
+
+  // Back button — pop breadcrumb
+  document.getElementById('drilldown-back').addEventListener('click', () => {
+    if (_breadcrumb.length > 1) {
+      _breadcrumb.pop();
+      _renderBreadcrumb();
+      _loadDrilldownContent(_breadcrumb[_breadcrumb.length - 1], _currentSubId, false);
+    } else {
+      _breadcrumb.length = 0;
+      document.getElementById('drilldown-panel').style.display = 'none';
+    }
+  });
+
+  document.getElementById('drilldown-close').addEventListener('click', () => {
+    _breadcrumb.length = 0;
+    document.getElementById('drilldown-panel').style.display = 'none';
+  });
+
+  // ── Load subscriptions list ───────────────────────────────────────────────
   async function loadSubscriptions() {
     try {
       const resp = await fetch('/api/subscriptions');
@@ -93,6 +300,9 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
          <td>${s.public_count > 0 ? `<span style="color:#f59e0b;font-weight:600;">⚠ ${s.public_count}</span>` : '0'}</td>
          <td>${s.state || '—'}</td>
          <td style="font-size:0.8rem;">${formatDate(s.last_synced)}</td>
+         <td style="text-align:center;">
+           <a href="/cloud/assets?sub=${encodeURIComponent(s.id)}" class="btn btn-sm" style="padding:4px 12px; font-size:0.75rem; text-decoration:none;">📦 Show Assets</a>
+         </td>
        </tr>
       `).join('');
 
@@ -107,7 +317,13 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     }
   }
 
+  // ── Load ingress diagram ──────────────────────────────────────────────────
   async function loadDiagram(subId, subName) {
+    _currentSubId = subId;
+    _currentNodeMap = null;
+    _breadcrumb.length = 0;
+    document.getElementById('drilldown-panel').style.display = 'none';
+
     const wrap = document.getElementById('subscription-diagram-wrap');
     const loading = document.getElementById('subscription-diagram-loading');
     const container = document.getElementById('subscription-diagram-container');
@@ -116,10 +332,9 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     wrap.style.display = 'block';
     loading.style.display = 'block';
     container.style.display = 'none';
-    container.innerHTML = ''; // Clear previous diagrams
+    container.innerHTML = '';
     title.textContent = subName || subId;
 
-    // Scroll into view
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     try {
@@ -134,239 +349,144 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       loading.style.display = 'none';
       container.style.display = 'block';
 
-      // Wait for Mermaid to be ready
-      const waitForMermaid = async () => {
-        let attempts = 0;
-        while (!window.mermaid && attempts < 100) {
-          await new Promise(r => setTimeout(r, 50));
-          attempts++;
-        }
-        if (!window.mermaid) {
-          console.error('[subscriptions] Mermaid failed to load');
-          return false;
-        }
-        if (typeof window.mermaid.run !== 'function') {
-          console.error('[subscriptions] Mermaid.run() not available');
-          return false;
-        }
-        return true;
-      };
-
-      // First, render the high-level ingress diagram
+      // ── Ingress diagram ──
       const ingressDiag = data.ingress_diagram;
       if (ingressDiag && ingressDiag.mermaid) {
-        console.log('[subscriptions] Found ingress diagram');
+        _currentNodeMap = ingressDiag.node_drilldown_map || {};
+        const drillableCount = Object.values(_currentNodeMap).filter(e => e.can_drill).length;
+
         const ingressSection = document.createElement('div');
-        ingressSection.style.marginBottom = '24px';
-        ingressSection.style.padding = '16px';
-        ingressSection.style.background = 'var(--bg-code, #1a1a1a)';
-        ingressSection.style.borderRadius = '6px';
-        ingressSection.style.border = '2px solid var(--border-color, #333)';
-          
-        // Add security caveat banner
+        ingressSection.style.cssText = 'margin-bottom:24px;padding:16px;background:var(--bg-code,#1a1a1a);border-radius:6px;border:2px solid var(--border-color,#333);';
+
+        // Security caveat
         const caveatBanner = document.createElement('div');
-        caveatBanner.style.background = '#fff3e0';
-        caveatBanner.style.border = '1px solid #ff9800';
-        caveatBanner.style.borderRadius = '4px';
-        caveatBanner.style.padding = '12px';
-        caveatBanner.style.marginBottom = '12px';
-        caveatBanner.style.fontSize = '0.85rem';
-        caveatBanner.style.color = '#333';
-        caveatBanner.innerHTML = `
-          <strong>⚠️ Security Note:</strong> 'PUBLIC ENDPOINT' means the public endpoint is <strong>enabled</strong>, 
+        caveatBanner.style.cssText = 'background:#fff3e0;border:1px solid #ff9800;border-radius:4px;padding:12px;margin-bottom:12px;font-size:0.85rem;color:#333;';
+        caveatBanner.innerHTML = `<strong>⚠️ Security Note:</strong> 'PUBLIC ENDPOINT' means the public endpoint is <strong>enabled</strong>, 
           not necessarily <strong>internet-accessible</strong>. Always verify firewall rules, NSG restrictions, WAF policies, 
-          and IP allowlists before assuming a resource is exposed.
-        `;
+          and IP allowlists before assuming a resource is exposed.`;
         ingressSection.appendChild(caveatBanner);
-          
+
+        // Drilldown hint
+        if (drillableCount > 0) {
+          const drillHint = document.createElement('div');
+          drillHint.style.cssText = 'background:rgba(96,165,250,0.1);border:1px solid #60a5fa;border-radius:4px;padding:8px 12px;margin-bottom:12px;font-size:0.82rem;color:var(--text-primary,#e5e7eb);';
+          drillHint.innerHTML = `🔍 <strong>${drillableCount} node${drillableCount > 1 ? 's' : ''}</strong> support drill-down — look for nodes with a <span style="color:#60a5fa;font-weight:bold;">⊕</span> badge and <strong>double-click</strong> to explore their child resources.`;
+          ingressSection.appendChild(drillHint);
+        }
+
         const ingressTitle = document.createElement('h4');
         ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
         ingressTitle.style.margin = '0 0 12px 0';
-       ingressSection.appendChild(ingressTitle);
-          
-       const ingressDiv = document.createElement('div');
-       ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
-       ingressDiv.style.maxWidth = '100%';
-       ingressDiv.style.overflow = 'auto';
-       ingressDiv.title = 'Double-click elements to explore details';
-       ingressSection.appendChild(ingressDiv);
-         
-       // Inject CSS styling if provided
-       if (ingressDiag.css_code) {
-         const styleTag = document.createElement('style');
-         styleTag.textContent = ingressDiag.css_code;
-         document.head.appendChild(styleTag);
-         console.log('[subscriptions] Applied ingress diagram CSS');
-       }
-          
-       container.appendChild(ingressSection);
-          
-       // Render ingress diagram after Mermaid is ready
-       if (await waitForMermaid()) {
-         console.log('[subscriptions] Rendering ingress diagram');
-         try {
-           await window.mermaid.run();
-           console.log('[subscriptions] Ingress render complete');
-            
-           // Inject icons if icon map is available
-           if (ingressDiag.icon_map && typeof MermaidIconInjector !== 'undefined') {
-             console.log('[subscriptions] Injecting icons into ingress diagram');
-             const svgElements = ingressDiv.querySelectorAll('svg');
-             if (svgElements.length > 0) {
-               const svgElement = svgElements[svgElements.length - 1];
-               if (typeof MermaidIconInjector.injectIcons === 'function') {
-                 await MermaidIconInjector.injectIcons(svgElement, ingressDiag.icon_map);
-                 console.log('[subscriptions] Icons injected successfully');
-               }
-             }
-           }
-         } catch (e) {
-           console.warn('[subscriptions] Ingress render error:', e.message);
-         }
-       } else {
-        console.warn('[subscriptions] Mermaid not available for ingress diagram');
-       }
-      }
+        ingressSection.appendChild(ingressTitle);
 
-      // Then render the detailed diagrams (one per resource group)
-      const diagrams = data.diagrams || [];
-      if (!diagrams.length) {
-        if (!ingressDiag) {
-          container.innerHTML = '<p>No diagrams available.</p>';
-        }
-        return;
-      }
+        const ingressDiv = document.createElement('div');
+        ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
+        ingressDiv.style.cssText = 'max-width:100%;overflow:auto;';
+        ingressSection.appendChild(ingressDiv);
 
-      // Add a separator
-      if (ingressDiag) {
-        const sep = document.createElement('div');
-        sep.style.borderTop = '2px solid var(--border-color, #333)';
-        sep.style.margin = '24px 0';
-        sep.style.paddingTop = '16px';
-        const sepLabel = document.createElement('h4');
-        sepLabel.textContent = '📊 Detailed Resource Group Views';
-        sepLabel.style.margin = '0 0 12px 0';
-        container.appendChild(sep);
-        container.appendChild(sepLabel);
-      }
-
-      // Create a collapsible section for each resource group
-      diagrams.forEach((d, idx) => {
-        const isOpen = idx === 0 && !ingressDiag; // First one open by default only if no ingress
-        const id = `diagram_${idx}`;
-         
-        const section = document.createElement('div');
-        section.style.marginBottom = '16px';
-        section.style.borderTop = '1px solid var(--border-color, #333)';
-        section.style.paddingTop = '12px';
-         
-        const header = document.createElement('div');
-        header.style.display = 'flex';
-        header.style.alignItems = 'center';
-        header.style.gap = '8px';
-        header.style.cursor = 'pointer';
-        header.style.padding = '8px';
-        header.style.background = 'var(--bg-hover, #2a2a2a)';
-        header.style.borderRadius = '4px';
-        header.style.marginBottom = '8px';
-        header.setAttribute('data-diagram-header', id);
-         
-        const toggle = document.createElement('span');
-        toggle.textContent = isOpen ? '▼' : '▶';
-        toggle.style.fontSize = '0.8rem';
-        toggle.style.width = '16px';
-        toggle.style.display = 'inline-block';
-         
-        const label = document.createElement('span');
-        label.innerHTML = `<strong>${d.rg}</strong> <span style="color:var(--text-muted); font-size:0.85rem;">(${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''})</span>`;
-         
-        header.appendChild(toggle);
-        header.appendChild(label);
-         
-        // Add control buttons for zoom, fit, export
-        const controls = document.createElement('div');
-        controls.style.marginLeft = 'auto';
-        controls.style.display = 'flex';
-        controls.style.gap = '4px';
-         
-        const btnStyle = `
-          padding: 4px 8px;
-          font-size: 0.75rem;
-          background: var(--btn-bg, #333);
-          border: 1px solid var(--border-color, #555);
-          border-radius: 3px;
-          cursor: pointer;
-          color: var(--text-primary, #ccc);
-        `;
-         
-        const zoomInBtn = document.createElement('button');
-        zoomInBtn.textContent = '🔍+';
-        zoomInBtn.style.cssText = btnStyle;
-        zoomInBtn.setAttribute('data-diagram-zoom-in', id);
-        zoomInBtn.title = 'Zoom in';
-         
-        const zoomOutBtn = document.createElement('button');
-        zoomOutBtn.textContent = '🔍−';
-        zoomOutBtn.style.cssText = btnStyle;
-        zoomOutBtn.setAttribute('data-diagram-zoom-out', id);
-        zoomOutBtn.title = 'Zoom out';
-         
-        const fitBtn = document.createElement('button');
-        fitBtn.textContent = '⊡ Fit';
-        fitBtn.style.cssText = btnStyle;
-        fitBtn.setAttribute('data-diagram-fit', id);
-        fitBtn.title = 'Fit to screen';
-         
-        const exportBtn = document.createElement('button');
-        exportBtn.textContent = '💾';
-        exportBtn.style.cssText = btnStyle;
-        exportBtn.setAttribute('data-diagram-export', id);
-        exportBtn.title = 'Download as PNG';
-         
-        controls.appendChild(zoomInBtn);
-        controls.appendChild(zoomOutBtn);
-        controls.appendChild(fitBtn);
-        controls.appendChild(exportBtn);
-         
-        header.appendChild(controls);
-         
-        const diagramDiv = document.createElement('div');
-        diagramDiv.id = id;
-        diagramDiv.style.display = isOpen ? 'block' : 'none';
-        diagramDiv.style.overflow = 'auto';
-        diagramDiv.style.maxHeight = '600px';
-         
-        // Always wrap in mermaid div - rendering is handled by TriageMermaid.render()
-        diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
-         
-        // Inject CSS styling if provided
-        if (d.css_code) {
+        if (ingressDiag.css_code) {
           const styleTag = document.createElement('style');
-          styleTag.textContent = d.css_code;
+          styleTag.textContent = ingressDiag.css_code;
           document.head.appendChild(styleTag);
         }
-         
+
+        container.appendChild(ingressSection);
+
+        if (await waitForMermaid()) {
+          try {
+            await window.mermaid.run();
+
+            // Inject icons
+            if (ingressDiag.icon_map && typeof MermaidIconInjector !== 'undefined') {
+              const svgElements = ingressDiv.querySelectorAll('svg');
+              if (svgElements.length > 0) {
+                const svgEl = svgElements[svgElements.length - 1];
+                if (typeof MermaidIconInjector.injectIcons === 'function') {
+                  await MermaidIconInjector.injectIcons(svgEl, ingressDiag.icon_map);
+                }
+              }
+            }
+
+            // Attach drill-down handlers AFTER render (so SVG elements exist)
+            const svgEls = ingressDiv.querySelectorAll('svg');
+            svgEls.forEach(svg => _attachDrilldownHandlers(svg, _currentNodeMap, subId));
+          } catch(e) {
+            console.warn('[subscriptions] Ingress render error:', e.message);
+          }
+        }
+      }
+
+      // ── Detailed per-RG diagrams ──
+      const diagrams = data.diagrams || [];
+      if (!diagrams.length) return;
+
+      const sep = document.createElement('div');
+      sep.style.cssText = 'border-top:2px solid var(--border-color,#333);margin:24px 0;padding-top:16px;';
+      const sepLabel = document.createElement('h4');
+      sepLabel.textContent = '📊 Detailed Resource Group Views';
+      sepLabel.style.margin = '0 0 12px 0';
+      container.appendChild(sep);
+      container.appendChild(sepLabel);
+
+      diagrams.forEach((d, idx) => {
+        const isOpen = idx === 0 && !ingressDiag;
+        const id = `diagram_${idx}`;
+
+        const section = document.createElement('div');
+        section.style.cssText = 'margin-bottom:16px;border-top:1px solid var(--border-color,#333);padding-top:12px;';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px;background:var(--bg-hover,#2a2a2a);border-radius:4px;margin-bottom:8px;';
+        header.setAttribute('data-diagram-header', id);
+
+        const toggle = document.createElement('span');
+        toggle.textContent = isOpen ? '▼' : '▶';
+        toggle.style.cssText = 'font-size:0.8rem;width:16px;display:inline-block;';
+
+        const label = document.createElement('span');
+        label.innerHTML = `<strong>${d.rg}</strong> <span style="color:var(--text-muted);font-size:0.85rem;">(${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''})</span>`;
+
+        header.appendChild(toggle);
+        header.appendChild(label);
+
+        const btnStyle = 'padding:4px 8px;font-size:0.75rem;background:var(--btn-bg,#333);border:1px solid var(--border-color,#555);border-radius:3px;cursor:pointer;color:var(--text-primary,#ccc);';
+        const controls = document.createElement('div');
+        controls.style.cssText = 'margin-left:auto;display:flex;gap:4px;';
+        ['🔍+','🔍−','⊡ Fit','💾'].forEach((txt, i) => {
+          const btn = document.createElement('button');
+          btn.textContent = txt;
+          btn.style.cssText = btnStyle;
+          const attrs = ['data-diagram-zoom-in','data-diagram-zoom-out','data-diagram-fit','data-diagram-export'];
+          btn.setAttribute(attrs[i], id);
+          controls.appendChild(btn);
+        });
+        header.appendChild(controls);
+
+        const diagramDiv = document.createElement('div');
+        diagramDiv.id = id;
+        diagramDiv.style.cssText = `display:${isOpen ? 'block' : 'none'};overflow:auto;max-height:600px;`;
+        diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
+
+        if (d.css_code) {
+          const st = document.createElement('style');
+          st.textContent = d.css_code;
+          document.head.appendChild(st);
+        }
+
         section.appendChild(header);
         section.appendChild(diagramDiv);
         container.appendChild(section);
       });
 
-      // Initialize Mermaid for initially visible diagrams - wait for Mermaid to be ready
-      const renderMermaid = async () => {
-        if (await waitForMermaid()) {
-          try {
-            await window.mermaid.run();
-            console.log('[subscriptions] Final render complete');
-            // Initialize subscription diagram features (zoom, export, etc.)
-            if (window.initSubscriptionDiagrams && typeof window.initSubscriptionDiagrams === 'function') {
-              await window.initSubscriptionDiagrams();
-            }
-          } catch (e) {
-            console.warn('[subscriptions] Final render error:', e);
-          }
+      // Final Mermaid render + init controls
+      if (await waitForMermaid()) {
+        try {
+          await window.mermaid.run();
+          if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
+        } catch(e) {
+          console.warn('[subscriptions] Final render error:', e);
         }
-      };
-      renderMermaid();
+      }
     } catch(e) {
       loading.textContent = 'Failed to load diagram: ' + e.message;
     }
@@ -374,6 +494,55 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
   document.getElementById('subscription-diagram-close').addEventListener('click', () => {
     document.getElementById('subscription-diagram-wrap').style.display = 'none';
+    document.getElementById('drilldown-panel').style.display = 'none';
+    _breadcrumb.length = 0;
+  });
+
+  // ── Refresh WAF & Routing button ─────────────────────────────────────────
+  document.getElementById('btn-refresh-routing').addEventListener('click', async () => {
+    const subId = _currentSubId;
+    if (!subId) return;
+    const btn = document.getElementById('btn-refresh-routing');
+    const statusEl = document.getElementById('routing-harvest-status');
+    btn.disabled = true;
+    btn.textContent = '⏳ Harvesting…';
+    statusEl.style.display = 'inline';
+    statusEl.textContent = 'Contacting Azure…';
+
+    try {
+      const startResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing`, { method: 'POST' });
+      const startData = await startResp.json();
+      const taskId = startData.task_id;
+      if (!taskId) throw new Error(startData.error || 'Failed to start harvest');
+
+      // Poll until done
+      const poll = async () => {
+        const r = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing/${taskId}`);
+        const d = await r.json();
+        if (d.status === 'running') {
+          statusEl.textContent = '⏳ Running…';
+          setTimeout(poll, 2000);
+        } else if (d.status === 'done') {
+          statusEl.textContent = '✅ Done — reloading diagram…';
+          btn.disabled = false;
+          btn.textContent = '🔄 Refresh WAF & Routing';
+          setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+          // Re-fetch the diagram to reflect new WAF/routing data
+          const subName = document.getElementById('subscription-diagram-title').textContent;
+          await loadDiagram(subId, subName);
+        } else {
+          statusEl.textContent = '❌ Harvest failed — check az login';
+          btn.disabled = false;
+          btn.textContent = '🔄 Refresh WAF & Routing';
+          console.error('[routing-harvest] Error:', d.output);
+        }
+      };
+      poll();
+    } catch (err) {
+      statusEl.textContent = `❌ ${err.message}`;
+      btn.disabled = false;
+      btn.textContent = '🔄 Refresh WAF & Routing';
+    }
   });
 
   loadSubscriptions();

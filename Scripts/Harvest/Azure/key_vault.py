@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.KeyVault/vaults"
 
@@ -17,6 +17,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         props = kv.get("properties") or {}
         vault_uri = props.get("vaultUri")
         fqdn = safe_str(vault_uri.replace("https://", "").rstrip("/")) if vault_uri else None
+
+        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+        endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
+        auth_methods = json.dumps(["azure_ad"])  # Key Vault always requires AAD
 
         extra = {
             "enable_soft_delete": props.get("enableSoftDelete", True),
@@ -34,7 +38,11 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "location": kv.get("location"),
             "sku": safe_str((props.get("sku") or {}).get("name")),
             "tags": json.dumps(kv.get("tags") or {}),
-            "is_public": _is_public(props),
+            "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": None,
             "raw_json": json.dumps({**kv, "_extra": extra}),
@@ -43,28 +51,27 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
+def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
+    """Return (is_public, is_restricted, ip_cidrs)."""
+    if props.get("publicNetworkAccess") == "Disabled":
+        return 0, 0, []
+
+    network_acls = props.get("networkAcls") or {}
+    default_action = network_acls.get("defaultAction", "Allow")
+
+    if default_action == "Deny":
+        cidrs = extract_ip_restrictions(network_acls=network_acls)
+        return 0, 1, cidrs
+
+    ip_rules = network_acls.get("ipRules") or []
+    vnet_rules = network_acls.get("virtualNetworkRules") or []
+    if ip_rules or vnet_rules:
+        cidrs = extract_ip_restrictions(network_acls=network_acls)
+        return 0, 1, cidrs
+
+    return 1, 0, []
+
+
 def _get_network_default_action(props: dict[str, Any]) -> str:
     network_acls = props.get("networkAcls") or {}
     return network_acls.get("defaultAction", "Allow")
-
-
-def _is_public(props: dict[str, Any]) -> int:
-    # Public only if network access is enabled AND not IP-restricted
-    if props.get("publicNetworkAccess") == "Disabled":
-        return 0
-    
-    network_acls = props.get("networkAcls") or {}
-    default_action = network_acls.get("defaultAction", "Allow")
-    
-    # If default action is "Deny", it's IP-restricted
-    if default_action == "Deny":
-        return 0
-    
-    # Check for VNet or IP rules restricting access
-    virtual_network_rules = network_acls.get("virtualNetworkRules") or []
-    ip_rules = network_acls.get("ipRules") or []
-    
-    if virtual_network_rules or ip_rules:
-        return 0  # IP-restricted
-    
-    return 1

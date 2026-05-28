@@ -119,8 +119,22 @@ def _detect_languages(scanned_paths: list[str]) -> tuple[str, list[str]]:
     if not counts:
         return '', []
     ordered = sorted(counts, key=lambda l: counts[l], reverse=True)
-    # Prefer a non-config language as the primary
-    primary = next((l for l in ordered if l not in _CONFIG_LANGS), ordered[0])
+    # Prefer a non-config language as primary — but only when it is substantial
+    # relative to the dominant config language (e.g. Terraform).  A repo with
+    # 36 .tf files and 3 helper .py scripts is a Terraform repo, not Python.
+    top_lang = ordered[0]
+    top_count = counts[top_lang]
+    primary_candidate = next((l for l in ordered if l not in _CONFIG_LANGS), None)
+    if primary_candidate is None:
+        # All detected languages are infrastructure/config — use the top one.
+        primary = top_lang
+    elif top_lang in _CONFIG_LANGS and counts[primary_candidate] < top_count * 0.5:
+        # The dominant language is config (e.g. Terraform) and the non-config
+        # language is a minority (<50% of the config file count) — treat the
+        # repo as config-primary.
+        primary = top_lang
+    else:
+        primary = primary_candidate
     return primary, ordered
 
 

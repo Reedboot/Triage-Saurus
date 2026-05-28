@@ -46,7 +46,68 @@ export function handleScanSubmit(e) {
       if (data.running_experiment) {
         showScanModal(repoName, data.running_experiment, repoPath);
       } else {
-        // Check for modules before starting scan
+        // Ask about cloud subscription first, then detect modules
+        proceedToScan(repoPath);
+      }
+    })
+    .catch(() => proceedToScan(repoPath));
+}
+
+// ── Cloud subscription prompt ──────────────────────────────────────────────────
+
+const CLOUD_SUB_DISMISSED_KEY = 'cloudSubDismissed:';
+const CLOUD_SUB_DEFAULT_LS_KEY = 'triageSaurusDefaultCloudSub';
+
+function getCloudSubStorageKey(repoPath) {
+  return CLOUD_SUB_DISMISSED_KEY + repoPath;
+}
+
+/**
+ * First gate before scan — prompts user to link the repo to an Azure
+ * subscription if any are available and one hasn't been chosen yet.
+ * Stashes selection in window._triage.pendingCloudSubs, then proceeds to module detection.
+ */
+export function proceedToScan(repoPath) {
+  // Check if user already dismissed for this repo path in this session
+  const dismissalKey = getCloudSubStorageKey(repoPath);
+  const dismissal = sessionStorage.getItem(dismissalKey);
+  if (dismissal === 'none' || dismissal === 'skip' || dismissal === 'linked') {
+    detectAndPromptForModules(repoPath);
+    return;
+  }
+
+  fetch('/api/subscriptions')
+    .then(r => r.json())
+    .then(data => {
+      const subs = data.subscriptions || [];
+      if (subs.length === 0) {
+        detectAndPromptForModules(repoPath);
+        return;
+      }
+
+      // Pre-select default subscription from settings (localStorage)
+      const defaultSub = localStorage.getItem(CLOUD_SUB_DEFAULT_LS_KEY) || '';
+      if (defaultSub) {
+        subs.forEach(s => {
+          const id = s.id || s.subscription_id;
+          if (id === defaultSub) s._preselected = true;
+        });
+      }
+
+      if (window.triagePipeline?.showCloudSubModal) {
+        window.triagePipeline.showCloudSubModal(
+          subs,
+          (selectedSubs) => {
+            window._triage.pendingCloudSubs = selectedSubs;
+            sessionStorage.setItem(dismissalKey, 'linked');
+            detectAndPromptForModules(repoPath);
+          },
+          (isNone) => {
+            sessionStorage.setItem(dismissalKey, isNone ? 'none' : 'skip');
+            detectAndPromptForModules(repoPath);
+          }
+        );
+      } else {
         detectAndPromptForModules(repoPath);
       }
     })
@@ -57,7 +118,6 @@ export function handleScanSubmit(e) {
 
 export function detectAndPromptForModules(repoPath) {
   window.triagePipeline?.onModuleCheckStart?.();
-  // Show status while detecting modules
   window._triage.setStatus('Detecting external modules…', '');
 
   fetch('/api/detect-modules', {
@@ -69,13 +129,10 @@ export function detectAndPromptForModules(repoPath) {
     .then(data => {
       if (data.error) {
         window._triage.setStatus(`Module detection failed: ${data.error}`, 'error');
-        // Continue with scan anyway
         startScan(repoPath);
         return;
       }
 
-      // If modules detected, only prompt for ones that are not already scanned.
-      // Re-prompting with "already scanned" modules is redundant and interrupts flow.
       if (data.modules && data.modules.length > 0) {
         const modulesNeedingScan = data.modules.filter(m => !m.already_scanned);
         if (modulesNeedingScan.length === 0) {
@@ -91,7 +148,6 @@ export function detectAndPromptForModules(repoPath) {
     })
     .catch(err => {
       console.warn('Module detection error:', err);
-      // On error, continue with scan anyway
       window._triage.setStatus('Proceeding without module detection', '');
       startScan(repoPath);
     });
@@ -498,6 +554,29 @@ export function showScanModal(repoName, experimentId, repoPath) {
 
 // ── Start scan ────────────────────────────────────────────────────────────────
 
+function _applyPendingCloudSubs(experimentId, repoName, repoPath) {
+  const pending = window._triage?.pendingCloudSubs;
+  if (!pending || pending.length === 0) return;
+  // Clear immediately so we don't re-apply on future experiment events
+  window._triage.pendingCloudSubs = null;
+
+  const name = repoName || (repoPath ? repoPath.split('/').filter(Boolean).pop() : null);
+  if (!name || !experimentId) return;
+
+  pending.forEach(sub => {
+    const subId = sub.subscription_id || sub.id;
+    if (!subId) return;
+    fetch(`/api/repo-subscriptions/${encodeURIComponent(experimentId)}/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription_id: subId, deploy_role: sub.deploy_role || 'primary' }),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.status === 'linked') addLogLine(`[Info] ☁️ Linked subscription: ${sub.display_name || subId}`, 'info'); })
+      .catch(err => console.warn('Cloud sub link failed:', err));
+  });
+}
+
 export function startScan(repoPath) {
   closeArchitectureAiStream();
   closeEventSource();
@@ -588,6 +667,7 @@ export function startScan(repoPath) {
                 }
                 if (currentEvent === 'experiment' && typeof message === 'string' && message) {
                   state.currentExperimentId = message;
+                  _applyPendingCloudSubs(message, getCurrentRepoName(), repoPath);
                 }
                 if (currentEvent === 'scan_stage' && message && typeof message === 'object') {
                   handleScanStageEvent(message);

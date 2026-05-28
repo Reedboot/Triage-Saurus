@@ -56,6 +56,23 @@ def _run_opengrep(rules_dir: Path, target: Path) -> list[dict]:
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 
+    # Exclude vendored/generated directories that cause opengrep to hang on large repos
+    _EXCLUDE_DIRS = [
+        ".python_packages",
+        "node_modules",
+        ".terraform",
+        "vendor",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".next",
+        "target",
+        ".eggs",
+        ".tox",
+    ]
+
     cmd = [
         "opengrep", "scan",
         "--config", str(rules_dir),
@@ -64,7 +81,14 @@ def _run_opengrep(rules_dir: Path, target: Path) -> list[dict]:
         "--output", str(tmp_path),
         "--quiet",
     ]
-    subprocess.run(cmd, capture_output=True, text=True)
+    for d in _EXCLUDE_DIRS:
+        cmd += ["--exclude-dir", d]
+
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return []
+
     if tmp_path.exists() and tmp_path.stat().st_size > 0:
         try:
             data = json.loads(tmp_path.read_text())

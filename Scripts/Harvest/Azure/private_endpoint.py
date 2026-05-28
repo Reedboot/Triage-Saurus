@@ -58,6 +58,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(pe.get("tags") or {}),
             "is_public": 0,  # Private endpoints are always private by definition
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": json.dumps([]),
+            "auth_methods": json.dumps([]),
             "fqdn": fqdn,
             "pipeline_tag": None,
             "raw_json": json.dumps({**pe, "_extra": extra}),

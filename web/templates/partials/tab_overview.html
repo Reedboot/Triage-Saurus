@@ -23,6 +23,96 @@
     </div>
   </div>
 
+  {% if cloud_posture %}
+  <details class="cloud-posture-banner" open>
+    <summary class="cloud-posture-banner-summary">
+      ☁️ Cloud Infrastructure Posture
+      {% if cloud_posture.behind_waf %}<span class="cpb-badge cpb-ok">✓ WAF</span>{% else %}<span class="cpb-badge cpb-warn">⚠ No WAF</span>{% endif %}
+      {% if cloud_posture.behind_apim %}<span class="cpb-badge cpb-ok">✓ APIM</span>{% else %}<span class="cpb-badge cpb-neutral">— No APIM</span>{% endif %}
+      {% if cloud_posture.aks_cluster %}
+        {% if cloud_posture.aks_secured %}<span class="cpb-badge cpb-ok">✓ AKS (IP-restricted)</span>{% else %}<span class="cpb-badge cpb-warn">⚠ AKS (public API)</span>{% endif %}
+      {% endif %}
+      {% if cloud_posture.endpoint_exposure == 'public' %}<span class="cpb-badge cpb-crit">⚡ Public endpoint</span>
+      {% elif cloud_posture.endpoint_exposure == 'restricted' %}<span class="cpb-badge cpb-warn">🔒 IP-restricted</span>
+      {% elif cloud_posture.endpoint_exposure == 'private' %}<span class="cpb-badge cpb-ok">🔐 Private</span>{% endif %}
+      {% if cloud_adjusted_count %}<span class="cpb-badge cpb-info">{{ cloud_adjusted_count }} score-adjusted</span>{% endif %}
+    </summary>
+    <div class="cloud-posture-banner-body">
+      <div class="cpb-grid">
+        <div class="cpb-item">
+          <span class="cpb-label">App Gateway</span>
+          <span class="cpb-val {% if cloud_posture.behind_app_gateway %}cpb-positive{% else %}cpb-negative{% endif %}">
+            {{ cloud_posture.app_gateway_name or ('Yes' if cloud_posture.behind_app_gateway else 'Not detected') }}
+          </span>
+        </div>
+        <div class="cpb-item">
+          <span class="cpb-label">WAF Protection</span>
+          <span class="cpb-val {% if cloud_posture.behind_waf %}cpb-positive{% else %}cpb-negative{% endif %}">
+            {{ 'Enabled' if cloud_posture.behind_waf else 'Not enabled' }}
+          </span>
+        </div>
+        <div class="cpb-item">
+          <span class="cpb-label">APIM</span>
+          <span class="cpb-val {% if cloud_posture.behind_apim %}cpb-positive{% else %}cpb-negative{% endif %}">
+            {{ cloud_posture.apim_name or ('Yes' if cloud_posture.behind_apim else 'Not detected') }}
+          </span>
+        </div>
+        {% if cloud_posture.aks_cluster %}
+        <div class="cpb-item">
+          <span class="cpb-label">AKS Cluster</span>
+          <span class="cpb-val {% if cloud_posture.aks_secured %}cpb-positive{% else %}cpb-negative{% endif %}">
+            {{ cloud_posture.aks_cluster }} — {% if cloud_posture.aks_secured %}IP-restricted{% else %}public API server{% endif %}
+          </span>
+        </div>
+        {% endif %}
+        <div class="cpb-item">
+          <span class="cpb-label">Endpoint Exposure</span>
+          <span class="cpb-val
+            {% if cloud_posture.endpoint_exposure == 'public' %}cpb-negative
+            {% elif cloud_posture.endpoint_exposure == 'restricted' %}cpb-neutral
+            {% elif cloud_posture.endpoint_exposure == 'private' %}cpb-positive
+            {% else %}cpb-neutral{% endif %}">
+            {{ cloud_posture.endpoint_exposure | capitalize }}
+          </span>
+        </div>
+        {% if cloud_posture.auth_methods %}
+        <div class="cpb-item">
+          <span class="cpb-label">Auth Methods</span>
+          <span class="cpb-val cpb-neutral">{{ cloud_posture.auth_methods | join(', ') }}</span>
+        </div>
+        {% endif %}
+      </div>
+      {% if cloud_adjusted_count %}
+      <p class="cpb-note">
+        {{ cloud_adjusted_count }} finding{{ 's' if cloud_adjusted_count != 1 else '' }}
+        had severity scores adjusted based on this cloud posture.
+        Adjusted scores are shown in the <em>Cloud ±</em> column in the Findings tab.
+      </p>
+      {% endif %}
+    </div>
+  </details>
+  <style>
+    .cloud-posture-banner { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+    .cloud-posture-banner-summary { list-style: none; padding: 10px 14px; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    .cloud-posture-banner-summary::-webkit-details-marker { display: none; }
+    .cloud-posture-banner-body { padding: 10px 14px 14px; border-top: 1px solid var(--border-subtle); }
+    .cpb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+    .cpb-item { display: flex; flex-direction: column; gap: 2px; }
+    .cpb-label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .cpb-val { font-size: 0.82rem; font-weight: 500; color: var(--text); }
+    .cpb-positive { color: #4ade80; }
+    .cpb-negative { color: #f87171; }
+    .cpb-neutral  { color: #facc15; }
+    .cpb-badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 600; }
+    .cpb-ok   { background: #052e16; color: #4ade80; }
+    .cpb-warn { background: #422006; color: #fbbf24; }
+    .cpb-crit { background: #450a0a; color: #f87171; }
+    .cpb-neutral { background: #1c1917; color: #a8a29e; }
+    .cpb-info { background: #0c1a2e; color: #60a5fa; }
+    .cpb-note { margin: 10px 0 0; font-size: 0.78rem; color: var(--text-muted); }
+  </style>
+  {% endif %}
+
   {% if overview_html %}
   <article class="overview-body">
     {{ overview_html | safe }}

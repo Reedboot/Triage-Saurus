@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.ServiceBus/namespaces"
 
@@ -19,7 +19,13 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                         .replace("https://", "").replace(":443/", "").rstrip("/")) or None
 
         sku = (ns.get("sku") or {}).get("name")
-        is_public = _is_public(props)
+        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+
+        endpoints = build_endpoints([
+            (fqdn, 5671, "amqp+tls"),
+            (fqdn, 443, "https"),
+        ] if fqdn else [])
+        auth_methods = json.dumps(_get_auth_methods(props))
 
         extra = {
             "sku": sku,
@@ -41,6 +47,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": sku,
             "tags": json.dumps(ns.get("tags") or {}),
             "is_public": is_public,
+            "is_restricted": is_restricted,
+            "ip_restrictions": json.dumps(ip_restrictions),
+            "endpoints": endpoints,
+            "auth_methods": auth_methods,
             "fqdn": fqdn,
             "pipeline_tag": (ns.get("tags") or {}).get("pipeline") or (ns.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**ns, "_extra": extra}),
@@ -49,19 +59,23 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _is_public(props: dict[str, Any]) -> int:
-    """Check if Service Bus namespace is truly internet-accessible."""
-    # If public network access is disabled, not public
+def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
-        return 0
-    
-    # Check for network rules (virtual network or IP rules)
+        return 0, 0, []
+
     network_rules = props.get("networkRuleSets") or {}
-    virtual_network_rules = network_rules.get("virtualNetworkRules") or []
+    vnet_rules = network_rules.get("virtualNetworkRules") or []
     ip_rules = network_rules.get("ipRules") or []
-    
-    # If there are any network rules, access is restricted
-    if virtual_network_rules or ip_rules:
-        return 0
-    
-    return 1
+
+    if vnet_rules or ip_rules:
+        cidrs = extract_ip_restrictions(ip_rules=ip_rules, vnet_rules=vnet_rules)
+        return 0, 1, cidrs
+
+    return 1, 0, []
+
+
+def _get_auth_methods(props: dict[str, Any]) -> list[str]:
+    methods: list[str] = ["azure_ad"]
+    if not props.get("disableLocalAuth", False):
+        methods.append("sas_key")
+    return methods

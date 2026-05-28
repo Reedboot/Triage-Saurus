@@ -48,6 +48,10 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "sku": None,
             "tags": json.dumps(comp.get("tags") or {}),
             "is_public": 0,  # App Insights is an observability sink, not a public endpoint
+            "is_restricted": 0,
+            "ip_restrictions": json.dumps([]),
+            "endpoints": json.dumps([]),
+            "auth_methods": json.dumps(["azure_ad", "instrumentation_key"]),
             "fqdn": None,
             "pipeline_tag": (comp.get("tags") or {}).get("pipeline") or (comp.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**comp, "properties": safe_props, "_extra": extra}),
