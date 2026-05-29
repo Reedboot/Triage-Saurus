@@ -13875,6 +13875,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             return "redis.cache.windows.net"
         if "documentdb" in t:
             return "documents.azure.com"
+        if "appconfiguration" in t:
+            return "azconfig.io"
         return None
 
     def _resolve_fqdns(item: dict) -> list[str]:
