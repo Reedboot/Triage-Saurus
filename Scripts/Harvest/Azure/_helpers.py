@@ -36,6 +36,17 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
         return []
 
 
+def _az_rest(url: str, resource: str | None = None) -> dict:
+    """Call az rest GET and return parsed JSON. Raises RuntimeError on failure."""
+    cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
+    if resource:
+        cmd += ["--resource", resource]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip()[:200])
+    return json.loads(result.stdout)
+
+
 def safe_str(value: Any) -> str | None:
     """Coerce a value to string, returning None for empty/null."""
     if value is None:

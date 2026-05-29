@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-from ._helpers import az, build_endpoints, infer_sku, safe_str
+from ._helpers import _az_rest, az, build_endpoints, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.ContainerService/managedClusters"
 
@@ -114,17 +113,6 @@ def _total_node_count(cluster: dict[str, Any]) -> int:
 # ---------------------------------------------------------------------------
 # AKS route model — Kubernetes ingress → service → deployment mapping
 # ---------------------------------------------------------------------------
-
-def _az_rest(url: str, resource: str | None = None) -> dict:
-    """Call az rest GET and return parsed JSON. Raises RuntimeError on failure."""
-    cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
-    if resource:
-        cmd += ["--resource", resource]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip()[:200])
-    return json.loads(result.stdout)
-
 
 def _get_cluster_portal_fqdn(cluster_id: str) -> str:
     """Fetch azurePortalFQDN for a cluster via the ARM management API."""
