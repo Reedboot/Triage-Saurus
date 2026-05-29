@@ -818,3 +818,322 @@ class TestInteractions:
         assert not row.is_visible() or "display: none" in style, (
             "Past-scans row is unexpectedly visible before any repo is selected"
         )
+
+
+# ---------------------------------------------------------------------------
+# Cloud page (subscription architecture diagrams) tests
+# ---------------------------------------------------------------------------
+
+class TestCloudPage:
+    """Tests for /cloud subscription list, ingress diagrams, and drill-down."""
+
+    _SUB_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    # Mermaid source that deliberately uses DUPLICATE FQDN labels on both
+    # Internet→listener arrows — this is the buggy output the Python backend
+    # used to produce.  The frontend fix in patchForeignObjectLabels must not
+    # create extra SVG <text> nodes, and the Python backend fix must emit
+    # distinct labels instead.
+    _MERMAID_DUPLICATE_LABELS = (
+        "graph LR\n"
+        '    Internet["🌐 Internet"]\n'
+        '    test_rg_appgw["App Gateway"]\n'
+        '    l_test_rg_appgw_HTTPS_443["🔒 HTTPS:443"]\n'
+        '    l_test_rg_appgw_HTTP_80["🔴 HTTP:80"]\n'
+        '    Internet -->|"gw.example.com"| l_test_rg_appgw_HTTPS_443\n'
+        '    Internet -->|"gw.example.com"| l_test_rg_appgw_HTTP_80\n'
+        "    l_test_rg_appgw_HTTPS_443 --> test_rg_appgw\n"
+        "    l_test_rg_appgw_HTTP_80 --> test_rg_appgw\n"
+        "    linkStyle 0 stroke:orange,stroke-width:2px\n"
+        "    linkStyle 1 stroke:red,stroke-width:2px\n"
+        "    linkStyle 2 stroke:orange,stroke-width:2px\n"
+        "    linkStyle 3 stroke:orange,stroke-width:2px\n"
+        "    classDef internet stroke:#d32f2f,stroke-width:2px;\n"
+        "    classDef entryPoint stroke:#d32f2f,stroke-width:2px;\n"
+        "    classDef listenerHttps stroke:#00897b,stroke-width:2px;\n"
+        "    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,stroke-dasharray:4,2;\n"
+        "    class Internet internet;\n"
+        "    class test_rg_appgw entryPoint;\n"
+        "    class l_test_rg_appgw_HTTPS_443 listenerHttps;\n"
+        "    class l_test_rg_appgw_HTTP_80 listenerHttp;\n"
+    )
+
+    # Same diagram but with distinct labels (what the backend should produce
+    # after the fix).
+    _MERMAID_DISTINCT_LABELS = (
+        "graph LR\n"
+        '    Internet["🌐 Internet"]\n'
+        '    test_rg_appgw["App Gateway"]\n'
+        '    l_test_rg_appgw_HTTPS_443["🔒 HTTPS:443"]\n'
+        '    l_test_rg_appgw_HTTP_80["🔴 HTTP:80"]\n'
+        '    Internet -->|"gw.example.com"| l_test_rg_appgw_HTTPS_443\n'
+        '    Internet -->|"HTTP"| l_test_rg_appgw_HTTP_80\n'
+        "    l_test_rg_appgw_HTTPS_443 --> test_rg_appgw\n"
+        "    l_test_rg_appgw_HTTP_80 --> test_rg_appgw\n"
+        "    linkStyle 0 stroke:orange,stroke-width:2px\n"
+        "    linkStyle 1 stroke:red,stroke-width:2px\n"
+        "    linkStyle 2 stroke:orange,stroke-width:2px\n"
+        "    linkStyle 3 stroke:orange,stroke-width:2px\n"
+        "    classDef internet stroke:#d32f2f,stroke-width:2px;\n"
+        "    classDef entryPoint stroke:#d32f2f,stroke-width:2px;\n"
+        "    classDef listenerHttps stroke:#00897b,stroke-width:2px;\n"
+        "    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,stroke-dasharray:4,2;\n"
+        "    class Internet internet;\n"
+        "    class test_rg_appgw entryPoint;\n"
+        "    class l_test_rg_appgw_HTTPS_443 listenerHttps;\n"
+        "    class l_test_rg_appgw_HTTP_80 listenerHttp;\n"
+    )
+
+    _NODE_MAP = {
+        "test_rg_appgw": {
+            "title": "test-appgw",
+            "arm_type": "microsoft.network/applicationgateways",
+            "resources": [{"rg": "test-rg", "name": "test-appgw"}],
+            "can_drill": True,
+        }
+    }
+
+    def _setup_mocks(self, page: Page, mermaid_source: str) -> None:
+        """Route-mock the subscription list and diagram API endpoints."""
+        import json
+
+        page.route(
+            "**/api/subscriptions",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscriptions": [{
+                        "id": self._SUB_ID,
+                        "display_name": "Test Subscription",
+                        "environment": "production",
+                        "env_badge": "danger",
+                        "provider": "Azure",
+                        "state": "Enabled",
+                        "last_synced": None,
+                        "asset_count": 5,
+                        "public_count": 1,
+                    }]
+                }),
+            ),
+        )
+
+        node_map = self._NODE_MAP
+        page.route(
+            f"**/{self._SUB_ID}/diagram",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscription_name": "Test Subscription",
+                    "environment": "production",
+                    "total_assets": 5,
+                    "ingress_diagram": {
+                        "mermaid": mermaid_source,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                    },
+                    "diagrams": [],
+                }),
+            ),
+        )
+
+        page.route(
+            f"**/{self._SUB_ID}/drilldown",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "title": "App Gateway — Routing Rules",
+                    "view_type": "table",
+                    "columns": ["Gateway", "Listener / Hostname", "Protocol", "URL Path", "Backend Pool", "Backend Targets", "WAF Policy"],
+                    "rows": [
+                        ["test-appgw", "gw.example.com", "HTTPS", "/*", "backend-pool", "10.0.0.1:443", "—"],
+                        ["test-appgw", "gw.example.com", "HTTP",  "/*", "backend-pool", "10.0.0.1:80",  "—"],
+                    ],
+                }),
+            ),
+        )
+
+    def _load_diagram(self, page: Page, live_server: str, mermaid_source: str) -> None:
+        """Navigate to /cloud, mock APIs, click the subscription, wait for SVG."""
+        self._setup_mocks(page, mermaid_source)
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector(".subscription-name-cell", timeout=8000)
+        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector("#ingress-diagram-div svg", timeout=15000)
+        page.wait_for_timeout(1500)  # allow post-processing to complete
+
+    # ── Basic page structure ────────────────────────────────────────────────
+
+    def test_cloud_page_loads(self, page: Page, live_server: str):
+        """Cloud page renders with correct title."""
+        page.goto(live_server + "/cloud")
+        expect(page.locator("h1")).to_have_text("Cloud Subscriptions")
+
+    def test_subscription_table_renders(self, page: Page, live_server: str):
+        """Subscription list populates from the API."""
+        self._setup_mocks(page, self._MERMAID_DISTINCT_LABELS)
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector("#subscriptions-tbody tr", timeout=8000)
+        rows = page.locator("#subscriptions-tbody tr")
+        expect(rows).to_have_count(1)
+        assert "Test Subscription" in rows.first.inner_text()
+
+    def test_diagram_renders_on_subscription_click(self, page: Page, live_server: str):
+        """Clicking a subscription row loads and renders the ingress SVG."""
+        self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
+        expect(page.locator("#ingress-diagram-div svg")).to_be_visible()
+
+    # ── Bug #1: Internet node label must not be duplicated ─────────────────
+
+    def test_internet_node_text_appears_once(self, page: Page, live_server: str):
+        """Internet node label must NOT appear as a duplicate SVG <text> fallback.
+
+        Root cause: patchForeignObjectLabels() was appending an extra SVG <text>
+        fallback even when the browser was already rendering the <foreignObject>
+        correctly, causing 'Internet' to show twice in different sizes.
+
+        After the fix, the Internet label lives only inside the <foreignObject> HTML —
+        there should be zero SVG <text> elements containing 'Internet'.
+        """
+        self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
+
+        count = page.evaluate(
+            """
+            () => {
+                const svg = document.querySelector('#ingress-diagram-div svg');
+                if (!svg) return -1;
+                return Array.from(svg.querySelectorAll('text'))
+                    .filter(t => t.textContent.includes('Internet'))
+                    .length;
+            }
+            """
+        )
+        assert count == 0, (
+            f"Expected 0 SVG <text> elements containing 'Internet', found {count}. "
+            "patchForeignObjectLabels() is creating a duplicate fallback text node."
+        )
+
+    # ── Bug #2: Internet→listener arrows must have distinct labels ─────────
+
+    def test_listener_arrows_have_distinct_labels(self, page: Page, live_server: str):
+        """Multiple Internet→listener arrows must carry distinct edge labels.
+
+        Root cause: _build_ingress_diagram() applied the same FQDN label to
+        every listener arrow from Internet, making multiple arrows look like
+        one line with stacked duplicate labels.
+        """
+        self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
+
+        edge_label_texts = page.evaluate(
+            """
+            () => {
+                const svg = document.querySelector('#ingress-diagram-div svg');
+                if (!svg) return [];
+                // Mermaid renders edge labels inside .edgeLabel groups
+                return Array.from(svg.querySelectorAll('.edgeLabel'))
+                    .map(g => g.textContent.trim())
+                    .filter(t => t.length > 0);
+            }
+            """
+        )
+        # There must be at least 2 edge labels (two Internet→listener arrows)
+        assert len(edge_label_texts) >= 2, (
+            f"Expected ≥2 edge labels from the diagram, got {edge_label_texts!r}. "
+            "Internet→listener arrows may not be rendering correctly."
+        )
+        # They must not ALL be identical
+        assert len(set(edge_label_texts)) > 1, (
+            f"All edge labels are identical: {edge_label_texts!r}. "
+            "Internet→listener arrows are sharing the same FQDN label."
+        )
+
+    # ── Bug #3: Double-click on drillable node opens drill-down panel ──────
+
+    def test_dblclick_opens_drilldown_panel(self, page: Page, live_server: str):
+        """Double-clicking a drillable node (⤵ badge) must open the drill-down modal
+        and render a table with the resource details."""
+        self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
+
+        # The App Gateway node should have been marked drillable
+        drillable = page.locator("#ingress-diagram-div svg g.node-drillable")
+        expect(drillable).to_have_count(1, timeout=5000)
+
+        drillable.dblclick()
+
+        # Drill-down modal should appear with a data table
+        expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
+        # Table should contain the mocked row data
+        expect(page.locator("#drilldown-modal table td").first).to_contain_text("test-appgw")
+
+
+# ---------------------------------------------------------------------------
+# Python unit test: _build_ingress_diagram label generation
+# ---------------------------------------------------------------------------
+
+class TestIngressDiagramGeneration:
+    """Unit tests for the Python _build_ingress_diagram() backend helper."""
+
+    def _make_rows(self):
+        """Minimal provisioned_assets rows for an App Gateway with two listeners."""
+        # (name, type, rg, fqdn, is_public, sku, id, has_waf, listeners)
+        return [
+            (
+                "test-appgw",
+                "Microsoft.Network/applicationGateways",
+                "test-rg",
+                "gw.example.com",
+                1,      # is_public
+                "WAF_v2",
+                "fake-id",
+                0,      # has_waf
+                "HTTPS:443, HTTP:80",   # listeners
+            )
+        ]
+
+    def _call(self):
+        import sys
+        import os
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        from web.app import _build_ingress_diagram
+        return _build_ingress_diagram(self._make_rows())
+
+    def test_internet_node_defined_once(self):
+        """Internet node must appear exactly once in the generated Mermaid source."""
+        result = self._call()
+        mermaid = result.get("mermaid", "")
+        internet_defs = [
+            line for line in mermaid.splitlines()
+            if line.strip().startswith('Internet[')
+        ]
+        assert len(internet_defs) == 1, (
+            f"Internet node defined {len(internet_defs)} time(s); expected 1.\n{mermaid}"
+        )
+
+    def test_listener_arrows_have_distinct_labels(self):
+        """Internet→listener arrows must carry distinct labels (not the same FQDN twice)."""
+        result = self._call()
+        mermaid = result.get("mermaid", "")
+        # Collect labels from Internet --> |"label"| lines
+        import re
+        internet_labels = re.findall(
+            r'Internet\s*-->?\|"([^"]+)"\|', mermaid
+        )
+        # A gateway with HTTP + HTTPS listeners should produce 2 arrow lines
+        assert len(internet_labels) >= 2, (
+            f"Expected ≥2 Internet→ arrow labels, got {internet_labels!r}.\n{mermaid}"
+        )
+        assert len(set(internet_labels)) > 1, (
+            f"All Internet→ arrow labels are identical: {internet_labels!r}.\n"
+            "The same FQDN is being applied to every listener arrow."
+        )
+
+    def test_drilldown_map_contains_appgw(self):
+        """App Gateway must appear in node_drilldown_map with can_drill=True."""
+        result = self._call()
+        ndm = result.get("node_drilldown_map", {})
+        drillable = [k for k, v in ndm.items() if v.get("can_drill")]
+        assert drillable, (
+            f"No drillable nodes in node_drilldown_map: {ndm}"
+        )

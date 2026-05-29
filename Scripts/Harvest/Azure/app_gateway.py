@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import subprocess
+from datetime import datetime, timezone
 from typing import Any
 
 from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
@@ -176,3 +179,302 @@ def get_backend_fqdns(subscription_id: str) -> dict[str, str]:
                 if fqdn:
                     index[fqdn.lower()] = gw_name
     return index
+
+
+# ---------------------------------------------------------------------------
+# Routing + WAF harvest (runs as part of the main harvest pipeline)
+# ---------------------------------------------------------------------------
+
+def _az_show(args: list[str], subscription_id: str, timeout: int = 120) -> dict | None:
+    """Run an az show command and return parsed JSON, or None on failure."""
+    cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            return None
+        return json.loads(r.stdout or "null")
+    except Exception:
+        return None
+
+
+def _id_tail(resource_id: str | None) -> str:
+    """Return the last path segment of an ARM resource ID."""
+    return (resource_id or "").rstrip("/").split("/")[-1]
+
+
+def _build_lookup(items: list[dict], key: str = "name") -> dict[str, dict]:
+    return {item[key]: item for item in items if item.get(key)}
+
+
+def extract_routes(gw: dict) -> list[dict]:
+    """Return a flat list of route dicts, one per (listener × path_rule).
+
+    Handles both nested ARM REST shape (properties wrapper) and the flat
+    az CLI show shape.
+    """
+    props = gw.get("properties") or gw
+
+    listeners_lkp  = _build_lookup(props.get("httpListeners") or [])
+    pools_lkp      = _build_lookup(props.get("backendAddressPools") or [])
+    http_cfg_lkp   = _build_lookup(props.get("backendHttpSettingsCollection") or [])
+    url_maps_lkp   = _build_lookup(props.get("urlPathMaps") or [])
+    frontend_ports = {
+        _id_tail(fp.get("id")): (fp.get("properties") or {}).get("port")
+        for fp in (props.get("frontendPorts") or [])
+    }
+
+    def _pool_fqdns(pool_name: str) -> list[str]:
+        pool = pools_lkp.get(pool_name) or {}
+        pp = pool.get("properties") or {}
+        return [
+            (a.get("fqdn") or a.get("ipAddress") or "?")
+            for a in (pp.get("backendAddresses") or [])
+        ]
+
+    def _http_cfg_detail(cfg_name: str) -> dict:
+        cfg = http_cfg_lkp.get(cfg_name) or {}
+        cp = cfg.get("properties") or {}
+        return {
+            "port": cp.get("port"),
+            "protocol": cp.get("protocol"),
+            "host_override": cp.get("hostName") or (
+                "(pick-from-backend)" if cp.get("pickHostNameFromBackendAddress") else None
+            ),
+        }
+
+    def _listener_detail(listener_name: str) -> dict:
+        l = listeners_lkp.get(listener_name) or {}
+        lp = l.get("properties") or {}
+        port_id = _id_tail((lp.get("frontendPort") or {}).get("id"))
+        hosts = lp.get("hostNames") or ([lp["hostName"]] if lp.get("hostName") else [])
+        return {
+            "protocol": lp.get("protocol"),
+            "port": frontend_ports.get(port_id),
+            "hostnames": hosts,
+            "waf_policy": _id_tail((lp.get("firewallPolicy") or {}).get("id")),
+        }
+
+    routes: list[dict] = []
+
+    for rule in (props.get("requestRoutingRules") or []):
+        rp = rule.get("properties") or {}
+        rule_name     = rule.get("name", "")
+        listener_name = _id_tail((rp.get("httpListener") or {}).get("id"))
+        listener      = _listener_detail(listener_name)
+        hostnames     = listener["hostnames"] or ["*"]
+        direct_pool   = _id_tail((rp.get("backendAddressPool") or {}).get("id"))
+        direct_cfg    = _id_tail((rp.get("backendHttpSettings") or {}).get("id"))
+        url_map_name  = _id_tail((rp.get("urlPathMap") or {}).get("id"))
+        rule_waf      = _id_tail((rp.get("firewallPolicy") or {}).get("id")) or listener["waf_policy"]
+
+        if direct_pool:
+            cfg = _http_cfg_detail(direct_cfg)
+            for hostname in hostnames:
+                routes.append({
+                    "rule_name": rule_name, "listener_name": listener_name,
+                    "hostname": hostname, "protocol": listener["protocol"],
+                    "url_path": "/*", "backend_pool_name": direct_pool,
+                    "backend_fqdns": _pool_fqdns(direct_pool),
+                    "http_settings_name": direct_cfg,
+                    "backend_port": cfg["port"], "backend_protocol": cfg["protocol"],
+                    "host_override": cfg["host_override"], "waf_policy_name": rule_waf or None,
+                })
+        elif url_map_name:
+            url_map = url_maps_lkp.get(url_map_name) or {}
+            mp = url_map.get("properties") or {}
+            default_pool = _id_tail((mp.get("defaultBackendAddressPool") or {}).get("id"))
+            default_cfg  = _id_tail((mp.get("defaultBackendHttpSettings") or {}).get("id"))
+            if default_pool:
+                cfg = _http_cfg_detail(default_cfg)
+                for hostname in hostnames:
+                    routes.append({
+                        "rule_name": rule_name, "listener_name": listener_name,
+                        "hostname": hostname, "protocol": listener["protocol"],
+                        "url_path": "/*", "backend_pool_name": default_pool,
+                        "backend_fqdns": _pool_fqdns(default_pool),
+                        "http_settings_name": default_cfg,
+                        "backend_port": cfg["port"], "backend_protocol": cfg["protocol"],
+                        "host_override": cfg["host_override"], "waf_policy_name": rule_waf or None,
+                    })
+            for path_rule in (mp.get("pathRules") or []):
+                prp = path_rule.get("properties") or {}
+                pool_name  = _id_tail((prp.get("backendAddressPool") or {}).get("id"))
+                cfg_name   = _id_tail((prp.get("backendHttpSettings") or {}).get("id"))
+                path_waf   = _id_tail((prp.get("firewallPolicy") or {}).get("id")) or rule_waf
+                paths      = prp.get("paths") or ["/*"]
+                cfg        = _http_cfg_detail(cfg_name)
+                for hostname in hostnames:
+                    for path in paths:
+                        routes.append({
+                            "rule_name": f"{rule_name}::{path_rule.get('name', '')}",
+                            "listener_name": listener_name,
+                            "hostname": hostname, "protocol": listener["protocol"],
+                            "url_path": path, "backend_pool_name": pool_name,
+                            "backend_fqdns": _pool_fqdns(pool_name),
+                            "http_settings_name": cfg_name,
+                            "backend_port": cfg["port"], "backend_protocol": cfg["protocol"],
+                            "host_override": cfg["host_override"], "waf_policy_name": path_waf or None,
+                        })
+
+    return routes
+
+
+def harvest_routing(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """Harvest App Gateway listener→backend routing rules and WAF policies.
+
+    Called automatically by the main harvest script after provisioned_assets
+    are written so the fqdn_to_asset lookup is up-to-date.
+
+    Returns (rules_upserted, waf_policies_upserted).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    gateways = az(["network", "application-gateway", "list"], subscription_id)
+    if not gateways:
+        return 0, 0
+
+    # Build FQDN → asset_id map from already-written provisioned_assets
+    fqdn_to_asset: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT id, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
+        (subscription_id,),
+    ).fetchall():
+        fqdn_to_asset[row[1].lower().rstrip(".")] = row[0]
+
+    total_rules = 0
+    total_waf   = 0
+
+    for gw_stub in gateways:
+        name = gw_stub["name"]
+        rg   = gw_stub.get("resourceGroup", "")
+        print(f"    [appgw-routing] {name}...", end=" ", flush=True)
+
+        gw = _az_show(
+            ["network", "application-gateway", "show", "--name", name, "--resource-group", rg],
+            subscription_id,
+        )
+        if not gw:
+            print("FAILED (show returned nothing)")
+            continue
+
+        routes = extract_routes(gw)
+        print(f"{len(routes)} routes", end="")
+
+        if not dry_run and routes:
+            # Remove stale rows for this gateway before repopulating
+            conn.execute(
+                "DELETE FROM appgw_routing_rules WHERE subscription_id = ? AND gateway_name = ?",
+                (subscription_id, name),
+            )
+            gw_resource_id = gw.get("id") or gw_stub.get("id")
+            for route in routes:
+                rule_id = f"{name}::{route['rule_name']}::{route['url_path']}"
+                conn.execute(
+                    """
+                    INSERT INTO appgw_routing_rules
+                        (id, subscription_id, gateway_name, gateway_resource_id, resource_group,
+                         rule_name, listener_name, hostname, protocol, url_path,
+                         backend_pool_name, backend_fqdns, http_settings_name,
+                         backend_port, backend_protocol, host_override,
+                         waf_policy_name, last_synced)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        hostname          = excluded.hostname,
+                        protocol          = excluded.protocol,
+                        backend_pool_name = excluded.backend_pool_name,
+                        backend_fqdns     = excluded.backend_fqdns,
+                        backend_port      = excluded.backend_port,
+                        backend_protocol  = excluded.backend_protocol,
+                        host_override     = excluded.host_override,
+                        waf_policy_name   = excluded.waf_policy_name,
+                        last_synced       = excluded.last_synced
+                    """,
+                    (
+                        rule_id, subscription_id, name, gw_resource_id, rg,
+                        route["rule_name"], route["listener_name"],
+                        route["hostname"], route["protocol"], route["url_path"],
+                        route["backend_pool_name"],
+                        json.dumps(route["backend_fqdns"]),
+                        route["http_settings_name"],
+                        route["backend_port"], route["backend_protocol"],
+                        route["host_override"], route["waf_policy_name"],
+                        now,
+                    ),
+                )
+            conn.commit()
+            total_rules += len(routes)
+        elif dry_run:
+            total_rules += len(routes)
+
+        print()
+
+    # WAF policies
+    waf_policies = az(["network", "application-gateway", "waf-policy", "list"], subscription_id)
+    gw_waf_map: dict[str, list[str]] = {}
+    for gw in gateways:
+        props = gw.get("properties") or gw
+        pol_id = (props.get("firewallPolicy") or {}).get("id", "")
+        pol_name = pol_id.split("/")[-1] if pol_id else None
+        if pol_name:
+            gw_waf_map.setdefault(pol_name, []).append(gw["name"])
+
+    for pol_stub in waf_policies:
+        pol_name = pol_stub["name"]
+        pol_rg   = pol_stub.get("resourceGroup", "")
+        pol_id   = pol_stub.get("id", "")
+
+        pol = _az_show(
+            ["network", "application-gateway", "waf-policy", "show",
+             "--name", pol_name, "--resource-group", pol_rg],
+            subscription_id,
+        ) or pol_stub
+        pp  = pol.get("properties") or {}
+        ps  = pp.get("policySettings") or {}
+        managed      = pp.get("managedRules") or {}
+        rule_sets    = managed.get("managedRuleSets") or []
+        exclusions   = managed.get("exclusions") or []
+        custom_rules = pp.get("customRules") or []
+        associated   = gw_waf_map.get(pol_name, [])
+
+        if not dry_run:
+            conn.execute(
+                """
+                INSERT INTO appgw_waf_policies
+                    (id, subscription_id, name, resource_group, mode, state,
+                     request_body_check, max_body_kb, managed_rule_sets,
+                     custom_rules_count, exclusions_count,
+                     associated_gateways, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    mode                = excluded.mode,
+                    state               = excluded.state,
+                    request_body_check  = excluded.request_body_check,
+                    max_body_kb         = excluded.max_body_kb,
+                    managed_rule_sets   = excluded.managed_rule_sets,
+                    custom_rules_count  = excluded.custom_rules_count,
+                    exclusions_count    = excluded.exclusions_count,
+                    associated_gateways = excluded.associated_gateways,
+                    last_synced         = excluded.last_synced
+                """,
+                (
+                    pol_id, subscription_id, pol_name, pol_rg,
+                    ps.get("mode"), ps.get("state"),
+                    1 if ps.get("requestBodyCheck") else 0,
+                    ps.get("maxRequestBodySizeInKb"),
+                    json.dumps([{"type": rs.get("ruleSetType"), "version": rs.get("ruleSetVersion")}
+                                for rs in rule_sets]),
+                    len(custom_rules), len(exclusions),
+                    json.dumps(associated),
+                    now,
+                ),
+            )
+        total_waf += 1
+
+    if not dry_run and total_waf:
+        conn.commit()
+
+    return total_rules, total_waf

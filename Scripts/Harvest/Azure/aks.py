@@ -14,17 +14,24 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for cluster in raw:
-        props = cluster.get("properties") or {}
-        fqdn = safe_str(props.get("fqdn")) or safe_str(props.get("privateFqdn"))
-        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+        # az CLI returns a flat structure — no nested "properties" wrapper
+        public_fqdn = safe_str(cluster.get("fqdn"))
+        private_fqdn = safe_str(cluster.get("privateFqdn"))
+        # Prefer public FQDN for endpoint probing; fall back to private FQDN for display
+        fqdn = public_fqdn or private_fqdn
+        is_public, is_restricted, ip_restrictions = _classify_exposure(cluster)
 
-        endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
-        auth_methods = json.dumps(_get_auth_methods(props))
+        endpoints = build_endpoints([(public_fqdn, 443, "https")] if public_fqdn else [])
+        auth_methods = json.dumps(_get_auth_methods(cluster))
 
+        api_access = cluster.get("apiServerAccessProfile") or {}
         extra = {
-            "kubernetes_version": props.get("kubernetesVersion"),
-            "node_count": _total_node_count(props),
-            "private_cluster": props.get("apiServerAccessProfile", {}).get("enablePrivateCluster", False),
+            "kubernetes_version": cluster.get("kubernetesVersion"),
+            "node_count": _total_node_count(cluster),
+            "private_cluster": api_access.get("enablePrivateCluster", False),
+            "public_fqdn": public_fqdn,
+            "private_fqdn": private_fqdn,
+            "public_network_access": cluster.get("publicNetworkAccess"),
         }
 
         results.append({
@@ -49,40 +56,43 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
+def _classify_exposure(cluster: dict[str, Any]) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_cidrs)."""
-    api_access = props.get("apiServerAccessProfile") or {}
+    api_access = cluster.get("apiServerAccessProfile") or {}
 
     if api_access.get("enablePrivateCluster"):
         return 0, 0, []
 
-    authorized_ip_ranges = api_access.get("authorizedIPRanges") or []
+    authorized_ip_ranges = api_access.get("authorizedIpRanges") or []
     if authorized_ip_ranges:
         return 0, 1, list(authorized_ip_ranges)
 
-    return 1, 0, []
+    # A public FQDN with no IP restrictions = publicly accessible API server
+    if cluster.get("fqdn"):
+        return 1, 0, []
+
+    return 0, 0, []
 
 
-def _get_auth_methods(props: dict[str, Any]) -> list[str]:
+def _get_auth_methods(cluster: dict[str, Any]) -> list[str]:
     methods: list[str] = []
-    aad_profile = props.get("aadProfile") or {}
+    aad_profile = cluster.get("aadProfile") or {}
     if aad_profile:
         methods.append("azure_ad")
 
-    oidc = props.get("oidcIssuerProfile") or {}
+    oidc = cluster.get("oidcIssuerProfile") or {}
     if oidc.get("enabled"):
         methods.append("oidc_workload_identity")
 
-    # Local accounts (basic kubeconfig)
-    disable_local = props.get("disableLocalAccounts", False)
+    disable_local = cluster.get("disableLocalAccounts", False)
     if not disable_local:
         methods.append("local_kubeconfig")
 
     return methods or ["local_kubeconfig"]
 
 
-def _total_node_count(props: dict[str, Any]) -> int:
+def _total_node_count(cluster: dict[str, Any]) -> int:
     total = 0
-    for pool in props.get("agentPoolProfiles") or []:
+    for pool in cluster.get("agentPoolProfiles") or []:
         total += pool.get("count") or 0
     return total

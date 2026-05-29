@@ -981,6 +981,17 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   padding: 12px !important;
 }
 
+/* Override Mermaid's default pale-yellow tooltip to match dark theme */
+.mermaidTooltip {
+  background: #1e293b !important;
+  border: 1px solid #475569 !important;
+  border-radius: 6px !important;
+  color: #e2e8f0 !important;
+  font-size: 12px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+}
+
 /* diagram-zoom-inner shrink-wraps content; JS transform handles all scaling */
 .diagram-zoom-inner .mermaid {
   display: block;

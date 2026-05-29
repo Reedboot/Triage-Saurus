@@ -94,6 +94,12 @@ export function autoFitDiagram(container, scrollEl) {
 /**
  * Fix rendering issues with foreignObject labels that browsers fail to paint reliably.
  * Creates SVG text fallbacks for text-only foreign objects.
+ *
+ * Note: modern browsers (Chromium, Firefox, Safari) render <foreignObject> correctly
+ * so we only add a fallback when the element has zero rendered height, which indicates
+ * the browser skipped it.  This prevents the Internet node (and other plain-text
+ * Mermaid labels) from showing twice — once from the foreignObject and once from the
+ * injected <text> element.
  */
 export function patchForeignObjectLabels(svgEl) {
   if (!svgEl) return;
@@ -102,6 +108,17 @@ export function patchForeignObjectLabels(svgEl) {
     if (fo.querySelector('img, image, svg')) return; // keep icon-bearing FOs intact
     const text = (fo.textContent || '').trim();
     if (!text) return;
+
+    // Skip if the browser is already rendering this foreignObject (height > 0).
+    // Adding a fallback <text> on top of a rendered foreignObject creates a
+    // duplicate label at a different font size.
+    try {
+      const rect = fo.getBoundingClientRect();
+      if (rect.height > 0) return;
+    } catch (_) {
+      // getBoundingClientRect may throw if the element is detached; fall through
+      // to the legacy fallback path.
+    }
 
     const x = parseFloat(fo.getAttribute('x') || '0');
     const y = parseFloat(fo.getAttribute('y') || '0');

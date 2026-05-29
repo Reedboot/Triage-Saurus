@@ -13555,7 +13555,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             else:
                 result.append({
                     "name": f"{category}_ep_group",
-                    "label": f"{category} ({len(items)}×)",
+                    "label": category,
                     "count": len(items),
                     "type": category,
                     "arm_type": items[0]["type"],
@@ -13595,7 +13595,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             unique_name = group_key.replace("|", "_")  # e.g. "APIM_Public" or "APIM_Private"
             result.append({
                 "name": unique_name,
-                "label": f"{info['type']} ({count}×)" if count > 1 else info["type"],
+                "label": info["type"],
                 "count": count,
                 "type": info["type"],
                 "arm_type": info["arm_type"],
@@ -13664,7 +13664,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             else:
                 result.append({
                     "name": f"{category}_group",
-                    "label": f"{category} ({len(items)}×)",
+                    "label": category,
                     "count": len(items),
                     "type": category,
                     "arm_type": "Microsoft.Web/functionApps" if category == "Function App" else items[0]["type"],
@@ -13905,10 +13905,21 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             w_nid = _waf_nids.get(node_id)
 
             if l_nids:
-                # Internet → each listener → [WAF] → App Gateway
-                for (l_nid, is_http) in l_nids:
+                # Internet → each listener → [WAF] → App Gateway.
+                # The FQDN label is shown only on the first (most secure) listener
+                # arrow to avoid the same label appearing on every parallel arrow.
+                # Subsequent arrows carry a short protocol name so each line is
+                # visually distinct and the user can tell HTTP from HTTPS at a glance.
+                # Sort HTTPS (is_http=False) before HTTP (is_http=True) so the FQDN
+                # is attached to the secure listener by default.
+                sorted_l_nids = sorted(l_nids, key=lambda x: x[1])  # False < True
+                for i, (l_nid, is_http) in enumerate(sorted_l_nids):
                     arrow_color = "red" if is_http else "orange"
-                    _add_link(f'    Internet -->|"{fqdn_label}"| {l_nid}', arrow_color)
+                    if i == 0:
+                        label = fqdn_label  # first arrow gets the FQDN
+                    else:
+                        label = "HTTP" if is_http else "HTTPS"
+                    _add_link(f'    Internet -->|"{label}"| {l_nid}', arrow_color)
                     if w_nid:
                         _add_link(f'    {l_nid} --> {w_nid}', "orange")
                     else:
@@ -14030,7 +14041,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     lines.append('    classDef dataStorePublic stroke:#d32f2f,stroke-width:2px;')  # Deep red = Public/exposed data
     lines.append('    classDef internet stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry
     lines.append('    classDef summary stroke:#6a1b9a,stroke-width:2px;')  # Dark purple = Summary nodes
-    lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,stroke-dasharray:4 2;')  # Red dashed = HTTP listener
+    lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
     lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px;')  # Teal = HTTPS listener
     lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px;')  # Deep orange = WAF policy
     
@@ -14079,6 +14090,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         "microsoft.containerservice/managedclusters",
         "microsoft.documentdb/databaseaccounts",
         "microsoft.web/sites",
+        "microsoft.web/serverfarms",
     }
 
     node_drilldown_map: dict = {}
@@ -14123,260 +14135,235 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     }
 
 
-def _build_child_diagram(conn, sub_id: str, arm_type: str, resources: list) -> dict:
-    """Build a drill-down Mermaid diagram for a specific resource type and set of named resources.
+def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dict:
+    """Build a drill-down table for a specific resource type and set of named resources.
 
-    `resources` is a list of {rg, name} dicts (from node_drilldown_map).
-    Returns the same shape as `_build_ingress_diagram`: {title, mermaid, css_code, node_drilldown_map}.
+    Returns {title, view_type: "table", columns, rows, empty_message}.
+    Each row is a list of cell values; an exposure cell is a dict {label, style}.
     """
     import json as _json
 
     arm_type_lc = (arm_type or "").lower()
     names = [r["name"] for r in resources if r.get("name")]
-    placeholders = ",".join("?" * len(names)) if names else "''"
+    ph = ",".join("?" * len(names)) if names else "''"
 
-    def _esc(s: str) -> str:
-        """Escape quotes for Mermaid labels."""
-        return (s or "").replace('"', "&quot;").replace("'", "&#39;")
+    def _exposure(is_public, is_restricted):
+        if is_public:
+            return {"label": "🌐 Public",     "style": "color:#f59e0b;font-weight:600;"}
+        if is_restricted:
+            return {"label": "⚠️ Restricted", "style": "color:#fb923c;font-weight:600;"}
+        return     {"label": "🔒 Private",    "style": "color:#34d399;font-weight:600;"}
 
-    node_drilldown_map: dict = {}
-    lines: list[str] = []
-    title = "Details"
-
-    # ── APIM → API routes ────────────────────────────────────────────────────
-    if "apimanagement" in arm_type_lc:
-        title = "APIM API Routes"
-        lines = ["graph LR"]
-        apim_rows = conn.execute(
-            f"""SELECT apim_name, api_name, api_display_name, api_path, backend_url,
-                       service_url, requires_subscription, api_protocols
-                FROM apim_api_routes
-                WHERE subscription_id = ? AND apim_name IN ({placeholders})
-                ORDER BY apim_name, api_path""",
-            [sub_id] + names,
-        ).fetchall() if names else []
-
-        if not apim_rows:
-            lines.append('    NO_DATA["⚠️ No API routes harvested yet<br/>Run: python Scripts/Harvest/appgw_routing_map.py"]')
-        else:
-            apim_nodes: dict = {}
-            for row in apim_rows:
-                apim_name, api_name, api_display, api_path, backend_url, svc_url, req_sub, protocols = row
-                apim_nid = _sanitise_node_id(f"apim_{apim_name}")
-                if apim_nid not in apim_nodes:
-                    fqdn_row = conn.execute(
-                        "SELECT fqdn FROM provisioned_assets WHERE subscription_id=? AND name=? LIMIT 1",
-                        (sub_id, apim_name),
-                    ).fetchone()
-                    fqdn_lbl = fqdn_row[0] if fqdn_row and fqdn_row[0] else apim_name
-                    lines.append(f'    {apim_nid}["🔷 {_esc(apim_name)}<br/>{_esc(fqdn_lbl)}"]')
-                    apim_nodes[apim_nid] = True
-
-                display = api_display or api_name or api_path or "?"
-                path_lbl = f"<br/>{_esc(api_path)}" if api_path else ""
-                sub_lbl = " 🔑" if req_sub else ""
-                api_nid = _sanitise_node_id(f"api_{apim_name}_{api_name}")
-                lines.append(f'    {api_nid}["🔌 {_esc(display)}{sub_lbl}{path_lbl}"]')
-                lines.append(f'    {apim_nid} --> {api_nid}')
-
-                be_url = backend_url or svc_url or ""
-                if be_url:
-                    be_nid = _sanitise_node_id(f"be_{api_nid}")
-                    short_be = be_url if len(be_url) <= 40 else be_url[:38] + "…"
-                    lines.append(f'    {be_nid}["⚙️ {_esc(short_be)}"]')
-                    lines.append(f'    {api_nid} --> {be_nid}')
-
-        css_lines = [
-            "/* APIM drill-down */",
-            ".apimNode { stroke:#0066cc; stroke-width:2px; fill:#cfe8ff; }",
-            ".apiNode  { stroke:#f97316; stroke-width:2px; fill:#ffedd5; }",
-            ".beNode   { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
-        ]
-
-    # ── App Gateway → listener/backend routing ───────────────────────────────
-    elif "applicationgateway" in arm_type_lc:
-        title = "App Gateway Routing"
-        lines = ["graph LR"]
+    # ── App Gateway ───────────────────────────────────────────────────────────
+    if "applicationgateway" in arm_type_lc:
+        title   = "App Gateway — Routing Rules"
+        columns = ["Gateway", "Listener / Hostname", "Protocol", "URL Path",
+                   "Backend Pool", "Backend Targets", "WAF Policy"]
         gw_rows = conn.execute(
             f"""SELECT gateway_name, listener_name, hostname, protocol, url_path,
                        backend_pool_name, backend_fqdns, backend_port, waf_policy_name
                 FROM appgw_routing_rules
-                WHERE subscription_id = ? AND gateway_name IN ({placeholders})
+                WHERE subscription_id=? AND gateway_name IN ({ph})
                 ORDER BY gateway_name, hostname, url_path""",
             [sub_id] + names,
         ).fetchall() if names else []
 
         if not gw_rows:
-            lines.append('    NO_DATA["⚠️ No routing rules harvested yet<br/>Run: python Scripts/Harvest/appgw_routing_map.py"]')
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No routing rules harvested yet — run Scripts/Harvest/appgw_routing_map.py"}
+
+        rows = []
+        for gw_name, listener, hostname, protocol, url_path, pool, be_json, be_port, waf in gw_rows:
+            try:
+                be_fqdns = _json.loads(be_json) if be_json else []
+            except Exception:
+                be_fqdns = []
+            targets = ", ".join(str(f) for f in be_fqdns[:3])
+            if len(be_fqdns) > 3:
+                targets += f" +{len(be_fqdns)-3} more"
+            if be_port:
+                targets += f":{be_port}"
+            rows.append([
+                gw_name,
+                hostname or listener or "—",
+                protocol or "HTTPS",
+                url_path if url_path and url_path != "/*" else "/*",
+                pool or "—",
+                targets or "—",
+                "🛡️ " + waf if waf else "—",
+            ])
+        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+
+    # ── APIM ──────────────────────────────────────────────────────────────────
+    elif "apimanagement" in arm_type_lc:
+        # Prefer per-operation detail when available; fall back to per-API rows.
+        has_ops_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='apim_api_operations'"
+        ).fetchone()
+
+        if has_ops_table and names:
+            op_rows = conn.execute(
+                f"""SELECT apim_name, api_display_name, method, api_path, url_template,
+                           backend_url, requires_subscription, display_name
+                    FROM apim_api_operations
+                    WHERE subscription_id=? AND apim_name IN ({ph})
+                    ORDER BY apim_name, api_path, method, url_template""",
+                [sub_id] + names,
+            ).fetchall()
         else:
-            gw_nodes: dict = {}
-            listener_nodes: dict = {}
-            for row in gw_rows:
-                gw_name, listener, hostname, protocol, url_path, pool_name, be_fqdns_json, be_port, waf_policy = row
-                gw_nid = _sanitise_node_id(f"gw_{gw_name}")
-                if gw_nid not in gw_nodes:
-                    waf_lbl = " 🛡️" if waf_policy else ""
-                    lines.append(f'    {gw_nid}["🔶 {_esc(gw_name)}{waf_lbl}"]')
-                    gw_nodes[gw_nid] = True
+            op_rows = []
 
-                host_lbl = hostname or listener or "?"
-                proto_lbl = f"<br/>{_esc(protocol or 'HTTPS')}"
-                path_lbl = f"<br/>{_esc(url_path)}" if url_path and url_path != "/*" else ""
-                listener_nid = _sanitise_node_id(f"lis_{gw_name}_{listener}_{hostname}")
-                if listener_nid not in listener_nodes:
-                    lines.append(f'    {listener_nid}["🔊 {_esc(host_lbl)}{proto_lbl}{path_lbl}"]')
-                    lines.append(f'    {gw_nid} -->|"{_esc(protocol or "HTTPS")}"| {listener_nid}')
-                    listener_nodes[listener_nid] = True
+        if op_rows:
+            title   = "APIM — Operations & Backend Routing"
+            columns = ["APIM", "API", "Method", "Full Path", "Backend", "Auth"]
+            rows = []
+            for apim_n, api_disp, method, api_path, url_tpl, backend_url, req_sub, op_disp in op_rows:
+                base = (api_path or "").rstrip("/")
+                op_path = (url_tpl or "").lstrip("/")
+                full_path = f"{base}/{op_path}" if op_path else (base or "/")
+                rows.append([
+                    apim_n,
+                    api_disp or "—",
+                    method or "—",
+                    full_path,
+                    backend_url or "—",
+                    "🔑 Required" if req_sub else "Open",
+                ])
+            return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
 
-                try:
-                    be_fqdns = _json.loads(be_fqdns_json) if be_fqdns_json else []
-                except Exception:
-                    be_fqdns = []
-                if be_fqdns or pool_name:
-                    be_label_parts = [_esc(pool_name or "pool")]
-                    for f in be_fqdns[:2]:
-                        be_label_parts.append(_esc(str(f)))
-                    if len(be_fqdns) > 2:
-                        be_label_parts.append(f"+{len(be_fqdns)-2} more")
-                    if be_port:
-                        be_label_parts.append(f":{be_port}")
-                    be_nid = _sanitise_node_id(f"be_{gw_name}_{pool_name}")
-                    lines.append(f'    {be_nid}["🖥 {"<br/>".join(be_label_parts)}"]')
-                    lines.append(f'    {listener_nid} --> {be_nid}')
+        # Fallback: per-API summary from apim_api_routes
+        title   = "APIM — API Routes"
+        columns = ["APIM Instance", "API", "Path", "Backend URL", "Auth", "Protocols"]
+        apim_rows = conn.execute(
+            f"""SELECT apim_name, api_display_name, api_path, backend_url,
+                       service_url, requires_subscription, api_protocols
+                FROM apim_api_routes
+                WHERE subscription_id=? AND apim_name IN ({ph})
+                ORDER BY apim_name, api_path""",
+            [sub_id] + names,
+        ).fetchall() if names else []
 
-        css_lines = [
-            "/* App Gateway drill-down */",
-            ".gwNode       { stroke:#d32f2f; stroke-width:2px; fill:#fde8e8; }",
-            ".listenerNode { stroke:#f97316; stroke-width:2px; fill:#ffedd5; }",
-            ".beNode       { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
-        ]
+        if not apim_rows:
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No API routes harvested yet — run Scripts/Harvest/apim_routing_map.py"}
 
-    # ── Generic: show each resource with enriched properties ─────────────────
+        rows = []
+        for apim_n, api_display, api_path, backend_url, svc_url, req_sub, protocols in apim_rows:
+            rows.append([
+                apim_n,
+                api_display or "—",
+                api_path or "—",
+                backend_url or svc_url or "—",
+                "🔑 Required" if req_sub else "Open",
+                protocols or "HTTPS",
+            ])
+        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+
+    # ── App Service Plan → hosted App Services ────────────────────────────────
+    elif "serverfarms" in arm_type_lc:
+        n = len(names)
+        title   = f"App Service Plan — Hosted Apps ({n} plan{'s' if n != 1 else ''})"
+        columns = ["App Service", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Plan"]
+        ph_plans = ",".join("?" * len(names)) if names else "''"
+
+        site_rows = conn.execute(
+            f"""SELECT s.name, s.resource_group, s.fqdn, s.is_public, s.is_restricted,
+                       s.raw_json, p.name AS plan_name
+                FROM provisioned_assets s
+                JOIN provisioned_assets p
+                    ON lower(json_extract(s.raw_json, '$.appServicePlanId')) = lower(p.id)
+                WHERE s.subscription_id = ?
+                  AND s.type LIKE '%/sites'
+                  AND p.name IN ({ph_plans})
+                ORDER BY p.name, s.name""",
+            [sub_id] + names,
+        ).fetchall() if names else []
+
+        if not site_rows:
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No App Services found on this plan"}
+
+        rows = []
+        for site_name, rg, fqdn, is_public, is_restricted, raw, plan_name in site_rows:
+            try:
+                kind = (_json.loads(raw) or {}).get("kind") or "—"
+            except Exception:
+                kind = "—"
+            rows.append([
+                site_name,
+                rg or "—",
+                fqdn or "—",
+                _exposure(is_public, is_restricted),
+                kind,
+                plan_name or "—",
+            ])
+        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+
+    # ── Generic resources ─────────────────────────────────────────────────────
     else:
         type_label = _friendly_type(arm_type) if arm_type else "Resources"
-        title = f"{type_label} Details"
-        lines = ["graph TB"]
+        n = len(names)
+        title   = f"{type_label} — {n} resource{'s' if n != 1 else ''}"
+        columns = ["Resource", "Resource Group", "URL / FQDN", "Exposure", "Entry Points", "SKU"]
 
         asset_rows = conn.execute(
             f"""SELECT name, resource_group, fqdn, is_public, is_restricted,
                        endpoints, auth_methods, sku, type
                 FROM provisioned_assets
-                WHERE subscription_id = ? AND name IN ({placeholders})
+                WHERE subscription_id=? AND name IN ({ph})
                 ORDER BY name""",
             [sub_id] + names,
         ).fetchall() if names else []
 
-        # Also fetch child assets (e.g. SQL databases under SQL servers)
-        child_rows = conn.execute(
-            f"""SELECT name, resource_group, fqdn, is_public, is_restricted,
-                       endpoints, auth_methods, sku, type
-                FROM provisioned_assets
-                WHERE subscription_id = ?
-                  AND type LIKE ?
-                  AND (resource_group IN (
-                        SELECT resource_group FROM provisioned_assets
-                        WHERE subscription_id = ? AND name IN ({placeholders})
-                  ))
-                ORDER BY type, name""",
-            [sub_id, arm_type_lc.rstrip("/") + "/%", sub_id] + names,
-        ).fetchall() if names else []
-
-        parent_names_set = {r[0] for r in asset_rows}
+        # Build entry-point map: which App GWs / APIMs route to each resource
+        entry_map: dict = {}
+        try:
+            for gw_name, be_json in conn.execute(
+                "SELECT gateway_name, backend_fqdns FROM appgw_routing_rules WHERE subscription_id=?",
+                (sub_id,),
+            ).fetchall():
+                be_fqdns = _json.loads(be_json) if be_json else []
+                for asset_name in names:
+                    if any(asset_name.lower() in str(f).lower() for f in be_fqdns):
+                        entry_map.setdefault(asset_name, set()).add(f"App GW: {gw_name}")
+        except Exception:
+            pass
+        try:
+            for apim_name, be_url, svc_url in conn.execute(
+                "SELECT apim_name, backend_url, service_url FROM apim_api_routes WHERE subscription_id=?",
+                (sub_id,),
+            ).fetchall():
+                combined = (str(be_url or "") + " " + str(svc_url or "")).lower()
+                for asset_name in names:
+                    if asset_name.lower() in combined:
+                        entry_map.setdefault(asset_name, set()).add(f"APIM: {apim_name}")
+        except Exception:
+            pass
 
         if not asset_rows:
-            lines.append(f'    NO_DATA["⚠️ No {_esc(type_label)} found in provisioned assets"]')
-        else:
-            for row in asset_rows:
-                name, rg, fqdn, is_public, is_restricted, endpoints_json, auth_json, sku, rtype = row
-                nid = _sanitise_node_id(f"res_{name}")
-                try:
-                    endpoints = _json.loads(endpoints_json) if endpoints_json else []
-                except Exception:
-                    endpoints = []
-                try:
-                    auth_methods = _json.loads(auth_json) if auth_json else []
-                except Exception:
-                    auth_methods = []
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": f"No {type_label} found in provisioned assets"}
 
-                # Exposure badge
-                if is_public:
-                    exposure = "🌐 Public"
-                elif is_restricted:
-                    exposure = "⚠️ IP-Restricted"
-                else:
-                    exposure = "🔒 Private"
-
-                # Build label lines
-                label_parts = [_esc(name)]
-                if fqdn:
-                    label_parts.append(_esc(fqdn))
-                label_parts.append(exposure)
-                if auth_methods:
-                    label_parts.append("🔐 " + _esc(", ".join(auth_methods[:3])))
-                if sku:
-                    label_parts.append(_esc(f"SKU: {sku}"))
-                label = "<br/>".join(label_parts)
-                lines.append(f'    {nid}["{label}"]')
-
-                # Register child drill if has children
-                child_count = sum(1 for c in child_rows if True)
-                node_drilldown_map[nid] = {
-                    "title": f"{type_label}: {name}",
-                    "arm_type": rtype,
-                    "resources": [{"rg": rg, "name": name}],
-                    "can_drill": False,
-                }
-
-                # Endpoint ports
-                for ep in endpoints[:3]:
-                    ep_addr = ep.get("address") or fqdn or name
-                    ep_port = ep.get("port")
-                    ep_proto = ep.get("protocol", "")
-                    if ep_port or ep_proto:
-                        ep_nid = _sanitise_node_id(f"ep_{name}_{ep_port}")
-                        port_lbl = f":{ep_port}" if ep_port else ""
-                        lines.append(f'    {ep_nid}["📡 {_esc(ep_addr)}{port_lbl}<br/>{_esc(ep_proto)}"]')
-                        lines.append(f'    {nid} --> {ep_nid}')
-
-            # Child resources (e.g. SQL databases, sub-resources)
-            child_by_parent: dict = {}
-            for crow in child_rows:
-                cname, crg, cfqdn, cis_public, cis_restricted, *_ = crow
-                # Group child under parent by resource group
-                parent_key = crg
-                child_by_parent.setdefault(parent_key, []).append(crow)
-
-            for prow in asset_rows:
-                pname, prg = prow[0], prow[1]
-                pnid = _sanitise_node_id(f"res_{pname}")
-                children = child_by_parent.get(prg, [])
-                for crow in children[:10]:
-                    cname = crow[0]
-                    cnid = _sanitise_node_id(f"child_{cname}")
-                    lines.append(f'    {cnid}["💾 {_esc(cname)}"]')
-                    lines.append(f'    {pnid} --> {cnid}')
-
-        css_lines = [
-            f"/* {type_label} drill-down */",
-            ".resNode  { stroke:#1565c0; stroke-width:2px; fill:#e3f2fd; }",
-            ".epNode   { stroke:#388e3c; stroke-width:2px; fill:#dcfce7; }",
-            ".childNode { stroke:#6a1b9a; stroke-width:2px; fill:#f3e5f5; }",
-        ]
-
-    return {
-        "title": title,
-        "mermaid": "\n".join(lines),
-        "css_code": "\n".join(css_lines),
-        "node_drilldown_map": node_drilldown_map,
-    }
+        rows = []
+        for name, rg, fqdn, is_public, is_restricted, _ep, _auth, sku, _type in asset_rows:
+            entry_pts = sorted(entry_map.get(name, set()))
+            rows.append([
+                name,
+                rg or "—",
+                fqdn or "—",
+                _exposure(is_public, is_restricted),
+                ", ".join(entry_pts) if entry_pts else "—",
+                sku or "—",
+            ])
+        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
 
 
 @app.route("/api/subscriptions/<sub_id>/drilldown", methods=["POST"])
 def api_subscription_drilldown(sub_id: str):
-    """Return a drill-down child diagram for a specific grouped resource node.
+    """Return a drill-down table for a specific grouped resource node.
 
     Request body JSON: {arm_type: str, resources: [{rg, name}]}
-    Response: {title, mermaid, css_code, node_drilldown_map}
+    Response: {title, view_type, columns, rows}
     """
     conn = _get_db_with_schema()
     if conn is None:
@@ -14389,25 +14376,10 @@ def api_subscription_drilldown(sub_id: str):
         if not arm_type:
             return jsonify({"error": "arm_type is required"}), 400
 
-        # Whitelist of drillable ARM types
-        _drillable = {
-            "microsoft.network/applicationgateways",
-            "microsoft.apimanagement/service",
-            "microsoft.keyvault/vaults",
-            "microsoft.storage/storageaccounts",
-            "microsoft.sql/servers",
-            "microsoft.containerservice/managedclusters",
-            "microsoft.documentdb/databaseaccounts",
-            "microsoft.web/sites",
-        }
-        if arm_type.lower() not in _drillable:
-            return jsonify({"error": f"Drill-down not supported for type: {arm_type}"}), 400
-
-        result = _build_child_diagram(conn, sub_id, arm_type, resources)
+        result = _build_child_table(conn, sub_id, arm_type, resources)
         return jsonify(result)
     finally:
         conn.close()
-
 
 
 def _build_drilldown_data(rows) -> dict:

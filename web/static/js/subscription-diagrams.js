@@ -123,6 +123,8 @@ if (document.readyState === 'loading') {
 
 // Expose to window (export is already done at function declaration)
 window.initSubscriptionDiagrams = initSubscriptionDiagrams;
+window.applyDiagramScale = applyDiagramScale;
+window.autoFitDiagram = autoFitDiagram;
 
 /** Post-process newly rendered SVGs inside a container (called after scoped mermaid.run). */
 window.postProcessDiagramSvgs = (container) => {

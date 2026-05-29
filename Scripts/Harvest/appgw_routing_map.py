@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Build a full App Gateway → backend routing map and persist it to cozo.db.
 
+NOTE: This is now run automatically as part of the main harvest pipeline
+(Scripts/Harvest/harvest_azure_assets.py). You only need to run this script
+manually if you want to refresh routing/WAF data without re-harvesting all assets,
+or if you need to use the --dry-run flag to inspect what would be written.
+
 For each Application Gateway in the subscription this script:
   1. Calls `az network application-gateway show` per gateway to get full nested properties
   2. Builds the chain: public hostname (listener) → routing rule → URL path map → backend pool → backend FQDNs

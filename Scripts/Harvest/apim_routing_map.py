@@ -51,6 +51,43 @@ CREATE TABLE IF NOT EXISTS apim_api_routes (
 );
 CREATE INDEX IF NOT EXISTS idx_apim_routes_sub  ON apim_api_routes(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_apim_routes_apim ON apim_api_routes(apim_name);
+
+CREATE TABLE IF NOT EXISTS apim_api_operations (
+    id                  TEXT PRIMARY KEY,   -- {apim_name}::{api_name}::{operation_id}
+    subscription_id     TEXT NOT NULL,
+    apim_name           TEXT NOT NULL,
+    api_name            TEXT NOT NULL,
+    api_display_name    TEXT,
+    api_path            TEXT,               -- base path of the owning API
+    backend_url         TEXT,               -- inherited from API-level route
+    operation_id        TEXT NOT NULL,
+    display_name        TEXT,
+    method              TEXT,               -- GET POST PUT DELETE PATCH etc.
+    url_template        TEXT,               -- e.g. /users/{userId}
+    description         TEXT,
+    requires_subscription INTEGER DEFAULT 1,
+    last_synced         DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_apim_ops_sub  ON apim_api_operations(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_apim_ops_apim ON apim_api_operations(apim_name);
+CREATE INDEX IF NOT EXISTS idx_apim_ops_api  ON apim_api_operations(api_name);
+
+CREATE TABLE IF NOT EXISTS apim_backends (
+    id                  TEXT PRIMARY KEY,   -- {apim_name}::{backend_id}
+    subscription_id     TEXT NOT NULL,
+    apim_name           TEXT NOT NULL,
+    backend_id          TEXT NOT NULL,
+    title               TEXT,
+    description         TEXT,
+    url                 TEXT,
+    protocol            TEXT,               -- http | soap
+    circuit_breaker     TEXT,               -- JSON
+    credentials         TEXT,               -- JSON (headers, query params, cert)
+    tls_validate_cert   INTEGER DEFAULT 1,
+    last_synced         DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_apim_backends_sub  ON apim_backends(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_apim_backends_apim ON apim_backends(apim_name);
 """
 
 
@@ -93,6 +130,16 @@ def list_backends(apim_name: str, resource_group: str, subscription_id: str) -> 
         "apim", "backend", "list",
         "--service-name", apim_name,
         "-g", resource_group,
+        subscription_id=subscription_id,
+    )
+
+
+def list_operations(apim_name: str, resource_group: str, api_id: str, subscription_id: str) -> list[dict]:
+    return _az(
+        "apim", "api", "operation", "list",
+        "--service-name", apim_name,
+        "-g", resource_group,
+        "--api-id", api_id,
         subscription_id=subscription_id,
     )
 
@@ -141,6 +188,42 @@ def process_apim(
         if b_url:
             backend_map[b_name] = b_url
     print(f"{len(backends_raw)} backends")
+
+    # Persist full backend details
+    if not dry_run:
+        for b in backends_raw:
+            b_name = b.get("name") or ""
+            props = b.get("properties") or b
+            cb_raw = props.get("circuitBreaker") or b.get("circuitBreaker")
+            cred_raw = props.get("credentials") or b.get("credentials")
+            tls_raw = props.get("tls") or b.get("tls") or {}
+            conn.execute(
+                """
+                INSERT INTO apim_backends
+                    (id, subscription_id, apim_name, backend_id, title, description,
+                     url, protocol, circuit_breaker, credentials, tls_validate_cert, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title, description=excluded.description,
+                    url=excluded.url, protocol=excluded.protocol,
+                    circuit_breaker=excluded.circuit_breaker,
+                    credentials=excluded.credentials,
+                    tls_validate_cert=excluded.tls_validate_cert,
+                    last_synced=excluded.last_synced
+                """,
+                (
+                    f"{apim_name}::{b_name}",
+                    subscription_id, apim_name, b_name,
+                    props.get("title") or b.get("title"),
+                    props.get("description") or b.get("description"),
+                    props.get("url") or b.get("url"),
+                    props.get("protocol") or b.get("protocol") or "http",
+                    json.dumps(cb_raw) if cb_raw else None,
+                    json.dumps(cred_raw) if cred_raw else None,
+                    1 if tls_raw.get("validateCertificateChain", True) else 0,
+                    now,
+                ),
+            )
 
     # --- APIs ---
     print(f"    fetching APIs...", end=" ", flush=True)
@@ -206,12 +289,49 @@ def process_apim(
                 """,
                 (
                     route_id, subscription_id, apim_name, apim_resource_id,
-                    api_name, api_display_name, api_path, protocols,
+                    api_name, api_display, api_path, protocols,
                     backend_id, backend_url, service_url,
                     requires_sub, now,
                 ),
             )
             routes_upserted += 1
+
+            # --- Harvest operations for this API ---
+            ops_raw = list_operations(apim_name, resource_group, api_name, subscription_id)
+            ops_upserted = 0
+            for op in ops_raw:
+                op_id   = op.get("name") or op.get("id", "").split("/")[-1] or ""
+                op_disp = op.get("displayName") or op_id
+                method  = op.get("method") or ""
+                url_tpl = op.get("urlTemplate") or op.get("url") or ""
+                desc    = op.get("description") or ""
+                conn.execute(
+                    """
+                    INSERT INTO apim_api_operations
+                        (id, subscription_id, apim_name, api_name, api_display_name,
+                         api_path, backend_url, operation_id, display_name,
+                         method, url_template, description, requires_subscription, last_synced)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        display_name=excluded.display_name,
+                        method=excluded.method,
+                        url_template=excluded.url_template,
+                        description=excluded.description,
+                        api_path=excluded.api_path,
+                        backend_url=excluded.backend_url,
+                        requires_subscription=excluded.requires_subscription,
+                        last_synced=excluded.last_synced
+                    """,
+                    (
+                        f"{apim_name}::{api_name}::{op_id}",
+                        subscription_id, apim_name, api_name, api_display,
+                        api_path, backend_url, op_id, op_disp,
+                        method.upper(), url_tpl, desc, requires_sub, now,
+                    ),
+                )
+                ops_upserted += 1
+            if ops_raw:
+                print(f"      {api_display}: {ops_upserted} operations")
 
             # --- Create resource_connection: APIM → backend asset ---
             backend_fqdn = _url_to_fqdn(backend_url)

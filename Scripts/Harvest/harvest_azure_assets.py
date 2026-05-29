@@ -346,6 +346,15 @@ def harvest_subscription(
             print("  To confirm removal:  UPDATE provisioned_assets SET status='removed' WHERE id='<id>';")
             print("  To restore (false positive):  UPDATE provisioned_assets SET status='active' WHERE id='<id>';")
 
+    # App Gateway routing + WAF — runs after assets so fqdn_to_asset lookup is populated
+    print(f"  [App Gateway Routing] harvesting listeners, routing rules & WAF policies...", flush=True)
+    try:
+        rules, waf = app_gateway.harvest_routing(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [App Gateway Routing] {rules} routing rules, {waf} WAF policies {action}")
+    except Exception as exc:
+        print(f"  [App Gateway Routing] FAILED ({exc})")
+
     print(f"  [total] {total} assets for {sub_name}")
     return total
 

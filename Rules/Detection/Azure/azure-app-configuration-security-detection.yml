@@ -1,0 +1,242 @@
+rules:
+  # ── Context discovery ────────────────────────────────────────────────────────
+  - id: context-azure-app-configuration
+    message: |
+      Azure App Configuration store detected in infrastructure.
+      Extracts configuration for security analysis.
+    severity: INFO
+    languages: [terraform, hcl]
+    pattern: |
+      resource "azurerm_app_configuration" $NAME {
+        ...
+        location = $LOCATION
+        ...
+      }
+    metadata:
+      finding_kind: Asset
+      asset_provider: azure
+      rule_type: context_discovery
+      category: infrastructure
+      subcategory: configuration
+      technology: [terraform, azure, app-configuration]
+      target_files: ["*.tf", "**/*.tf"]
+      extracts:
+        service_type: App Configuration
+        resource_type: azurerm_app_configuration
+        resource_name: $NAME
+        properties:
+          - name: location
+            pattern: location = "$LOCATION"
+          - name: sku
+            pattern: sku = "$SKU"
+          - name: local_auth_enabled
+            pattern: local_auth_enabled = $LOCAL_AUTH
+          - name: public_network_access
+            pattern: public_network_access = "$PNA"
+      description: |
+        Detects Azure App Configuration stores in Terraform.
+        Used to scope App Configuration security checks.
+
+  # ── Security findings ────────────────────────────────────────────────────────
+  - id: azure-app-configuration-local-auth-enabled
+    message: |
+      Azure App Configuration store has local authentication (access keys) enabled.
+      Access keys allow any holder to read all configuration values without Azure AD identity.
+      Set local_auth_enabled = false to enforce RBAC-only access via Azure AD.
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+            local_auth_enabled = true
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "azurerm_app_configuration" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_app_configuration" $NAME {
+                ...
+                local_auth_enabled = false
+                ...
+              }
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security
+      category: authentication
+      subcategory: access-keys
+      severity: MEDIUM
+      technology: [terraform, azure, app-configuration]
+      target_files: ["*.tf", "**/*.tf"]
+      cwe: [CWE-306]
+      remediation: |
+        Add local_auth_enabled = false to the azurerm_app_configuration resource.
+        Assign App Configuration Data Reader or Data Owner roles to consuming managed identities.
+      description: |
+        App Configuration access keys bypass Azure AD and RBAC entirely.
+        Any application or person with the connection string can read all config values.
+        Disabling local auth forces all clients to authenticate via Azure AD.
+
+  - id: azure-app-configuration-no-identity
+    message: |
+      Azure App Configuration store has no managed identity assigned.
+      Without an identity the store cannot authenticate to other services (e.g. Key Vault references)
+      using keyless MSI auth, and consuming apps have no principal to grant RBAC roles to.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+            identity {
+              ...
+            }
+            ...
+          }
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security
+      category: authentication
+      subcategory: managed-identity
+      severity: LOW
+      technology: [terraform, azure, app-configuration]
+      target_files: ["*.tf", "**/*.tf"]
+      cwe: [CWE-522]
+      remediation: |
+        Add an identity block to the azurerm_app_configuration resource:
+          identity {
+            type = "SystemAssigned"
+          }
+        Then assign the App Configuration Data Reader role to consuming app managed identities.
+      description: |
+        A managed identity enables keyless authentication between Azure services.
+        Without one, the store relies on access keys for any service-to-service calls
+        (e.g. resolving Key Vault references), and there is no MSI principal to scope RBAC roles to.
+
+  - id: azure-app-configuration-public-access-enabled
+    message: |
+      Azure App Configuration store allows public network access without a private endpoint.
+      The .azconfig.io endpoint is internet-reachable, increasing the attack surface.
+      Restrict access via a private endpoint and set public_network_access = "Disabled".
+    severity: WARNING
+    languages: [terraform, hcl]
+    pattern-either:
+      - pattern: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+            public_network_access = "Enabled"
+            ...
+          }
+      - patterns:
+          - pattern: |
+              resource "azurerm_app_configuration" $NAME {
+                ...
+              }
+          - pattern-not: |
+              resource "azurerm_app_configuration" $NAME {
+                ...
+                public_network_access = "Disabled"
+                ...
+              }
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security
+      category: network
+      subcategory: public-exposure
+      severity: MEDIUM
+      technology: [terraform, azure, app-configuration]
+      target_files: ["*.tf", "**/*.tf"]
+      cwe: [CWE-284]
+      remediation: |
+        Set public_network_access = "Disabled" on the azurerm_app_configuration resource
+        and configure a private endpoint (azurerm_private_endpoint) targeting the
+        "configurationStores" subresource. Ensure consumers are on the same VNet.
+      description: |
+        The default public endpoint (https://<name>.azconfig.io) is reachable from the internet.
+        Combined with enabled access keys this creates a remotely exploitable credential exposure risk.
+        A private endpoint removes this from the public internet entirely.
+
+  - id: azure-app-configuration-no-purge-protection
+    message: |
+      Azure App Configuration store does not have purge protection enabled.
+      Without purge protection, a deleted store and all its configuration data can be
+      permanently destroyed immediately — either accidentally or by a malicious actor.
+    severity: WARNING
+    languages: [terraform, hcl]
+    patterns:
+      - pattern: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+          }
+      - pattern-not: |
+          resource "azurerm_app_configuration" $NAME {
+            ...
+            purge_protection_enabled = true
+            ...
+          }
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security
+      category: resilience
+      subcategory: data-protection
+      severity: LOW
+      technology: [terraform, azure, app-configuration]
+      target_files: ["*.tf", "**/*.tf"]
+      cwe: [CWE-693]
+      remediation: |
+        Add purge_protection_enabled = true and soft_delete_retention_days = 7 (or higher)
+        to the azurerm_app_configuration resource. Note: purge protection requires Standard SKU.
+      description: |
+        Soft delete and purge protection prevent accidental or malicious permanent deletion
+        of configuration stores. Without purge protection, a delete operation is irreversible.
+
+  # ── Credential leak detection ────────────────────────────────────────────────
+  - id: azure-app-configuration-connection-string-in-code
+    message: |
+      Azure App Configuration connection string detected in source code or configuration.
+      Connection strings grant access-key-level access to all configuration values.
+      Use managed identity with DefaultAzureCredential instead.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: |
+      Endpoint=https://[a-zA-Z0-9\-]+\.azconfig\.io;Id=[^;]+;Secret=[^"'\s]+
+    metadata:
+      finding_kind: Finding
+      asset_provider: azure
+      rule_type: security
+      category: secrets
+      subcategory: credential-leak
+      severity: HIGH
+      technology: [azure, app-configuration]
+      target_files:
+        - "**/*.cs"
+        - "**/*.ts"
+        - "**/*.js"
+        - "**/*.py"
+        - "**/*.json"
+        - "**/*.yml"
+        - "**/*.yaml"
+        - "**/*.env"
+        - "**/*.config"
+        - "**/*.xml"
+      cwe: [CWE-798]
+      remediation: |
+        Remove the connection string immediately and rotate the access key in the Azure portal.
+        Replace with endpoint-only initialisation and DefaultAzureCredential:
+          C#: new ConfigurationClient(new Uri(endpoint), new DefaultAzureCredential())
+          Python: AzureAppConfigurationClient(endpoint, DefaultAzureCredential())
+      description: |
+        A hardcoded App Configuration connection string embeds a secret key directly in source.
+        This key can be used from anywhere on the internet to enumerate and read all config values
+        in the store, including any values that should be in Key Vault but were placed here instead.
