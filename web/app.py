@@ -13859,6 +13859,47 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             label += f" {suffix}"
         return label
 
+    def _azure_fqdn_suffix(arm_type: str) -> str | None:
+        """Return the well-known Azure FQDN suffix for resource types whose FQDN
+        is not stored in the DB but can be derived from the resource name."""
+        t = (arm_type or "").lower()
+        if "keyvault" in t:
+            return "vault.azure.net"
+        if "storage" in t:
+            return "blob.core.windows.net"
+        if "servicebus" in t or "eventhub" in t:
+            return "servicebus.windows.net"
+        if "sql" in t and ("server" in t or "sql" in t):
+            return "database.windows.net"
+        if "cache/redis" in t or "redis" in t:
+            return "redis.cache.windows.net"
+        if "documentdb" in t:
+            return "documents.azure.com"
+        return None
+
+    def _resolve_fqdns(item: dict) -> list[str]:
+        """Return FQDNs for a diagram node, deriving them when the DB field is null.
+
+        For individual resources (count == 1): derive from name + known suffix.
+        For groups (count > 1): return the wildcard pattern (e.g. *.vault.azure.net)
+        so the user can still verify what service family is exposed.
+        """
+        stored = item.get("fqdns") or []
+        if stored:
+            return stored
+        arm_type = item.get("arm_type") or item.get("type") or ""
+        suffix = _azure_fqdn_suffix(arm_type)
+        if not suffix:
+            return []
+        count = item.get("count", 1)
+        resources = item.get("resources") or []
+        if count == 1 and resources:
+            name = resources[0].get("name") or item.get("name") or ""
+            if name:
+                return [f"{name}.{suffix}"]
+        # For groups, return wildcard pattern so the suffix is visible
+        return [f"*.{suffix}"]
+
     def _data_exposure_label(arm_type: str, count: int) -> str:
         """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
         t = (arm_type or "").lower()
@@ -13994,37 +14035,45 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
                     _add_link(f'    {src_nid} -->|"hosted on"| {dst_nid}', "white")
 
     # SECURITY: Internet → Public Resources (red — direct exposure, no gateway protection)
-    # Arrow label includes FQDN when available so the endpoint can be verified directly.
-    def _direct_exposure_label(arm_type: str, fqdns: list, count: int) -> str:
-        """Arrow label for direct Internet → resource exposure, including FQDN when there is one."""
-        proto_part = _data_exposure_label(arm_type, count)
-        if fqdns and count == 1:
+    # Arrow label includes FQDN (or derived FQDN pattern) so the endpoint can be verified.
+    def _direct_exposure_label(arm_type: str, item: dict) -> str:
+        """Arrow label for direct Internet → resource exposure.
+
+        Uses stored or derived FQDNs so every public resource has a verifiable address.
+        Single resource → exact FQDN.  Group → wildcard pattern (*.vault.azure.net).
+        Falls back to protocol label when no FQDN can be determined.
+        """
+        fqdns = _resolve_fqdns(item)
+        count = item.get("count", 1)
+        if fqdns:
             first = fqdns[0]
-            if len(first) > 38:
-                first = first[:36] + "…"
-            return f"{first}"
-        return proto_part
+            if len(first) > 40:
+                first = first[:38] + "…"
+            # For groups show count alongside the pattern so scale is clear
+            return f"{first} x{count}" if count > 1 else first
+        return _data_exposure_label(arm_type, count)
 
     for item in shown_backend:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item.get("fqdns") or [], item.get("count", 1))
+            arrow_label = _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
     for item in shown_api:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item.get("fqdns") or [], item.get("count", 1))
+            arrow_label = _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
     for item in shown_data:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item.get("fqdns") or [], item.get("count", 1))
+            arrow_label = _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
+
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
@@ -14101,8 +14150,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         resources = item.get("resources") or []
         if not resources and item.get("name"):
             resources = [{"rg": item.get("rg"), "name": item.get("name")}]
+        # Use label (user-friendly display name) as the title, falling back to
+        # type then name.  This prevents internal group keys like "Key Vault_ds_group"
+        # from appearing as the drill-down panel heading.
+        title = item.get("label") or item.get("type") or item.get("name") or node_id
         node_drilldown_map[node_id] = {
-            "title": item.get("name", node_id),
+            "title": title,
             "arm_type": item.get("arm_type") or item.get("type"),
             "resources": resources,
             "can_drill": arm_type in _drillable_arm_types and bool(resources),
@@ -14215,14 +14268,13 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
 
         if op_rows:
             title   = "APIM — Operations & Backend Routing"
-            columns = ["APIM", "API", "Method", "Full Path", "Backend", "Auth"]
+            columns = ["API", "Method", "Full Path", "Backend", "Auth"]
             rows = []
             for apim_n, api_disp, method, api_path, url_tpl, backend_url, req_sub, op_disp in op_rows:
                 base = (api_path or "").rstrip("/")
                 op_path = (url_tpl or "").lstrip("/")
                 full_path = f"{base}/{op_path}" if op_path else (base or "/")
                 rows.append([
-                    apim_n,
                     api_disp or "—",
                     method or "—",
                     full_path,
@@ -14233,7 +14285,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
 
         # Fallback: per-API summary from apim_api_routes
         title   = "APIM — API Routes"
-        columns = ["APIM Instance", "API", "Path", "Backend URL", "Auth", "Protocols"]
+        columns = ["API", "Path", "Backend URL", "Auth", "Protocols"]
         apim_rows = conn.execute(
             f"""SELECT apim_name, api_display_name, api_path, backend_url,
                        service_url, requires_subscription, api_protocols
@@ -14250,7 +14302,6 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         rows = []
         for apim_n, api_display, api_path, backend_url, svc_url, req_sub, protocols in apim_rows:
             rows.append([
-                apim_n,
                 api_display or "—",
                 api_path or "—",
                 backend_url or svc_url or "—",
