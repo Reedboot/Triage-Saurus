@@ -139,6 +139,10 @@ from Azure.aks import (
     _build_route_model,
     _make_route_id,
 )
+from Azure.apim import _get_gateway_hosts, _get_apim_exposure_level
+from Azure.function_apps import _extract_http_triggers
+from Azure.firewall import _extract_nat_rules, _extract_app_rules, _get_firewall_exposure_level
+from Azure.front_door import _extract_classic_routes, _extract_afd_route
 
 
 class TestGetIngressStatusAddresses:
@@ -378,3 +382,205 @@ class TestMakeRouteId:
         assert default_id != rule_id
         assert "default" in default_id
         assert "rule" in rule_id
+
+
+class TestApimGatewayHosts:
+    def test_prefers_hostname_configurations_and_deduplicates(self):
+        service = {
+            "properties": {
+                "hostnameConfigurations": [
+                    {"hostName": "api.contoso.com"},
+                    {"hostName": "api.contoso.com"},
+                    {"hostName": "gateway.azure-api.net"},
+                ],
+                "gatewayUrl": "https://gateway.azure-api.net/",
+            }
+        }
+        assert _get_gateway_hosts(service) == ["api.contoso.com", "gateway.azure-api.net"]
+
+    def test_falls_back_to_gateway_url(self):
+        service = {"properties": {"gatewayUrl": "https://fallback.azure-api.net/"}}
+        assert _get_gateway_hosts(service) == ["fallback.azure-api.net"]
+
+
+class TestApimExposureLevel:
+    def test_internal_for_internal_vnet(self):
+        assert _get_apim_exposure_level({"properties": {"virtualNetworkType": "Internal"}}) == "Internal"
+
+    def test_internal_for_disabled_public_network_access(self):
+        assert _get_apim_exposure_level({"properties": {"publicNetworkAccess": "Disabled"}}) == "Internal"
+
+    def test_public_otherwise(self):
+        assert _get_apim_exposure_level({"properties": {"virtualNetworkType": "External"}}) == "Public"
+
+
+class TestFunctionTriggerParsing:
+    def test_extracts_http_trigger_fields(self):
+        functions = [{
+            "name": "myapp/RunReport",
+            "properties": {
+                "config": {
+                    "bindings": [
+                        {"type": "httpTrigger", "route": "reports/run", "authLevel": "anonymous", "methods": ["get", "post"]},
+                        {"type": "http"},
+                    ]
+                }
+            },
+        }]
+        triggers = _extract_http_triggers(functions)
+        assert triggers == [{
+            "function_name": "RunReport",
+            "route": "reports/run",
+            "auth_level": "anonymous",
+            "methods": ["GET", "POST"],
+        }]
+
+    def test_skips_non_http_and_missing_bindings(self):
+        functions = [
+            {"name": "myapp/QueueOnly", "properties": {"config": {"bindings": [{"type": "queueTrigger"}]}}},
+            {"name": "myapp/NoConfig", "properties": {}},
+        ]
+        assert _extract_http_triggers(functions) == []
+
+    def test_defaults_route_to_function_name(self):
+        functions = [{
+            "name": "myapp/DefaultRoute",
+            "config": {"bindings": [{"type": "httpTrigger", "authLevel": "function"}]},
+        }]
+        triggers = _extract_http_triggers(functions)
+        assert triggers[0]["route"] == "DefaultRoute"
+        assert triggers[0]["auth_level"] == "function"
+        assert triggers[0]["methods"] == []
+
+
+class TestFirewallNatRules:
+    def test_extracts_destination_and_translation_fields(self):
+        collections = [{
+            "name": "nat-collection",
+            "rules": [{
+                "name": "ssh",
+                "destinationAddresses": ["20.1.1.1"],
+                "translatedAddress": "10.0.0.4",
+                "translatedPort": "22",
+                "ipProtocols": ["TCP"],
+            }],
+        }]
+        rules = _extract_nat_rules(collections, "fw1", "rg1", "Public")
+        assert rules[0]["entry_hosts"] == ["20.1.1.1"]
+        assert rules[0]["translated_address"] == "10.0.0.4"
+        assert rules[0]["translated_fqdn"] is None
+        assert rules[0]["protocols"] == ["TCP"]
+
+    def test_supports_translated_fqdn_and_skips_incomplete_rules(self):
+        collections = [{
+            "name": "nat-collection",
+            "rules": [
+                {"name": "web", "destinationAddress": "20.1.1.2", "translatedFqdn": "internal.contoso.local"},
+                {"name": "skip-no-entry", "translatedAddress": "10.0.0.5"},
+                {"name": "skip-no-target", "destinationAddress": "20.1.1.3"},
+            ],
+        }]
+        rules = _extract_nat_rules(collections, "fw1", "rg1", "Public")
+        assert len(rules) == 1
+        assert rules[0]["translated_fqdn"] == "internal.contoso.local"
+        assert rules[0]["entry_hosts"] == ["20.1.1.2"]
+
+
+class TestFirewallAppRules:
+    def test_extracts_targets_and_protocols(self):
+        collections = [{
+            "name": "app-collection",
+            "rules": [{
+                "name": "allow-web",
+                "sourceAddresses": ["10.0.0.0/24"],
+                "targetFqdns": ["github.com", "api.github.com"],
+                "protocols": [{"protocolType": "Https", "port": 443}, {"protocolType": "Http", "port": 80}],
+            }],
+        }]
+        rules = _extract_app_rules(collections, "fw1", "rg1")
+        assert rules == [{
+            "id": "fw1::app-collection::allow-web",
+            "firewall_name": "fw1",
+            "resource_group": "rg1",
+            "collection_name": "app-collection",
+            "rule_name": "allow-web",
+            "source_addresses": ["10.0.0.0/24"],
+            "target_fqdns": ["github.com", "api.github.com"],
+            "protocols": ["Https:443", "Http:80"],
+        }]
+
+
+class TestFirewallExposureLevel:
+    def test_public_if_public_ip_present(self):
+        firewall = {"properties": {"ipConfigurations": [{"properties": {"publicIPAddress": {"id": "/pip/one"}}}]}}
+        assert _get_firewall_exposure_level(firewall) == "Public"
+
+    def test_internal_without_public_ip(self):
+        firewall = {"properties": {"ipConfigurations": [{"properties": {}}]}}
+        assert _get_firewall_exposure_level(firewall) == "Internal"
+
+
+class TestFrontDoorClassicRoutes:
+    def test_extracts_frontend_to_backend_routes(self):
+        profile = {
+            "name": "fd-classic",
+            "properties": {
+                "frontendEndpoints": [
+                    {"id": "/frontends/fe1", "name": "fe1", "properties": {"hostName": "www.contoso.com", "webApplicationFirewallPolicyLink": {"id": "/waf/policy1"}}},
+                ],
+                "backendPools": [
+                    {"id": "/backendPools/pool1", "name": "pool1", "properties": {"backends": [{"address": "origin.contoso.internal", "httpPort": 80, "httpsPort": 443}]}}
+                ],
+                "routingRules": [
+                    {"name": "route1", "properties": {"frontendEndpoints": [{"id": "/frontends/fe1"}], "backendPool": {"id": "/backendPools/pool1"}, "acceptedProtocols": ["Https"], "patternsToMatch": ["/api/*"], "httpsRedirect": True}},
+                ],
+            },
+        }
+        routes = _extract_classic_routes(profile)
+        assert routes == [{
+            "profile_name": "fd-classic",
+            "profile_tier": "Classic",
+            "endpoint_name": "fe1",
+            "hostname": "www.contoso.com",
+            "route_name": "route1",
+            "patterns": ["/api/*"],
+            "origin_group": "pool1",
+            "origins": ["origin.contoso.internal"],
+            "waf_policy": "policy1",
+            "https_redirect": 1,
+            "exposure_level": "Public",
+        }]
+
+
+class TestFrontDoorAfdRoutes:
+    def test_extracts_patterns_origin_group_and_https_redirect(self):
+        route = {
+            "name": "afd-route",
+            "properties": {
+                "patternsToMatch": ["/images/*", "/css/*"],
+                "originGroup": {"id": "/profiles/p1/originGroups/group1"},
+                "httpsRedirect": "Enabled",
+            },
+        }
+        extracted = _extract_afd_route(
+            route,
+            hostname="site.azurefd.net",
+            profile_name="afd-profile",
+            profile_tier="Standard_AzureFrontDoor",
+            endpoint_name="ep1",
+            origins=["origin1.contoso.com"],
+            waf_policy=None,
+        )
+        assert extracted == {
+            "profile_name": "afd-profile",
+            "profile_tier": "Standard_AzureFrontDoor",
+            "endpoint_name": "ep1",
+            "hostname": "site.azurefd.net",
+            "route_name": "afd-route",
+            "patterns": ["/images/*", "/css/*"],
+            "origin_group": "group1",
+            "origins": ["origin1.contoso.com"],
+            "waf_policy": None,
+            "https_redirect": 1,
+            "exposure_level": "Public",
+        }

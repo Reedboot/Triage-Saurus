@@ -41,6 +41,7 @@ from Azure import app_gateway, apim, web_apps, function_apps, aks, storage, key_
 from Azure import cosmos_db, app_service_plan, service_bus, container_registry, virtual_network
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
+from Azure import front_door, firewall
 from Azure._helpers import set_probe_enabled
 
 # ---------------------------------------------------------------------------
@@ -51,6 +52,7 @@ PROVIDERS = [
     ("App Gateways",            app_gateway.harvest),
     ("APIM",                    apim.harvest),
     ("Traffic Manager",         traffic_manager.harvest),
+    ("Front Door",              front_door.harvest),
     # ── Compute ─────────────────────────────────────────────────────────
     ("App Service Environments",app_service_environment.harvest),
     ("App Service Plans",       app_service_plan.harvest),
@@ -78,6 +80,7 @@ PROVIDERS = [
     ("App Insights",            app_insights.harvest),
     # ── Networking ───────────────────────────────────────────────────────
     ("Virtual Networks",        virtual_network.harvest),
+    ("Firewalls",               firewall.harvest),
 ]
 
 
@@ -363,6 +366,42 @@ def harvest_subscription(
         print(f"  [AKS Routes] {route_count} routes {action}")
     except Exception as exc:
         print(f"  [AKS Routes] FAILED ({exc})")
+
+    # APIM API → backend routes
+    print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
+    try:
+        route_count = apim.harvest_routes(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [APIM Routes] {route_count} routes {action}")
+    except Exception as exc:
+        print(f"  [APIM Routes] FAILED ({exc})")
+
+    # Function App HTTP triggers
+    print(f"  [Function App Triggers] harvesting HTTP trigger routes...", flush=True)
+    try:
+        trigger_count = function_apps.harvest_http_triggers(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [Function App Triggers] {trigger_count} triggers {action}")
+    except Exception as exc:
+        print(f"  [Function App Triggers] FAILED ({exc})")
+
+    # Front Door routing rules
+    print(f"  [Front Door Routes] harvesting routing rules...", flush=True)
+    try:
+        fd_count = front_door.harvest_routes(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [Front Door Routes] {fd_count} routes {action}")
+    except Exception as exc:
+        print(f"  [Front Door Routes] FAILED ({exc})")
+
+    # Azure Firewall NAT + app rules
+    print(f"  [Firewall Rules] harvesting NAT and application rules...", flush=True)
+    try:
+        nat_count, app_count = firewall.harvest_rules(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [Firewall Rules] {nat_count} NAT rules, {app_count} app rules {action}")
+    except Exception as exc:
+        print(f"  [Firewall Rules] FAILED ({exc})")
 
     print(f"  [total] {total} assets for {sub_name}")
     return total

@@ -619,6 +619,8 @@ _BASE_TABLES_SQL = """
         backend_url           TEXT,               -- resolved backend URL
         service_url           TEXT,               -- serviceUrl on the API itself
         requires_subscription INTEGER DEFAULT 1,
+        gateway_hosts         TEXT,               -- JSON array of gateway hostnames
+        exposure_level        TEXT,               -- Public | Internal
         last_synced           DATETIME
     );
     CREATE INDEX IF NOT EXISTS idx_apim_routes_sub  ON apim_api_routes(subscription_id);
@@ -696,6 +698,82 @@ _BASE_TABLES_SQL = """
     CREATE INDEX IF NOT EXISTS idx_aks_routes_deployment ON aks_routes(deployment_name);
     CREATE INDEX IF NOT EXISTS idx_aks_routes_git_repo   ON aks_routes(git_repository);
     CREATE INDEX IF NOT EXISTS idx_aks_routes_team       ON aks_routes(team);
+
+    -- Function App HTTP trigger routes (populated by function_apps.harvest_http_triggers)
+    CREATE TABLE IF NOT EXISTS function_app_http_triggers (
+        id              TEXT PRIMARY KEY,   -- {function_app_id}::{function_name}
+        subscription_id TEXT NOT NULL,
+        function_app_id TEXT NOT NULL,
+        function_app_name TEXT NOT NULL,
+        resource_group  TEXT,
+        function_name   TEXT NOT NULL,
+        route           TEXT,               -- custom route template or default function name
+        auth_level      TEXT,               -- anonymous | function | admin
+        methods         TEXT,               -- JSON array e.g. ["GET","POST"]
+        fqdn            TEXT,
+        full_url        TEXT,
+        is_public       INTEGER DEFAULT 0,
+        last_synced     DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_func_triggers_sub  ON function_app_http_triggers(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_func_triggers_app  ON function_app_http_triggers(function_app_name);
+    CREATE INDEX IF NOT EXISTS idx_func_triggers_auth ON function_app_http_triggers(auth_level);
+
+    -- Azure Front Door routing rules (populated by front_door.harvest_routes)
+    CREATE TABLE IF NOT EXISTS front_door_routes (
+        id              TEXT PRIMARY KEY,   -- {profile_name}::{endpoint_name}::{route_name}
+        subscription_id TEXT NOT NULL,
+        profile_name    TEXT NOT NULL,
+        profile_tier    TEXT,               -- Classic | Standard_AzureFrontDoor | Premium_AzureFrontDoor
+        endpoint_name   TEXT,
+        hostname        TEXT,               -- frontend hostname
+        route_name      TEXT NOT NULL,
+        patterns        TEXT,               -- JSON array of path patterns
+        origin_group    TEXT,
+        origins         TEXT,               -- JSON array of origin hostnames/addresses
+        waf_policy      TEXT,
+        https_redirect  INTEGER DEFAULT 0,
+        exposure_level  TEXT DEFAULT 'Public',
+        last_synced     DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_fdr_sub     ON front_door_routes(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_fdr_profile ON front_door_routes(profile_name);
+    CREATE INDEX IF NOT EXISTS idx_fdr_host    ON front_door_routes(hostname);
+
+    -- Azure Firewall NAT rules / DNAT (populated by firewall.harvest_rules)
+    CREATE TABLE IF NOT EXISTS firewall_nat_rules (
+        id                  TEXT PRIMARY KEY,   -- {firewall_name}::{collection}::{rule}::{translated}
+        subscription_id     TEXT NOT NULL,
+        firewall_name       TEXT NOT NULL,
+        resource_group      TEXT,
+        collection_name     TEXT,
+        rule_name           TEXT,
+        entry_hosts         TEXT,               -- JSON array of destination IPs (public-facing)
+        translated_address  TEXT,
+        translated_fqdn     TEXT,
+        translated_port     TEXT,
+        protocols           TEXT,               -- JSON array
+        exposure_level      TEXT,               -- Public | Internal
+        last_synced         DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_fw_nat_sub      ON firewall_nat_rules(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_fw_nat_firewall ON firewall_nat_rules(firewall_name);
+
+    -- Azure Firewall application rules (target FQDNs allowed outbound)
+    CREATE TABLE IF NOT EXISTS firewall_app_rules (
+        id              TEXT PRIMARY KEY,   -- {firewall_name}::{collection}::{rule}
+        subscription_id TEXT NOT NULL,
+        firewall_name   TEXT NOT NULL,
+        resource_group  TEXT,
+        collection_name TEXT,
+        rule_name       TEXT,
+        source_addresses TEXT,              -- JSON array
+        target_fqdns    TEXT,               -- JSON array
+        protocols       TEXT,               -- JSON array e.g. ["Http:80","Https:443"]
+        last_synced     DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_fw_app_sub      ON firewall_app_rules(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_fw_app_firewall ON firewall_app_rules(firewall_name);
 
     -- Private DNS zones (populated by private_dns_map.py)
     CREATE TABLE IF NOT EXISTS private_dns_zones (
