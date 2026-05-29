@@ -666,6 +666,37 @@ _BASE_TABLES_SQL = """
         last_synced         DATETIME
     );
 
+    -- AKS ingress → service → deployment route model (populated by aks.harvest_routes)
+    CREATE TABLE IF NOT EXISTS aks_routes (
+        id                   TEXT PRIMARY KEY,   -- {cluster}::{ns}::{ingress}::{host}::{path}::{svc}::{port}::{deploy}
+        subscription_id      TEXT NOT NULL,
+        cluster_name         TEXT NOT NULL,
+        cluster_resource_id  TEXT,
+        resource_group       TEXT,
+        namespace            TEXT,
+        ingress_name         TEXT,
+        host                 TEXT,               -- NULL means wildcard / default backend
+        host_aliases         TEXT,               -- JSON array of LB IPs/hostnames from ingress status
+        path                 TEXT,               -- NULL means catch-all
+        is_default_backend   INTEGER DEFAULT 0,
+        service_name         TEXT,
+        service_port         TEXT,               -- port number or named port referenced by ingress
+        service_ports        TEXT,               -- JSON array of all ports on the service object
+        deployment_name      TEXT,
+        deployment_namespace TEXT,
+        pod_template_labels  TEXT,               -- JSON object
+        git_repository       TEXT,
+        team                 TEXT,
+        last_synced          DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_sub        ON aks_routes(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_cluster    ON aks_routes(cluster_name);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_ingress    ON aks_routes(ingress_name);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_host       ON aks_routes(host);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_deployment ON aks_routes(deployment_name);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_git_repo   ON aks_routes(git_repository);
+    CREATE INDEX IF NOT EXISTS idx_aks_routes_team       ON aks_routes(team);
+
     -- Private DNS zones (populated by private_dns_map.py)
     CREATE TABLE IF NOT EXISTS private_dns_zones (
         id                  TEXT PRIMARY KEY,

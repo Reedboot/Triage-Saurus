@@ -355,6 +355,15 @@ def harvest_subscription(
     except Exception as exc:
         print(f"  [App Gateway Routing] FAILED ({exc})")
 
+    # AKS ingress → service → deployment route model
+    print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)
+    try:
+        route_count = aks.harvest_routes(sub_id, conn, dry_run=dry_run)
+        action = "would harvest" if dry_run else "written"
+        print(f"  [AKS Routes] {route_count} routes {action}")
+    except Exception as exc:
+        print(f"  [AKS Routes] FAILED ({exc})")
+
     print(f"  [total] {total} assets for {sub_name}")
     return total
 
