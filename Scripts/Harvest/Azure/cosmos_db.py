@@ -60,7 +60,12 @@ def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
         return 0, 0, []
 
     ip_rules = props.get("ipRules") or []
-    vnet_rules = props.get("virtualNetworkRules") or []
+
+    # virtualNetworkRules are only enforced when isVirtualNetworkFilterEnabled is True.
+    # If the flag is absent or False the rules are stored but have no effect, so the
+    # account is still publicly reachable and must not be mis-classified as restricted.
+    vnet_filter_enabled = props.get("isVirtualNetworkFilterEnabled", False)
+    vnet_rules = (props.get("virtualNetworkRules") or []) if vnet_filter_enabled else []
 
     if ip_rules or vnet_rules:
         cidrs = extract_ip_restrictions(ip_rules=ip_rules, vnet_rules=vnet_rules,

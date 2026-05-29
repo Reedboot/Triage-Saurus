@@ -44,58 +44,6 @@ export async function initSubscriptionDiagrams() {
     return;
   }
 
-  // Hook all collapsible diagram headers (with deduplication)
-  const headers = document.querySelectorAll('[data-diagram-header]');
-  console.log(`[subscription-diagrams] Found ${headers.length} diagram headers`);
-  
-  headers.forEach(header => {
-    // Check if already hooked
-    if (header._diagramHookAttached) {
-      console.log('[subscription-diagrams] Header already hooked, skipping');
-      return;
-    }
-    header._diagramHookAttached = true;
-    
-    header.addEventListener('click', async (evt) => {
-      const diagramId = header.getAttribute('data-diagram-header');
-      const diagramDiv = document.getElementById(diagramId);
-      const scrollEl = diagramDiv?.parentElement;
-      const toggle = header.querySelector('span');
-      
-      console.log(`[subscription-diagrams] Clicked header for ${diagramId}`);
-      
-      if (!diagramDiv || !scrollEl) {
-        console.warn(`[subscription-diagrams] Could not find diagram or parent for ${diagramId}`);
-        return;
-      }
-
-      const isVisible = diagramDiv.style.display !== 'none';
-      console.log(`[subscription-diagrams] Before toggle: display=${diagramDiv.style.display}`);
-      diagramDiv.style.display = isVisible ? 'none' : 'block';
-      console.log(`[subscription-diagrams] After toggle: display=${diagramDiv.style.display}`);
-      
-      // Update toggle icon
-      if (toggle) {
-        toggle.textContent = isVisible ? '▶' : '▼';
-      }
-
-      // Render on expand
-      if (!isVisible) {
-        try {
-          await window.mermaid.run();
-          
-          // Post-process any new SVGs
-          const newSvgs = diagramDiv.querySelectorAll('svg');
-          newSvgs.forEach(postProcessSvg);
-          
-          console.log(`[subscription-diagrams] Rendered diagram ${diagramId}`);
-        } catch (err) {
-          console.warn(`[subscription-diagrams] Render error for ${diagramId}:`, err);
-        }
-      }
-    });
-  });
-
   // Hook zoom buttons
   document.querySelectorAll('[data-diagram-zoom-in]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -175,3 +123,8 @@ if (document.readyState === 'loading') {
 
 // Expose to window (export is already done at function declaration)
 window.initSubscriptionDiagrams = initSubscriptionDiagrams;
+
+/** Post-process newly rendered SVGs inside a container (called after scoped mermaid.run). */
+window.postProcessDiagramSvgs = (container) => {
+  container.querySelectorAll('svg').forEach(postProcessSvg);
+};

@@ -84,6 +84,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   let _currentSubId = null;
   let _currentNodeMap = null;          // node_drilldown_map from ingress diagram
   const _breadcrumb = [];              // [{title, arm_type, resources}] stack
+  let _rgDiagrams = [];                // full list of per-RG diagram data for current sub
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function renderBadge(env, badge) {
@@ -106,29 +107,119 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     return !!(window.mermaid && typeof window.mermaid.run === 'function');
   }
 
+  function escapeHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  /**
+   * Inject a <style> tag scoped to the current subscription.
+   * Deduplicates by subId + key so the same CSS is never added twice.
+   * All injected tags carry data-sub-style so loadDiagram() can purge them on reload.
+   */
+  function injectSubStyle(subId, key, css) {
+    if (!css) return;
+    const attrVal = `${subId}:${key}`;
+    if (document.querySelector(`style[data-sub-style="${CSS.escape(attrVal)}"]`)) return;
+    const st = document.createElement('style');
+    st.setAttribute('data-sub-style', attrVal);
+    st.textContent = css;
+    document.head.appendChild(st);
+  }
+
+  /** Build a zoom / fit / export controls bar for a diagram container. */
+  function buildControlsBar(containerId) {
+    const btnStyle = 'padding:4px 8px;font-size:0.75rem;background:var(--btn-bg,#333);border:1px solid var(--border-color,#555);border-radius:3px;cursor:pointer;color:var(--text-primary,#ccc);';
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:4px;margin-bottom:8px;';
+    [['🔍+','data-diagram-zoom-in'],['🔍−','data-diagram-zoom-out'],['⊡ Fit','data-diagram-fit'],['💾 Export','data-diagram-export']].forEach(([txt, attr]) => {
+      const btn = document.createElement('button');
+      btn.textContent = txt;
+      btn.style.cssText = btnStyle;
+      btn.setAttribute(attr, containerId);
+      bar.appendChild(btn);
+    });
+    return bar;
+  }
+
+  /**
+   * Render the chosen RG diagram lazily in the shared rg-diagram-panel.
+   * Uses mermaid.run({ nodes }) so only this one element is processed —
+   * hidden diagrams are never pre-rendered and won't produce 16×16 placeholders.
+   */
+  async function selectRg(d) {
+    const panel   = document.getElementById('rg-diagram-panel');
+    const content = document.getElementById('rg-diagram-content');
+    const titleEl = document.getElementById('rg-diagram-title');
+    if (!panel || !content || !titleEl) return;
+
+    // Reset previous state
+    content.innerHTML = '';
+    content.style.transform = '';
+
+    titleEl.textContent = `${d.rg} — ${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''}`;
+    panel.style.display = 'block';
+
+    // Inject CSS (deduplicated)
+    injectSubStyle(_currentSubId, d.rg, d.css_code);
+
+    // Loading placeholder
+    const loadingMsg = document.createElement('div');
+    loadingMsg.style.cssText = 'color:var(--text-muted);padding:12px;font-size:0.85rem;';
+    loadingMsg.textContent = 'Rendering diagram…';
+    content.appendChild(loadingMsg);
+
+    if (!(await waitForMermaid())) return;
+
+    // Build the mermaid source div — use textContent so mermaid source is never
+    // interpreted as HTML (avoids issues with --> and ["label"] syntax)
+    const mermaidDiv = document.createElement('div');
+    mermaidDiv.className = 'mermaid';
+    mermaidDiv.textContent = d.mermaid;
+
+    content.innerHTML = '';
+    content.appendChild(mermaidDiv);
+
+    try {
+      // Scoped render: only process this one element, not all hidden .mermaid divs
+      await window.mermaid.run({ nodes: [mermaidDiv] });
+      if (typeof window.postProcessDiagramSvgs === 'function') {
+        window.postProcessDiagramSvgs(content);
+      }
+    } catch(e) {
+      console.warn('[subscriptions] RG diagram render error:', e);
+      content.innerHTML = `<pre style="color:#f87171;font-size:0.8rem;padding:8px;">${escapeHtml(String(e))}</pre>`;
+    }
+
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
   /**
    * After a Mermaid SVG renders, attach dblclick handlers to drillable nodes.
    * Mermaid v11 flowchart nodes render as:  <g class="node" id="flowchart-{nodeId}-{seq}">
    * We recover nodeId by stripping prefix/suffix.
+   *
+   * Uses SVG-level event delegation so that clicks on HTML content inside
+   * <foreignObject> (used for icon+label nodes) are correctly captured across
+   * all browsers — foreignObject content can swallow per-element handlers.
    */
   function _attachDrilldownHandlers(svgEl, nodeMap, subId) {
     if (!svgEl || !nodeMap) return;
+
+    // ── Visual affordances ──
     const nodeEls = svgEl.querySelectorAll('g.node[id]');
     nodeEls.forEach(el => {
-      // Extract original nodeId: "flowchart-someNodeId-3" → "someNodeId"
       const rawId = el.getAttribute('id') || '';
       const nodeId = rawId.replace(/^flowchart-/, '').replace(/-\d+$/, '');
       const entry = nodeMap[nodeId];
       if (!entry || !entry.can_drill) return;
 
-      // Visual affordance — dashed coloured border on the rect/polygon inside the node
       el.classList.add('node-drillable');
-      el.title = `Double-click to explore ${entry.title}`;
+      el.setAttribute('title', `Double-click to explore ${entry.title}`);
+      el.style.cursor = 'pointer';
 
-      // Also show a small badge near the node
+      // Inject ⊕ badge near top-right of node bounding box
       const rect = el.querySelector('rect, polygon');
       if (rect) {
-        // Inject a tiny ▸ indicator as SVG text near top-right of node bounding box
         try {
           const bbox = rect.getBBox();
           const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -143,16 +234,51 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         } catch(_) { /* getBBox may fail in some browsers */ }
       }
 
-      el.style.cursor = 'pointer';
-      el.addEventListener('dblclick', (evt) => {
-        evt.stopPropagation();
-        openDrilldown(entry, subId);
-      });
-      // Accessibility: also allow Enter key when focused
+      // Keyboard accessibility
       el.setAttribute('tabindex', '0');
       el.addEventListener('keydown', (evt) => {
         if (evt.key === 'Enter') openDrilldown(entry, subId);
       });
+    });
+
+    // ── Single delegated dblclick handler on the SVG ──
+    // This fires even when the user double-clicks HTML content inside a
+    // <foreignObject> because the event reaches the SVG element via bubbling
+    // regardless of which DOM context (HTML vs SVG) the target lives in.
+    // We deduplicate with a small timeout guard to avoid double-firing.
+    let _drillPending = false;
+    svgEl.addEventListener('dblclick', (evt) => {
+      if (_drillPending) return;
+
+      // Walk up from evt.target to find the nearest SVG g.node with an id
+      let el = evt.target;
+      let nodeEl = null;
+      while (el && el !== svgEl) {
+        if (el.tagName === 'g' && el.classList && el.classList.contains('node') && el.id) {
+          nodeEl = el;
+          break;
+        }
+        // Also handle the case where we're inside a foreignObject: the SVG
+        // parent chain may skip directly to the <g.node> ancestor.
+        // Use closest() on the SVG side when available.
+        if (el.closest) {
+          const candidate = el.closest('g.node[id]');
+          if (candidate && candidate !== nodeEl) { nodeEl = candidate; break; }
+        }
+        el = el.parentElement || el.parentNode;
+      }
+      if (!nodeEl) return;
+
+      const rawId = nodeEl.getAttribute('id') || '';
+      const nodeId = rawId.replace(/^flowchart-/, '').replace(/-\d+$/, '');
+      const entry = nodeMap[nodeId];
+      if (!entry || !entry.can_drill) return;
+
+      evt.stopPropagation();
+      evt.preventDefault();
+      _drillPending = true;
+      setTimeout(() => { _drillPending = false; }, 400);
+      openDrilldown(entry, subId);
     });
   }
 
@@ -322,7 +448,11 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     _currentSubId = subId;
     _currentNodeMap = null;
     _breadcrumb.length = 0;
+    _rgDiagrams = [];
     document.getElementById('drilldown-panel').style.display = 'none';
+
+    // Remove style tags injected by a previous subscription load
+    document.querySelectorAll('style[data-sub-style]').forEach(el => el.remove());
 
     const wrap = document.getElementById('subscription-diagram-wrap');
     const loading = document.getElementById('subscription-diagram-loading');
@@ -351,6 +481,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
       // ── Ingress diagram ──
       const ingressDiag = data.ingress_diagram;
+      let ingressDiv = null;
       if (ingressDiag && ingressDiag.mermaid) {
         _currentNodeMap = ingressDiag.node_drilldown_map || {};
         const drillableCount = Object.values(_currentNodeMap).filter(e => e.can_drill).length;
@@ -374,27 +505,43 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
           ingressSection.appendChild(drillHint);
         }
 
+        // Title row with zoom/fit/export controls
+        const ingressTitleRow = document.createElement('div');
+        ingressTitleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;';
         const ingressTitle = document.createElement('h4');
         ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
-        ingressTitle.style.margin = '0 0 12px 0';
-        ingressSection.appendChild(ingressTitle);
+        ingressTitle.style.margin = '0';
+        ingressTitleRow.appendChild(ingressTitle);
+        ingressTitleRow.appendChild(buildControlsBar('ingress-diagram-div'));
+        ingressSection.appendChild(ingressTitleRow);
 
-        const ingressDiv = document.createElement('div');
-        ingressDiv.innerHTML = `<div class="mermaid">${ingressDiag.mermaid}</div>`;
-        ingressDiv.style.cssText = 'max-width:100%;overflow:auto;';
-        ingressSection.appendChild(ingressDiv);
+        // Viewport (scroll container) wrapping the transform target
+        const ingressViewport = document.createElement('div');
+        ingressViewport.style.cssText = 'overflow:auto;max-height:70vh;';
 
-        if (ingressDiag.css_code) {
-          const styleTag = document.createElement('style');
-          styleTag.textContent = ingressDiag.css_code;
-          document.head.appendChild(styleTag);
-        }
+        ingressDiv = document.createElement('div');
+        ingressDiv.id = 'ingress-diagram-div';
+        ingressDiv.style.cssText = 'max-width:100%;';
 
+        // Use textContent so mermaid source is not interpreted as HTML
+        const ingressMermaidDiv = document.createElement('div');
+        ingressMermaidDiv.className = 'mermaid';
+        ingressMermaidDiv.textContent = ingressDiag.mermaid;
+        ingressDiv.appendChild(ingressMermaidDiv);
+
+        ingressViewport.appendChild(ingressDiv);
+        ingressSection.appendChild(ingressViewport);
+
+        injectSubStyle(subId, 'ingress', ingressDiag.css_code);
         container.appendChild(ingressSection);
 
         if (await waitForMermaid()) {
           try {
-            await window.mermaid.run();
+            // Scoped render: only this element, not the whole document
+            await window.mermaid.run({ nodes: [ingressMermaidDiv] });
+            if (typeof window.postProcessDiagramSvgs === 'function') {
+              window.postProcessDiagramSvgs(ingressDiv);
+            }
 
             // Inject icons
             if (ingressDiag.icon_map && typeof MermaidIconInjector !== 'undefined') {
@@ -407,86 +554,151 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
               }
             }
 
-            // Attach drill-down handlers AFTER render (so SVG elements exist)
-            const svgEls = ingressDiv.querySelectorAll('svg');
-            svgEls.forEach(svg => _attachDrilldownHandlers(svg, _currentNodeMap, subId));
+            // Attach drill-down handlers after SVG exists
+            ingressDiv.querySelectorAll('svg').forEach(svg => _attachDrilldownHandlers(svg, _currentNodeMap, subId));
           } catch(e) {
             console.warn('[subscriptions] Ingress render error:', e.message);
           }
         }
       }
 
-      // ── Detailed per-RG diagrams ──
+      // ── Detailed Resource Group Views — autocomplete dropdown ──
       const diagrams = data.diagrams || [];
-      if (!diagrams.length) return;
+      _rgDiagrams = diagrams;
 
       const sep = document.createElement('div');
-      sep.style.cssText = 'border-top:2px solid var(--border-color,#333);margin:24px 0;padding-top:16px;';
+      sep.style.cssText = 'border-top:2px solid var(--border-color,#333);margin:24px 0 16px;padding-top:16px;';
       const sepLabel = document.createElement('h4');
-      sepLabel.textContent = '📊 Detailed Resource Group Views';
+      sepLabel.textContent = `📊 Detailed Resource Group Views`;
       sepLabel.style.margin = '0 0 12px 0';
       container.appendChild(sep);
       container.appendChild(sepLabel);
 
-      diagrams.forEach((d, idx) => {
-        const isOpen = idx === 0 && !ingressDiag;
-        const id = `diagram_${idx}`;
+      if (!diagrams.length) {
+        const noRg = document.createElement('p');
+        noRg.style.cssText = 'color:var(--text-muted);font-size:0.85rem;';
+        noRg.textContent = 'No per-resource-group diagrams available for this subscription.';
+        container.appendChild(noRg);
+      } else {
+        // ── Search input + dropdown ──────────────────────────────────────────
+        const searchWrap = document.createElement('div');
+        searchWrap.style.cssText = 'position:relative;max-width:560px;margin-bottom:16px;';
 
-        const section = document.createElement('div');
-        section.style.cssText = 'margin-bottom:16px;border-top:1px solid var(--border-color,#333);padding-top:12px;';
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.id = 'rg-search-input';
+        searchInput.placeholder = `Search resource groups… (${diagrams.length} total)`;
+        searchInput.autocomplete = 'off';
+        searchInput.style.cssText = 'width:100%;padding:8px 36px 8px 12px;background:var(--bg-code,#1a1a1a);border:1px solid var(--border-color,#555);border-radius:4px;color:var(--text-primary,#e5e7eb);font-size:0.9rem;box-sizing:border-box;';
 
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px;background:var(--bg-hover,#2a2a2a);border-radius:4px;margin-bottom:8px;';
-        header.setAttribute('data-diagram-header', id);
+        const clearBtn = document.createElement('button');
+        clearBtn.textContent = '✕';
+        clearBtn.title = 'Clear';
+        clearBtn.style.cssText = 'position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.85rem;display:none;padding:0;';
 
-        const toggle = document.createElement('span');
-        toggle.textContent = isOpen ? '▼' : '▶';
-        toggle.style.cssText = 'font-size:0.8rem;width:16px;display:inline-block;';
+        const dropdown = document.createElement('ul');
+        dropdown.id = 'rg-dropdown-list';
+        dropdown.style.cssText = 'position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--bg-code,#1a1a1a);border:1px solid var(--border-color,#555);border-top:none;border-radius:0 0 4px 4px;max-height:260px;overflow-y:auto;list-style:none;margin:0;padding:0;z-index:200;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
 
-        const label = document.createElement('span');
-        label.innerHTML = `<strong>${d.rg}</strong> <span style="color:var(--text-muted);font-size:0.85rem;">(${d.asset_count} assets${d.public_count > 0 ? `, ${d.public_count} public` : ''})</span>`;
+        searchWrap.appendChild(searchInput);
+        searchWrap.appendChild(clearBtn);
+        searchWrap.appendChild(dropdown);
+        container.appendChild(searchWrap);
 
-        header.appendChild(toggle);
-        header.appendChild(label);
+        // ── RG diagram panel ─────────────────────────────────────────────────
+        const rgPanel = document.createElement('div');
+        rgPanel.id = 'rg-diagram-panel';
+        rgPanel.style.cssText = 'display:none;border:1px solid var(--border-color,#333);border-radius:6px;overflow:hidden;';
 
-        const btnStyle = 'padding:4px 8px;font-size:0.75rem;background:var(--btn-bg,#333);border:1px solid var(--border-color,#555);border-radius:3px;cursor:pointer;color:var(--text-primary,#ccc);';
-        const controls = document.createElement('div');
-        controls.style.cssText = 'margin-left:auto;display:flex;gap:4px;';
-        ['🔍+','🔍−','⊡ Fit','💾'].forEach((txt, i) => {
-          const btn = document.createElement('button');
-          btn.textContent = txt;
-          btn.style.cssText = btnStyle;
-          const attrs = ['data-diagram-zoom-in','data-diagram-zoom-out','data-diagram-fit','data-diagram-export'];
-          btn.setAttribute(attrs[i], id);
-          controls.appendChild(btn);
+        const rgPanelHeader = document.createElement('div');
+        rgPanelHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-hover,#2a2a2a);border-bottom:1px solid var(--border-color,#333);flex-wrap:wrap;';
+        const rgTitleEl = document.createElement('span');
+        rgTitleEl.id = 'rg-diagram-title';
+        rgTitleEl.style.cssText = 'font-weight:600;font-size:0.9rem;flex:1;min-width:0;';
+        rgPanelHeader.appendChild(rgTitleEl);
+        rgPanelHeader.appendChild(buildControlsBar('rg-diagram-content'));
+
+        // Viewport is the scroll container; content is the transform target
+        const rgViewport = document.createElement('div');
+        rgViewport.style.cssText = 'overflow:auto;max-height:600px;padding:8px;';
+        const rgContent = document.createElement('div');
+        rgContent.id = 'rg-diagram-content';
+        rgViewport.appendChild(rgContent);
+
+        rgPanel.appendChild(rgPanelHeader);
+        rgPanel.appendChild(rgViewport);
+        container.appendChild(rgPanel);
+
+        // ── Autocomplete logic ───────────────────────────────────────────────
+        const itemStyle = 'padding:8px 12px;cursor:pointer;font-size:0.85rem;color:var(--text-primary,#e5e7eb);border-bottom:1px solid var(--border-color,#333);';
+        let highlighted = -1;
+        let filteredList = [];
+
+        function buildDropdown(query) {
+          dropdown.innerHTML = '';
+          highlighted = -1;
+          filteredList = query
+            ? diagrams.filter(d => d.rg.toLowerCase().includes(query.toLowerCase())).slice(0, 25)
+            : diagrams.slice(0, 25);
+
+          if (!filteredList.length) { dropdown.style.display = 'none'; return; }
+
+          filteredList.forEach((d, i) => {
+            const li = document.createElement('li');
+            li.style.cssText = itemStyle;
+            li.innerHTML = `<span style="font-weight:500;">${escapeHtml(d.rg)}</span>&nbsp;<span style="color:var(--text-muted);font-size:0.78rem;">${d.asset_count} asset${d.asset_count !== 1 ? 's' : ''}${d.public_count > 0 ? `, ${d.public_count} public` : ''}</span>`;
+            li.addEventListener('mouseover', () => setHighlight(i));
+            li.addEventListener('mousedown', e => { e.preventDefault(); chooseRg(d); });
+            dropdown.appendChild(li);
+          });
+          dropdown.style.display = 'block';
+        }
+
+        function setHighlight(i) {
+          dropdown.querySelectorAll('li').forEach((li, idx) => {
+            li.style.background = idx === i ? 'var(--bg-hover,#2a2a2a)' : '';
+          });
+          highlighted = i;
+        }
+
+        function chooseRg(d) {
+          searchInput.value = d.rg;
+          clearBtn.style.display = 'inline';
+          dropdown.style.display = 'none';
+          selectRg(d);
+        }
+
+        searchInput.addEventListener('focus', () => buildDropdown(searchInput.value));
+        searchInput.addEventListener('input', () => {
+          clearBtn.style.display = searchInput.value ? 'inline' : 'none';
+          buildDropdown(searchInput.value);
         });
-        header.appendChild(controls);
+        searchInput.addEventListener('keydown', e => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setHighlight(Math.min(highlighted + 1, filteredList.length - 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHighlight(Math.max(highlighted - 1, 0));
+          } else if (e.key === 'Enter' && highlighted >= 0) {
+            e.preventDefault();
+            chooseRg(filteredList[highlighted]);
+          } else if (e.key === 'Escape') {
+            dropdown.style.display = 'none';
+          }
+        });
+        searchInput.addEventListener('blur', () => setTimeout(() => { dropdown.style.display = 'none'; }, 150));
 
-        const diagramDiv = document.createElement('div');
-        diagramDiv.id = id;
-        diagramDiv.style.cssText = `display:${isOpen ? 'block' : 'none'};overflow:auto;max-height:600px;`;
-        diagramDiv.innerHTML = `<div class="mermaid">${d.mermaid}</div>`;
-
-        if (d.css_code) {
-          const st = document.createElement('style');
-          st.textContent = d.css_code;
-          document.head.appendChild(st);
-        }
-
-        section.appendChild(header);
-        section.appendChild(diagramDiv);
-        container.appendChild(section);
-      });
-
-      // Final Mermaid render + init controls
-      if (await waitForMermaid()) {
-        try {
-          await window.mermaid.run();
-          if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
-        } catch(e) {
-          console.warn('[subscriptions] Final render error:', e);
-        }
+        clearBtn.addEventListener('click', () => {
+          searchInput.value = '';
+          clearBtn.style.display = 'none';
+          dropdown.style.display = 'none';
+          searchInput.focus();
+        });
       }
+
+      // Wire up zoom/fit/export buttons (ingress + RG panel)
+      if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
     } catch(e) {
       loading.textContent = 'Failed to load diagram: ' + e.message;
     }

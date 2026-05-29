@@ -1812,6 +1812,13 @@ button.secondary:hover, .btn-secondary:hover { background: var(--border); color:
   background: #1f3a5f33; border-radius: 999px; padding: 2px 8px;
 }
 .asset-name { color: var(--text); font-weight: 500; }
+.asset-parent-hint {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-top: 1px;
+}
 
 /* Ensure parent assets have a slightly larger name than children */
 /*tr:not(.child-row) .asset-name { font-size: 1rem; }

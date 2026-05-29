@@ -82,6 +82,39 @@ def infer_sku(resource: dict[str, Any]) -> str | None:
 # Exposure helpers
 # ---------------------------------------------------------------------------
 
+def fetch_ase_ilb_map(subscription_id: str) -> dict[str, bool]:
+    """Return a map of ASE resource ID (lowercased) → web_is_internal.
+
+    A True value means the ASE's HTTP/S endpoint is served through an internal
+    load balancer (ILB) and is therefore not internet-accessible.  This covers
+    ``internalLoadBalancingMode`` values of ``"Web"`` and ``"Web, Publishing"``.
+
+    An ``internalLoadBalancingMode`` of ``"Publishing"`` only internalises the
+    SCM/Kudu endpoint; the web endpoint is still publicly reachable, so those
+    ASEs map to False.
+
+    Returns an empty dict if the ASE list cannot be retrieved (e.g. permissions
+    or the resource provider is not registered).  Callers must treat a missing
+    key as "unknown" and fall through to their existing exposure checks rather
+    than assuming the app is public or private.
+    """
+    environments = az(["appservice", "ase", "list"], subscription_id)
+    result: dict[str, bool] = {}
+    for ase in environments:
+        ase_id = safe_str(ase.get("id") or "")
+        if not ase_id:
+            continue
+        # internalLoadBalancingMode surfaces under properties in the REST/ARM
+        # shape but az CLI may flatten it to root level — check both.
+        ilb_mode = (
+            (ase.get("properties") or {}).get("internalLoadBalancingMode")
+            or ase.get("internalLoadBalancingMode")
+            or "None"
+        )
+        result[ase_id.lower()] = "web" in ilb_mode.lower()
+    return result
+
+
 def extract_ip_restrictions(
     network_acls: dict[str, Any] | None = None,
     ip_rules: list[dict[str, Any]] | None = None,

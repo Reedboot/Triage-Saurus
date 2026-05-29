@@ -220,7 +220,7 @@ During bulk processing, if a finding title clearly names a cloud service (e.g., 
 **Required tools**
 - **Python 3.8+** — Required to run all scripts and helpers:
   - `Scripts/Utils/risk_register.py` (generate `Output/Summary/Risk Register.xlsx`)
-  - `Scripts/regen_all.py --provider <azure|aws|gcp>` (regenerate Summary outputs from existing findings)
+
   - `Scripts/Validate/validate_findings.py` (validate finding + summary formatting)
   - `Scripts/clear_session.py` (delete per-session artifacts under `Output/Findings/`, `Output/Knowledge/`, `Output/Summary/`)
 - **SQLite 3** — Required (used by the pipeline and accessible from Python):

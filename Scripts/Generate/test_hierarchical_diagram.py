@@ -564,7 +564,8 @@ def test_punctuation_in_names_is_sanitized():
     )
 
     assert 'demo' in node
-    assert '\\"demo\\"' in node
+    # _quote_mermaid_label replaces " with ' for Mermaid parse safety
+    assert "'demo'" in node
 
 
 def test_rbac_resource_types_are_filtered(monkeypatch):

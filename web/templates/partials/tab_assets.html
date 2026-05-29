@@ -59,6 +59,9 @@
             <span class="child-count-badge" title="{{ a.children_count }} sub-asset(s)">{{ a.children_count }}</span>
           {% elif a.is_child %}
             <span class="asset-name">{{ a.resource_name }}</span>
+            {% if a.parent_resource_name and 'database' in (a.resource_type or '') | lower %}
+              <span class="asset-parent-hint" title="Parent server">{{ a.parent_resource_name }}</span>
+            {% endif %}
           {% else %}
             <span class="asset-name">{{ a.resource_name }}</span>
           {% endif %}

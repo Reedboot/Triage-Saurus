@@ -39,9 +39,9 @@ repository.
 - **Path:** Agents/PlatformSkeptic.md
   - **Purpose:** Review approach for platform-focused findings.
   - **Slash command:** `.github/skills/skeptic-review/SKILL.md` (combined Dev + Platform)
-- **Path:** Knowledge/DevSkeptic.md
+- **Path:** Knowledge/DevSkeptic.md *(not yet created — see `Docs/MissingScripts.md`)*
   - **Purpose:** Reusable dev-centric context (app patterns, common mitigations, org conventions).
-- **Path:** Knowledge/PlatformSkeptic.md
+- **Path:** Knowledge/PlatformSkeptic.md *(not yet created — see `Docs/MissingScripts.md`)*
   - **Purpose:** Reusable platform-centric context (networking/CI/CD constraints, guardrails, rollout realities).
 - **Path:** Agents/SecurityAgent.md
   - **Purpose:** Review approach for security-focused findings.
@@ -56,10 +56,14 @@ repository.
 - **Path:** Agents/ArchitectureValidationAgent.md
   - **Purpose:** Validate generated architecture diagrams for hierarchy issues, missing internet ingress, network segmentation gaps, and missing components. Runs after Phase 1, before security scanning.
   - **Slash command:** `.github/skills/architecture-validation/SKILL.md`
+- **Path:** Agents/SubscriptionDiagramAgent.md
+  - **Purpose:** On-demand Playwright audit of a subscription's rendered diagrams. Checks icon loading, double-click drilldown functionality, WAF/listener node presence, content accuracy (DB vs. diagram), and exposure correctness (public assets shown with red arrows).
+  - **Capabilities:** Playwright screenshots (ingress + RG + assets), broken icon detection, dblclick smoke test, DB-to-diagram diff, WAF/HTTP listener node verification, ILB ASE exposure cross-check.
+  - **Slash command:** `.github/skills/subscription-diagram-check/SKILL.md`
 - **Path:** Agents/CloudSummaryAgent.md
   - **Purpose:** Guidance for summarising cloud findings grouped by resource type.
   - **Slash command:** `.github/skills/cloud-summary/SKILL.md`
-- **Path:** Agents/RepoSummaryAgent.md
+- **Path:** Agents/RepoSummaryAgent.md *(not yet created — see `Docs/MissingScripts.md`)*
   - **Purpose:** Create executive summaries for scanned repositories.
 - **Path:** Agents/RiskRegisterAgent.md
   - **Purpose:** Create and maintain the executive risk register spreadsheet.

@@ -11,15 +11,22 @@ When you identify a **missing detection** or **new vulnerability pattern**, your
 **Location:** `Rules/Misconfigurations/` or `Rules/Misconfigurations/Secrets/`  
 **Format:** Opengrep/Semgrep-compatible YAML
 
-**Portability requirement:** Rules must be organisation/project agnostic. Avoid hardcoded org names, project names, repository names, and tenant-specific host/path fragments; use constrained generic patterns so rules work across any environment.
+**Portability requirement:** Rules must work against **any** codebase of the same technology — not just the project currently being scanned. Before committing a rule, apply the Rule Genericity Gate in `Rules/CreationGuide.md`:
+
+- **Too specific** (❌ discard): pattern contains a project-specific resource name, variable name, tenant/subscription ID, hostname, or org identifier.
+- **Too broad** (❌ revise): pattern would fire on almost any codebase regardless of security context (e.g., detecting the word `linux` or any variable named `password` with no structural constraint).
+- **Just right** (✅ keep): detects a known vulnerability class (CWE / OWASP / cloud benchmark) using metavariables or constrained regex that would fire on any vulnerable repo of that type and not fire on a correctly-configured one.
+
+If a finding cannot be expressed as a portable rule, document it directly in the findings file — do not force it into the ruleset.
 
 **Example workflow:**
 ```
 Learning: Opus found nonsensitive() usage but we missed it
-→ Create: Rules/Misconfigurations/terraform-nonsensitive-secrets.yml
-→ Document: What pattern to match, why it's dangerous, how to fix
-→ Test: Validate against known vulnerable code
-→ Track: Monitor rule effectiveness in future experiments
+→ Create:    Rules/Misconfigurations/terraform-nonsensitive-secrets.yml
+→ Validate:  python3 Scripts/Validate/validate_rule_portability.py <rule-file.yml>
+             Must exit 0 — catches both syntax errors and portability violations
+→ Document:  What pattern to match, why it's dangerous, how to fix
+→ Track:     Monitor rule effectiveness in future experiments
 ```
 
 ### 2. Track Rule Effectiveness

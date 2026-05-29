@@ -34,9 +34,16 @@ This repository supports consistent security triage. The expected workflow is:
 ### Rule Creation & Verification
 
 - **When creating new rules** (regardless of experiment or not), create them in the relevant subfolder of `Rules/` (e.g., `Rules/Detection/`, `Rules/Misconfigurations/`, `Rules/Misconfigurations/Secrets/`).
-- **Rules must be organisation/project agnostic**: do not hardcode tenant-specific org names, project names, repository names, or host-specific URL paths in detection patterns or examples. Prefer portable patterns with constrained wildcards/regex that work across any organisation/project.
-- **After creating a rule**, run opengrep verification against the rule: `opengrep scan --config <rule-file.yml> <target>` to validate syntax and test detection behavior.
-- If the rule is intended for a specific pattern, create a minimal test case to confirm the rule triggers correctly.
+- **Rules must pass the Rule Genericity Gate** (see `Rules/CreationGuide.md`): rules must work against any codebase of the same technology, not just the project being scanned. There are three failure modes:
+  - **Too specific** (❌): pattern contains a project-specific identifier — resource name, variable name, tenant/subscription ID, hostname, org name. Replace with metavariables (`$VAR`) or constrained regex.
+  - **Too broad** (❌): pattern fires on almost any codebase regardless of security context (e.g., detects the word `linux`, or any variable named `password` with no structural constraint). Add structural context to narrow it.
+  - **Just right** (✅): detects a known vulnerability class (CWE / OWASP / cloud provider benchmark) using portable patterns that fire on any vulnerable instance and not on correctly-configured code.
+  - If a finding cannot be expressed as a portable rule, document it directly in the findings file — do not force it into the shared ruleset.
+- **After creating a rule**, run the mandatory validation script before committing — this covers both opengrep syntax validation and portability checks in one step:
+  ```bash
+  python3 Scripts/Validate/validate_rule_portability.py <rule-file.yml>
+  ```
+  The script must exit `0`. A non-zero exit means the rule has syntax errors or hardcoded project-specific identifiers and **must not be committed**.
 - **Current limitation (Mar 2026):** opengrep 1.16.1/1.16.2 can hang on WSL when a single scan processes more than ~900 git-tracked files (≈8 large subdirectories). Use `python3 Scripts/Scan/opengrep_chunked_scan.py <target>` to automatically batch scans into safe-size chunks, logging each chunk until the upstream fix lands.
 - **Context window hygiene:** After each repo scan, summarize key learnings (resources, dependencies, unanswered questions) into `Output/Knowledge/<...>.md` and the Cozo knowledge graph, then purge the working context (clear scratch buffers, stop streaming agents) before starting the next repo so the LLM never carries stale assumptions between scans. Always reload only the relevant knowledge slices for the next repo from the Cozo graph rather than keeping prior repo transcripts in memory.
 

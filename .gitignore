@@ -37,3 +37,10 @@ node_modules/*
 web/node_modules/*
 
 .pytest_cache
+
+# Runtime SQLite databases (generated at runtime, not committed)
+Scripts/Persist/cozo.db
+web/app.db
+web/app_data.db
+*.db-shm
+*.db-wal

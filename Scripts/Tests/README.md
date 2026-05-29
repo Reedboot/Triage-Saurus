@@ -23,20 +23,24 @@ bash Scripts/Tests/test_run_cozo_init.sh
 
 ## Unit Tests
 
-Unit tests are currently maintained in their respective module directories:
-- `Scripts/Analyze/` - Analyzer unit tests
-- `Scripts/Context/` - Context extraction unit tests  
-- `Scripts/Generate/` - Diagram and report generation unit tests
-- `Scripts/Scan/` - Scan pipeline unit tests
-- `Scripts/Validate/` - Validation unit tests
+Unit tests live alongside their source modules (canonical location):
+- `Scripts/Analyze/test_*.py` — Analyzer unit tests
+- `Scripts/Context/test_*.py` — Context extraction unit tests
+- `Scripts/Generate/test_*.py` — Diagram and report generation unit tests
+- `Scripts/Scan/test_*.py` — Scan pipeline unit tests
+- `Scripts/Validate/test_*.py` — Validation unit tests
 
-To run all unit tests with pytest:
+**Do not duplicate module-level tests here.** This directory is for integration and contract tests only (files listed in the Integration Tests section above).
+
+To run all unit tests from the repo root:
 
 ```bash
 pip install pytest
-python -m pytest Scripts/Analyze/ Scripts/Context/ Scripts/Generate/ Scripts/Scan/ Scripts/Validate/ -v
+python -m pytest -v
 ```
+
+A `pytest.ini` at the repo root configures test discovery automatically.
 
 ## CI/CD Integration
 
-See `.github/workflows/` for automated test execution on commits.
+See `.github/workflows/tests.yml` for automated test execution on commits (OpenGrep rules validation + integration test).

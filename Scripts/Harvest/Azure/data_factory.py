@@ -58,12 +58,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _is_public(props: dict[str, Any]) -> int:
     """Check if Data Factory is truly internet-accessible."""
-    # If public network access is disabled, not public
+    # managedVirtualNetwork governs outbound integration-runtime connectivity
+    # only, not the factory's management-plane endpoint — do not use it as a
+    # public-access indicator.  Only publicNetworkAccess controls that.
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
         return 0
-    
-    # If managed VNet is enabled, it's not internet-facing
-    if (props.get("managedVirtualNetwork") or {}).get("type"):
-        return 0
-    
     return 1

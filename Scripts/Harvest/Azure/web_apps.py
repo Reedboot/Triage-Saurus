@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_fqdn, infer_sku, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, fetch_ase_ilb_map, infer_fqdn, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.Web/sites"
 
@@ -15,12 +15,13 @@ _DEFAULT_ALLOW_ALL_PRIORITY = 65000
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     """Return normalised provisioned_asset rows for all web apps in a subscription."""
     raw_apps = az(["webapp", "list"], subscription_id)
+    ase_ilb_map = fetch_ase_ilb_map(subscription_id)
     results = []
 
     for app in raw_apps:
         fqdn = safe_str(app.get("defaultHostName")) or infer_fqdn(app)
         pipeline_tag = _get_pipeline_tag(app, subscription_id)
-        is_public, is_restricted, ip_restrictions = _classify_exposure(app)
+        is_public, is_restricted, ip_restrictions = _classify_exposure(app, ase_ilb_map)
 
         endpoints = build_endpoints(_get_endpoint_entries(app, fqdn))
         auth_methods = json.dumps(_get_auth_methods(app))
@@ -47,18 +48,26 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(app: dict[str, Any]) -> tuple[int, int, list[str]]:
+def _classify_exposure(app: dict[str, Any], ase_ilb_map: dict[str, bool] | None = None) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_restriction_cidrs)."""
     props = app.get("properties") or {}
+
+    # ILB App Service Environment: web endpoint is VNet-internal only.
+    # Only short-circuit when the ASE is confirmed in the map — if the lookup
+    # failed (empty map) we fall through rather than silently mis-classifying.
+    ase_profile = props.get("hostingEnvironmentProfile") or app.get("hostingEnvironmentProfile")
+    if ase_profile and isinstance(ase_profile, dict) and ase_ilb_map:
+        ase_id = safe_str(ase_profile.get("id") or "")
+        if ase_id and ase_ilb_map.get(ase_id.lower(), False):
+            return 0, 0, []
 
     # Public network access disabled → private
     public_network_access = props.get("publicNetworkAccess") or app.get("publicNetworkAccess", "Enabled")
     if public_network_access == "Disabled":
         return 0, 0, []
 
-    # VNet integration → private
-    if props.get("virtualNetworkSubnetId") or app.get("virtualNetworkSubnetId"):
-        return 0, 0, []
+    # NOTE: virtualNetworkSubnetId = outbound VNet integration only.
+    # It does NOT restrict inbound public access — do not use as a private indicator.
 
     # Collect IP restrictions (ignore the default "Allow all" catch-all rule)
     site_config = props.get("siteConfig") or {}
