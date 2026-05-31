@@ -2340,12 +2340,6 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
             # Only use resolved names, never local/var/module expressions.
             if not _is_unresolved_tf_expression(name_value):
                 props["actual_name"] = name_value
-        elif "name" in attrs and attrs["name"]:
-            name_value = attrs["name"].strip('"').strip("'")
-            # Only use resolved names, never local/var/module expressions.
-            if not _is_unresolved_tf_expression(name_value):
-                props["actual_name"] = name_value
-
         # For API operations, also extract operation_id
         if resource_type == "azurerm_api_management_api_operation":
             op_id_match = re.search(r'^\s*operation_id\s*=\s*"([^"]+)"', block_text, re.MULTILINE)
