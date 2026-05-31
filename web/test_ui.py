@@ -918,6 +918,36 @@ class TestCloudPage:
         )
 
         node_map = self._NODE_MAP
+        ingress_views = {
+            "connectivity": {
+                "mermaid": mermaid_source,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "Connectivity mock view",
+                "legend": ["Connectivity legend"],
+                "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
+            },
+            "exposure": {
+                "mermaid": mermaid_source,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "Exposure mock view",
+                "legend": ["Exposure legend"],
+                "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
+            },
+            "attack_paths": {
+                "mermaid": mermaid_source,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "Attack mock view",
+                "legend": ["Attack legend"],
+                "attack_paths": [{"title": "Mock attack", "path": "Internet -> test-appgw"}],
+                "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
+            },
+        }
         page.route(
             f"**/{self._SUB_ID}/diagram",
             lambda route: route.fulfill(
@@ -931,8 +961,25 @@ class TestCloudPage:
                         "css_code": "",
                         "icon_map": {},
                         "node_drilldown_map": node_map,
+                        "default_view": "connectivity",
+                        "views": ingress_views,
+                        "attack_paths": [{"title": "Mock attack", "path": "Internet -> test-appgw"}],
+                        "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
                     },
-                    "diagrams": [],
+                    "diagrams": [{
+                        "rg": "test-rg",
+                        "mermaid": mermaid_source,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "asset_count": 2,
+                        "public_count": 1,
+                        "relationship_count": 1,
+                        "default_view": "connectivity",
+                        "views": ingress_views,
+                        "attack_paths": [{"title": "Mock RG attack", "path": "Internet -> test-appgw"}],
+                        "asset_summary": {"entry_points": 1, "api_layer": 0, "backends": 0, "data_stores": 0, "public_assets": 1},
+                    }],
                 }),
             ),
         )
@@ -982,6 +1029,15 @@ class TestCloudPage:
         """Clicking a subscription row loads and renders the ingress SVG."""
         self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
         expect(page.locator("#ingress-diagram-div svg")).to_be_visible()
+
+    def test_mode_toggle_and_rg_diagram_render(self, page: Page, live_server: str):
+        """Mode buttons and the RG diagram should render for subscription views."""
+        self._load_diagram(page, live_server, self._MERMAID_DISTINCT_LABELS)
+        expect(page.locator("button:has-text('🎯 Attack Paths')")).to_be_visible()
+        expect(page.locator("text=Resource group views")).to_be_visible()
+        expect(page.locator("#subscription-rg-diagram-div svg")).to_be_visible()
+        page.locator("button:has-text('🎯 Attack Paths')").click()
+        expect(page.locator("text=Likely attack paths")).to_be_visible()
 
     # ── Bug #1: Internet node label must not be duplicated ─────────────────
 
@@ -1137,3 +1193,87 @@ class TestIngressDiagramGeneration:
         assert drillable, (
             f"No drillable nodes in node_drilldown_map: {ndm}"
         )
+
+    def test_ingress_diagram_includes_overlay_views(self):
+        """Ingress diagram payload should expose connectivity, exposure, and attack-path views."""
+        result = self._call()
+        views = result.get("views", {})
+        assert {"connectivity", "exposure", "attack_paths"} <= set(views), views
+        assert result.get("default_view") == "connectivity"
+        assert result.get("attack_paths"), "Expected attack-path summaries in the ingress payload"
+
+
+class TestSubscriptionResourceGroupDiagrams:
+    """Unit tests for per-resource-group subscription diagrams."""
+
+    def _make_rows(self):
+        return [
+            (
+                "test-appgw",
+                "Microsoft.Network/applicationGateways",
+                "rg-app",
+                "gw.example.com",
+                1,
+                "WAF_v2",
+                "fake-appgw-id",
+                1,
+                "HTTPS:443",
+            ),
+            (
+                "test-apim",
+                "Microsoft.ApiManagement/service",
+                "rg-app",
+                "api.example.com",
+                0,
+                "Developer",
+                "fake-apim-id",
+                0,
+                None,
+            ),
+            (
+                "test-web",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "",
+                0,
+                "P1v3",
+                "fake-site-id",
+                0,
+                None,
+            ),
+            (
+                "test-kv",
+                "Microsoft.KeyVault/vaults",
+                "rg-app",
+                "",
+                0,
+                "standard",
+                "fake-kv-id",
+                0,
+                None,
+            ),
+        ]
+
+    def _call(self):
+        import sys
+        import os
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        from web.app import _build_subscription_diagrams_by_rg
+        return _build_subscription_diagrams_by_rg("Test Subscription", "production", self._make_rows())
+
+    def test_rg_diagrams_include_mode_views(self):
+        diagrams = self._call()
+        assert diagrams, "Expected at least one RG diagram"
+        first = diagrams[0]
+        assert {"connectivity", "exposure", "attack_paths"} <= set(first.get("views", {}))
+        assert first.get("default_view") == "connectivity"
+        assert first.get("relationship_count", 0) >= 1
+
+    def test_rg_connectivity_and_attack_views_render_edges(self):
+        diagrams = self._call()
+        first = diagrams[0]
+        connectivity = first["views"]["connectivity"]["mermaid"]
+        attack = first["views"]["attack_paths"]["mermaid"]
+        assert "-->" in connectivity, connectivity
+        assert "route abuse" in attack or "backend exploit" in attack or "steal secrets" in attack, attack

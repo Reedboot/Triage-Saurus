@@ -146,6 +146,7 @@ def test_run_opengrep_falls_back_to_chunked_scan_after_detection_timeout(monkeyp
     seen: dict[str, object] = {"calls": 0}
 
     monkeypatch.setattr(targeted_scan, "_tracked_file_count", lambda _target: 1)
+    monkeypatch.setattr(targeted_scan, "_scannable_paths", lambda _target: ["a.tf", "b.tf"])
     monkeypatch.setattr(
         targeted_scan,
         "_build_scan_chunks",
@@ -172,3 +173,95 @@ def test_run_opengrep_falls_back_to_chunked_scan_after_detection_timeout(monkeyp
     assert seen["calls"] == 3
     assert [result["check_id"] for result in data["results"]] == ["chunk-1", "chunk-2"]
     assert data["paths"]["scanned"] == ["a.tf", "b.tf"]
+
+
+def test_filter_scannable_paths_excludes_generated_assets():
+    paths = [
+        "src/app.py",
+        "docs/readme.md",
+        "frontend/package-lock.json",
+        "frontend/yarn.lock",
+        "frontend/src/app.min.js",
+        "frontend/src/app.min.css",
+        "frontend/src/app.js.map",
+        "modules/module-1/resources/storage_account/webfiles/build/static/js/main.js",
+        "modules/module-1/resources/storage_account/webfiles/src/index.js",
+    ]
+
+    assert targeted_scan._filter_scannable_paths(paths) == [
+        "src/app.py",
+        "modules/module-1/resources/storage_account/webfiles/src/index.js",
+    ]
+
+
+def test_build_scan_chunks_uses_requested_chunk_size():
+    files = [f"src/file-{idx}.py" for idx in range(5)]
+
+    assert targeted_scan._build_scan_chunks(files, max_files=2) == [
+        ["src/file-0.py", "src/file-1.py"],
+        ["src/file-2.py", "src/file-3.py"],
+        ["src/file-4.py"],
+    ]
+
+
+def test_run_opengrep_uses_single_pass_for_small_scannable_set(monkeypatch):
+    monkeypatch.setattr(targeted_scan, "_tracked_file_count", lambda _target: 1826)
+    monkeypatch.setattr(
+        targeted_scan,
+        "_scannable_paths",
+        lambda _target: [f"src/file-{idx}.py" for idx in range(151)],
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, cwd=None, check=False):
+        del capture_output, text, timeout, cwd, check
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout='{"results":[],"errors":[],"paths":{"scanned":[]}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(targeted_scan.subprocess, "run", fake_run)
+
+    targeted_scan.run_opengrep([targeted_scan.DETECTION], Path("/repo"), "Detection")
+
+    assert calls == [[
+        "opengrep",
+        "scan",
+        "--config",
+        str(targeted_scan.DETECTION),
+        "/repo",
+        "--json",
+        "--quiet",
+    ]]
+
+
+def test_run_opengrep_chunks_large_scannable_set(monkeypatch):
+    monkeypatch.setattr(targeted_scan, "_tracked_file_count", lambda _target: 1826)
+    scannable = [f"src/file-{idx}.py" for idx in range(801)]
+    monkeypatch.setattr(targeted_scan, "_scannable_paths", lambda _target: scannable)
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, cwd=None, check=False):
+        del capture_output, text, timeout, check
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout='{"results":[],"errors":[],"paths":{"scanned":[]}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(targeted_scan.subprocess, "run", fake_run)
+
+    targeted_scan.run_opengrep([targeted_scan.DETECTION], Path("/repo"), "Detection")
+
+    assert len(calls) == 5
+    assert all(call[:4] == ["opengrep", "scan", "--config", str(targeted_scan.DETECTION)] for call in calls)
+    assert all(call[-2:] == ["--json", "--quiet"] for call in calls)
+    assert all(len(call[4:-2]) <= 200 for call in calls[:-1])
+    assert len(calls[-1][4:-2]) == 1

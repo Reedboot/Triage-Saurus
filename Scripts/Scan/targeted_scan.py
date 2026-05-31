@@ -334,6 +334,18 @@ _NON_CODE_EXTENSIONS = {
     ".adoc", ".markdown", ".md", ".rst", ".txt",
 }
 
+_GENERATED_FILE_SUFFIXES = (
+    ".map",
+    ".min.css",
+    ".min.js",
+)
+
+_GENERATED_FILE_NAMES = {
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+
 _EXCLUDED_DIR_PARTS = {
     ".git",
     ".python_packages",
@@ -348,6 +360,11 @@ _EXCLUDED_DIR_PARTS = {
     "vendor",
 }
 
+_EXCLUDED_PATH_SUBSTRINGS = (
+    "/build/static/",
+    "/webfiles/build/",
+)
+
 
 def _filter_scannable_paths(paths: Iterable[str]) -> list[str]:
     """Drop obvious non-code assets that slow opengrep and rarely match rules."""
@@ -356,6 +373,14 @@ def _filter_scannable_paths(paths: Iterable[str]) -> list[str]:
         parts = set(Path(rel).parts)
         if parts & _EXCLUDED_DIR_PARTS:
             continue
+        lower_rel = rel.lower()
+        if Path(lower_rel).name in _GENERATED_FILE_NAMES:
+            continue
+        if lower_rel.endswith(_GENERATED_FILE_SUFFIXES):
+            continue
+        normalized_rel = f"/{lower_rel.replace(os.sep, '/')}"
+        if any(token in normalized_rel for token in _EXCLUDED_PATH_SUBSTRINGS):
+            continue
         ext = Path(rel).suffix.lower()
         if ext in _BINARY_EXTENSIONS or ext in _NON_CODE_EXTENSIONS:
             continue
@@ -363,14 +388,17 @@ def _filter_scannable_paths(paths: Iterable[str]) -> list[str]:
     return filtered
 
 
+def _scannable_paths(target: Path) -> list[str]:
+    return sorted(_filter_scannable_paths(_git_ls_files(target)))
+
+
 def _tracked_file_count(target: Path) -> int:
     return len(_git_ls_files(target))
 
 
-def _build_scan_chunks(target: Path, max_files: int = 800, max_paths: int = 8) -> list[list[str]]:
+def _build_scan_chunks(files: list[str], max_files: int = 800, max_paths: int = 8) -> list[list[str]]:
     """Chunk scannable tracked files to keep each opengrep invocation bounded."""
     del max_paths  # Kept for call-site compatibility.
-    files = sorted(_filter_scannable_paths(_git_ls_files(target)))
     if not files:
         return [["."]]
     size = max(1, max_files)
@@ -556,10 +584,15 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     
     # WSL/opengrep can hang on large repositories. Chunk scanning for large tracked sets.
     tracked_files = _tracked_file_count(target)
+    scannable_files = _scannable_paths(target)
+    scannable_count = len(scannable_files)
     if label == "Detection":
-        print(f"{Header.DETECTION} Detection pre-scan inventory complete: {tracked_files} tracked file(s)")
-    # Be conservative on WSL/network filesystems: chunk once repos are moderately sized.
-    use_chunked = tracked_files >= 250
+        print(
+            f"{Header.DETECTION} Detection pre-scan inventory complete: "
+            f"{tracked_files} tracked file(s), {scannable_count} scannable file(s)"
+        )
+    # opengrep can hang on very large scans in WSL; decide based on actual scannable files.
+    use_chunked = scannable_count >= 800
 
     timed_out_fallback = False
     if not use_chunked:
@@ -587,11 +620,14 @@ def run_opengrep(config_paths: list[Path], target: Path, label: str) -> dict:
     if timed_out_fallback:
         print(f"{Header.INFO} Falling back to chunked opengrep for {label} scan.")
     else:
-        print(f"{Header.INFO} Large repo detected ({tracked_files} tracked files); using chunked opengrep.")
-    chunk_size = 40
-    chunks = _build_scan_chunks(target, max_files=chunk_size, max_paths=3)
+        print(f"{Header.INFO} Large repo detected ({scannable_count} scannable files); using chunked opengrep.")
+    chunk_size = 200
+    chunks = _build_scan_chunks(scannable_files, max_files=chunk_size, max_paths=3)
     if label == "Detection":
-        print(f"{Header.DETECTION} Detection chunk prep: {len(chunks)} chunk(s), up to {chunk_size} tracked files each")
+        print(
+            f"{Header.DETECTION} Detection chunk prep: "
+            f"{len(chunks)} chunk(s), up to {chunk_size} scannable files each"
+        )
     chunk_results: list[dict] = []
     chunk_timeout_seconds = 180
     for idx, chunk in enumerate(chunks, start=1):

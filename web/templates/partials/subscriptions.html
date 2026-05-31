@@ -457,6 +457,127 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     }
   }
 
+  function getDiagramView(diagram, mode) {
+    if (!diagram) return null;
+    return (diagram.views && diagram.views[mode]) || diagram;
+  }
+
+  function createModeToggle(currentMode, onSelect) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;';
+    [
+      ['connectivity', '🔗 Connectivity'],
+      ['exposure', '🌐 Exposure'],
+      ['attack_paths', '🎯 Attack Paths'],
+    ].forEach(([mode, label]) => {
+      const btn = document.createElement('button');
+      const active = mode === currentMode;
+      btn.textContent = label;
+      btn.className = 'btn btn-sm';
+      btn.style.cssText = [
+        'padding:6px 10px',
+        'font-size:0.78rem',
+        'border-radius:999px',
+        'border:1px solid',
+        active ? 'background:#2563eb;color:#fff;border-color:#2563eb;' : 'background:transparent;color:var(--text-primary,#e5e7eb);border-color:var(--border-color,#444);',
+      ].join(';');
+      btn.addEventListener('click', () => onSelect(mode));
+      wrap.appendChild(btn);
+    });
+    return wrap;
+  }
+
+  function createCardShell() {
+    const card = document.createElement('div');
+    card.style.cssText = 'padding:16px;background:var(--bg-code,#1a1a1a);border-radius:8px;border:1px solid var(--border-color,#333);margin-bottom:12px;';
+    return card;
+  }
+
+  function renderSummaryList(items, ordered = false) {
+    if (!items || !items.length) return '';
+    const tag = ordered ? 'ol' : 'ul';
+    return `<${tag} style="margin:8px 0 0 18px;padding:0;display:grid;gap:6px;">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</${tag}>`;
+  }
+
+  async function renderDiagramSection(host, { subId, diagram, mode, heading, containerId, emptyText, minHeight = '360px' }) {
+    host.innerHTML = '';
+    const view = getDiagramView(diagram, mode);
+    if (!view || !view.mermaid) {
+      const empty = createCardShell();
+      empty.innerHTML = `<div style="color:var(--text-muted);">${escapeHtml(emptyText || 'No diagram available.')}</div>`;
+      host.appendChild(empty);
+      return;
+    }
+
+    const section = createCardShell();
+
+    const titleRow = document.createElement('div');
+    titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;';
+    const titleEl = document.createElement('h4');
+    titleEl.textContent = heading;
+    titleEl.style.margin = '0';
+    titleRow.appendChild(titleEl);
+    titleRow.appendChild(buildControlsBar(containerId));
+    section.appendChild(titleRow);
+
+    if (view.description) {
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;line-height:1.45;';
+      desc.textContent = view.description;
+      section.appendChild(desc);
+    }
+
+    const summary = view.asset_summary || diagram.asset_summary || {};
+    const summaryEntries = Object.entries(summary).filter(([, value]) => Number.isFinite(value));
+    if (summaryEntries.length) {
+      const chips = document.createElement('div');
+      chips.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
+      summaryEntries.forEach(([key, value]) => {
+        const chip = document.createElement('span');
+        chip.style.cssText = 'padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.06);font-size:0.74rem;color:var(--text-primary,#e5e7eb);';
+        chip.textContent = `${key.replace(/_/g, ' ')}: ${value}`;
+        chips.appendChild(chip);
+      });
+      section.appendChild(chips);
+    }
+
+    const viewport = document.createElement('div');
+    viewport.style.cssText = `overflow:auto;min-height:${minHeight};max-height:calc(100vh - 240px);`;
+    const transformTarget = document.createElement('div');
+    transformTarget.id = containerId;
+    const mermaidEl = document.createElement('div');
+    mermaidEl.className = 'mermaid';
+    mermaidEl.textContent = view.mermaid;
+    transformTarget.appendChild(mermaidEl);
+    viewport.appendChild(transformTarget);
+    section.appendChild(viewport);
+    host.appendChild(section);
+
+    injectSubStyle(subId, `${containerId}-${mode}`, view.css_code);
+
+    if (await waitForMermaid()) {
+      try {
+        await window.mermaid.run({ nodes: [mermaidEl] });
+        if (typeof window.postProcessDiagramSvgs === 'function') {
+          window.postProcessDiagramSvgs(transformTarget);
+        }
+        if (view.icon_map && typeof MermaidIconInjector !== 'undefined') {
+          const svgElements = transformTarget.querySelectorAll('svg');
+          if (svgElements.length > 0 && typeof MermaidIconInjector.injectIcons === 'function') {
+            await MermaidIconInjector.injectIcons(svgElements[svgElements.length - 1], view.icon_map);
+          }
+        }
+        const nodeMap = view.node_drilldown_map || diagram.node_drilldown_map || {};
+        transformTarget.querySelectorAll('svg').forEach(svg => _attachDrilldownHandlers(svg, nodeMap, subId));
+      } catch (e) {
+        const err = document.createElement('div');
+        err.style.cssText = 'color:#fca5a5;font-size:0.82rem;margin-top:8px;';
+        err.textContent = `Render error: ${e.message}`;
+        section.appendChild(err);
+      }
+    }
+  }
+
   // ── Load ingress diagram ──────────────────────────────────────────────────
   async function loadDiagram(subId, subName) {
     _currentSubId = subId;
@@ -492,87 +613,153 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       loading.style.display = 'none';
       container.style.display = 'block';
 
-      // ── Two-column wrapper: ingress left, RG picker right ──
+      const ingressDiag = data.ingress_diagram;
+      const rgDiagrams = data.diagrams || [];
+      const state = {
+        mode: (ingressDiag && ingressDiag.default_view) || 'connectivity',
+        selectedRgIndex: 0,
+      };
+
       const twoColWrap = document.createElement('div');
-      twoColWrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;';
-
+      twoColWrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;';
       const leftCol = document.createElement('div');
-      leftCol.style.cssText = 'flex:1 1 0;min-width:0;';
-
+      leftCol.style.cssText = 'flex:1 1 760px;min-width:0;';
       const rightCol = document.createElement('div');
-      rightCol.style.cssText = 'flex:0 0 360px;max-width:360px;min-width:240px;';
+      rightCol.style.cssText = 'flex:0 0 360px;max-width:360px;min-width:280px;';
+      const modeHost = document.createElement('div');
+      const ingressHost = document.createElement('div');
+      const sidebarHost = document.createElement('div');
+      const rgListHost = document.createElement('div');
+      const rgHost = document.createElement('div');
 
+      leftCol.appendChild(modeHost);
+      leftCol.appendChild(ingressHost);
+      rightCol.appendChild(sidebarHost);
+      rightCol.appendChild(rgListHost);
+      rightCol.appendChild(rgHost);
       twoColWrap.appendChild(leftCol);
       twoColWrap.appendChild(rightCol);
       container.appendChild(twoColWrap);
 
-      // ── Ingress diagram ──
-      const ingressDiag = data.ingress_diagram;
-      let ingressDiv = null;
-      if (ingressDiag && ingressDiag.mermaid) {
-        _currentNodeMap = ingressDiag.node_drilldown_map || {};
-
-        const ingressSection = document.createElement('div');
-        ingressSection.style.cssText = 'padding:16px;background:var(--bg-code,#1a1a1a);border-radius:6px;border:2px solid var(--border-color,#333);';
-
-        // Title row with zoom/fit/export controls
-        const ingressTitleRow = document.createElement('div');
-        ingressTitleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;';
-        const ingressTitle = document.createElement('h4');
-        ingressTitle.textContent = '🌐 Internet Entry Points & Routing Flow';
-        ingressTitle.style.margin = '0';
-        ingressTitleRow.appendChild(ingressTitle);
-        ingressTitleRow.appendChild(buildControlsBar('ingress-diagram-div'));
-        ingressSection.appendChild(ingressTitleRow);
-
-        // Viewport (scroll container) wrapping the transform target
-        const ingressViewport = document.createElement('div');
-        ingressViewport.style.cssText = 'overflow:auto;height:calc(100vh - 200px);min-height:400px;';
-
-        ingressDiv = document.createElement('div');
-        ingressDiv.id = 'ingress-diagram-div';
-
-        // Use textContent so mermaid source is not interpreted as HTML
-        const ingressMermaidDiv = document.createElement('div');
-        ingressMermaidDiv.className = 'mermaid';
-        ingressMermaidDiv.textContent = ingressDiag.mermaid;
-        ingressDiv.appendChild(ingressMermaidDiv);
-
-        ingressViewport.appendChild(ingressDiv);
-        ingressSection.appendChild(ingressViewport);
-
-        injectSubStyle(subId, 'ingress', ingressDiag.css_code);
-        container.appendChild(ingressSection);
-
-        if (await waitForMermaid()) {
-          try {
-            // Scoped render: only this element, not the whole document
-            await window.mermaid.run({ nodes: [ingressMermaidDiv] });
-            if (typeof window.postProcessDiagramSvgs === 'function') {
-              window.postProcessDiagramSvgs(ingressDiv);
-            }
-
-            // Inject icons
-            if (ingressDiag.icon_map && typeof MermaidIconInjector !== 'undefined') {
-              const svgElements = ingressDiv.querySelectorAll('svg');
-              if (svgElements.length > 0) {
-                const svgEl = svgElements[svgElements.length - 1];
-                if (typeof MermaidIconInjector.injectIcons === 'function') {
-                  await MermaidIconInjector.injectIcons(svgEl, ingressDiag.icon_map);
-                }
-              }
-            }
-
-            // Attach drill-down handlers after SVG exists
-            ingressDiv.querySelectorAll('svg').forEach(svg => _attachDrilldownHandlers(svg, _currentNodeMap, subId));
-          } catch(e) {
-            console.warn('[subscriptions] Ingress render error:', e.message);
-          }
-        }
+      function selectedRg() {
+        return rgDiagrams[state.selectedRgIndex] || null;
       }
 
-      // Wire up zoom/fit/export buttons
-      if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
+      function renderSidebar() {
+        const activeIngress = getDiagramView(ingressDiag, state.mode) || {};
+        const activeRg = selectedRg();
+        const activeRgView = getDiagramView(activeRg, state.mode) || {};
+        const card = createCardShell();
+        const attackPaths = (state.mode === 'attack_paths')
+          ? (activeRgView.attack_paths && activeRgView.attack_paths.length ? activeRgView.attack_paths : (activeIngress.attack_paths || []))
+          : [];
+        card.innerHTML = `
+          <div style="font-weight:600;margin-bottom:8px;">Current mode</div>
+          <div style="font-size:0.82rem;color:var(--text-muted);line-height:1.5;">${escapeHtml(activeIngress.description || '')}</div>
+          ${activeIngress.legend && activeIngress.legend.length ? `<div style="margin-top:12px;font-weight:600;font-size:0.82rem;">Legend</div>${renderSummaryList(activeIngress.legend)}` : ''}
+          ${attackPaths.length ? `<div style="margin-top:12px;font-weight:600;font-size:0.82rem;">Likely attack paths</div>${renderSummaryList(attackPaths.slice(0, 4).map(path => `${path.title}: ${path.path || path.summary || ''}`), true)}` : ''}
+          ${activeRg ? `<div style="margin-top:12px;font-size:0.78rem;color:var(--text-muted);">Selected RG: <strong style="color:var(--text-primary,#e5e7eb);">${escapeHtml(activeRg.rg)}</strong></div>` : ''}
+        `;
+        sidebarHost.innerHTML = '';
+        sidebarHost.appendChild(card);
+      }
+
+      function renderRgPicker() {
+        const card = createCardShell();
+        const heading = document.createElement('div');
+        heading.style.cssText = 'font-weight:600;margin-bottom:10px;';
+        heading.textContent = 'Resource group views';
+        card.appendChild(heading);
+
+        if (!rgDiagrams.length) {
+          const empty = document.createElement('div');
+          empty.style.cssText = 'font-size:0.82rem;color:var(--text-muted);';
+          empty.textContent = 'No resource-group diagrams available for this subscription.';
+          card.appendChild(empty);
+          rgListHost.innerHTML = '';
+          rgListHost.appendChild(card);
+          return;
+        }
+
+        const list = document.createElement('div');
+        list.style.cssText = 'display:grid;gap:6px;';
+        rgDiagrams.forEach((diagram, idx) => {
+          const btn = document.createElement('button');
+          const active = idx === state.selectedRgIndex;
+          btn.className = 'btn btn-sm';
+          btn.style.cssText = [
+            'display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;padding:8px 10px;border-radius:8px;border:1px solid',
+            active ? 'background:rgba(37,99,235,0.18);border-color:#2563eb;color:#fff;' : 'background:transparent;border-color:var(--border-color,#444);color:var(--text-primary,#e5e7eb);',
+          ].join(';');
+          btn.innerHTML = `
+            <span style="display:flex;flex-direction:column;gap:2px;">
+              <span>${escapeHtml(diagram.rg)}</span>
+              <small style="color:${active ? 'rgba(255,255,255,0.75)' : 'var(--text-muted)'};">${diagram.asset_count || 0} assets · ${diagram.public_count || 0} public · ${diagram.relationship_count || 0} links</small>
+            </span>
+          `;
+          btn.addEventListener('click', async () => {
+            state.selectedRgIndex = idx;
+            renderSidebar();
+            renderRgPicker();
+            await renderDiagramSection(rgHost, {
+              subId,
+              diagram: selectedRg(),
+              mode: state.mode,
+              heading: `🧩 ${selectedRg().rg} — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}`,
+              containerId: 'subscription-rg-diagram-div',
+              emptyText: 'No resource-group diagram available.',
+              minHeight: '300px',
+            });
+            if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
+          });
+          list.appendChild(btn);
+        });
+        card.appendChild(list);
+        rgListHost.innerHTML = '';
+        rgListHost.appendChild(card);
+      }
+
+      async function renderAll() {
+        modeHost.innerHTML = '';
+        const modeCard = createCardShell();
+        const modeTitle = document.createElement('div');
+        modeTitle.style.cssText = 'font-weight:600;margin-bottom:8px;';
+        modeTitle.textContent = 'Diagram mode';
+        modeCard.appendChild(modeTitle);
+        modeCard.appendChild(createModeToggle(state.mode, async (mode) => {
+          if (mode === state.mode) return;
+          state.mode = mode;
+          await renderAll();
+        }));
+        modeHost.appendChild(modeCard);
+
+        await renderDiagramSection(ingressHost, {
+          subId,
+          diagram: ingressDiag,
+          mode: state.mode,
+          heading: `🌐 Subscription ingress — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}`,
+          containerId: 'ingress-diagram-div',
+          emptyText: 'No subscription ingress diagram available.',
+          minHeight: '420px',
+        });
+
+        renderSidebar();
+        renderRgPicker();
+
+        await renderDiagramSection(rgHost, {
+          subId,
+          diagram: selectedRg(),
+          mode: state.mode,
+          heading: selectedRg() ? `🧩 ${selectedRg().rg} — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}` : '🧩 Resource group view',
+          containerId: 'subscription-rg-diagram-div',
+          emptyText: 'Choose a resource group to inspect its diagram.',
+          minHeight: '300px',
+        });
+
+        if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
+      }
+
+      await renderAll();
     } catch(e) {
       loading.textContent = 'Failed to load diagram: ' + e.message;
     }
