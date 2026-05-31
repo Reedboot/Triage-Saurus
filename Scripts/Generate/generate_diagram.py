@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from db_helpers import get_db_connection, get_resources_for_diagram, get_connections_for_diagram, get_repo_context
 import resource_type_db as _rtdb
+from architecture_view_helpers import build_architecture_view_bundle
 from internet_exposure_detector import InternetExposureDetector, ExposureDetail
 from icon_resolver import get_icon_data_uri, get_icon_class, get_fallback_icon_data_uri, get_icon_path
 
@@ -6508,34 +6509,73 @@ def generate_architecture_diagram_with_css(
         use_embedded_icons=use_embedded_icons,
     )
     diagram = builder.generate()
-    
-    # Only generate and embed CSS if NOT using embedded icons
+
     if use_embedded_icons:
-        # When using embedded icons, return diagram as-is with no classDefs
         return diagram, ""
-    
-    # Always generate CSS for icon classes when using CSS classes
+
     classdefs = builder.generate_icon_css()
-    
     if classdefs:
-        # Embed classDef statements into the diagram
-        # Insert them before the first node/subgraph definition
         lines = diagram.split('\n')
-        # Find first non-comment line after the flowchart declaration
         insert_idx = 1
         for i, line in enumerate(lines[1:], 1):
             if line.strip() and not line.strip().startswith('%%'):
                 insert_idx = i
                 break
-        
-        # Insert classDefs before first diagram content
         lines.insert(insert_idx, classdefs)
         diagram_with_css = '\n'.join(lines)
     else:
         diagram_with_css = diagram
-    
-    # Return diagram with embedded classDefs and also standalone CSS
+
     return diagram_with_css, classdefs
+
+
+def generate_architecture_diagram_bundle_with_css(
+    experiment_id: str,
+    repo_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    include_operation_resources: Optional[bool] = None,
+    use_embedded_icons: bool = False,
+) -> dict:
+    """Generate a diagram payload with connectivity, exposure, and attack-path views."""
+    builder = HierarchicalDiagramBuilder(
+        experiment_id=experiment_id,
+        repo_name=repo_name,
+        include_api_operations=include_operation_resources,
+        provider_filter=provider,
+        use_embedded_icons=use_embedded_icons,
+    )
+    diagram = builder.generate()
+    css_code = ""
+
+    if not use_embedded_icons:
+        classdefs = builder.generate_icon_css()
+        css_code = classdefs
+        if classdefs:
+            lines = diagram.split('\n')
+            insert_idx = 1
+            for i, line in enumerate(lines[1:], 1):
+                if line.strip() and not line.strip().startswith('%%'):
+                    insert_idx = i
+                    break
+            lines.insert(insert_idx, classdefs)
+            diagram = '\n'.join(lines)
+
+    return build_architecture_view_bundle(
+        connectivity_code=diagram,
+        connectivity_css=css_code,
+        resources=builder.resources,
+        connections=builder.connections,
+        emitted_nodes=builder.emitted_nodes,
+        exposed_resources=builder.exposed_resources,
+        get_node_id=builder._get_node_id,
+        get_icon_url=lambda resource_type: _get_icon_svg_url(resource_type, builder.provider_filter or "azure"),
+        get_friendly_type=builder.get_friendly_type,
+        classify_layer=builder._classify_resource_layer,
+        is_connected_resource=builder._is_connected_resource,
+        is_exposed_resource=builder._is_exposed_resource,
+        is_relay_resource=builder.is_internet_relay_resource,
+        internet_edge_annotation=builder._internet_edge_annotation,
+    )
 
 
 if __name__ == "__main__":
