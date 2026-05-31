@@ -6569,7 +6569,7 @@ def generate_architecture_diagram_bundle_with_css(
         exposed_resources=builder.exposed_resources,
         get_node_id=builder._get_node_id,
         get_icon_url=lambda resource_type: _get_icon_svg_url(resource_type, builder.provider_filter or "azure"),
-        get_friendly_type=builder.get_friendly_type,
+        get_friendly_type=get_friendly_type,
         classify_layer=builder._classify_resource_layer,
         is_connected_resource=builder._is_connected_resource,
         is_exposed_resource=builder._is_exposed_resource,
