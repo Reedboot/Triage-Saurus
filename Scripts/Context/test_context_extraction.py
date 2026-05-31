@@ -124,6 +124,39 @@ def test_extract_context_skips_expression_like_resource_labels(tmp_path, monkeyp
     assert any(r.resource_type == "azurerm_service_plan" for r in context.resources)
 
 
+def test_extract_context_ignores_nested_security_rule_name_for_nsg(tmp_path, monkeypatch):
+    _stub_heavy_detectors(monkeypatch)
+    (tmp_path / "main.tf").write_text(
+        dedent(
+            """
+            resource "azurerm_network_security_group" "net_sg" {
+              name     = "real-nsg"
+              location = "eastus"
+
+              security_rule {
+                name                       = "SSH"
+                priority                   = 1000
+                direction                  = "Inbound"
+                access                     = "Allow"
+                protocol                   = "Tcp"
+                source_port_range          = "*"
+                destination_port_range     = "22"
+                source_address_prefix      = "*"
+                destination_address_prefix = "*"
+              }
+            }
+            """
+        ).strip()
+    )
+
+    context = context_extraction.extract_context(str(tmp_path))
+    nsg = next(r for r in context.resources if r.resource_type == "azurerm_network_security_group")
+
+    assert nsg.name == "net_sg"
+    assert (nsg.properties or {}).get("actual_name") == "real-nsg"
+    assert not any(r.name == "SSH" for r in context.resources)
+
+
 def test_meta_resources_infer_provider_for_new_prefixes(tmp_path, monkeypatch):
     _stub_heavy_detectors(monkeypatch)
 

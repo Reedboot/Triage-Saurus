@@ -2323,14 +2323,18 @@ def extract_context(repo_path_str: str) -> RepositoryContext:
         resource_type = resource.resource_type
 
         top_level_name_match = None
-        depth = 0
-        for line in block_text.splitlines():
-            depth += line.count("{") - line.count("}")
-            if depth == 0:
+        block_lines = block_text.splitlines()
+        # Skip the opening `resource ... {` line and only consider name assignments
+        # while we're at the immediate block depth. This avoids nested blocks like
+        # Azure NSG `security_rule { name = "SSH" }` overwriting the parent resource.
+        depth = 1
+        for line in block_lines[1:]:
+            if depth == 1:
                 m = re.match(r'^\s*name\s*=\s*"([^"]+)"', line)
                 if m:
                     top_level_name_match = m
                     break
+            depth += line.count("{") - line.count("}")
         if top_level_name_match:
             name_value = top_level_name_match.group(1)
             # Only use resolved names, never local/var/module expressions.
