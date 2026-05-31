@@ -102,14 +102,22 @@ function createDiagramPlaceholder(message = 'Architecture diagram will appear af
 export function clearDiagrams(message = 'Architecture diagram will appear after the scan completes.') {
   const diagramViews = document.getElementById('diagram-views');
   const diagramTabs = document.getElementById('diagram-tabs');
+  const diagramModeTabs = document.getElementById('diagram-mode-tabs');
+  const diagramViewSummary = document.getElementById('diagram-view-summary');
   const zoomInner = document.getElementById('diagram-zoom-inner');
 
   state.storedDiagrams = [];
   state.currentDiagramIndex = 0;
+  state.currentDiagramMode = 'connectivity';
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
 
   if (zoomInner) zoomInner.classList.remove('is-rendering');
   if (diagramTabs) diagramTabs.innerHTML = '';
+  if (diagramModeTabs) diagramModeTabs.innerHTML = '';
+  if (diagramViewSummary) {
+    diagramViewSummary.innerHTML = '';
+    diagramViewSummary.style.display = 'none';
+  }
 
   if (diagramViews) {
     diagramViews.replaceChildren(createDiagramPlaceholder(message));
@@ -118,6 +126,110 @@ export function clearDiagrams(message = 'Architecture diagram will appear after 
 
   setDiagramPlaceholderVisible(true);
   setDiagramLoadingVisible(false);
+}
+
+function getDiagramViews(diagram) {
+  return diagram && typeof diagram.views === 'object' && diagram.views ? diagram.views : {};
+}
+
+function getAvailableDiagramModes(diagrams) {
+  const modes = new Set();
+  (diagrams || []).forEach((diagram) => {
+    Object.keys(getDiagramViews(diagram)).forEach((mode) => modes.add(mode));
+  });
+  return modes.size ? Array.from(modes) : ['connectivity'];
+}
+
+function getDiagramModePayload(diagram, mode) {
+  const views = getDiagramViews(diagram);
+  if (views[mode]) return views[mode];
+  if (mode === 'connectivity') {
+    return {
+      code: diagram.code || '',
+      css_code: diagram.css_code || '',
+      attack_paths: diagram.attack_paths || [],
+      asset_summary: diagram.asset_summary || {},
+      description: '',
+      legend: [],
+    };
+  }
+  return null;
+}
+
+function renderDiagramModeTabs(diagrams) {
+  const diagramModeTabs = document.getElementById('diagram-mode-tabs');
+  if (!diagramModeTabs) return;
+
+  const availableModes = getAvailableDiagramModes(diagrams);
+  const defaultMode = diagrams.find((diagram) => diagram.default_view)?.default_view || 'connectivity';
+  if (!availableModes.includes(state.currentDiagramMode)) {
+    state.currentDiagramMode = availableModes.includes(defaultMode) ? defaultMode : availableModes[0];
+  }
+
+  diagramModeTabs.innerHTML = '';
+  if (availableModes.length <= 1) return;
+
+  const labels = {
+    connectivity: 'Connectivity',
+    exposure: 'Exposure',
+    attack_paths: 'Attack Paths',
+  };
+
+  availableModes.forEach((mode) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn-small' + (mode === state.currentDiagramMode ? ' active' : '');
+    btn.textContent = labels[mode] || mode;
+    btn.dataset.mode = mode;
+    btn.style.marginRight = '4px';
+    btn.addEventListener('click', () => {
+      if (state.currentDiagramMode === mode) return;
+      state.currentDiagramMode = mode;
+      renderDiagrams(state.storedDiagrams);
+    });
+    diagramModeTabs.appendChild(btn);
+  });
+}
+
+function renderDiagramViewSummary(diagram) {
+  const summaryEl = document.getElementById('diagram-view-summary');
+  if (!summaryEl || !diagram) return;
+
+  const payload = getDiagramModePayload(diagram, state.currentDiagramMode) || {};
+  const attackPaths = payload.attack_paths || diagram.attack_paths || [];
+  const assetSummary = payload.asset_summary || diagram.asset_summary || {};
+  const legend = payload.legend || [];
+  const counts = [
+    ['Entry', assetSummary.entry_points],
+    ['API', assetSummary.api_layer],
+    ['Backends', assetSummary.backends],
+    ['Data', assetSummary.data_stores],
+    ['Public', assetSummary.public_assets],
+  ].filter(([, value]) => Number.isFinite(value));
+
+  const legendHtml = legend.length
+    ? `<div style="margin-top:8px"><strong>Legend:</strong> ${legend.map((item) => String(item)).join(' | ')}</div>`
+    : '';
+  const countsHtml = counts.length
+    ? `<div style="margin-top:8px"><strong>In view:</strong> ${counts.map(([label, value]) => `${label} ${value}`).join(' | ')}</div>`
+    : '';
+  const pathsHtml = attackPaths.length
+    ? `<div style="margin-top:8px"><strong>Likely attack paths:</strong><ul style="margin:6px 0 0 18px;padding:0">${attackPaths.slice(0, 3).map((path) => `<li>${path.title || path.path || ''}</li>`).join('')}</ul></div>`
+    : '';
+
+  if (!payload.description && !legend.length && !counts.length && !attackPaths.length) {
+    summaryEl.innerHTML = '';
+    summaryEl.style.display = 'none';
+    return;
+  }
+
+  summaryEl.innerHTML = `
+    <div><strong>${payload.title || 'Architecture view'}</strong></div>
+    ${payload.description ? `<div style="margin-top:6px">${payload.description}</div>` : ''}
+    ${countsHtml}
+    ${legendHtml}
+    ${pathsHtml}
+  `;
+  summaryEl.style.display = 'block';
 }
 
 // ── Per-container Mermaid rendering ───────────────────────────────────────────

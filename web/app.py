@@ -5349,25 +5349,32 @@ def api_diagrams(experiment_id: str):
             css_code = d.get("css_code") or ""
             provider_key = _canonical_provider_key(d.get("provider"))
 
-            if (
-                repo_name
-                and code
-                and _diagram_has_icon_classes(code)
-                and not _diagram_has_icon_defs(code, css_code)
-                and provider_key not in ("", "unknown")
+            if repo_name and provider_key not in ("", "unknown") and (
+                not d.get("views")
+                or (
+                    code
+                    and _diagram_has_icon_classes(code)
+                    and not _diagram_has_icon_defs(code, css_code)
+                )
             ):
                 try:
-                    from Scripts.Generate.generate_diagram import generate_architecture_diagram_with_css  # type: ignore
-                    regenerated_code, regenerated_css = generate_architecture_diagram_with_css(
+                    from Scripts.Generate.generate_diagram import generate_architecture_diagram_bundle_with_css  # type: ignore
+                    regenerated = generate_architecture_diagram_bundle_with_css(
                         experiment_id,
                         repo_name=repo_name,
                         provider=provider_key,
                         include_operation_resources=include_api_operations_override,
+                        use_embedded_icons=True,
                     )
+                    regenerated_code = regenerated.get("code")
                     if regenerated_code:
                         d = dict(d)
                         d["mermaid_code"] = regenerated_code
-                        d["css_code"] = regenerated_css or ""
+                        d["css_code"] = regenerated.get("css_code", "") or ""
+                        d["views"] = regenerated.get("views") or {}
+                        d["default_view"] = regenerated.get("default_view") or "connectivity"
+                        d["attack_paths"] = regenerated.get("attack_paths") or []
+                        d["asset_summary"] = regenerated.get("asset_summary") or {}
                 except Exception:
                     pass
 
@@ -5384,11 +5391,35 @@ def api_diagrams(experiment_id: str):
             except Exception:
                 sanitized_code = raw_code
 
+            raw_views = d.get("views") if isinstance(d.get("views"), dict) else {}
+            sanitized_views: dict[str, dict] = {}
+            for view_name, view_payload in raw_views.items():
+                if not isinstance(view_payload, dict):
+                    continue
+                view_code = view_payload.get("code") or view_payload.get("mermaid") or ""
+                try:
+                    sanitized_view_code = _sanitize_mermaid(view_code) if view_code else view_code
+                except Exception:
+                    sanitized_view_code = view_code
+                sanitized_views[view_name] = {
+                    "code": sanitized_view_code,
+                    "css_code": view_payload.get("css_code", ""),
+                    "title": view_payload.get("title", ""),
+                    "description": view_payload.get("description", ""),
+                    "legend": view_payload.get("legend") or [],
+                    "attack_paths": view_payload.get("attack_paths") or [],
+                    "asset_summary": view_payload.get("asset_summary") or {},
+                }
+
             response_diagrams.append(
                 {
                     "title": d.get("diagram_title"),
                     "code": sanitized_code,
                     "css_code": d.get("css_code", ""),
+                    "views": sanitized_views,
+                    "default_view": d.get("default_view") or ("connectivity" if sanitized_views else ""),
+                    "attack_paths": d.get("attack_paths") or [],
+                    "asset_summary": d.get("asset_summary") or {},
                 }
             )
 
@@ -5444,7 +5475,7 @@ def api_diagrams(experiment_id: str):
                     return jsonify(_response_payload(db_diagrams))
 
                 # No persisted diagrams — regenerate per-provider from DB topology.
-                from Scripts.Generate.generate_diagram import generate_architecture_diagram_with_css  # type: ignore
+                from Scripts.Generate.generate_diagram import generate_architecture_diagram_bundle_with_css  # type: ignore
                 from Scripts.Persist.db_helpers import get_db_connection as _get_conn  # type: ignore
 
                 with _get_conn() as conn:
@@ -5496,14 +5527,17 @@ def api_diagrams(experiment_id: str):
                 generated: list[dict] = []
                 for provider in providers:
                     try:
-                        code, css = generate_architecture_diagram_with_css(
+                        bundle = generate_architecture_diagram_bundle_with_css(
                             experiment_id,
                             repo_name=repo_name,
                             provider=provider,
                             include_operation_resources=include_api_operations_override,
                             use_embedded_icons=True,
                         )
+                        code = bundle.get("code")
+                        css = bundle.get("css_code")
                     except Exception:
+                        bundle = {}
                         code = None
                         css = None
                     if code and "No resources found" not in code:
@@ -5513,6 +5547,10 @@ def api_diagrams(experiment_id: str):
                             "diagram_title": f"{provider_display} Architecture",
                             "mermaid_code": code,
                             "css_code": css,
+                            "views": bundle.get("views") or {},
+                            "default_view": bundle.get("default_view") or "connectivity",
+                            "attack_paths": bundle.get("attack_paths") or [],
+                            "asset_summary": bundle.get("asset_summary") or {},
                             "display_order": len(generated),
                         })
                         # Persist the regenerated diagrams for faster subsequent responses

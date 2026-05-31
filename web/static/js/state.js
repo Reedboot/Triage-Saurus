@@ -35,6 +35,7 @@ export const state = {
   },
   diagramStates:    {},    // keyed by diagram index
   currentDiagramIndex: 0,
+  currentDiagramMode: 'connectivity',
 
   // ── Pan interaction ───────────────────────────────────────────────────────
   isPanning:          false,
