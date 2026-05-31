@@ -25,6 +25,17 @@ from typing import Optional
 
 from flask import Flask, Response, render_template, request, stream_with_context, jsonify, redirect
 
+try:
+    from web.subscription_diagram_helpers import (
+        build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
+        build_subscription_overlay_views as _shared_build_subscription_overlay_views,
+    )
+except ImportError:
+    from subscription_diagram_helpers import (  # type: ignore
+        build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
+        build_subscription_overlay_views as _shared_build_subscription_overlay_views,
+    )
+
 app = Flask(__name__)
 
 # Jinja2 custom filters
