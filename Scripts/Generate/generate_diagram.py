@@ -1811,6 +1811,45 @@ class HierarchicalDiagramBuilder:
                       'kubernetes_cluster', 'container_cluster',
                       'vpn', 'express_route', 'public_ip']
         return any(tok in rtype for tok in net_tokens)
+
+    def _get_sg_protected_computes(self, sg: dict, candidate_computes: List[dict]) -> List[dict]:
+        """Resolve which compute resources an SG/NSG should wrap in the diagram."""
+        sg_children = self.children_by_parent.get(sg.get('id'), [])
+        has_nic_associations = any(
+            'network_interface_security_group_association' in (c.get('resource_type') or '').lower()
+            for c in sg_children
+        )
+        if not has_nic_associations:
+            return list(candidate_computes)
+
+        associated_nic_names = {
+            str((child.get('properties') or {}).get('network_interface_name') or '').strip()
+            for child in sg_children
+            if 'network_interface_security_group_association' in (child.get('resource_type') or '').lower()
+        }
+        associated_nic_names.discard('')
+
+        protected_computes = []
+        for compute in candidate_computes:
+            props = compute.get('properties') or {}
+            nic_names_raw = props.get('network_interface_names')
+            if isinstance(nic_names_raw, list):
+                nic_names = [str(name).strip() for name in nic_names_raw if str(name).strip()]
+            elif nic_names_raw:
+                nic_names = [str(nic_names_raw).strip()]
+            else:
+                nic_names = []
+            if associated_nic_names and any(nic_name in associated_nic_names for nic_name in nic_names):
+                protected_computes.append(compute)
+
+        if protected_computes:
+            return protected_computes
+
+        # Fallback for older scans that don't persist NIC names on the VM.
+        return [
+            compute for compute in candidate_computes
+            if 'azurerm_virtual_machine' in (compute.get('resource_type') or '').lower()
+        ]
     
     def is_security_group_or_rule(self, resource: dict) -> bool:
         """Check if resource is a security group or security group rule."""
@@ -2616,26 +2655,7 @@ class HierarchicalDiagramBuilder:
                             
                             # Determine which compute resources this SG wraps
                             # For Azure NSGs with associations, find NICs and their parent VMs
-                            sg_children = self.children_by_parent.get(sg.get('id'), [])
-                            sg_protected_computes = []
-                            
-                            # Check if NSG has network_interface_security_group_association children
-                            has_nic_associations = any(
-                                'network_interface_security_group_association' in (c.get('resource_type') or '').lower()
-                                for c in sg_children
-                            )
-                            
-                            if has_nic_associations:
-                                # For Azure NSGs with NIC associations, wrap all VMs in the subnet
-                                # Note: subnet_nics is empty due to _apply_azure_nic_nesting() remapping
-                                sg_protected_computes = [
-                                    c for c in subnet_computes 
-                                    if 'azurerm_virtual_machine' in (c.get('resource_type') or '').lower()
-                                ]
-                            else:
-                                # Default: NSG wraps all compute resources in the subnet
-                                sg_protected_computes = subnet_computes
-                            
+                            sg_protected_computes = self._get_sg_protected_computes(sg, subnet_computes)
                             has_compute_to_wrap = bool(sg_protected_computes)
                             if has_compute_to_wrap:
                                 _sg_rtype = (sg.get('resource_type') or '').lower()
@@ -2806,12 +2826,14 @@ class HierarchicalDiagramBuilder:
             self.node_id_override[sg['resource_name']] = sg_id
             sg_children = self.children_by_parent.get(sg.get('id'), [])
             sg_rules = [r for r in sg_children if 'rule' in (r.get('resource_type') or '').lower()]
+            sg_protected_computes = self._get_sg_protected_computes(sg, compute_resources)
             
-            if sg_rules:
+            if sg_rules or sg_protected_computes:
                 sg_label = self._wrap_mermaid_label(sg['resource_name'])
                 lines.append(f'    subgraph {sg_id}[{self._quote_mermaid_label(sg_label)}]')
                 self._emitted_mermaid_ids.add(sg_id)
                 self._node_id_first_owner[sg_id] = str(sg.get('id', ''))
+                self.subgraph_nodes.add(sg['resource_name'])
                 
                 for rule in sg_rules:
                     if rule['resource_name'] not in self.emitted_nodes:
@@ -2838,6 +2860,10 @@ class HierarchicalDiagramBuilder:
                             # Rule has no children, render as simple node
                             lines.append(self.render_node(rule, indent="      "))
                         self.emitted_nodes.add(rule['resource_name'])
+
+                for compute in sg_protected_computes:
+                    if compute['resource_name'] not in self.emitted_nodes:
+                        self._emit_compute_node(compute, lines, "      ")
                 
                 lines.append('    end')
             else:

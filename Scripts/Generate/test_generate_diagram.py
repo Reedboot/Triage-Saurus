@@ -195,6 +195,55 @@ def test_public_ip_collapse_targets_vm_not_vnet(monkeypatch):
     assert diagram.startswith("flowchart TB")
 
 
+def test_top_level_azure_nsg_with_nic_association_wraps_vm(monkeypatch):
+    """Azure NSGs should not render as orphan nodes when only the VM path remains visible."""
+    builder = HierarchicalDiagramBuilder("exp-1")
+
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "net_sg",
+            "resource_type": "azurerm_network_security_group",
+            "provider": "azure",
+            "repo_name": "repo",
+            "properties": {},
+        },
+        {
+            "id": 2,
+            "resource_name": "nsg_assoc",
+            "resource_type": "azurerm_network_interface_security_group_association",
+            "provider": "azure",
+            "repo_name": "repo",
+            "parent_resource_id": 1,
+            "properties": {"network_interface_name": "nic-1"},
+        },
+        {
+            "id": 3,
+            "resource_name": "dev-vm",
+            "resource_type": "azurerm_virtual_machine",
+            "provider": "azure",
+            "repo_name": "repo",
+            "properties": {"network_interface_names": ["nic-1"]},
+        },
+    ]
+
+    def fake_load_data():
+        builder.resources = resources
+        builder.connections = []
+        builder.children_by_parent = {1: [resources[1]]}
+        builder.exposed_resources = {}
+        builder.resource_by_id = {r["id"]: r for r in resources}
+        builder.resource_by_name = {r["resource_name"]: r for r in resources}
+
+    monkeypatch.setattr(builder, "load_data", fake_load_data)
+    monkeypatch.setattr(builder, "infer_connections", lambda: False)
+
+    diagram = builder.generate()
+
+    assert 'subgraph net_sg[' in diagram
+    assert 'dev_vm' in diagram
+
+
 def test_storage_blob_is_nested_under_container(monkeypatch):
     """Test that storage blob is nested under container."""
     builder = HierarchicalDiagramBuilder("exp-1")
@@ -1025,4 +1074,3 @@ def test_azure_mssql_icons_resolve_to_sql_assets():
     assert database_path is not None
     assert server_path.as_posix().endswith("/azure/databases/sql-server.svg")
     assert database_path.as_posix().endswith("/azure/databases/sql-database.svg")
-

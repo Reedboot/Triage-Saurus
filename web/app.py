@@ -13972,6 +13972,17 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     }
 
 
+def _build_subscription_overlay_views(rows: list, plan_links: list | None = None) -> dict:
+    return _shared_build_subscription_overlay_views(
+        rows,
+        sanitise_node_id=_sanitise_node_id,
+        friendly_type=_friendly_type,
+        get_icon_path=_get_icon_path,
+        normalize_attack_paths=_normalize_attack_paths,
+        plan_links=plan_links,
+    )
+
+
 def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
@@ -15227,6 +15238,19 @@ def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: li
         })
 
     return diagrams
+
+
+def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: list, plan_links: list | None = None) -> list[dict]:
+    return _shared_build_subscription_diagrams_by_rg(
+        sub_name,
+        environment,
+        rows,
+        sanitise_node_id=_sanitise_node_id,
+        friendly_type=_friendly_type,
+        get_icon_path=_get_icon_path,
+        normalize_attack_paths=_normalize_attack_paths,
+        plan_links=plan_links,
+    )
 
 
 def _build_subscription_mermaid(sub_name: str, environment: str, rows: list) -> str:
