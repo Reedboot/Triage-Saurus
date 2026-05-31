@@ -528,6 +528,53 @@ class TestDiagramPanel:
         assert abs(svg_center_x - wrap_center_x) < wrap_box["width"] * 0.15
         assert abs(svg_center_y - wrap_center_y) < wrap_box["height"] * 0.25
 
+    def test_architecture_mode_tabs_and_summary_render(self, home: Page):
+        """Architecture diagrams with overlay views should render mode tabs and update the summary."""
+        home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
+        home.evaluate(
+            """
+            () => {
+              window._triage.renderDiagrams([{
+                title: 'Azure Architecture',
+                code: 'flowchart LR; A[Gateway] --> B[API]',
+                default_view: 'connectivity',
+                views: {
+                  connectivity: {
+                    code: 'flowchart LR; A[Gateway] --> B[API]',
+                    title: 'Connectivity view',
+                    description: 'Shows the full provider topology.',
+                    legend: ['White edges: service relationships'],
+                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
+                    attack_paths: [{ title: 'Public ingress into architecture' }]
+                  },
+                  exposure: {
+                    code: 'flowchart LR; Internet --> A[Gateway] --> B[API]',
+                    title: 'Exposure view',
+                    description: 'Shows internet-facing resources.',
+                    legend: ['Red edges: direct public exposure'],
+                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
+                    attack_paths: [{ title: 'Public ingress into architecture' }]
+                  },
+                  attack_paths: {
+                    code: 'flowchart LR; Internet -.-> A[Gateway] -.-> B[API]',
+                    title: 'Attack-path view',
+                    description: 'Shows plausible attacker movement.',
+                    legend: ['Dashed red edges: attacker movement'],
+                    asset_summary: { entry_points: 1, api_layer: 1, backends: 1, data_stores: 1, public_assets: 1 },
+                    attack_paths: [{ title: 'Public ingress into architecture' }, { title: 'Secrets pivot from workloads' }]
+                  }
+                }
+              }]);
+            }
+            """
+        )
+        home.wait_for_selector("#diagram-views svg", state="attached", timeout=15000)
+
+        expect(home.locator("#diagram-mode-tabs button")).to_have_count(3)
+        home.locator("#diagram-mode-tabs button:has-text('Attack Paths')").click()
+        expect(home.locator("#diagram-view-summary")).to_contain_text("Likely attack paths")
+        expect(home.locator("#diagram-view-summary")).to_contain_text("Secrets pivot from workloads")
+
     def test_rendered_diagram_svg_fills_wrapper(self, home: Page):
         """Rendered Mermaid SVG should fill the active diagram wrapper."""
         home.wait_for_function("window._triage && typeof window._triage.renderDiagrams === 'function'")
