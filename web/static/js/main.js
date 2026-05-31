@@ -16,7 +16,7 @@ import {
   setArchitectureAiProgress, clearArchitectureAiProgress,
   _showDiagramNotReady,
 } from './diagram-actions.js';
-import { clearDiagrams } from './diagram-render.js';
+import { clearDiagrams, renderDiagrams } from './diagram-render.js';
 import {
   showSectionsView, showLogView, getCurrentRepoName,
   buildSectionTabs, loadSectionContent, activateSectionKey,
@@ -77,6 +77,7 @@ window._triage.registerToolbarStop = (callback) => {
 
 window._triage.setArchitectureAiProgress = setArchitectureAiProgress;
 window._triage.clearArchitectureAiProgress = clearArchitectureAiProgress;
+window._triage.renderDiagrams = renderDiagrams;
 
 // ── Load Recent Scan Handler ───────────────────────────────────────────────────────────
 

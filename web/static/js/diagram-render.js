@@ -280,6 +280,8 @@ export function renderDiagrams(diagrams) {
     return;
   }
 
+  state.storedDiagrams = diagrams;
+
   if (window.MermaidIconInjector && window.MermaidIconInjector._clearCache) {
     window.MermaidIconInjector._clearCache();
   }
@@ -299,7 +301,7 @@ export function renderDiagrams(diagrams) {
 
   // Reset per-diagram zoom state
   Object.keys(state.diagramStates).forEach(k => delete state.diagramStates[k]);
-  state.currentDiagramIndex = 0;
+  const initialIndex = Math.min(state.currentDiagramIndex || 0, diagrams.length - 1);
 
   setDiagramPlaceholderVisible(false);
   const placeholder = diagramViews.querySelector(
@@ -309,11 +311,13 @@ export function renderDiagrams(diagrams) {
 
   diagramTabs.innerHTML = '';
   diagramViews.querySelectorAll('.diagram-view').forEach(el => el.remove());
+  renderDiagramModeTabs(diagrams);
 
   let addedCount = 0;
   diagrams.forEach((diag, idx) => {
     const title = diag.title || `Diagram ${idx + 1}`;
-    const code  = sanitizeMermaidSource(diag.code).trim();
+    const modePayload = getDiagramModePayload(diag, state.currentDiagramMode);
+    const code  = sanitizeMermaidSource((modePayload && modePayload.code) || diag.code).trim();
     if (!code) {
       console.warn('[renderDiagrams] Skipping diagram', idx, 'no code');
       return;
@@ -321,14 +325,14 @@ export function renderDiagrams(diagrams) {
     addedCount++;
 
     const tabBtn = document.createElement('button');
-    tabBtn.className       = 'btn-small' + (idx === 0 ? ' active' : '');
+    tabBtn.className       = 'btn-small' + (idx === initialIndex ? ' active' : '');
     tabBtn.dataset.idx     = idx;
     tabBtn.textContent     = title;
     tabBtn.style.marginRight = '4px';
     diagramTabs.appendChild(tabBtn);
 
     const viewDiv = document.createElement('div');
-    viewDiv.className   = 'diagram-view' + (idx === 0 ? ' active' : '');
+    viewDiv.className   = 'diagram-view' + (idx === initialIndex ? ' active' : '');
     viewDiv.dataset.idx = idx;
 
     const pre = document.createElement('pre');
@@ -353,6 +357,7 @@ export function renderDiagrams(diagrams) {
         setDiagramLoadingVisible(false);
       }
       state.currentDiagramIndex = idx;
+      renderDiagramViewSummary(diagrams[idx]);
       loadDiagramState(idx);
       if (window.MermaidIconInjector) {
         setTimeout(() => window.MermaidIconInjector.processAllDiagrams(), 100);
@@ -366,7 +371,8 @@ export function renderDiagrams(diagrams) {
       .then(() => {
         setTimeout(() => {
           initPanZoom();
-          state.currentDiagramIndex = 0;
+          state.currentDiagramIndex = initialIndex;
+          renderDiagramViewSummary(diagrams[initialIndex]);
           scheduleDiagramFit();
           if (zoomInner) zoomInner.classList.remove('is-rendering');
           setDiagramLoadingVisible(false);

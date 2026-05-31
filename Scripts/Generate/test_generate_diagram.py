@@ -8,7 +8,11 @@ ROOT = Path(__file__).resolve().parents[2]
 for rel in ("Generate", "Context", "Scan", "Persist", "Utils"):
     sys.path.insert(0, str(ROOT / "Scripts" / rel))
 
-from generate_diagram import HierarchicalDiagramBuilder, sanitize_id
+from generate_diagram import (
+    HierarchicalDiagramBuilder,
+    generate_architecture_diagram_bundle_with_css,
+    sanitize_id,
+)
 from internet_exposure_detector import ExposureDetail
 from icon_resolver import get_icon_path
 
@@ -280,6 +284,86 @@ def test_storage_blob_is_nested_under_container(monkeypatch):
     diagram = builder.generate()
     assert isinstance(diagram, str)
     assert diagram.startswith("flowchart TB")
+
+
+def test_generate_architecture_diagram_bundle_includes_overlay_views(monkeypatch):
+    resources = [
+        {
+            "id": 1,
+            "resource_name": "edge-gateway",
+            "resource_type": "azurerm_application_gateway",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 2,
+            "resource_name": "public-api",
+            "resource_type": "azurerm_api_management",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 3,
+            "resource_name": "orders-app",
+            "resource_type": "azurerm_linux_web_app",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 4,
+            "resource_name": "orders-kv",
+            "resource_type": "azurerm_key_vault",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+        {
+            "id": 5,
+            "resource_name": "orders-sql",
+            "resource_type": "azurerm_mssql_server",
+            "provider": "azure",
+            "repo_name": "repo",
+        },
+    ]
+    connections = [
+        {"source": "Internet", "target": "edge-gateway", "connection_type": "confirmed_public", "confirmed": True},
+        {"source": "edge-gateway", "target": "public-api", "connection_type": "routes_to", "confirmed": True},
+        {"source": "public-api", "target": "orders-app", "connection_type": "calls", "confirmed": True},
+        {"source": "orders-app", "target": "orders-kv", "connection_type": "uses_secret", "confirmed": True},
+        {"source": "orders-app", "target": "orders-sql", "connection_type": "uses_database", "confirmed": True},
+    ]
+
+    def fake_load_data(self):
+        self.resources = resources
+        self.connections = list(connections)
+        self.children_by_parent = {}
+        self.exposed_resources = {
+            "edge-gateway": ExposureDetail(
+                resource_name="edge-gateway",
+                resource_id=1,
+                exposure_type="property",
+                confidence="high",
+                reason="Public listener",
+                color="#ff0000",
+                auth_required=False,
+            )
+        }
+        self.resource_by_id = {resource["id"]: resource for resource in resources}
+        self.resource_by_name = {resource["resource_name"]: resource for resource in resources}
+
+    monkeypatch.setattr(HierarchicalDiagramBuilder, "load_data", fake_load_data)
+    monkeypatch.setattr(HierarchicalDiagramBuilder, "infer_connections", lambda self: False)
+
+    bundle = generate_architecture_diagram_bundle_with_css(
+        "exp-1",
+        repo_name="repo",
+        provider="azure",
+        use_embedded_icons=True,
+    )
+
+    assert bundle["default_view"] == "connectivity"
+    assert set(bundle["views"]) == {"connectivity", "exposure", "attack_paths"}
+    assert "Internet" in bundle["views"]["exposure"]["code"]
+    assert any(path["title"] == "Secrets pivot from workloads" for path in bundle["attack_paths"])
 
 
 def test_punctuation_heavy_labels_are_quoted(monkeypatch):
