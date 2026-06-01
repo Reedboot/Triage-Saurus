@@ -1180,6 +1180,10 @@ class TestCloudPage:
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
         # Table should contain the mocked row data
         expect(page.locator("#drilldown-modal table td").first).to_contain_text("test-appgw")
+        fqdn_link = page.locator("#drilldown-modal a[href='https://gw.example.com']").first
+        expect(fqdn_link).to_be_visible(timeout=5000)
+        assert fqdn_link.get_attribute("target") == "_blank"
+        assert "noopener" in (fqdn_link.get_attribute("rel") or "")
 
 
 class TestCloudPageAseNestedDrilldown:
@@ -1313,6 +1317,10 @@ class TestCloudPageAseNestedDrilldown:
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
         expect(page.locator("#drilldown-modal table td").first).to_contain_text("ase-app")
         expect(page.locator("#drilldown-modal table")).to_contain_text("Function App")
+        fqdn_link = page.locator("#drilldown-modal a[href='https://ase-app.azurewebsites.net']").first
+        expect(fqdn_link).to_be_visible(timeout=5000)
+        assert fqdn_link.get_attribute("target") == "_blank"
+        assert "noopener" in (fqdn_link.get_attribute("rel") or "")
 
 
 class TestCloudPageApimNestedDrilldown:
@@ -1504,6 +1512,10 @@ class TestCloudPageApimNestedDrilldown:
 
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::get']")).to_be_visible(timeout=5000)
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::post']")).to_be_visible(timeout=5000)
+        backend_link = page.locator("#drilldown-modal a[href='https://orders.example.com']").first
+        expect(backend_link).to_be_visible(timeout=5000)
+        assert backend_link.get_attribute("target") == "_blank"
+        assert "noopener" in (backend_link.get_attribute("rel") or "")
 
 
 # ---------------------------------------------------------------------------

@@ -367,13 +367,62 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   function populateDrilldownCell(span, cell) {
     if (!span) return;
     if (cell && typeof cell === 'object' && cell.label !== undefined) {
-      span.textContent = cell.label;
       if (cell.style) span.style.cssText = cell.style;
+      appendDrilldownText(span, cell.label);
       return;
     }
     const value = cell == null || cell === '' ? '—' : String(cell);
-    span.textContent = value;
-    if (value === '—') span.style.color = '#4b5563';
+    if (value === '—') {
+      span.textContent = value;
+      span.style.color = '#4b5563';
+      return;
+    }
+    appendDrilldownText(span, value);
+  }
+
+  function drilldownExternalHref(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
+    return `https://${text}`;
+  }
+
+  function appendDrilldownText(container, value) {
+    if (!container) return;
+    const text = String(value ?? '');
+    if (!text) return;
+
+    // Linkify hostnames / URLs while preserving the surrounding text.
+    const tokenRe = /\b(?:https?:\/\/|ftp:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{2,5})?(?:\/[^\s<>()"'`]+)?/gi;
+    let lastIndex = 0;
+    let match;
+    while ((match = tokenRe.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+
+      const raw = match[0];
+      const trimmed = raw.replace(/[.,;!?]+$/g, '');
+      if (trimmed) {
+        const link = document.createElement('a');
+        link.href = drilldownExternalHref(trimmed);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = trimmed;
+        link.style.cssText = 'color:#60a5fa;text-decoration:underline;word-break:break-all;';
+        container.appendChild(link);
+        if (trimmed.length < raw.length) {
+          container.appendChild(document.createTextNode(raw.slice(trimmed.length)));
+        }
+      } else {
+        container.appendChild(document.createTextNode(raw));
+      }
+      lastIndex = match.index + raw.length;
+    }
+
+    if (lastIndex < text.length) {
+      container.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
   }
 
   function renderTreeDrilldown(content, data) {
@@ -921,8 +970,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
               wrap.appendChild(badge);
             } else {
               const text = document.createElement('span');
-              text.textContent = val;
-              if (val === '—') text.style.color = '#4b5563';
+              if (val === '—') {
+                text.textContent = val;
+                text.style.color = '#4b5563';
+              } else {
+                appendDrilldownText(text, val);
+              }
               wrap.appendChild(text);
             }
             td.appendChild(wrap);
@@ -930,8 +983,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
             // Exposure badge cell
             td.innerHTML = `<span style="${cell.style || ''}">${cell.label}</span>`;
           } else {
-            td.textContent = val;
-            if (val === '—') td.style.color = '#4b5563';
+            if (val === '—') {
+              td.textContent = val;
+              td.style.color = '#4b5563';
+            } else {
+              appendDrilldownText(td, val);
+            }
           }
           tr.appendChild(td);
         });
