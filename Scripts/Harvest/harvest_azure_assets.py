@@ -11,6 +11,9 @@ Usage:
     # Dry-run: print what would be harvested without writing to DB
     python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --dry-run
 
+    # Faster storage inventory: skip blob-object enumeration
+    python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub" --skip-storage-blobs
+
 Prerequisites:
     - Python 3.9+
     - Azure CLI (az) installed and in PATH — https://aka.ms/installazurecli
@@ -439,9 +442,15 @@ def main() -> None:
     parser.add_argument("--skip-prereq-check", action="store_true", help="Skip prerequisites check")
     parser.add_argument("--skip-probes", action="store_true",
                         help="Skip active connectivity probes (faster, no network connections made)")
+    parser.add_argument(
+        "--skip-storage-blobs",
+        action="store_true",
+        help="Skip blob-object enumeration under storage containers (faster on large subscriptions)",
+    )
     args = parser.parse_args()
 
     set_probe_enabled(not args.skip_probes)
+    storage.set_include_blob_children(not args.skip_storage_blobs)
 
     if not args.skip_prereq_check:
         print("[prereq] Checking prerequisites...")

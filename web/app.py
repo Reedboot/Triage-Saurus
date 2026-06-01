@@ -30,12 +30,14 @@ try:
         build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
         subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
+        subscription_primary_fqdn as _shared_subscription_primary_fqdn,
     )
 except ImportError:
     from subscription_diagram_helpers import (  # type: ignore
         build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
         subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
+        subscription_primary_fqdn as _shared_subscription_primary_fqdn,
     )
 
 app = Flask(__name__)
@@ -12545,6 +12547,9 @@ def _compute_cloud_posture(conn, experiment_id: str, repo_name: str) -> dict:
     for a in matched_assets:
         if a.get("fqdn"):
             known_fqdns.add(a["fqdn"].lower())
+        resolved_fqdn = _resolved_asset_fqdn(a.get("name") or "", a.get("type") or "", a.get("fqdn"))
+        if resolved_fqdn:
+            known_fqdns.add(resolved_fqdn.lower())
         try:
             import json as _json
             eps = _json.loads(a.get("endpoints") or "[]")
@@ -12868,17 +12873,18 @@ def api_cloud_assets_all():
                    json_extract(pa.raw_json, '$.kind') AS kind,
                    CASE
                        WHEN p.id IS NOT NULL THEN p.id
-                       ELSE NULL
-                   END AS parent_id,
-                   p.name AS parent_name,
-                   p.resource_group AS parent_resource_group,
-                   p.type AS parent_arm_type
+                      WHEN pe.id IS NOT NULL THEN pe.id
+                      ELSE NULL
+                  END AS parent_id,
+                  COALESCE(p.name, pe.name) AS parent_name,
+                  COALESCE(p.resource_group, pe.resource_group) AS parent_resource_group,
+                  COALESCE(p.type, pe.type) AS parent_arm_type
             FROM provisioned_assets pa
             JOIN subscriptions s ON s.id = pa.subscription_id
             LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
             LEFT JOIN repositories r ON r.id = parl.repository_id
             LEFT JOIN provisioned_assets p
-              ON p.subscription_id = pa.subscription_id
+             ON p.subscription_id = pa.subscription_id
              AND lower(p.type) LIKE '%/serverfarms%'
              AND lower(pa.type) LIKE '%/sites%'
              AND lower(p.id) = lower(
@@ -12887,6 +12893,16 @@ def api_cloud_assets_all():
                         json_extract(pa.raw_json, '$.serverFarmId')
                     )
                  )
+            LEFT JOIN provisioned_assets pe
+             ON pe.subscription_id = pa.subscription_id
+             AND lower(pe.type) LIKE '%/hostingenvironments%'
+             AND lower(pa.type) LIKE '%/sites%'
+             AND lower(pe.id) = lower(
+                   COALESCE(
+                       json_extract(pa.raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                       json_extract(pa.raw_json, '$.hostingEnvironmentProfile.id')
+                   )
+                )
             ORDER BY s.environment, s.display_name, pa.type, pa.name
             """
         ).fetchall()
@@ -12908,7 +12924,7 @@ def api_cloud_assets_all():
                 "type_label": _friendly_type(r[2]),
                 "display_type_label": display_type,
                 "resource_group": r[3], "location": r[4],
-                "sku": r[5], "fqdn": r[6],
+                "sku": r[5], "fqdn": _resolved_asset_fqdn(r[1], r[2], r[6]),
                 "is_public": bool(r[7]), "status": r[8] or "active",
                 "pipeline_tag": r[9], "first_detected": r[10], "last_synced": r[11],
                 "sub_id": r[12], "sub_name": r[13],
@@ -13366,9 +13382,9 @@ def api_subscription_diagram(sub_id: str):
         if not rows:
             return jsonify({"error": "No assets harvested for this subscription yet."}), 404
 
-        # Query App Service → App Service Plan hosting relationships from raw_json.
-        # raw_json stores appServicePlanId (or serverFarmId) as a full ARM resource ID.
-        # Extract plan name as the last path segment.
+        # Query App Service / Function App hosting relationships from raw_json.
+        # raw_json stores appServicePlanId/serverFarmId and hostingEnvironmentProfile.id
+        # as full ARM resource IDs.
         plan_links: list[tuple[str, str, str, str]] = []
         try:
             site_plan_rows = conn.execute(
@@ -13389,14 +13405,36 @@ def api_subscription_diagram(sub_id: str):
                 (sub_id,),
             ).fetchall()
             for site_name, site_rg, plan_arm_id in site_plan_rows:
-                # Plan ARM ID: /subscriptions/.../resourceGroups/{rg}/providers/Microsoft.Web/serverfarms/{name}
-                plan_name = (plan_arm_id or "").rstrip("/").split("/")[-1]
-                plan_rg_parts = (plan_arm_id or "").lower().split("/resourcegroups/")
-                plan_rg = plan_rg_parts[1].split("/")[0] if len(plan_rg_parts) > 1 else ""
+                plan_rg, plan_name = _arm_id_name_and_rg(plan_arm_id)
                 if plan_name:
                     plan_links.append((site_rg or "", site_name, plan_rg, plan_name))
         except Exception:
             pass  # Non-critical — proceed without plan links if query fails
+
+        try:
+            ase_site_rows = conn.execute(
+                """
+                SELECT name, resource_group,
+                       COALESCE(
+                           json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                           json_extract(raw_json, '$.hostingEnvironmentProfile.id')
+                       ) AS ase_arm_id
+                FROM provisioned_assets
+                WHERE subscription_id = ?
+                  AND (type LIKE '%Web/sites%' OR type LIKE '%Web/Sites%')
+                  AND COALESCE(
+                        json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                        json_extract(raw_json, '$.hostingEnvironmentProfile.id')
+                      ) IS NOT NULL
+                """,
+                (sub_id,),
+            ).fetchall()
+            for site_name, site_rg, ase_arm_id in ase_site_rows:
+                ase_rg, ase_name = _arm_id_name_and_rg(ase_arm_id)
+                if ase_name:
+                    plan_links.append((site_rg or "", site_name, ase_rg, ase_name))
+        except Exception:
+            pass  # Non-critical — proceed without ASE links if query fails
 
         # Build high-level ingress diagram (simplified for readability)
         ingress_diagram = _build_ingress_diagram(rows, plan_links=plan_links)
@@ -13422,7 +13460,7 @@ def _friendly_type(arm_type: str) -> str:
     labels = {
         "microsoft.web/sites": "App Service",
         "microsoft.web/serverfarms": "App Service Plan",
-        "microsoft.web/hostingenvironments": "App Service Env",
+        "microsoft.web/hostingenvironments": "App Service Environment",
         "microsoft.storage/storageaccounts/blobservices/containers": "Blob Container",
         "microsoft.storage/storageaccounts/blobservices/containers/blobs": "Blob",
         "microsoft.sql/servers/databases": "SQL Database",
@@ -13450,6 +13488,24 @@ def _friendly_type(arm_type: str) -> str:
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
 
 
+def _arm_id_name_and_rg(arm_id: str | None) -> tuple[str, str]:
+    """Extract (resource_group, name) from a full ARM resource ID."""
+    if not arm_id:
+        return "", ""
+
+    parts = [part for part in str(arm_id).rstrip("/").split("/") if part]
+    if not parts:
+        return "", ""
+
+    name = parts[-1]
+    rg = ""
+    for idx, part in enumerate(parts[:-1]):
+        if part.lower() == "resourcegroups" and idx + 1 < len(parts):
+            rg = parts[idx + 1]
+            break
+    return rg, name
+
+
 def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
     arm_type_lc = (arm_type or "").lower()
     kind_lc = (kind or "").lower()
@@ -13466,6 +13522,15 @@ def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
         return "SQL Database"
 
     return _friendly_type(arm_type)
+
+
+def _resolved_asset_fqdn(name: str, arm_type: str, fqdn: str | None) -> str:
+    return _shared_subscription_primary_fqdn({
+        "name": name,
+        "arm_type": arm_type,
+        "type": arm_type,
+        "fqdn": fqdn or "",
+    })
 
 
 def _get_icon_path(resource_type: str) -> str | None:
@@ -13665,6 +13730,7 @@ _SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.documentdb/databaseaccounts",
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
+    "microsoft.web/hostingenvironments",
 }
 
 
@@ -14240,7 +14306,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             elif "serverfarms" in type_key:
                 category = "App Service Plan"
             elif "hostingenvironment" in type_key:
-                category = "App Service Env"
+                category = "App Service Environment"
             elif "containerinstance" in type_key:
                 category = "Container Instance"
             elif "containerregistry" in type_key:
@@ -14987,32 +15053,166 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
 
         if has_ops_table and names:
             op_rows = conn.execute(
-                f"""SELECT apim_name, api_display_name, method, api_path, url_template,
-                           backend_url, requires_subscription, display_name
+                f"""SELECT apim_name, api_name, api_display_name, method, api_path, url_template,
+                           backend_url, requires_subscription, operation_id, display_name
                     FROM apim_api_operations
                     WHERE subscription_id=? AND apim_name IN ({ph})
-                    ORDER BY apim_name, api_path, method, url_template""",
+                    ORDER BY apim_name, api_name, method, url_template, operation_id""",
                 [sub_id] + names,
             ).fetchall()
         else:
             op_rows = []
 
         if op_rows:
-            title   = "APIM — Operations & Backend Routing"
-            columns = ["API", "Method", "Full Path", "Backend", "Auth"]
-            rows = []
-            for apim_n, api_disp, method, api_path, url_tpl, backend_url, req_sub, op_disp in op_rows:
-                base = (api_path or "").rstrip("/")
-                op_path = (url_tpl or "").lstrip("/")
-                full_path = f"{base}/{op_path}" if op_path else (base or "/")
-                rows.append([
-                    api_disp or "—",
-                    method or "—",
-                    full_path,
-                    backend_url or "—",
-                    "🔑 Required" if req_sub else "Open",
-                ])
-            return _table_result(title=title, columns=columns, rows=rows)
+            title   = "APIM — APIs & Methods"
+            columns = ["API", "Method", "Path", "Backend", "Auth"]
+
+            def _text(*parts) -> str:
+                cleaned: list[str] = []
+                for part in parts:
+                    if part is None:
+                        continue
+                    text = str(part).strip()
+                    if text and text.lower() != "none":
+                        cleaned.append(text)
+                return " ".join(cleaned)
+
+            def _search(*parts) -> str:
+                return _text(*parts).lower()
+
+            def _cell(label: str, style: str = "") -> dict:
+                return {"label": label, "style": style} if style else {"label": label}
+
+            rg_lookup = {
+                str(res.get("name") or ""): str(res.get("rg") or "").strip()
+                for res in resources
+                if res.get("name")
+            }
+
+            sections_by_apim: dict[str, dict] = {}
+            section_order: list[str] = []
+            for row in op_rows:
+                apim_name = str(row[0] or "").strip() or "APIM"
+                if apim_name not in sections_by_apim:
+                    sections_by_apim[apim_name] = {
+                        "title": apim_name,
+                        "subtitle": rg_lookup.get(apim_name) or "",
+                        "rows": [],
+                    }
+                    section_order.append(apim_name)
+                sections_by_apim[apim_name]["rows"].append(row)
+
+            sections: list[dict] = []
+            rows: list[dict] = []
+            for apim_name in section_order:
+                section_rows = sections_by_apim[apim_name]["rows"]
+                api_groups: dict[str, dict] = {}
+                api_order: list[str] = []
+
+                for row in section_rows:
+                    _, api_name, api_disp, method, api_path, url_tpl, backend_url, req_sub, op_id, op_disp = row
+                    api_key = str(api_name or api_disp or op_id or "api").strip()
+                    if api_key not in api_groups:
+                        api_groups[api_key] = {
+                            "api_name": api_name,
+                            "api_display_name": api_disp,
+                            "api_path": api_path,
+                            "backend_url": backend_url,
+                            "requires_subscription": req_sub,
+                            "operations": [],
+                        }
+                        api_order.append(api_key)
+
+                    api_info = api_groups[api_key]
+                    if not api_info.get("api_display_name") and api_disp:
+                        api_info["api_display_name"] = api_disp
+                    if not api_info.get("api_path") and api_path:
+                        api_info["api_path"] = api_path
+                    if not api_info.get("backend_url") and backend_url:
+                        api_info["backend_url"] = backend_url
+                    api_info["operations"].append(row)
+
+                section_tree_rows: list[dict] = []
+                for api_key in api_order:
+                    api_info = api_groups[api_key]
+                    operations = api_info["operations"]
+                    api_display_name = str(api_info.get("api_display_name") or api_info.get("api_name") or api_key or "API").strip()
+                    api_path = str(api_info.get("api_path") or "").strip()
+                    backend_url = str(api_info.get("backend_url") or "").strip()
+                    auth_label = "🔑 Required" if api_info.get("requires_subscription") else "Open"
+                    parent_id = f"{apim_name}::{api_key}"
+
+                    child_rows: list[dict] = []
+                    for _, _, _, method, _api_path, url_tpl, op_backend_url, req_sub, op_id, op_disp in operations:
+                        base = api_path.rstrip("/")
+                        op_path = str(url_tpl or "").lstrip("/")
+                        full_path = f"{base}/{op_path}" if op_path else (base or "/")
+                        method_text = str(method or "—").upper() if method else "—"
+                        op_label = str(op_disp or op_id or method_text or "Operation").strip()
+                        child_rows.append({
+                            "id": f"{parent_id}::{op_id or op_label or method_text or len(child_rows)}",
+                            "parent_id": parent_id,
+                            "cells": [
+                                _cell(op_label),
+                                _cell(method_text, "color:#94a3b8;font-size:0.78rem;"),
+                                full_path,
+                                op_backend_url or backend_url or "—",
+                                "🔑 Required" if req_sub else "Open",
+                            ],
+                            "child_count": 0,
+                            "search_text": _search(
+                                apim_name,
+                                api_display_name,
+                                api_info.get("api_name") or api_key,
+                                op_label,
+                                method_text,
+                                full_path,
+                                op_backend_url or backend_url,
+                                "required" if req_sub else "open",
+                            ),
+                        })
+
+                    parent_row = {
+                        "id": parent_id,
+                        "parent_id": None,
+                        "cells": [
+                            _cell(api_display_name, "font-weight:600;"),
+                            _cell("API", "color:#94a3b8;font-size:0.78rem;"),
+                            api_path or "—",
+                            backend_url or "—",
+                            auth_label,
+                        ],
+                        "child_count": len(child_rows),
+                        "search_text": _search(
+                            apim_name,
+                            api_display_name,
+                            api_info.get("api_name") or api_key,
+                            api_path,
+                            backend_url,
+                            auth_label,
+                        ),
+                    }
+
+                    section_tree_rows.append(parent_row)
+                    section_tree_rows.extend(child_rows)
+
+                    rows.append(parent_row)
+                    rows.extend(child_rows)
+
+                sections.append({
+                    "title": sections_by_apim[apim_name]["title"],
+                    "subtitle": sections_by_apim[apim_name]["subtitle"],
+                    "rows": section_tree_rows,
+                })
+
+            result = _table_result(
+                title=title,
+                columns=columns,
+                rows=rows,
+            )
+            result["view_type"] = "tree_table"
+            result["sections"] = sections
+            return result
 
         # Fallback: per-API summary from apim_api_routes
         title   = "APIM — API Routes"
@@ -15141,6 +15341,56 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
             ])
         return _table_result(title=title, columns=columns, rows=rows)
 
+    # ── App Service Environment → hosted App Services / Function Apps ─────────
+    elif "hostingenvironment" in arm_type_lc:
+        n = len(names)
+        title   = f"App Service Environment — Hosted Apps ({n} environment{'s' if n != 1 else ''})"
+        columns = ["App Service / Function App", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Environment"]
+        ph_envs = ",".join("?" * len(names)) if names else "''"
+
+        site_rows = conn.execute(
+            f"""SELECT s.name, s.resource_group, s.fqdn, s.is_public, s.is_restricted,
+                       s.raw_json, ase.name AS env_name
+                FROM provisioned_assets s
+                JOIN provisioned_assets ase
+                    ON lower(COALESCE(
+                        json_extract(s.raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                        json_extract(s.raw_json, '$.hostingEnvironmentProfile.id')
+                    )) = lower(ase.id)
+                WHERE s.subscription_id = ?
+                  AND s.type LIKE '%/sites'
+                  AND lower(ase.type) LIKE '%/hostingenvironments%'
+                  AND ase.name IN ({ph_envs})
+                ORDER BY ase.name, s.name""",
+            [sub_id] + names,
+        ).fetchall() if names else []
+
+        if not site_rows:
+            return {
+                "title": title,
+                "view_type": "table",
+                "columns": columns,
+                "rows": [],
+                "empty_message": "No App Services or Function Apps found in this App Service Environment",
+            }
+
+        rows = []
+        for site_name, rg, fqdn, is_public, is_restricted, raw, env_name in site_rows:
+            try:
+                raw_kind = (_json.loads(raw) or {}).get("kind") or ""
+            except Exception:
+                raw_kind = ""
+            kind = "Function App" if "functionapp" in raw_kind.lower() or "function app" in raw_kind.lower() else "App Service"
+            rows.append([
+                site_name,
+                rg or "—",
+                fqdn or "—",
+                _exposure(is_public, is_restricted),
+                kind,
+                env_name or "—",
+            ])
+        return _table_result(title=title, columns=columns, rows=rows)
+
     # ── Generic resources ─────────────────────────────────────────────────────
     else:
         type_label = _friendly_type(arm_type) if arm_type else "Resources"
@@ -15189,10 +15439,11 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         rows = []
         for name, rg, fqdn, is_public, is_restricted, _ep, _auth, sku, _type in asset_rows:
             entry_pts = sorted(entry_map.get(name, set()))
+            display_fqdn = _resolved_asset_fqdn(name, _type or "", fqdn)
             rows.append([
                 name,
                 rg or "—",
-                fqdn or "—",
+                display_fqdn or "—",
                 _exposure(is_public, is_restricted),
                 ", ".join(entry_pts) if entry_pts else "—",
                 sku or "—",

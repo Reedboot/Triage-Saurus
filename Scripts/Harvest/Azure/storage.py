@@ -9,6 +9,12 @@ from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, s
 
 RESOURCE_TYPE = "Microsoft.Storage/storageAccounts"
 _SKIP_BLOB_CHILD_PREFIXES = ("bootdiagnostics-",)
+_INCLUDE_BLOB_CHILDREN = True
+
+
+def set_include_blob_children(enabled: bool) -> None:
+    global _INCLUDE_BLOB_CHILDREN
+    _INCLUDE_BLOB_CHILDREN = enabled
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -211,6 +217,9 @@ def _harvest_blob_containers(
             "pipeline_tag": None,
             "raw_json": json.dumps(container),
         })
+
+        if not _INCLUDE_BLOB_CHILDREN:
+            continue
 
         # Boot diagnostics containers can explode in number on VM-heavy
         # subscriptions and usually do not provide useful drill-down value.

@@ -192,6 +192,90 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 .node-drillable:hover polygon {
   filter: brightness(1.15);
 }
+#drilldown-content .tree-drilldown-host {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#drilldown-content .tree-drilldown-section {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  overflow: hidden;
+  background: transparent;
+}
+#drilldown-content .tree-drilldown-section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+#drilldown-content .tree-drilldown-section-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-primary,#e5e7eb);
+}
+#drilldown-content .tree-drilldown-section-subtitle {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+#drilldown-content .tree-drilldown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+#drilldown-content .tree-drilldown-table thead th {
+  padding: 8px 12px;
+  text-align: left;
+  background: #0f172a;
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-bottom: 1px solid #1e293b;
+  white-space: nowrap;
+}
+#drilldown-content .tree-drilldown-row {
+  border-bottom: 1px solid #1e293b;
+}
+#drilldown-content .tree-drilldown-row:hover {
+  background: rgba(96,165,250,0.05);
+}
+#drilldown-content .expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  border: none;
+  background: transparent;
+  color: #60a5fa;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: transform .12s ease;
+}
+#drilldown-content .expand-toggle.open {
+  transform: rotate(90deg);
+}
+#drilldown-content .child-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+#drilldown-content .tree-drilldown-empty {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  padding: 8px 0;
+}
 </style>
 
 <script>
@@ -259,6 +343,268 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       bar.appendChild(btn);
     });
     return bar;
+  }
+
+  function drilldownCellText(cell) {
+    if (cell == null) return '';
+    if (typeof cell === 'object') {
+      if (cell.label != null) return String(cell.label);
+      if (cell.text != null) return String(cell.text);
+    }
+    return String(cell);
+  }
+
+  function drilldownRowSearchText(row) {
+    if (row && typeof row.search_text === 'string' && row.search_text.trim()) {
+      return row.search_text.toLowerCase();
+    }
+    if (row && Array.isArray(row.cells)) {
+      return row.cells.map(drilldownCellText).join(' ').toLowerCase();
+    }
+    return '';
+  }
+
+  function populateDrilldownCell(span, cell) {
+    if (!span) return;
+    if (cell && typeof cell === 'object' && cell.label !== undefined) {
+      span.textContent = cell.label;
+      if (cell.style) span.style.cssText = cell.style;
+      return;
+    }
+    const value = cell == null || cell === '' ? '—' : String(cell);
+    span.textContent = value;
+    if (value === '—') span.style.color = '#4b5563';
+  }
+
+  function renderTreeDrilldown(content, data) {
+    const sections = Array.isArray(data.sections) && data.sections.length
+      ? data.sections
+      : [{ title: data.title || '', subtitle: data.subtitle || '', rows: data.rows || [] }];
+
+    const filterWrap = document.createElement('div');
+    filterWrap.style.cssText = 'margin-bottom:10px;display:flex;flex-direction:column;gap:6px;';
+
+    const filterLabel = document.createElement('label');
+    filterLabel.style.cssText = 'font-size:0.78rem;color:var(--text-muted);font-weight:600;';
+    filterLabel.textContent = 'Filter';
+    filterWrap.appendChild(filterLabel);
+
+    const filterInput = document.createElement('input');
+    filterInput.type = 'search';
+    filterInput.placeholder = '🔎 Filter methods…';
+    filterInput.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 10px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:0.85rem;outline:none;';
+    filterWrap.appendChild(filterInput);
+    content.appendChild(filterWrap);
+
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font-size:0.76rem;color:var(--text-muted);margin-bottom:10px;';
+    content.appendChild(summary);
+
+    const host = document.createElement('div');
+    host.className = 'tree-drilldown-host';
+    content.appendChild(host);
+
+    const state = { filter: '', expanded: new Set() };
+
+    const render = () => {
+      host.innerHTML = '';
+      const q = state.filter.trim().toLowerCase();
+      let totalApiRows = 0;
+      let totalMethodRows = 0;
+      let visibleApiRows = 0;
+      let visibleMethodRows = 0;
+
+      sections.forEach((section) => {
+        const sectionRows = Array.isArray(section.rows) ? section.rows : [];
+        if (!sectionRows.length) return;
+
+        const rowMap = new Map();
+        const childrenMap = new Map();
+        sectionRows.forEach((row) => {
+          const rowId = String(row.id || '').trim();
+          if (rowId) rowMap.set(rowId, row);
+        });
+        sectionRows.forEach((row) => {
+          const parentId = String(row.parent_id || '').trim();
+          if (!parentId || !rowMap.has(parentId)) return;
+          if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+          childrenMap.get(parentId).push(row);
+        });
+
+        const topRows = sectionRows.filter((row) => {
+          const parentId = String(row.parent_id || '').trim();
+          return !parentId || !rowMap.has(parentId);
+        });
+
+        const subtreeMatchCache = new Map();
+        const rowMatches = (row) => drilldownRowSearchText(row).includes(q);
+        const subtreeMatches = (row) => {
+          const rowId = String(row.id || '').trim();
+          if (!q) return true;
+          if (subtreeMatchCache.has(rowId)) return subtreeMatchCache.get(rowId);
+          let matched = rowMatches(row);
+          for (const child of childrenMap.get(rowId) || []) {
+            if (subtreeMatches(child)) {
+              matched = true;
+              break;
+            }
+          }
+          subtreeMatchCache.set(rowId, matched);
+          return matched;
+        };
+
+        if (q && !topRows.some((row) => subtreeMatches(row))) return;
+
+        totalApiRows += topRows.length;
+        totalMethodRows += sectionRows.filter((row) => String(row.parent_id || '').trim()).length;
+
+        const sectionWrap = document.createElement('div');
+        sectionWrap.className = 'tree-drilldown-section';
+
+        const sectionHeader = document.createElement('div');
+        sectionHeader.className = 'tree-drilldown-section-header';
+        const sectionTitle = document.createElement('div');
+        sectionTitle.className = 'tree-drilldown-section-title';
+        sectionTitle.textContent = section.title || data.title || 'APIM';
+        sectionHeader.appendChild(sectionTitle);
+        if (section.subtitle) {
+          const sectionSubtitle = document.createElement('div');
+          sectionSubtitle.className = 'tree-drilldown-section-subtitle';
+          sectionSubtitle.textContent = section.subtitle;
+          sectionHeader.appendChild(sectionSubtitle);
+        }
+        sectionWrap.appendChild(sectionHeader);
+
+        const table = document.createElement('table');
+        table.className = 'tree-drilldown-table';
+        const thead = document.createElement('thead');
+        const hRow = document.createElement('tr');
+        (data.columns || []).forEach((col) => {
+          const th = document.createElement('th');
+          th.textContent = col;
+          hRow.appendChild(th);
+        });
+        thead.appendChild(hRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        table.appendChild(tbody);
+        sectionWrap.appendChild(table);
+        host.appendChild(sectionWrap);
+
+        const renderRow = (row, depth, ancestorOpen, ancestorForcedVisible) => {
+          const rowId = String(row.id || '').trim();
+          if (!rowId) return;
+
+          const childRows = childrenMap.get(rowId) || [];
+          const hasChildren = childRows.length > 0;
+          const selfMatch = q ? rowMatches(row) : false;
+          const visible = q ? (ancestorForcedVisible || subtreeMatches(row)) : (depth === 0 || ancestorOpen);
+
+          const tr = document.createElement('tr');
+          tr.className = `tree-drilldown-row${row.parent_id ? ' child-row' : ' parent-row'}`;
+          tr.dataset.rowId = rowId;
+          if (row.parent_id) tr.dataset.parentRowId = String(row.parent_id || '').trim();
+          tr.dataset.childrenCount = String(row.child_count != null ? row.child_count : childRows.length);
+          tr.dataset.search = drilldownRowSearchText(row);
+          if (!visible) tr.style.display = 'none';
+
+          (row.cells || []).forEach((cell, cellIndex) => {
+            const td = document.createElement('td');
+            td.style.cssText = 'padding:7px 12px;color:var(--text-primary,#e5e7eb);vertical-align:middle;';
+
+            if (cellIndex === 0) {
+              const wrap = document.createElement('div');
+              wrap.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;';
+
+              if (depth > 0) {
+                const indent = document.createElement('span');
+                indent.style.cssText = `display:inline-block;width:${depth * 16}px;flex:0 0 auto;`;
+                wrap.appendChild(indent);
+              }
+
+              if (hasChildren) {
+                const toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = `expand-toggle${state.expanded.has(rowId) ? ' open' : ''}`;
+                toggle.textContent = '▶';
+                toggle.title = state.expanded.has(rowId) ? 'Collapse methods' : 'Expand methods';
+                toggle.addEventListener('click', (evt) => {
+                  evt.stopPropagation();
+                  if (state.expanded.has(rowId)) state.expanded.delete(rowId);
+                  else state.expanded.add(rowId);
+                  render();
+                });
+                wrap.appendChild(toggle);
+              } else {
+                const spacer = document.createElement('span');
+                spacer.style.cssText = 'display:inline-block;width:16px;flex:0 0 auto;';
+                wrap.appendChild(spacer);
+              }
+
+              const labelWrap = document.createElement('span');
+              labelWrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap;';
+              const valueSpan = document.createElement('span');
+              populateDrilldownCell(valueSpan, cell);
+              labelWrap.appendChild(valueSpan);
+              if (hasChildren) {
+                const badge = document.createElement('span');
+                badge.className = 'child-count-badge';
+                const count = Number(row.child_count != null ? row.child_count : childRows.length) || 0;
+                badge.textContent = String(count);
+                badge.title = `${count} method${count === 1 ? '' : 's'}`;
+                labelWrap.appendChild(badge);
+              }
+              wrap.appendChild(labelWrap);
+              td.appendChild(wrap);
+            } else {
+              const valueSpan = document.createElement('span');
+              populateDrilldownCell(valueSpan, cell);
+              td.appendChild(valueSpan);
+            }
+
+            tr.appendChild(td);
+          });
+
+          tbody.appendChild(tr);
+
+          const nextAncestorOpen = q ? false : (ancestorOpen && state.expanded.has(rowId));
+          const nextAncestorForcedVisible = q ? (ancestorForcedVisible || selfMatch) : false;
+          childRows.forEach((childRow) => {
+            renderRow(childRow, depth + 1, nextAncestorOpen, nextAncestorForcedVisible);
+          });
+
+          if (visible) {
+            if (row.parent_id) visibleMethodRows += 1;
+            else visibleApiRows += 1;
+          }
+        };
+
+        topRows.forEach((row) => renderRow(row, 0, true, false));
+      });
+
+      if (!host.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'tree-drilldown-empty';
+        empty.textContent = q
+          ? `No APIM APIs or methods match "${state.filter.trim()}".`
+          : (data.empty_message || 'No data available.');
+        host.appendChild(empty);
+      }
+
+      if (q) {
+        summary.textContent = `Showing APIM APIs and methods matching "${state.filter.trim()}".`;
+      } else {
+        summary.textContent = `Showing ${visibleApiRows || totalApiRows} API${(visibleApiRows || totalApiRows) === 1 ? '' : 's'} with ${visibleMethodRows || totalMethodRows} method${(visibleMethodRows || totalMethodRows) === 1 ? '' : 's'}.`;
+      }
+    };
+
+    filterInput.addEventListener('input', () => {
+      state.filter = filterInput.value;
+      render();
+    });
+
+    render();
   }
 
   /**
@@ -409,6 +755,18 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     const modal   = document.getElementById('drilldown-modal');
     const loading = document.getElementById('drilldown-loading');
     const content = document.getElementById('drilldown-content');
+    const modalContent = modal?.querySelector('.modal-content');
+    const isAppGateway = String(entry?.arm_type || '').toLowerCase().includes('applicationgateway');
+
+    if (modalContent) {
+      if (isAppGateway) {
+        modalContent.style.maxWidth = 'min(98vw, 1600px)';
+        modalContent.style.width = '98vw';
+      } else {
+        modalContent.style.maxWidth = 'min(92vw, 1100px)';
+        modalContent.style.width = '92vw';
+      }
+    }
 
     modal.style.display   = 'flex';
     loading.style.display = 'block';
@@ -495,9 +853,14 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         return;
       }
 
-      // ── Filter bar ────────────────────────────────────────────────────────
-      const filterWrap = document.createElement('div');
-      filterWrap.style.cssText = 'margin-bottom:10px;';
+      if (data.view_type === 'tree_table') {
+        renderTreeDrilldown(content, data);
+        return;
+      }
+
+        // ── Filter bar ────────────────────────────────────────────────────────
+        const filterWrap = document.createElement('div');
+        filterWrap.style.cssText = 'margin-bottom:10px;';
       const filterInput = document.createElement('input');
       filterInput.type        = 'text';
       filterInput.placeholder = '🔎 Filter…';

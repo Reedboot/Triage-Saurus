@@ -26,6 +26,8 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, ex
 # Config
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 TEST_PORT = 9001
 BASE_URL = f"http://localhost:{TEST_PORT}"
 
@@ -1170,9 +1172,338 @@ class TestCloudPage:
 
         # Drill-down modal should appear with a data table
         expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        modal_style = page.locator("#drilldown-modal .modal-content").evaluate(
+            """(el) => ({ width: el.style.width, maxWidth: el.style.maxWidth })"""
+        )
+        assert modal_style["width"] == "98vw", modal_style
+        assert modal_style["maxWidth"] == "min(98vw, 1600px)", modal_style
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
         # Table should contain the mocked row data
         expect(page.locator("#drilldown-modal table td").first).to_contain_text("test-appgw")
+
+
+class TestCloudPageAseNestedDrilldown:
+    """Playwright coverage for App Service Environment drill-down."""
+
+    _SUB_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    _MERMAID_ASE = (
+        "graph LR\n"
+        '    test_rg_ase["App Service Environment"]\n'
+        "    classDef backend stroke:#388e3c,stroke-width:2px;\n"
+        "    class test_rg_ase backend;\n"
+    )
+
+    _NODE_MAP = {
+        "test_rg_ase": {
+            "title": "test-ase",
+            "arm_type": "microsoft.web/hostingenvironments",
+            "resources": [{"rg": "rg-app", "name": "test-ase"}],
+            "can_drill": True,
+        }
+    }
+
+    def _setup_mocks(self, page: Page) -> None:
+        import json
+
+        page.route(
+            "**/api/subscriptions",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscriptions": [{
+                        "id": self._SUB_ID,
+                        "display_name": "ASE Subscription",
+                        "environment": "production",
+                        "env_badge": "danger",
+                        "provider": "Azure",
+                        "state": "Enabled",
+                        "last_synced": None,
+                        "asset_count": 3,
+                        "public_count": 0,
+                    }]
+                }),
+            ),
+        )
+
+        node_map = self._NODE_MAP
+        views = {
+            "connectivity": {
+                "mermaid": self._MERMAID_ASE,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "ASE mock view",
+                "legend": ["Hosted apps"],
+                "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 1, "data_stores": 0, "public_assets": 0},
+            },
+            "exposure": {
+                "mermaid": self._MERMAID_ASE,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "ASE mock view",
+                "legend": ["Hosted apps"],
+                "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 1, "data_stores": 0, "public_assets": 0},
+            },
+        }
+
+        page.route(
+            f"**/{self._SUB_ID}/diagram",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscription_name": "ASE Subscription",
+                    "environment": "production",
+                    "total_assets": 3,
+                    "ingress_diagram": {
+                        "mermaid": self._MERMAID_ASE,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "default_view": "connectivity",
+                        "views": views,
+                        "attack_paths": [],
+                        "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 1, "data_stores": 0, "public_assets": 0},
+                    },
+                    "diagrams": [{
+                        "rg": "rg-app",
+                        "mermaid": self._MERMAID_ASE,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "asset_count": 3,
+                        "public_count": 0,
+                        "relationship_count": 0,
+                        "default_view": "connectivity",
+                        "views": views,
+                        "attack_paths": [],
+                        "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 1, "data_stores": 0, "public_assets": 0},
+                    }],
+                }),
+            ),
+        )
+
+        page.route(
+            f"**/{self._SUB_ID}/drilldown",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "title": "App Service Environment — Hosted Apps",
+                    "view_type": "table",
+                    "columns": ["App Service / Function App", "Resource Group", "URL / FQDN", "Exposure", "Kind", "Environment"],
+                    "rows": [
+                        ["ase-app", "rg-app", "ase-app.azurewebsites.net", "🔒 Private", "App Service", "ase-one"],
+                        ["ase-fn", "rg-app", "ase-fn.azurewebsites.net", "🔒 Private", "Function App", "ase-one"],
+                    ],
+                }),
+            ),
+        )
+
+    def test_dblclick_opens_ase_drilldown(self, page: Page, live_server: str):
+        self._setup_mocks(page)
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector(".subscription-name-cell", timeout=8000)
+        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
+
+        page.locator("#ingress-diagram-div svg g.node-drillable").dblclick()
+
+        expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal table td").first).to_contain_text("ase-app")
+        expect(page.locator("#drilldown-modal table")).to_contain_text("Function App")
+
+
+class TestCloudPageApimNestedDrilldown:
+    """Playwright coverage for nested APIM method drill-down."""
+
+    _SUB_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    _MERMAID_APIM = (
+        "graph LR\n"
+        '    test_rg_apim["APIM"]\n'
+        "    classDef apiGateway stroke:#00897b,stroke-width:2px;\n"
+        "    class test_rg_apim apiGateway;\n"
+    )
+
+    def _setup_mocks(self, page: Page) -> None:
+        import json
+
+        page.route(
+            "**/api/subscriptions",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscriptions": [{
+                        "id": self._SUB_ID,
+                        "display_name": "Nested APIM Subscription",
+                        "environment": "production",
+                        "env_badge": "danger",
+                        "provider": "Azure",
+                        "state": "Enabled",
+                        "last_synced": None,
+                        "asset_count": 1,
+                        "public_count": 1,
+                    }]
+                }),
+            ),
+        )
+
+        node_map = {
+            "test_rg_apim": {
+                "title": "test-apim",
+                "arm_type": "microsoft.apimanagement/service",
+                "resources": [{"rg": "rg-app", "name": "test-apim"}],
+                "can_drill": True,
+            }
+        }
+
+        page.route(
+            f"**/{self._SUB_ID}/diagram",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscription_name": "Nested APIM Subscription",
+                    "environment": "production",
+                    "total_assets": 1,
+                    "ingress_diagram": {
+                        "mermaid": self._MERMAID_APIM,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "default_view": "overview",
+                    },
+                    "diagrams": [{
+                        "rg": "rg-app",
+                        "mermaid": self._MERMAID_APIM,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "asset_count": 1,
+                        "public_count": 1,
+                        "relationship_count": 0,
+                        "default_view": "overview",
+                    }],
+                }),
+            ),
+        )
+
+        page.route(
+            f"**/{self._SUB_ID}/drilldown",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "title": "APIM — APIs & Methods",
+                    "view_type": "tree_table",
+                    "columns": ["API", "Method", "Path", "Backend", "Auth"],
+                    "rows": [
+                        {
+                            "id": "test-apim::orders",
+                            "parent_id": None,
+                            "cells": [
+                                {"label": "Orders API", "style": "font-weight:600;"},
+                                {"label": "API", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                "/orders",
+                                "https://orders.example.com",
+                                "🔑 Required",
+                            ],
+                            "child_count": 2,
+                            "search_text": "orders api /orders https://orders.example.com required",
+                        },
+                        {
+                            "id": "test-apim::orders::get",
+                            "parent_id": "test-apim::orders",
+                            "cells": [
+                                "Get orders",
+                                {"label": "GET", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                "/orders",
+                                "https://orders.example.com",
+                                "🔑 Required",
+                            ],
+                            "child_count": 0,
+                            "search_text": "get orders get /orders https://orders.example.com required",
+                        },
+                        {
+                            "id": "test-apim::orders::post",
+                            "parent_id": "test-apim::orders",
+                            "cells": [
+                                "Create order",
+                                {"label": "POST", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                "/orders",
+                                "https://orders.example.com",
+                                "🔑 Required",
+                            ],
+                            "child_count": 0,
+                            "search_text": "create order post /orders https://orders.example.com required",
+                        },
+                    ],
+                    "sections": [{
+                        "title": "test-apim",
+                        "subtitle": "rg-app",
+                        "rows": [
+                            {
+                                "id": "test-apim::orders",
+                                "parent_id": None,
+                                "cells": [
+                                    {"label": "Orders API", "style": "font-weight:600;"},
+                                    {"label": "API", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                    "/orders",
+                                    "https://orders.example.com",
+                                    "🔑 Required",
+                                ],
+                                "child_count": 2,
+                                "search_text": "orders api /orders https://orders.example.com required",
+                            },
+                            {
+                                "id": "test-apim::orders::get",
+                                "parent_id": "test-apim::orders",
+                                "cells": [
+                                    "Get orders",
+                                    {"label": "GET", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                    "/orders",
+                                    "https://orders.example.com",
+                                    "🔑 Required",
+                                ],
+                                "child_count": 0,
+                                "search_text": "get orders get /orders https://orders.example.com required",
+                            },
+                            {
+                                "id": "test-apim::orders::post",
+                                "parent_id": "test-apim::orders",
+                                "cells": [
+                                    "Create order",
+                                    {"label": "POST", "style": "color:#94a3b8;font-size:0.78rem;"},
+                                    "/orders",
+                                    "https://orders.example.com",
+                                    "🔑 Required",
+                                ],
+                                "child_count": 0,
+                                "search_text": "create order post /orders https://orders.example.com required",
+                            },
+                        ],
+                    }],
+                }),
+            ),
+        )
+
+    def test_apim_node_expands_nested_methods(self, page: Page, live_server: str):
+        self._setup_mocks(page)
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector(".subscription-name-cell", timeout=8000)
+        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector("#ingress-diagram-div svg g.node-drillable", timeout=8000)
+
+        page.locator("#ingress-diagram-div svg g.node-drillable").click()
+
+        expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders']")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::get']")).to_be_hidden(timeout=5000)
+
+        page.locator("#drilldown-modal tr[data-row-id='test-apim::orders'] .expand-toggle").click()
+
+        expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::get']")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::post']")).to_be_visible(timeout=5000)
 
 
 # ---------------------------------------------------------------------------
@@ -1290,6 +1621,41 @@ class TestIngressDiagramGeneration:
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
         assert titles == {"test-plan"}, titles
 
+    def test_function_app_rows_fold_into_app_service_environment(self):
+        """App Service Environment rows should also fold hosted apps beneath the parent node."""
+        rows = [
+            (
+                "test-ase",
+                "Microsoft.Web/hostingEnvironments",
+                "rg-app",
+                "ase-one.westus.appserviceenvironment.net",
+                0,
+                "ASEv3",
+                "ase-id",
+                0,
+                None,
+            ),
+            (
+                "orders-fn-app",
+                "Microsoft.Web/sites",
+                "rg-app",
+                "orders.example.com",
+                0,
+                "Y1",
+                "site-id",
+                0,
+                None,
+            ),
+        ]
+        result = self._call(
+            rows=rows,
+            plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-ase")],
+        )
+        assert "hosted on" not in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "orders-fn-app" not in result.get("mermaid", ""), result.get("mermaid", "")
+        titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
+        assert titles == {"test-ase"}, titles
+
     def test_app_service_plan_drilldown_lists_hosted_apps(self):
         """The App Service Plan drilldown must list hosted app services."""
         import sqlite3
@@ -1359,6 +1725,105 @@ class TestIngressDiagramGeneration:
         assert result["view_type"] == "table", result
         assert result["rows"], result
         assert any(row[0] == "orders-fn-app" for row in result["rows"]), result["rows"]
+
+    def test_apim_drilldown_nests_methods_under_apis(self):
+        """APIM drill-down should return expandable API rows with nested methods."""
+        import sqlite3
+
+        try:
+            from web.app import _build_child_table
+        except ModuleNotFoundError:
+            from app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE apim_api_operations (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT NOT NULL,
+                    apim_name TEXT NOT NULL,
+                    api_name TEXT NOT NULL,
+                    api_display_name TEXT,
+                    api_path TEXT,
+                    backend_url TEXT,
+                    operation_id TEXT NOT NULL,
+                    display_name TEXT,
+                    method TEXT,
+                    url_template TEXT,
+                    description TEXT,
+                    requires_subscription INTEGER DEFAULT 1,
+                    policy_summary TEXT,
+                    last_synced DATETIME
+                );
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO apim_api_operations (
+                    id, subscription_id, apim_name, api_name, api_display_name,
+                    api_path, backend_url, operation_id, display_name, method,
+                    url_template, description, requires_subscription, policy_summary, last_synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "test-apim::orders::get",
+                        "sub-1",
+                        "test-apim",
+                        "orders-api",
+                        "Orders API",
+                        "/orders",
+                        "https://orders.example.com",
+                        "get-order",
+                        "Get orders",
+                        "GET",
+                        "/{id}",
+                        "Get an order",
+                        1,
+                        None,
+                        None,
+                    ),
+                    (
+                        "test-apim::orders::post",
+                        "sub-1",
+                        "test-apim",
+                        "orders-api",
+                        "Orders API",
+                        "/orders",
+                        "https://orders.example.com",
+                        "create-order",
+                        "Create order",
+                        "POST",
+                        "",
+                        "Create an order",
+                        1,
+                        None,
+                        None,
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.ApiManagement/service",
+                [{"rg": "rg-app", "name": "test-apim"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "tree_table", result
+        assert result["sections"], result
+        assert result["sections"][0]["title"] == "test-apim", result["sections"]
+        rows = result["sections"][0]["rows"]
+        parent = next(row for row in rows if row.get("parent_id") is None)
+        children = [row for row in rows if row.get("parent_id") == parent["id"]]
+        assert parent["child_count"] == 2, parent
+        assert parent["cells"][0]["label"] == "Orders API", parent["cells"]
+        assert parent["cells"][1]["label"] == "API", parent["cells"]
+        assert children[0]["cells"][1]["label"] == "GET", children[0]["cells"]
+        assert children[1]["cells"][1]["label"] == "POST", children[1]["cells"]
 
 
 class TestSubscriptionResourceGroupDiagrams:
@@ -1439,10 +1904,129 @@ class TestSubscriptionResourceGroupDiagrams:
         assert "internet" in path_text or "secret" in path_text or "backend" in path_text, path_text
 
 
+class TestCosmosDbFqdnResolution:
+    """Regression tests for Cosmos DB endpoint resolution in cloud views."""
+
+    def test_exposure_view_derives_cosmos_fqdn(self):
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.subscription_diagram_helpers import build_subscription_diagrams_by_rg
+
+        rows = [
+            (
+                "cosmos-one",
+                "Microsoft.DocumentDB/databaseAccounts",
+                "rg-data",
+                "",
+                1,
+                None,
+                "cosmos-id",
+                0,
+                None,
+                0,
+                None,
+            ),
+        ]
+        diagrams = build_subscription_diagrams_by_rg(
+            "Demo Subscription",
+            "production",
+            rows,
+            sanitise_node_id=lambda s: s.replace("/", "_").replace(" ", "_"),
+            friendly_type=lambda arm_type: "Cosmos DB" if arm_type == "Microsoft.DocumentDB/databaseAccounts" else arm_type,
+            get_icon_path=lambda _resource_type: None,
+            normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+        )
+
+        exposure_mermaid = diagrams[0]["views"]["exposure"]["mermaid"]
+        assert "cosmos-one.documents.azure.com" in exposure_mermaid
+        assert "Direct data plane" not in exposure_mermaid
+
+    def test_drilldown_table_derives_cosmos_fqdn(self):
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    tags TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    fqdn TEXT,
+                    pipeline_tag TEXT,
+                    raw_json TEXT,
+                    endpoints TEXT,
+                    auth_methods TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    status TEXT DEFAULT 'active',
+                    is_restricted INTEGER DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    tags, is_public, fqdn, pipeline_tag, raw_json, endpoints,
+                    auth_methods, first_detected, last_synced, status, is_restricted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-one",
+                    "sub-1",
+                    "rg-data",
+                    "cosmos-one",
+                    "Microsoft.DocumentDB/databaseAccounts",
+                    "westus",
+                    None,
+                    None,
+                    1,
+                    None,
+                    None,
+                    "{}",
+                    None,
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "active",
+                    0,
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.DocumentDB/databaseAccounts",
+                [{"rg": "rg-data", "name": "cosmos-one"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table"
+        assert result["rows"], result
+        assert result["rows"][0][2] == "cosmos-one.documents.azure.com", result["rows"]
+        assert result["rows"][0][3]["label"] == "🌐 Public", result["rows"]
+
+
 def _cloud_assets_payload():
     plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"
     app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app-one"
     fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
+    ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+    ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
+    ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
     gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
     storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
     container_id = f"{storage_id}/blobServices/default/containers/logs"
@@ -1538,6 +2122,93 @@ def _cloud_assets_payload():
             "parent_name": "plan-one",
             "parent_resource_group": "rg-app",
             "parent_type_label": "App Service Plan",
+            "children_count": 0,
+            "is_child": True,
+            "depth": 1,
+        },
+        {
+            "id": ase_id,
+            "name": "ase-one",
+            "type": "Microsoft.Web/hostingEnvironments",
+            "type_label": "App Service Environment",
+            "display_type_label": "App Service Environment",
+            "resource_group": "rg-app",
+            "location": "westus",
+            "sku": "ASEv3",
+            "fqdn": "ase-one.westus.appserviceenvironment.net",
+            "is_public": False,
+            "status": "active",
+            "pipeline_tag": None,
+            "first_detected": "2026-06-01T00:00:00Z",
+            "last_synced": "2026-06-01T00:00:00Z",
+            "sub_id": "sub-1",
+            "sub_name": "Demo Subscription",
+            "environment": "production",
+            "cloud_provider": "Azure",
+            "linked_repo": None,
+            "kind": "ASEv3",
+            "parent_id": None,
+            "parent_name": None,
+            "parent_resource_group": None,
+            "parent_type_label": None,
+            "children_count": 2,
+            "is_child": False,
+            "depth": 0,
+        },
+        {
+            "id": ase_app_id,
+            "name": "ase-app",
+            "type": "Microsoft.Web/sites",
+            "type_label": "App Service",
+            "display_type_label": "App Service",
+            "resource_group": "rg-app",
+            "location": "westus",
+            "sku": "P1v3",
+            "fqdn": "ase-app.azurewebsites.net",
+            "is_public": False,
+            "status": "active",
+            "pipeline_tag": None,
+            "first_detected": "2026-06-01T00:00:00Z",
+            "last_synced": "2026-06-01T00:00:00Z",
+            "sub_id": "sub-1",
+            "sub_name": "Demo Subscription",
+            "environment": "production",
+            "cloud_provider": "Azure",
+            "linked_repo": None,
+            "kind": "app",
+            "parent_id": ase_id,
+            "parent_name": "ase-one",
+            "parent_resource_group": "rg-app",
+            "parent_type_label": "App Service Environment",
+            "children_count": 0,
+            "is_child": True,
+            "depth": 1,
+        },
+        {
+            "id": ase_fn_id,
+            "name": "ase-fn",
+            "type": "Microsoft.Web/sites",
+            "type_label": "App Service",
+            "display_type_label": "Function App",
+            "resource_group": "rg-app",
+            "location": "westus",
+            "sku": "Y1",
+            "fqdn": "ase-fn.azurewebsites.net",
+            "is_public": False,
+            "status": "active",
+            "pipeline_tag": None,
+            "first_detected": "2026-06-01T00:00:00Z",
+            "last_synced": "2026-06-01T00:00:00Z",
+            "sub_id": "sub-1",
+            "sub_name": "Demo Subscription",
+            "environment": "production",
+            "cloud_provider": "Azure",
+            "linked_repo": None,
+            "kind": "functionapp,linux",
+            "parent_id": ase_id,
+            "parent_name": "ase-one",
+            "parent_resource_group": "rg-app",
+            "parent_type_label": "App Service Environment",
             "children_count": 0,
             "is_child": True,
             "depth": 1,
@@ -1726,8 +2397,8 @@ def _cloud_assets_payload():
             "cloud_provider": "Azure",
             "state": "Enabled",
             "last_synced": "2026-06-01T00:00:00Z",
-            "total": 4,
-            "public_count": 3,
+            "total": 12,
+            "public_count": 8,
             "stale_count": 0,
         }],
         "assets": assets,
@@ -1735,6 +2406,7 @@ def _cloud_assets_payload():
             {"label": "App Service Plan", "count": 1},
             {"label": "App Service", "count": 1},
             {"label": "Function App", "count": 1},
+            {"label": "App Service Environment", "count": 1},
             {"label": "App Gateway", "count": 1},
             {"label": "App Gateway Listener", "count": 1},
             {"label": "Storage Account", "count": 1},
@@ -1743,7 +2415,7 @@ def _cloud_assets_payload():
             {"label": "SQL Database", "count": 1},
         ],
         "totals": {
-            "assets": 9,
+            "assets": 12,
             "public": 8,
             "stale": 0,
             "linked": 1,
@@ -1787,6 +2459,12 @@ class TestCloudAssetsPage:
 
         expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app-one"]')).to_be_visible()
         expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"] .type-badge')).to_contain_text("Function App")
+        ase_toggle = page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"] .expand-toggle')
+        expect(ase_toggle).to_have_count(1)
+        expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"]')).to_be_hidden()
+        ase_toggle.click()
+        expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"]')).to_be_visible()
+        expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"] .type-badge')).to_contain_text("Function App")
         gateway_toggle = page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"] .expand-toggle')
         expect(gateway_toggle).to_have_count(1)
         gateway_toggle.click()
@@ -1862,6 +2540,9 @@ class TestCloudAssetsApi:
         plan_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"
         app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app-one"
         fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"
+        ase_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"
+        ase_app_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"
+        ase_fn_id = "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"
         gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
         storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
         container_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"
@@ -1893,6 +2574,20 @@ class TestCloudAssetsApi:
                  None, 1, "fn-one.azurewebsites.net", None, json.dumps({
                      "kind": "functionapp,linux",
                      "serverFarmId": plan_id,
+                 }), now, now, "active"),
+                (ase_id, "sub-1", "rg-app", "ase-one", "Microsoft.Web/hostingEnvironments", "westus", "ASEv3",
+                 None, 0, "ase-one.westus.appserviceenvironment.net", None, json.dumps({
+                    "kind": "ASEv3",
+                 }), now, now, "active"),
+                (ase_app_id, "sub-1", "rg-app", "ase-app", "Microsoft.Web/sites", "westus", "P1v3",
+                 None, 0, "ase-app.azurewebsites.net", None, json.dumps({
+                    "kind": "app",
+                    "hostingEnvironmentProfile": {"id": ase_id},
+                 }), now, now, "active"),
+                (ase_fn_id, "sub-1", "rg-app", "ase-fn", "Microsoft.Web/sites", "westus", "Y1",
+                 None, 0, "ase-fn.azurewebsites.net", None, json.dumps({
+                    "kind": "functionapp,linux",
+                    "hostingEnvironmentProfile": {"id": ase_id},
                  }), now, now, "active"),
                 (gw_id, "sub-1", "rg-net", "gw-one", "Microsoft.Network/applicationGateways", "westus", "WAF_v2",
                  None, 1, "gw.example.com", None, json.dumps({}), now, now, "active"),
@@ -1951,6 +2646,9 @@ class TestCloudAssetsApi:
         plan = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/serverfarms/plan-one"]
         app = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app-one"]
         fn = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/fn-one"]
+        ase = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/hostingEnvironments/ase-one"]
+        ase_app = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-app"]
+        ase_fn = assets["/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/ase-fn"]
         gw = assets["/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"]
         listener = assets["listener::gw-one::https::gw.example.com"]
 
@@ -1963,6 +2661,12 @@ class TestCloudAssetsApi:
         assert app["parent_id"] == plan["id"]
         assert fn["display_type_label"] == "Function App"
         assert fn["parent_id"] == plan["id"]
+        assert ase["display_type_label"] == "App Service Environment"
+        assert ase["children_count"] == 2
+        assert ase_app["parent_id"] == ase["id"]
+        assert ase_app["parent_type_label"] == "App Service Environment"
+        assert ase_fn["display_type_label"] == "Function App"
+        assert ase_fn["parent_id"] == ase["id"]
         assert gw["children_count"] == 1
         assert listener["parent_id"] == gw["id"]
         assert listener["is_child"] is True
@@ -1976,4 +2680,5 @@ class TestCloudAssetsApi:
         assert sql["children_count"] == 1
         assert db["parent_id"] == sql["id"]
         assert db["display_type_label"] == "SQL Database"
+        assert any(item["label"] == "App Service Environment" for item in data["type_summary"])
         assert any(item["label"] == "Function App" for item in data["type_summary"])

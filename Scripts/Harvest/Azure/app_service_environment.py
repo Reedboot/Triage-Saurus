@@ -36,6 +36,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "virtual_network": (props.get("virtualNetwork") or {}).get("id"),
             "subnet": (props.get("virtualNetwork") or {}).get("subnet"),
             "upgrade_availability": props.get("upgradeAvailability"),
+            "hosted_service_families": ["App Service", "Function App"],
+            "hosted_resource_types": ["Microsoft.Web/sites"],
         }
 
         # ILB ASE = no public internet ingress

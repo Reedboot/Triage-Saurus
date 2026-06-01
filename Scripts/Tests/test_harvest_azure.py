@@ -281,6 +281,36 @@ class TestStorageHarvest:
         assert f"{account_id}/blobServices/default/containers/{regular_container_name}/blobs/hello.txt" in ids
         assert blob_calls == [regular_container_name]
 
+    def test_can_skip_all_blob_children(self, monkeypatch):
+        account_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [{
+                    "id": account_id,
+                    "name": "sa-one",
+                    "resourceGroup": "rg-data",
+                    "location": "westus",
+                    "type": "Microsoft.Storage/storageAccounts",
+                    "properties": {},
+                }]
+            if args[:3] == ["storage", "container", "list"]:
+                return [{"name": "logs", "publicAccess": "blob"}]
+            if args[:3] == ["storage", "blob", "list"]:
+                raise AssertionError("blob listing should be disabled")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+        monkeypatch.setattr(storage, "_INCLUDE_BLOB_CHILDREN", False)
+
+        rows = storage.harvest("sub-1")
+        ids = {row["id"] for row in rows}
+
+        assert account_id in ids
+        assert f"{account_id}/blobServices/default/containers/logs" in ids
+        assert not any("/blobs/" in row["id"] for row in rows)
+
 
 # ---------------------------------------------------------------------------
 # extract_ip_restrictions

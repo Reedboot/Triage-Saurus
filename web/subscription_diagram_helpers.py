@@ -14,6 +14,18 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.documentdb/databaseaccounts",
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
+    "microsoft.web/hostingenvironments",
+}
+
+SUBSCRIPTION_FQDN_SUFFIXES = {
+    "microsoft.keyvault/vaults": "vault.azure.net",
+    "microsoft.storage/storageaccounts": "blob.core.windows.net",
+    "microsoft.servicebus/namespaces": "servicebus.windows.net",
+    "microsoft.eventhub/namespaces": "servicebus.windows.net",
+    "microsoft.sql/servers": "database.windows.net",
+    "microsoft.cache/redis": "redis.cache.windows.net",
+    "microsoft.documentdb/databaseaccounts": "documents.azure.com",
+    "microsoft.appconfiguration/configurationstores": "azconfig.io",
 }
 
 
@@ -39,6 +51,10 @@ def subscription_short_name(name: str, max_len: int = 28) -> str:
 def subscription_is_function_app(item: dict) -> bool:
     name = (item.get("name") or "").lower()
     return "-fn-" in name or name.endswith("-fn") or "funcapp" in name or "functionapp" in name
+
+
+def subscription_known_fqdn_suffix(arm_type: str) -> str | None:
+    return SUBSCRIPTION_FQDN_SUFFIXES.get((arm_type or "").lower())
 
 
 def subscription_asset_tier(arm_type: str, name: str = "") -> str:
@@ -90,7 +106,6 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "arm_type": rtype,
             "rg": rg or "default",
             "fqdn": fqdn or "",
-            "fqdns": [fqdn] if fqdn else [],
             "public": bool(is_public),
             "sku": sku,
             "id": asset_id,
@@ -102,16 +117,20 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "friendly_type": friendly_type(rtype),
             "short_name": subscription_short_name(name or "resource"),
         }
+        resolved_fqdn = subscription_primary_fqdn(asset)
+        asset["fqdn"] = resolved_fqdn
+        asset["fqdns"] = [resolved_fqdn] if resolved_fqdn else []
         assets.append(asset)
     return assets
 
 
 def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | None = None) -> list[dict]:
-    """Fold hosted App Services / Function Apps into their App Service Plan.
+    """Fold hosted App Services / Function Apps into their hosting parent.
 
-    The returned list keeps App Service Plans visible, hides hosted sites that have a
-    matching plan in scope, and aggregates the hosted sites' FQDN/public exposure
-    onto the plan node so the diagram stays clickable and accurate.
+    The returned list keeps App Service Plans and App Service Environments visible,
+    hides hosted sites that have a matching parent in scope, and aggregates the
+    hosted sites' FQDN/public exposure onto the parent node so the diagram stays
+    clickable and accurate.
     """
     from collections import defaultdict
 
@@ -126,21 +145,24 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
 
     asset_map = {_key(asset): dict(asset) for asset in assets}
     hidden_keys: set[tuple[str, str]] = set()
-    hosted_by_plan: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    hosted_by_parent: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for site_rg, site_name, plan_rg, plan_name in plan_links:
         site_key = ((site_name or "").lower(), (site_rg or "").lower())
         plan_key = ((plan_name or "").lower(), (plan_rg or "").lower())
         site_asset = asset_map.get(site_key)
-        plan_asset = asset_map.get(plan_key)
-        if not site_asset or not plan_asset:
+        parent_asset = asset_map.get(plan_key)
+        if not site_asset or not parent_asset:
             continue
-        if "sites" not in _type(site_asset) or "serverfarms" not in _type(plan_asset):
+        parent_type = _type(parent_asset)
+        if "sites" not in _type(site_asset) or not any(
+            token in parent_type for token in ("serverfarms", "hostingenvironment")
+        ):
             continue
         if site_key in hidden_keys:
             continue
         hidden_keys.add(site_key)
-        hosted_by_plan[plan_key].append(site_asset)
+        hosted_by_parent[plan_key].append(site_asset)
 
     visible_assets: list[dict] = []
     for asset in assets:
@@ -149,16 +171,18 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         if key in hidden_keys:
             continue
 
-        children = hosted_by_plan.get(key)
-        if children and "serverfarms" in _type(asset_copy):
+        children = hosted_by_parent.get(key)
+        if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
             child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
             merged_fqdns = list(dict.fromkeys([*(asset_copy.get("fqdns") or []), *child_fqdns]))
             asset_copy["fqdns"] = merged_fqdns
             asset_copy["public"] = bool(asset_copy.get("public") or any(child.get("public") for child in children))
             asset_copy["is_restricted"] = bool(asset_copy.get("is_restricted") or any(child.get("is_restricted") for child in children))
             asset_copy["hosted_site_count"] = len(children)
-        elif "fqdns" not in asset_copy and asset_copy.get("fqdn"):
-            asset_copy["fqdns"] = [asset_copy["fqdn"]]
+        elif "fqdns" not in asset_copy:
+            resolved_fqdn = subscription_primary_fqdn(asset_copy)
+            if resolved_fqdn:
+                asset_copy["fqdns"] = [resolved_fqdn]
 
         visible_assets.append(asset_copy)
 
@@ -169,7 +193,15 @@ def subscription_primary_fqdn(asset: dict) -> str:
     fqdns = asset.get("fqdns") or []
     if fqdns:
         return str(fqdns[0]).strip()
-    return str(asset.get("fqdn") or "").strip()
+    fqdn = str(asset.get("fqdn") or "").strip()
+    if fqdn:
+        return fqdn
+    suffix = subscription_known_fqdn_suffix(asset.get("arm_type") or asset.get("type") or "")
+    if suffix:
+        name = str(asset.get("name") or "").strip()
+        if name:
+            return f"{name}.{suffix}"
+    return ""
 
 
 def subscription_is_secret_store(arm_type: str) -> bool:
