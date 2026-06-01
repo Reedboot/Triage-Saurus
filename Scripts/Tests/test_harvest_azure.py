@@ -4,7 +4,9 @@
 These tests use only pure Python (no az CLI, no DB) by exercising functions
 that are isolated from external dependencies.
 """
+import json
 import sys
+import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +15,12 @@ sys.path.insert(0, str(ROOT / "Scripts" / "Harvest" / "Azure"))
 sys.path.insert(0, str(ROOT / "Scripts" / "Persist"))
 
 import pytest
+import harvest_azure_assets
+import apim_routing_map
+import appgw_routing_map
+import correlate_assets
 from Azure._helpers import safe_str, infer_fqdn, build_endpoints, extract_ip_restrictions, infer_sku
+from Azure import app_configuration, storage
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +110,176 @@ class TestBuildEndpoints:
         parsed = json.loads(result)
         assert len(parsed) == 1
         assert parsed[0]["address"] == "myapp.azurewebsites.net"
+
+    def test_multiple_probes_run_concurrently(self, monkeypatch):
+        import threading
+
+        barrier = threading.Barrier(4, timeout=2)
+
+        def fake_probe(address, port, protocol, timeout=5):
+            barrier.wait()
+            return {
+                "reachable": True,
+                "probe_latency_ms": 1,
+                "probe_error": None,
+                "probe_note": "tcp_ok",
+            }
+
+        monkeypatch.setattr("Azure._helpers._probe_endpoint", fake_probe)
+        entries = [(f"host{i}.example.com", 443, "https") for i in range(4)]
+        result = build_endpoints(entries)
+        parsed = json.loads(result)
+        assert [item["address"] for item in parsed] == [f"host{i}.example.com" for i in range(4)]
+
+
+class TestStorageHarvest:
+    def test_accounts_run_concurrently(self, monkeypatch):
+        import threading
+
+        barrier = threading.Barrier(2, timeout=2)
+        account_one_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+        account_two_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-two"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [
+                    {
+                        "id": account_one_id,
+                        "name": "sa-one",
+                        "resourceGroup": "rg-data",
+                        "location": "westus",
+                        "type": "Microsoft.Storage/storageAccounts",
+                        "properties": {},
+                    },
+                    {
+                        "id": account_two_id,
+                        "name": "sa-two",
+                        "resourceGroup": "rg-data",
+                        "location": "westus",
+                        "type": "Microsoft.Storage/storageAccounts",
+                        "properties": {},
+                    },
+                ]
+            if args[:3] == ["storage", "container", "list"]:
+                return []
+            raise AssertionError(f"unexpected args: {args}")
+
+        def fake_children(subscription_id, account, account_fqdn, account_is_public, account_is_restricted, account_ip_restrictions, account_auth_methods):
+            barrier.wait()
+            return [{
+                "id": f"{account['id']}/blobServices/default/containers/logs",
+                "subscription_id": subscription_id,
+                "resource_group": account["resourceGroup"],
+                "name": "logs",
+                "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+                "location": account.get("location"),
+                "sku": "blob",
+                "tags": json.dumps({}),
+                "is_public": 0,
+                "is_restricted": 0,
+                "ip_restrictions": json.dumps([]),
+                "endpoints": json.dumps([]),
+                "auth_methods": account_auth_methods,
+                "fqdn": None,
+                "pipeline_tag": None,
+                "raw_json": json.dumps({"name": "logs"}),
+            }]
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+        monkeypatch.setattr(storage, "_harvest_blob_containers", fake_children)
+
+        rows = storage.harvest("sub-1")
+        ids = {row["id"] for row in rows}
+        assert account_one_id in ids
+        assert account_two_id in ids
+        assert f"{account_one_id}/blobServices/default/containers/logs" in ids
+        assert f"{account_two_id}/blobServices/default/containers/logs" in ids
+
+    def test_blob_children_run_concurrently(self, monkeypatch):
+        import threading
+
+        barrier = threading.Barrier(2, timeout=2)
+        account_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+        container_one_id = f"{account_id}/blobServices/default/containers/logs"
+        container_two_id = f"{account_id}/blobServices/default/containers/images"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [{
+                    "id": account_id,
+                    "name": "sa-one",
+                    "resourceGroup": "rg-data",
+                    "location": "westus",
+                    "type": "Microsoft.Storage/storageAccounts",
+                    "properties": {},
+                }]
+            if args[:3] == ["storage", "container", "list"]:
+                return [
+                    {"name": "logs", "publicAccess": "blob"},
+                    {"name": "images", "publicAccess": "blob"},
+                ]
+            if args[:3] == ["storage", "blob", "list"]:
+                barrier.wait()
+                return [{
+                    "name": "hello.txt",
+                    "properties": {"accessTier": "Hot", "blobType": "BlockBlob"},
+                }]
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+
+        rows = storage.harvest("sub-1")
+        ids = {row["id"] for row in rows}
+
+        assert account_id in ids
+        assert container_one_id in ids
+        assert container_two_id in ids
+        assert f"{container_one_id}/blobs/hello.txt" in ids
+        assert f"{container_two_id}/blobs/hello.txt" in ids
+
+    def test_skips_boot_diagnostics_blob_children(self, monkeypatch):
+        account_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+        boot_container_name = "bootdiagnostics-prod-0001"
+        regular_container_name = "logs"
+        blob_calls: list[str] = []
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [{
+                    "id": account_id,
+                    "name": "sa-one",
+                    "resourceGroup": "rg-data",
+                    "location": "westus",
+                    "type": "Microsoft.Storage/storageAccounts",
+                    "properties": {},
+                }]
+            if args[:3] == ["storage", "container", "list"]:
+                return [
+                    {"name": boot_container_name, "publicAccess": "blob"},
+                    {"name": regular_container_name, "publicAccess": "blob"},
+                ]
+            if args[:3] == ["storage", "blob", "list"]:
+                container_name = args[args.index("--container-name") + 1]
+                blob_calls.append(container_name)
+                return [{
+                    "name": "hello.txt",
+                    "properties": {"accessTier": "Hot", "blobType": "BlockBlob"},
+                }]
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+
+        rows = storage.harvest("sub-1")
+        ids = {row["id"] for row in rows}
+
+        assert account_id in ids
+        assert f"{account_id}/blobServices/default/containers/{boot_container_name}" in ids
+        assert f"{account_id}/blobServices/default/containers/{regular_container_name}" in ids
+        assert f"{account_id}/blobServices/default/containers/{regular_container_name}/blobs/hello.txt" in ids
+        assert blob_calls == [regular_container_name]
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +697,250 @@ class TestFirewallExposureLevel:
         assert _get_firewall_exposure_level(firewall) == "Internal"
 
 
+class TestHarvestSubscription:
+    def test_invokes_appgw_routing_map_harvest(self, monkeypatch):
+        calls = []
+
+        def fake_harvest_routing(subscription_id, conn, dry_run=False):
+            calls.append((subscription_id, dry_run))
+            return 0, 0, 0, 0
+
+        monkeypatch.setattr(harvest_azure_assets, "PROVIDERS", [])
+        monkeypatch.setattr(harvest_azure_assets.appgw_routing_map, "harvest_routing", fake_harvest_routing)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets.harvest_subscription({"id": "sub-1", "name": "sub"}, conn, dry_run=True)
+        finally:
+            conn.close()
+
+        assert calls == [("sub-1", True)]
+
+class TestAppGatewayRewriteHarvest:
+    def test_persists_rewrite_rule_sets(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            appgw_routing_map._ensure_appgw_schema(conn)
+
+            gw_stub = {
+                "name": "gw-one",
+                "resourceGroup": "rg-net",
+                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one",
+            }
+            gw = {
+                "id": gw_stub["id"],
+                "name": "gw-one",
+                "resourceGroup": "rg-net",
+                "properties": {
+                    "requestRoutingRules": [{
+                        "name": "basic-rule",
+                        "properties": {
+                            "ruleType": "Basic",
+                            "httpListener": {
+                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/httpListeners/listener-one",
+                            },
+                            "rewriteRuleSet": {
+                                "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/rewriteRuleSets/rewrite-one",
+                            },
+                        },
+                    }],
+                    "rewriteRuleSets": [{
+                        "name": "rewrite-one",
+                        "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/rewriteRuleSets/rewrite-one",
+                        "properties": {
+                            "provisioningState": "Succeeded",
+                            "rewriteRules": [{
+                                "name": "add-header",
+                                "ruleSequence": 10,
+                                "conditions": [{"variable": "http_req_Authorization", "pattern": "^Bearer"}],
+                                "actionSet": {
+                                    "requestHeaderConfigurations": [{"headerName": "X-Test", "headerValue": "1"}],
+                                    "responseHeaderConfigurations": [{"headerName": "Strict-Transport-Security", "headerValue": "max-age=1"}],
+                                    "urlConfiguration": {"modifiedPath": "/abc", "reroute": False},
+                                },
+                            }],
+                        },
+                    }],
+                },
+            }
+
+            set_count, rule_count = appgw_routing_map.process_rewrite_rule_sets(
+                gw_stub, "sub-1", conn, dry_run=False, now="2026-06-01T00:00:00Z", gw=gw
+            )
+            row = conn.execute(
+                "SELECT set_name, attached_route_count, rewrite_rule_count, attached_routes, rewrite_rules "
+                "FROM appgw_rewrite_rule_sets"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert set_count == 1
+        assert rule_count == 1
+        assert row[0] == "rewrite-one"
+        assert row[1] == 1
+        assert row[2] == 1
+        attached_routes = json.loads(row[3])
+        rewrite_rules = json.loads(row[4])
+        assert attached_routes[0]["routing_rule_name"] == "basic-rule"
+        assert rewrite_rules[0]["name"] == "add-header"
+
+    def test_apim_backend_derivation_stays_cli_free(self, monkeypatch):
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets._ensure_schema(conn)
+            apim_routing_map._ensure_apim_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO apim_api_routes (
+                    id, subscription_id, apim_name, apim_resource_id,
+                    api_name, api_display_name, api_path, api_protocols,
+                    backend_id, backend_url, service_url, requires_subscription,
+                    last_synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "orders-apim::orders-api",
+                    "sub-1",
+                    "orders-apim",
+                    "apim-id",
+                    "orders-api",
+                    "Orders API",
+                    "orders",
+                    '["https"]',
+                    None,
+                    "https://backend.example.com/v1",
+                    "https://backend.example.com/v1",
+                    1,
+                    "2026-06-01T00:00:00Z",
+                ),
+            )
+
+            def _fail(*args, **kwargs):
+                raise AssertionError("APIM CLI should not be called during backend derivation")
+
+            monkeypatch.setattr(apim_routing_map, "list_apim_instances", _fail)
+            monkeypatch.setattr(apim_routing_map, "list_backends", _fail)
+
+            backend_count, route_count = apim_routing_map.harvest_backends("sub-1", conn, dry_run=False)
+            row = conn.execute(
+                "SELECT id, apim_name, backend_id, url, protocol FROM apim_backends"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert backend_count == 1
+        assert route_count == 1
+        assert row[0] == "orders-apim::backend.example.com/v1"
+        assert row[1] == "orders-apim"
+        assert row[2] == "backend.example.com/v1"
+        assert row[3] == "https://backend.example.com/v1"
+        assert row[4] == "https"
+
+    def test_invokes_apim_backend_links_harvest(self, monkeypatch):
+        calls = []
+
+        def fake_harvest_backends(subscription_id, conn, dry_run=False):
+            calls.append((subscription_id, dry_run))
+            return 0, 0
+
+        monkeypatch.setattr(harvest_azure_assets, "PROVIDERS", [])
+        monkeypatch.setattr(harvest_azure_assets.apim_routing_map, "harvest_backends", fake_harvest_backends)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets.harvest_subscription({"id": "sub-1", "name": "sub"}, conn, dry_run=True)
+        finally:
+            conn.close()
+
+        assert calls == [("sub-1", True)]
+
+
+class TestAppConfigurationHarvest:
+    def test_does_not_call_role_assignment_lookup(self, monkeypatch):
+        store = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.AppConfiguration/configurationStores/store-1",
+            "name": "store-1",
+            "type": "Microsoft.AppConfiguration/configurationStores",
+            "resourceGroup": "rg-1",
+            "location": "westeurope",
+            "sku": {"name": "Standard"},
+            "tags": {},
+            "properties": {
+                "endpoint": "https://store-1.azconfig.io/",
+                "publicNetworkAccess": "Enabled",
+                "disableLocalAuth": False,
+                "networkAcls": {"defaultAction": "Allow"},
+                "privateEndpointConnections": [],
+            },
+        }
+
+        calls = []
+
+        def fake_az(args, subscription_id):
+            calls.append(args)
+            if args[:3] == ["role", "assignment", "list"]:
+                raise AssertionError("App Configuration harvest should not query role assignments")
+            if args == ["appconfig", "list"]:
+                return [store]
+            return []
+
+        def fake_build_endpoints(entries, timeout=5):
+            return json.dumps([
+                {"address": address, "port": port, "protocol": protocol}
+                for address, port, protocol in entries
+            ])
+
+        monkeypatch.setattr(app_configuration, "az", fake_az)
+        monkeypatch.setattr(app_configuration, "build_endpoints", fake_build_endpoints)
+
+        results = app_configuration.harvest("sub-1")
+        assert len(results) == 1
+        extra = json.loads(results[0]["raw_json"])["_extra"]
+        assert extra["rbac_check"]["role_assignment_lookup"] == "skipped"
+        assert all(call[:3] != ["role", "assignment", "list"] for call in calls)
+
+
+class TestRefreshPublicFlags:
+    def test_does_not_override_network_restrictions(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            """
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                type TEXT,
+                is_public INTEGER,
+                is_restricted INTEGER,
+                raw_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO provisioned_assets (id, subscription_id, type, is_public, is_restricted, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "storage-1",
+                "sub-1",
+                "Microsoft.Storage/storageAccounts",
+                0,
+                1,
+                '{"properties":{"allowBlobPublicAccess":true}}',
+            ),
+        )
+        try:
+            correlate_assets.refresh_public_flags(conn, "sub-1")
+            row = conn.execute(
+                "SELECT is_public, is_restricted FROM provisioned_assets WHERE id = ?",
+                ("storage-1",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert row == (0, 1)
+
+
 class TestFrontDoorClassicRoutes:
     def test_extracts_frontend_to_backend_routes(self):
         profile = {
@@ -584,3 +1005,117 @@ class TestFrontDoorAfdRoutes:
             "https_redirect": 1,
             "exposure_level": "Public",
         }
+
+
+# ---------------------------------------------------------------------------
+# subscription_assets_from_rows — new columns (is_restricted, waf_mode)
+# ---------------------------------------------------------------------------
+
+class TestSubscriptionAssetsFromRows:
+    """subscription_diagram_helpers.subscription_assets_from_rows parses new columns."""
+
+    def _make_row(self, *, is_restricted=0, waf_mode=None):
+        # Row layout: name, type, rg, fqdn, is_public, sku, id, has_waf, listeners,
+        #             is_restricted, waf_mode
+        return (
+            "my-appgw", "Microsoft.Network/applicationGateways", "rg1",
+            "appgw.azurefd.net", 1, "WAF_v2", "/subs/s1/appgw",
+            1, "HTTPS:443",
+            is_restricted, waf_mode,
+        )
+
+    def _import_helper(self):
+        import importlib.util, sys
+        web_dir = ROOT / "web"
+        spec = importlib.util.spec_from_file_location(
+            "subscription_diagram_helpers",
+            web_dir / "subscription_diagram_helpers.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_is_restricted_false_when_zero(self):
+        mod = self._import_helper()
+        row = self._make_row(is_restricted=0)
+        assets = mod.subscription_assets_from_rows([row], lambda t: t)
+        assert assets[0]["is_restricted"] is False
+
+    def test_is_restricted_true_when_one(self):
+        mod = self._import_helper()
+        row = self._make_row(is_restricted=1)
+        assets = mod.subscription_assets_from_rows([row], lambda t: t)
+        assert assets[0]["is_restricted"] is True
+
+    def test_waf_mode_none_when_absent(self):
+        mod = self._import_helper()
+        row = self._make_row(waf_mode=None)
+        assets = mod.subscription_assets_from_rows([row], lambda t: t)
+        assert assets[0]["waf_mode"] is None
+
+    def test_waf_mode_stored_correctly(self):
+        mod = self._import_helper()
+        row = self._make_row(waf_mode="Prevention")
+        assets = mod.subscription_assets_from_rows([row], lambda t: t)
+        assert assets[0]["waf_mode"] == "Prevention"
+
+    def test_short_row_defaults_is_restricted_false(self):
+        """Rows from older DBs without the new column default to False."""
+        mod = self._import_helper()
+        # Only 9 columns (no is_restricted, no waf_mode)
+        row = (
+            "gw", "Microsoft.Network/applicationGateways", "rg", "gw.azurefd.net",
+            1, "WAF_v2", "/id", True, "HTTPS:443",
+        )
+        assets = mod.subscription_assets_from_rows([row], lambda t: t)
+        assert assets[0]["is_restricted"] is False
+        assert assets[0]["waf_mode"] is None
+
+
+class TestSubscriptionOverlayPlanLinks:
+    """App Service Plans should drill into hosted apps without top-level hosting arrows."""
+
+    def _import_helper(self):
+        import importlib.util
+        web_dir = ROOT / "web"
+        spec = importlib.util.spec_from_file_location(
+            "subscription_diagram_helpers",
+            web_dir / "subscription_diagram_helpers.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_hosted_apps_fold_into_plan_node(self):
+        mod = self._import_helper()
+        rows = [
+            (
+                "ingress", "Microsoft.Network/applicationGateways", "rg1",
+                "ingress.azurefd.net", 1, "WAF_v2", "/subs/s1/ingress",
+                1, "HTTPS:443", 0, None,
+            ),
+            (
+                "functions_windows", "Microsoft.Web/sites", "rg1",
+                "functions.azurewebsites.net", 0, "F1", "/subs/s1/functions",
+                0, None, 0, None,
+            ),
+            (
+                "functions_plan", "Microsoft.Web/serverfarms", "rg1",
+                "", 0, "S1", "/subs/s1/functions-plan",
+                0, None, 0, None,
+            ),
+        ]
+        plan_links = [("rg1", "functions_windows", "rg1", "functions_plan")]
+        view = mod.build_subscription_overlay_views(
+            rows,
+            sanitise_node_id=lambda s: s.replace("/", "_").replace("-", "_"),
+            friendly_type=lambda t: t,
+            get_icon_path=lambda t: None,
+            normalize_attack_paths=lambda *args, **kwargs: [],
+            plan_links=plan_links,
+        )
+        assert "hosted on" not in view["exposure"]["mermaid"]
+        assert view["exposure"]["asset_summary"]["backends"] == 1
+        titles = {v.get("title") for v in view["exposure"]["node_drilldown_map"].values()}
+        assert "functions_plan" in titles, titles
+        assert "functions_windows" not in titles, titles

@@ -29,11 +29,13 @@ try:
     from web.subscription_diagram_helpers import (
         build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
+        subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
     )
 except ImportError:
     from subscription_diagram_helpers import (  # type: ignore
         build_subscription_diagrams_by_rg as _shared_build_subscription_diagrams_by_rg,
         build_subscription_overlay_views as _shared_build_subscription_overlay_views,
+        subscription_apply_plan_hierarchy as _shared_subscription_apply_plan_hierarchy,
     )
 
 app = Flask(__name__)
@@ -11713,7 +11715,6 @@ def scan_001_diagram():
     try:
         import sqlite3
         from Scripts.Generate.generate_diagram import get_friendly_type
-        from Scripts.Generate.icon_resolver import get_icon_path
         
         # Query database for main resources (simplified, no nesting)
         conn = sqlite3.connect('Output/Data/cozo.db')
@@ -11890,9 +11891,9 @@ def scan_001_diagram():
         tech_stack_html = ""
         for rt in resource_types:
             friendly = get_friendly_type(rt)
-            icon_path = get_icon_path(rt, 'azure')
-            if icon_path and icon_path.exists():
-                tech_stack_html += f'<span class="tech-badge"><img src="/static/assets/icons/azure/{icon_path.relative_to(Path("/home/neil/code/Triage-Saurus/web/static/assets/icons/azure"))}" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;"/>{friendly}</span>\n'
+            icon_url = _get_icon_path(rt)
+            if icon_url:
+                tech_stack_html += f'<span class="tech-badge"><img src="{icon_url}" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;"/>{friendly}</span>\n'
             else:
                 tech_stack_html += f'<span class="tech-badge">{friendly}</span>\n'
         
@@ -12863,11 +12864,29 @@ def api_cloud_assets_all():
                    pa.first_detected, pa.last_synced,
                    s.id AS sub_id, s.display_name AS sub_name,
                    s.environment,
-                   r.repo_name
+                   r.repo_name,
+                   json_extract(pa.raw_json, '$.kind') AS kind,
+                   CASE
+                       WHEN p.id IS NOT NULL THEN p.id
+                       ELSE NULL
+                   END AS parent_id,
+                   p.name AS parent_name,
+                   p.resource_group AS parent_resource_group,
+                   p.type AS parent_arm_type
             FROM provisioned_assets pa
             JOIN subscriptions s ON s.id = pa.subscription_id
             LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
             LEFT JOIN repositories r ON r.id = parl.repository_id
+            LEFT JOIN provisioned_assets p
+              ON p.subscription_id = pa.subscription_id
+             AND lower(p.type) LIKE '%/serverfarms%'
+             AND lower(pa.type) LIKE '%/sites%'
+             AND lower(p.id) = lower(
+                    COALESCE(
+                        json_extract(pa.raw_json, '$.appServicePlanId'),
+                        json_extract(pa.raw_json, '$.serverFarmId')
+                    )
+                 )
             ORDER BY s.environment, s.display_name, pa.type, pa.name
             """
         ).fetchall()
@@ -12883,9 +12902,11 @@ def api_cloud_assets_all():
 
         assets = []
         for r in rows:
+            display_type = _cloud_asset_display_type(r[2], r[16])
             assets.append({
                 "id": r[0], "name": r[1], "type": r[2],
                 "type_label": _friendly_type(r[2]),
+                "display_type_label": display_type,
                 "resource_group": r[3], "location": r[4],
                 "sku": r[5], "fqdn": r[6],
                 "is_public": bool(r[7]), "status": r[8] or "active",
@@ -12893,6 +12914,14 @@ def api_cloud_assets_all():
                 "sub_id": r[12], "sub_name": r[13],
                 "environment": r[14], "cloud_provider": "Azure",
                 "linked_repo": r[15],
+                "kind": r[16],
+                "parent_id": r[17],
+                "parent_name": r[18],
+                "parent_resource_group": r[19],
+                "parent_type_label": _friendly_type(r[20]) if r[20] else None,
+                "children_count": 0,
+                "is_child": bool(r[17]),
+                "depth": 1 if r[17] else 0,
             })
 
         # Build a lookup of subscription metadata for virtual assets
@@ -12917,6 +12946,7 @@ def api_cloud_assets_all():
                     "name": wr[1],
                     "type": "microsoft.network/applicationgatewaywafpolicies",
                     "type_label": "WAF Policy",
+                    "display_type_label": "WAF Policy",
                     "resource_group": wr[2],
                     "location": None,
                     "sku": f"{mode_lbl} / {state_lbl}",
@@ -12953,6 +12983,7 @@ def api_cloud_assets_all():
                     "name": f"{lr[2]} ({proto})",
                     "type": "microsoft.network/applicationgatewaylisteners",
                     "type_label": "App Gateway Listener",
+                    "display_type_label": "App Gateway Listener",
                     "resource_group": lr[5],
                     "location": None,
                     "sku": f"{proto} → {lr[1]}",
@@ -12967,12 +12998,91 @@ def api_cloud_assets_all():
                     "environment": meta.get("environment", ""),
                     "cloud_provider": "Azure",
                     "linked_repo": None,
+                    "kind": None,
+                    "parent_name": lr[1],
+                    "parent_resource_group": lr[5],
+                    "parent_type_label": "App Gateway",
+                    "parent_id": None,
+                    "children_count": 0,
+                    "is_child": True,
+                    "depth": 1,
                 })
+
+        # Resolve parent links for virtual assets and compute tree metadata.
+        by_key = {}
+        by_id = {}
+        for a in assets:
+            asset_id = str(a.get("id") or "").lower()
+            if asset_id:
+                by_id[asset_id] = a
+            key = (
+                str(a.get("sub_id") or "").lower(),
+                str(a.get("resource_group") or "").lower(),
+                str(a.get("name") or "").lower(),
+                str(a.get("display_type_label") or a.get("type_label") or "").lower(),
+            )
+            by_key[key] = a
+
+        for a in assets:
+            if a.get("parent_id"):
+                continue
+            parent_name = a.get("parent_name")
+            parent_rg = a.get("parent_resource_group")
+            parent_type = a.get("parent_type_label")
+            if parent_name and parent_rg and parent_type:
+                key = (
+                    str(a.get("sub_id") or "").lower(),
+                    str(parent_rg or "").lower(),
+                    str(parent_name or "").lower(),
+                    str(parent_type or "").lower(),
+                )
+                parent = by_key.get(key)
+                if parent:
+                    a["parent_id"] = parent.get("id")
+                    if not a.get("parent_name"):
+                        a["parent_name"] = parent.get("name")
+                    if not a.get("parent_resource_group"):
+                        a["parent_resource_group"] = parent.get("resource_group")
+                    if not a.get("parent_type_label"):
+                        a["parent_type_label"] = parent.get("display_type_label") or parent.get("type_label")
+                    a["is_child"] = True
+                    a["depth"] = 1
+                    continue
+
+            asset_id = str(a.get("id") or "").rstrip("/")
+            if "/" not in asset_id:
+                continue
+            candidate = asset_id
+            while "/" in candidate:
+                candidate = candidate.rsplit("/", 1)[0]
+                parent = by_id.get(candidate.lower())
+                if not parent:
+                    continue
+                a["parent_id"] = parent.get("id")
+                if not a.get("parent_name"):
+                    a["parent_name"] = parent.get("name")
+                if not a.get("parent_resource_group"):
+                    a["parent_resource_group"] = parent.get("resource_group")
+                if not a.get("parent_type_label"):
+                    a["parent_type_label"] = parent.get("display_type_label") or parent.get("type_label")
+                a["is_child"] = True
+                a["depth"] = 1
+                break
+
+        child_counts: dict = {}
+        for a in assets:
+            parent_id = a.get("parent_id")
+            if parent_id:
+                child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
+        for a in assets:
+            a["children_count"] = child_counts.get(a.get("id"), 0)
+            a["is_child"] = bool(a.get("parent_id"))
+            a["depth"] = 1 if a.get("parent_id") else 0
 
         # Type summary for the filter bar (computed from full asset list including virtual assets)
         type_counts: dict[str, int] = {}
         for a in assets:
-            lbl = a["type_label"]
+            lbl = a.get("display_type_label") or a["type_label"]
             type_counts[lbl] = type_counts.get(lbl, 0) + 1
         type_summary = sorted(
             [{"label": k, "count": v} for k, v in type_counts.items()],
@@ -13113,26 +13223,53 @@ _ROUTING_HARVEST_LOCK = threading.Lock()
 
 
 def _run_routing_harvest(sub_id: str, task_id: str) -> None:
-    """Background worker: runs appgw_routing_map.py for the given subscription."""
-    import subprocess as _sp
-    script = str(Path(__file__).parent.parent / "Scripts" / "Harvest" / "appgw_routing_map.py")
+    """Background worker: harvests App Gateway rewrites + APIM routing rules for a subscription."""
+    from Scripts.Harvest import appgw_routing_map as _appgw_mod
+    from Scripts.Harvest.Azure import apim as _apim_mod
+
+    lines: list[str] = []
+    final_status = "done"
+
+    conn = _get_db_with_schema()
+    if conn is None:
+        with _ROUTING_HARVEST_LOCK:
+            _ROUTING_HARVEST_TASKS[task_id] = {"status": "error", "output": "DB unavailable"}
+        return
+
     try:
-        result = _sp.run(
-            [sys.executable, script, "--subscription", sub_id],
-            capture_output=True, text=True, timeout=300,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        status = "done" if result.returncode == 0 else "error"
-    except Exception as exc:
-        output = str(exc)
-        status = "error"
+        # ── App Gateway routing + rewrites + WAF ────────────────────────────
+        lines.append("=== App Gateway routing + rewrites ===")
+        try:
+            rules, rewrite_sets, rewrite_rules, waf = _appgw_mod.harvest_routing(sub_id, conn, dry_run=False)
+            lines.append(
+                f"  {rules} routing rules, {rewrite_sets} rewrite rule sets "
+                f"({rewrite_rules} rewrite rules), {waf} WAF policies written"
+            )
+        except Exception as exc:
+            lines.append(f"  FAILED: {exc}")
+            final_status = "error"
+
+        # ── APIM API → backend routes ───────────────────────────────────────
+        lines.append("=== APIM routes ===")
+        try:
+            route_count = _apim_mod.harvest_routes(sub_id, conn, dry_run=False)
+            lines.append(f"  {route_count} API routes written")
+        except Exception as exc:
+            lines.append(f"  FAILED: {exc}")
+            final_status = "error"
+
+    finally:
+        conn.close()
+
     with _ROUTING_HARVEST_LOCK:
-        _ROUTING_HARVEST_TASKS[task_id] = {"status": status, "output": output}
+        _ROUTING_HARVEST_TASKS[task_id] = {"status": final_status, "output": "\n".join(lines)}
+    if final_status == "done":
+        _SUBSCRIPTION_DIAGRAM_CACHE.pop(sub_id, None)
 
 
 @app.route("/api/subscriptions/<sub_id>/harvest-routing", methods=["POST"])
 def api_harvest_routing(sub_id: str):
-    """Start a background harvest of App Gateway routing rules and WAF policies."""
+    """Start a background harvest of App Gateway routing rules, rewrites, and WAF policies."""
     import uuid as _uuid
     task_id = _uuid.uuid4().hex
     with _ROUTING_HARVEST_LOCK:
@@ -13155,19 +13292,32 @@ def api_harvest_routing_status(sub_id: str, task_id: str):
     return jsonify({"task_id": task_id, "status": info["status"], "output": info.get("output", "")})
 
 
+_SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, dict]] = {}
+_SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
+
+
 @app.route("/api/subscriptions/<sub_id>/diagram")
 def api_subscription_diagram(sub_id: str):
     """Generate hierarchical architecture diagrams for a subscription.
     
     Returns:
     - A high-level ingress flow diagram (HTTP → WAF → Gateway → APIM → Backend)
-    - Grouped diagrams by resource group for detailed view
-    - Drilldown data for interactive exploration
     """
+    import time as _time
+
+    cached = _SUBSCRIPTION_DIAGRAM_CACHE.get(sub_id)
+    if cached:
+        cached_at, cached_payload = cached
+        if _time.monotonic() - cached_at < _SUBSCRIPTION_DIAGRAM_CACHE_TTL:
+            return jsonify(cached_payload)
+
     conn = _get_db_with_schema()
     if conn is None:
         return jsonify({"error": "DB unavailable"}), 503
     try:
+        pa_columns = _table_columns(conn, "provisioned_assets")
+        waf_mode_expr = "pa.waf_mode" if "waf_mode" in pa_columns else "NULL AS waf_mode"
+
         sub_row = conn.execute(
             "SELECT display_name, environment FROM subscriptions WHERE id = ?", (sub_id,)
         ).fetchone()
@@ -13177,23 +13327,35 @@ def api_subscription_diagram(sub_id: str):
         sub_name, environment = sub_row
 
         rows = conn.execute(
-            """
+            f"""
             SELECT pa.name, pa.type, pa.resource_group, pa.fqdn, pa.is_public, pa.sku, pa.id,
-                   (SELECT COUNT(*) > 0 FROM appgw_waf_policies pwp 
-                    WHERE pwp.subscription_id = pa.subscription_id 
-                    AND EXISTS (
-                        SELECT 1 FROM appgw_routing_rules ar 
-                        WHERE ar.subscription_id = pa.subscription_id 
-                        AND ar.gateway_name = pa.name 
-                        AND ar.waf_policy_name = pwp.name
-                    )) AS has_waf,
+                   (CASE
+                     WHEN pa.type LIKE '%applicationGateway%' OR pa.type LIKE '%applicationgateway%' THEN
+                       (SELECT COUNT(*) > 0 FROM appgw_waf_policies pwp
+                        WHERE pwp.subscription_id = pa.subscription_id
+                        AND EXISTS (
+                            SELECT 1 FROM appgw_routing_rules ar
+                            WHERE ar.subscription_id = pa.subscription_id
+                            AND ar.gateway_name = pa.name
+                            AND ar.waf_policy_name = pwp.name
+                        ))
+                     WHEN pa.type LIKE '%frontdoor%' OR pa.type LIKE '%frontDoor%' OR pa.type LIKE '%FrontDoor%' THEN
+                       (SELECT COUNT(*) > 0 FROM front_door_routes fdr
+                        WHERE fdr.subscription_id = pa.subscription_id
+                        AND fdr.profile_name = pa.name
+                        AND fdr.waf_policy IS NOT NULL
+                        LIMIT 1)
+                     ELSE 0
+                   END) AS has_waf,
                    (SELECT GROUP_CONCAT(protocol_port, ', ')
                     FROM (SELECT DISTINCT protocol || ':' || COALESCE(
                        CASE WHEN protocol = 'HTTPS' THEN '443' WHEN protocol = 'HTTP' THEN '80' ELSE '' END, '') AS protocol_port
                     FROM appgw_routing_rules ar
                     WHERE ar.subscription_id = pa.subscription_id
                     AND ar.gateway_name = pa.name)
-                    LIMIT 1) AS listeners
+                    LIMIT 1) AS listeners,
+                   pa.is_restricted,
+                   {waf_mode_expr}
             FROM provisioned_assets pa
             WHERE subscription_id = ?
             ORDER BY pa.resource_group, pa.type, pa.name
@@ -13239,20 +13401,14 @@ def api_subscription_diagram(sub_id: str):
         # Build high-level ingress diagram (simplified for readability)
         ingress_diagram = _build_ingress_diagram(rows, plan_links=plan_links)
         
-        # Build detailed diagrams grouped by resource group
-        detailed_diagrams = _build_subscription_diagrams_by_rg(sub_name, environment, rows, plan_links=plan_links)
-        
-        # Build drilldown data (grouped by resource type for exploration)
-        drilldown_data = _build_drilldown_data(rows)
-        
-        return jsonify({
+        payload = {
             "subscription_name": sub_name,
             "environment": environment,
             "total_assets": len(rows),
-            "ingress_diagram": ingress_diagram,  # High-level entry point diagram
-            "diagrams": detailed_diagrams,  # Detailed per-RG diagrams
-            "drilldown": drilldown_data,  # Data for double-click exploration
-        })
+            "ingress_diagram": ingress_diagram,
+        }
+        _SUBSCRIPTION_DIAGRAM_CACHE[sub_id] = (_time.monotonic(), payload)
+        return jsonify(payload)
     finally:
         conn.close()
 
@@ -13267,11 +13423,14 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.web/sites": "App Service",
         "microsoft.web/serverfarms": "App Service Plan",
         "microsoft.web/hostingenvironments": "App Service Env",
+        "microsoft.storage/storageaccounts/blobservices/containers": "Blob Container",
+        "microsoft.storage/storageaccounts/blobservices/containers/blobs": "Blob",
+        "microsoft.sql/servers/databases": "SQL Database",
         "microsoft.network/applicationgateways": "App Gateway",
         "microsoft.apimanagement/service": "APIM",
         "microsoft.containerservice/managedclusters": "AKS",
         "microsoft.containerregistry/registries": "Container Registry",
-        "microsoft.storage/storageaccounts": "Storage",
+        "microsoft.storage/storageaccounts": "Storage Account",
         "microsoft.keyvault/vaults": "Key Vault",
         "microsoft.sql/servers": "SQL Server",
         "microsoft.documentdb/databaseaccounts": "Cosmos DB",
@@ -13289,6 +13448,24 @@ def _friendly_type(arm_type: str) -> str:
         "microsoft.search/searchservices": "AI Search",
     }
     return labels.get((arm_type or "").lower(), arm_type.split("/")[-1] if arm_type else "Resource")
+
+
+def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
+    arm_type_lc = (arm_type or "").lower()
+    kind_lc = (kind or "").lower()
+
+    if "microsoft.web/sites" in arm_type_lc:
+        if "functionapp" in kind_lc or "function app" in kind_lc:
+            return "Function App"
+        return "App Service"
+    if "microsoft.storage/storageaccounts/blobservices/containers/blobs" in arm_type_lc:
+        return "Blob"
+    if "microsoft.storage/storageaccounts/blobservices/containers" in arm_type_lc:
+        return "Blob Container"
+    if "microsoft.sql/servers/databases" in arm_type_lc:
+        return "SQL Database"
+
+    return _friendly_type(arm_type)
 
 
 def _get_icon_path(resource_type: str) -> str | None:
@@ -13323,6 +13500,8 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.web/functionapps": "azurerm_function_app",
             "microsoft.web/serverfarms": "azurerm_app_service_plan",
             "microsoft.web/hostingenvironments": "azurerm_app_service_environment",
+            "microsoft.storage/storageaccounts/blobservices/containers": "azurerm_storage_container",
+            "microsoft.sql/servers/databases": "azurerm_sql_database",
             "microsoft.cdn/profiles": "azurerm_cdn_profile",
             "microsoft.network/virtualnetworks": "azurerm_virtual_network",
             "microsoft.network/networksecuritygroups": "azurerm_network_security_group",
@@ -13478,6 +13657,7 @@ def _get_icon_class(resource_type: str) -> str:
 _SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.network/applicationgateways",
     "microsoft.apimanagement/service",
+    "microsoft.appconfiguration/configurationstores",
     "microsoft.keyvault/vaults",
     "microsoft.storage/storageaccounts",
     "microsoft.sql/servers",
@@ -13514,7 +13694,7 @@ def _subscription_is_function_app(item: dict) -> bool:
 def _subscription_asset_tier(arm_type: str, name: str = "") -> str:
     type_key = (arm_type or "").lower()
     item = {"name": name}
-    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key:
+    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key or "cdn/profiles" in type_key or "network/loadbalancers" in type_key:
         return "entry"
     if "apimanagement" in type_key:
         return "api"
@@ -13539,6 +13719,8 @@ def _subscription_assets_from_rows(rows: list) -> list[dict]:
         asset_id = row[6] if len(row) > 6 else None
         has_waf = bool(row[7]) if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
+        is_restricted = bool(row[9]) if len(row) > 9 else False
+        waf_mode = row[10] if len(row) > 10 else None
         asset = {
             "name": name,
             "arm_type": rtype,
@@ -13549,7 +13731,9 @@ def _subscription_assets_from_rows(rows: list) -> list[dict]:
             "sku": sku,
             "id": asset_id,
             "has_waf": has_waf,
+            "waf_mode": waf_mode,
             "listeners": listeners,
+            "is_restricted": is_restricted,
             "tier": _subscription_asset_tier(rtype, name),
             "friendly_type": _friendly_type(rtype),
             "short_name": _subscription_short_name(name or "resource"),
@@ -13655,7 +13839,9 @@ def _subscription_register_node(node_map: dict, asset: dict) -> None:
         "title": asset.get("name") or asset.get("friendly_type") or "resource",
         "arm_type": asset.get("arm_type"),
         "resources": resources,
-        "can_drill": arm_type in _SUBSCRIPTION_DRILLABLE_ARM_TYPES and bool(resources),
+        "can_drill": bool(resources) and (
+            arm_type in _SUBSCRIPTION_DRILLABLE_ARM_TYPES or len(resources) > 1
+        ),
     }
 
 
@@ -13848,169 +14034,6 @@ def _build_subscription_attack_paths(assets: list[dict], scope_label: str) -> li
 
 
 def _build_subscription_overlay_views(rows: list, plan_links: list | None = None) -> dict:
-    assets = _subscription_assets_from_rows(rows)
-    entries = [a for a in assets if a.get("tier") == "entry"]
-    apis = [a for a in assets if a.get("tier") == "api"]
-    backends = [a for a in assets if a.get("tier") == "backend"]
-    data = [a for a in assets if a.get("tier") == "data"]
-    public_assets = [a for a in assets if a.get("public")]
-    attack_paths = _build_subscription_attack_paths(assets, "this subscription")
-    asset_summary = {
-        "entry_points": len(entries),
-        "api_layer": len(apis),
-        "backends": len(backends),
-        "data_stores": len(data),
-        "public_assets": len(public_assets),
-    }
-
-    def _make_scope_nodes(selected_assets: list[dict], *, badges: bool, include_fqdn: bool) -> tuple[list[dict], dict]:
-        nodes: list[dict] = [{"id": "Internet", "label": "🌐 Internet", "class_name": "internet"}]
-        node_map: dict = {}
-        seen: set[str] = {"Internet"}
-        for asset in selected_assets:
-            node_id = _subscription_node_id(asset)
-            if node_id in seen:
-                continue
-            seen.add(node_id)
-            nodes.append({
-                "id": node_id,
-                "label": _subscription_asset_label(asset, include_badges=badges, include_fqdn=include_fqdn),
-                "arm_type": asset.get("arm_type"),
-                "class_name": _subscription_node_class(asset),
-            })
-            _subscription_register_node(node_map, asset)
-        return nodes, node_map
-
-    # Exposure view: internet-reachable path and direct public surfaces.
-    exposure_assets: list[dict] = []
-    exposure_assets.extend(entries[:4])
-    exposure_assets.extend(apis[:2])
-    exposure_assets.extend([a for a in backends if a.get("public")][:4])
-    exposure_assets.extend([a for a in backends if not a.get("public")][:3] if (entries or apis) else [])
-    exposure_assets.extend([a for a in data if a.get("public")][:3])
-    exposure_assets.extend([a for a in data if not a.get("public")][:3] if (entries or apis or [a for a in backends if a.get("public")]) else [])
-    exp_nodes, exp_node_map = _make_scope_nodes(exposure_assets, badges=False, include_fqdn=True)
-    exp_edges: list[dict] = []
-    seen_edges: set[tuple[str, str, str]] = set()
-
-    def _add_exp_edge(src: str, dst: str, label: str, color: str, width: str = "2px") -> None:
-        key = (src, dst, label)
-        if key in seen_edges:
-            return
-        seen_edges.add(key)
-        exp_edges.append({"src": src, "dst": dst, "label": label, "color": color, "width": width})
-
-    for entry in entries[:4]:
-        label = _subscription_primary_fqdn(entry) or ("WAF protected" if entry.get("has_waf") else "Public edge")
-        _add_exp_edge("Internet", _subscription_node_id(entry), label, "#f97316" if entry.get("has_waf") else "#ef4444", "3px")
-    for api in [a for a in apis if a.get("public")][:2]:
-        _add_exp_edge("Internet", _subscription_node_id(api), _subscription_primary_fqdn(api) or "Public API", "#ef4444", "3px")
-    for backend in [a for a in backends if a.get("public")][:4]:
-        _add_exp_edge("Internet", _subscription_node_id(backend), _subscription_primary_fqdn(backend) or "Direct workload", "#ef4444", "3px")
-    for store in [a for a in data if a.get("public")][:3]:
-        _add_exp_edge("Internet", _subscription_node_id(store), _subscription_primary_fqdn(store) or "Direct data plane", "#ef4444", "3px")
-    if entries and apis:
-        for entry in entries[:2]:
-            for api in apis[:2]:
-                _add_exp_edge(_subscription_node_id(entry), _subscription_node_id(api), "routing", "#f97316")
-    elif entries and backends:
-        for entry in entries[:2]:
-            for backend in backends[:3]:
-                _add_exp_edge(_subscription_node_id(entry), _subscription_node_id(backend), "backend reach", "#f97316")
-    if apis and backends:
-        for api in apis[:2]:
-            for backend in backends[:3]:
-                _add_exp_edge(_subscription_node_id(api), _subscription_node_id(backend), "backend reach", "#f59e0b")
-    if backends and data and (entries or apis or [a for a in backends if a.get("public")]):
-        for backend in backends[:2]:
-            for store in data[:4]:
-                _add_exp_edge(_subscription_node_id(backend), _subscription_node_id(store), "reachable next hop", "#94a3b8")
-
-    exposure_view = _render_subscription_view(
-        nodes=exp_nodes,
-        edges=exp_edges,
-        node_map=exp_node_map,
-        title="Exposure view",
-        description="Shows internet-reachable entry points, directly public assets, and the next internal hops they can reach.",
-        legend=[
-            "Orange edges: internet-reachable routing chain",
-            "Red edges: directly public workload or data-plane exposure",
-            "Grey edges: likely next hop once the public edge is crossed",
-        ],
-        attack_paths=attack_paths,
-        asset_summary=asset_summary,
-    )
-
-    # Attack-path view: plausible attacker movement, not normal traffic.
-    attack_assets: list[dict] = []
-    attack_assets.extend(entries[:3])
-    attack_assets.extend(apis[:2])
-    attack_assets.extend(backends[:3])
-    attack_assets.extend([a for a in data if _subscription_is_secret_store(a.get("arm_type") or "")][:2])
-    attack_assets.extend([a for a in data if not _subscription_is_secret_store(a.get("arm_type") or "")][:3])
-    atk_nodes, atk_node_map = _make_scope_nodes(attack_assets, badges=True, include_fqdn=False)
-    atk_edges: list[dict] = []
-    seen_attack_edges: set[tuple[str, str, str]] = set()
-
-    def _add_atk_edge(src: str, dst: str, label: str) -> None:
-        key = (src, dst, label)
-        if key in seen_attack_edges:
-            return
-        seen_attack_edges.add(key)
-        atk_edges.append({
-            "src": src,
-            "dst": dst,
-            "label": label,
-            "color": "#ef4444",
-            "width": "3px",
-            "dasharray": "6 4",
-        })
-
-    public_origins = entries[:3] + [a for a in apis if a.get("public")][:2] + [a for a in backends if a.get("public")][:2] + [a for a in data if a.get("public")][:2]
-    for asset in public_origins:
-        _add_atk_edge("Internet", _subscription_node_id(asset), _subscription_primary_fqdn(asset) or "public foothold")
-    if entries and apis:
-        for entry in entries[:2]:
-            for api in apis[:2]:
-                _add_atk_edge(_subscription_node_id(entry), _subscription_node_id(api), "route abuse")
-    upstream_for_backends = apis[:2] or entries[:2] or [a for a in backends if a.get("public")][:2]
-    for src in upstream_for_backends[:2]:
-        for backend in backends[:3]:
-            if src.get("name") == backend.get("name") and src.get("rg") == backend.get("rg"):
-                continue
-            _add_atk_edge(_subscription_node_id(src), _subscription_node_id(backend), "backend exploit")
-    for backend in backends[:3]:
-        for store in [a for a in data if _subscription_is_secret_store(a.get("arm_type") or "")][:2]:
-            _add_atk_edge(_subscription_node_id(backend), _subscription_node_id(store), _subscription_data_attack_label(store))
-        for store in [a for a in data if not _subscription_is_secret_store(a.get("arm_type") or "")][:3]:
-            _add_atk_edge(_subscription_node_id(backend), _subscription_node_id(store), _subscription_data_attack_label(store))
-
-    if not atk_edges:
-        atk_nodes.append({"id": "PrivateOnly", "label": "No direct public attack chain\nfrom harvested exposure", "class_name": "summary"})
-
-    attack_view = _render_subscription_view(
-        nodes=atk_nodes,
-        edges=atk_edges,
-        node_map=atk_node_map,
-        title="Attack-path view",
-        description="Shows plausible compromise chains: public foothold, backend compromise, then secrets or data access.",
-        legend=[
-            "Dashed red edges: plausible attacker movement",
-            "Node badges: public edge, executable workload, secrets, or data target",
-        ],
-        attack_paths=attack_paths,
-        asset_summary=asset_summary,
-    )
-
-    return {
-        "exposure": exposure_view,
-        "attack_paths": attack_view,
-        "attack_paths_summary": attack_paths,
-        "asset_summary": asset_summary,
-    }
-
-
-def _build_subscription_overlay_views(rows: list, plan_links: list | None = None) -> dict:
     return _shared_build_subscription_overlay_views(
         rows,
         sanitise_node_id=_sanitise_node_id,
@@ -14058,8 +14081,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     # Categorize resources by type to show entry point flow
     entry_points = []  # Public IPs, App Gateways, WAFs
     api_layer = []     # APIM instances
-    backends = []      # App Services, AKS, etc.
-    function_apps = [] # Function Apps shown in backend tier
+    backends = []      # Hosted compute (AKS, App Service, Function App, etc.)
     data_stores = []   # Databases, Storage
     
     type_groups = _dd(list)
@@ -14080,17 +14102,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         elif ("managedcluster" in type_key or "containerinstance" in type_key
               or "serverfarms" in type_key or "hostingenvironment" in type_key
               or "datafactory" in type_key or "cognitiveservices" in type_key
-              or "containerregistry" in type_key or "servicefabric" in type_key):
+              or "containerregistry" in type_key or "servicefabric" in type_key
+              or "sites" in type_key):
             backends.append(item)
-        elif "sites" in type_key:
-            if _is_function_app(item):
-                function_apps.append(item)
-            else:
-                backends.append(item)
         elif ("sql" in type_key or "documentdb" in type_key or "storage" in type_key
               or "keyvault" in type_key or "servicebus" in type_key or "eventhub" in type_key
               or "cache/redis" in type_key or "search/search" in type_key or "appconfiguration" in type_key):
             data_stores.append(item)
+
+    backends = _shared_subscription_apply_plan_hierarchy(backends, plan_links)
     
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
@@ -14243,20 +14263,33 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             )
             if len(items) <= NAME_THRESHOLD:
                 for item in items:
+                    item_fqdns = list(item.get("fqdns") or ([item["fqdn"]] if item.get("fqdn") else []))
+                    label = _short_name(item["name"])
+                    hosted_site_count = item.get("hosted_site_count")
+                    if hosted_site_count:
+                        label = f"{label} ({hosted_site_count} app{'s' if hosted_site_count != 1 else ''})"
                     result.append({
                         "name": item["name"],
-                        "label": _short_name(item["name"]),
+                        "label": label,
                         "count": 1,
                         "type": category,
                         "arm_type": effective_arm_type(item, category),
                         "is_group": False,
                         "resources": [{"rg": item.get("rg"), "name": item["name"]}],
-                        "fqdns": [item["fqdn"]] if item.get("fqdn") else [],
+                        "fqdns": item_fqdns,
                         "public": bool(item.get("public")),
+                        "is_restricted": bool(item.get("is_restricted")),
                         "rg": item.get("rg", ""),
                         "has_waf": item.get("has_waf"),
+                        "hosted_site_count": hosted_site_count,
                     })
             else:
+                merged_fqdns: list[str] = []
+                for item in items:
+                    item_fqdns = list(item.get("fqdns") or ([item["fqdn"]] if item.get("fqdn") else []))
+                    for fqdn_value in item_fqdns:
+                        if fqdn_value and fqdn_value not in merged_fqdns:
+                            merged_fqdns.append(fqdn_value)
                 result.append({
                     "name": f"{category}_group",
                     "label": category,
@@ -14265,8 +14298,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
                     "arm_type": "Microsoft.Web/functionApps" if category == "Function App" else items[0]["type"],
                     "is_group": True,
                     "resources": [{"rg": i.get("rg"), "name": i["name"]} for i in items],
-                    "fqdns": [i["fqdn"] for i in items if i.get("fqdn")],
+                    "fqdns": merged_fqdns,
                     "public": any(i.get("public") for i in items),
+                    "is_restricted": any(i.get("is_restricted") for i in items),
                     "rg": "",
                 })
         return result
@@ -14335,7 +14369,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     # Group resources by type + exposure (only show unique combinations)
     grouped_entry_points = _group_entry_points(entry_points)
     grouped_api_layer = _group_api_services(api_layer)
-    grouped_backends = _group_backends_by_type(_prioritize_backends(backends + function_apps))
+    grouped_backends = _group_backends_by_type(_prioritize_backends(backends))
     grouped_data_stores = _group_data_stores_by_type(data_stores)
     
     shown_entry = grouped_entry_points
@@ -14514,6 +14548,37 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             proto = "TCP"
         return f"🔴 {proto} x{count}" if count > 1 else f"🔴 {proto}"
 
+    def _allowlist_target_label(item: dict) -> str:
+        """Label IP-allowlisted edges with the concrete resource family."""
+        family = str(item.get("type") or item.get("label") or _friendly_type(item.get("arm_type") or "")).strip()
+        return f"IP allowlist ({family})" if family else "IP allowlist"
+
+    def _is_allowlist_target(item: dict) -> bool:
+        """Only show allowlist edges for endpoints that actually accept inbound traffic."""
+        type_key = (item.get("arm_type") or item.get("type") or "").lower()
+        return any(
+            token in type_key
+            for token in (
+                "apimanagement",
+                "sites",
+                "managedcluster",
+                "containerinstance",
+                "datafactory",
+                "cognitiveservices",
+                "containerregistry",
+                "servicefabric",
+                "keyvault",
+                "storage",
+                "sql",
+                "documentdb",
+                "servicebus",
+                "eventhub",
+                "cache/redis",
+                "search/search",
+                "appconfiguration",
+            )
+        )
+
     def _internal_link_label(arm_type: str) -> str:
         """Protocol label for internal backend→data-store arrows."""
         t = (arm_type or "").lower()
@@ -14578,8 +14643,37 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     if shown_entry and shown_api:
         api_nid = _get_node_id(shown_api[0])
         for entry in shown_entry:
-            routing_label = '"Routing (WAF ✓)"' if entry.get("has_waf") else '"Routing"'
+            arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            if "trafficmanager" in arm_type_low:
+                routing_label = '"DNS routing"'
+            elif "cdn/profiles" in arm_type_low:
+                routing_label = '"CDN routing"'
+            elif "loadbalancers" in arm_type_low:
+                routing_label = '"Load balancing"'
+            elif entry.get("has_waf"):
+                routing_label = '"Routing (WAF ✓)"'
+            else:
+                routing_label = '"Routing"'
             _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {api_nid}', "orange")
+
+    # Entry Points → Backends (orange — fallback when no APIM; Traffic Manager, App Gateway, etc.)
+    # Without APIM, entry points route directly to backend services. Traffic Manager specifically
+    # works at the DNS level, returning the address of the best-available backend endpoint.
+    if shown_entry and shown_backend and not shown_api:
+        first_backend_nid = _get_node_id(shown_backend[0])
+        for entry in shown_entry:
+            arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            if "trafficmanager" in arm_type_low:
+                routing_label = '"DNS routing"'
+            elif "cdn/profiles" in arm_type_low:
+                routing_label = '"CDN routing"'
+            elif "loadbalancers" in arm_type_low:
+                routing_label = '"Load balancing"'
+            elif entry.get("has_waf"):
+                routing_label = '"Routing (WAF ✓)"'
+            else:
+                routing_label = '"Routing"'
+            _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {first_backend_nid}', "orange")
 
     # API Layer → Backends (white — internal routing behind gateway, OK)
     if shown_api and shown_backend:
@@ -14594,7 +14688,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             store_proto = _internal_link_label(store.get("arm_type") or "")
             _add_link(f'    {backend_node} -->|"{store_proto}"| {_get_node_id(store)}', "white")
 
-    # App Service → App Service Plan "hosted on" arrows
+    # Fallback hosted-on arrows for any site nodes that remain visible
     if plan_links:
         # Build lookup: plan_name (lower) → plan node_id (from shown_backend nodes)
         plan_node_ids: dict[str, str] = {}
@@ -14671,6 +14765,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             arrow_label = _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
+    for item in shown_api + shown_backend + shown_data:
+        if item.get("is_restricted") and not item.get("public") and _is_allowlist_target(item):
+            node_id = _get_node_id(item)
+            _add_link(f'    Internet -->|"{_allowlist_target_label(item)}"| {node_id}', "#f59e0b")
+
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
@@ -14730,6 +14829,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     _drillable_arm_types = {
         "microsoft.network/applicationgateways",
         "microsoft.apimanagement/service",
+        "microsoft.appconfiguration/configurationstores",
         "microsoft.keyvault/vaults",
         "microsoft.storage/storageaccounts",
         "microsoft.sql/servers",
@@ -14747,15 +14847,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         resources = item.get("resources") or []
         if not resources and item.get("name"):
             resources = [{"rg": item.get("rg"), "name": item.get("name")}]
-        # Use label (user-friendly display name) as the title, falling back to
-        # type then name.  This prevents internal group keys like "Key Vault_ds_group"
+        # Use the resource name for individual nodes and the label for grouped
+        # nodes. This prevents internal group keys like "Key Vault_ds_group"
         # from appearing as the drill-down panel heading.
-        title = item.get("label") or item.get("type") or item.get("name") or node_id
+        title = item.get("label") if item.get("is_group") else (item.get("name") or item.get("label") or item.get("type") or node_id)
         node_drilldown_map[node_id] = {
             "title": title,
             "arm_type": item.get("arm_type") or item.get("type"),
             "resources": resources,
-            "can_drill": arm_type in _drillable_arm_types and bool(resources),
+            "can_drill": bool(resources) and (
+                arm_type in _drillable_arm_types or len(resources) > 1
+            ),
         }
 
     for item in shown_entry:
@@ -14779,14 +14881,15 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         "title": "Connectivity view",
         "description": "Shows normal ingress, gateway, backend, and data-tier connectivity across the subscription.",
         "legend": [
-            "Orange edges: internet-reachable routing chain",
-            "Red edges: directly public workload or data-plane exposure",
+            "Orange edges: WAF-protected entry point (Prevention mode)",
+            "Amber edges: WAF in Detection mode or IP-allowlisted access",
+            "Red edges: directly public — no WAF or network restriction",
             "White edges: internal application or data flow",
         ],
         "asset_summary": {
             "entry_points": len(entry_points),
             "api_layer": len(api_layer),
-            "backends": len(backends) + len(function_apps),
+            "backends": len(backends),
             "data_stores": len(data_stores),
         },
     }
@@ -14797,7 +14900,6 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     result["views"] = {
         "connectivity": connectivity_view,
         "exposure": overlays["exposure"],
-        "attack_paths": overlays["attack_paths"],
     }
     result["default_view"] = "connectivity"
     result["attack_paths"] = overlays["attack_paths_summary"]
@@ -14815,6 +14917,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     arm_type_lc = (arm_type or "").lower()
     names = [r["name"] for r in resources if r.get("name")]
     ph = ",".join("?" * len(names)) if names else "''"
+    icon_path = _get_icon_path(arm_type)
 
     def _exposure(is_public, is_restricted):
         if is_public:
@@ -14822,6 +14925,18 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         if is_restricted:
             return {"label": "⚠️ Restricted", "style": "color:#fb923c;font-weight:600;"}
         return     {"label": "🔒 Private",    "style": "color:#34d399;font-weight:600;"}
+
+    def _table_result(*, title: str, columns: list[str], rows: list, empty_message: str | None = None) -> dict:
+        result = {
+            "title": title,
+            "view_type": "table",
+            "columns": columns,
+            "rows": rows,
+            "icon_path": icon_path,
+        }
+        if empty_message:
+            result["empty_message"] = empty_message
+        return result
 
     # ── App Gateway ───────────────────────────────────────────────────────────
     if "applicationgateway" in arm_type_lc:
@@ -14861,7 +14976,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 targets or "—",
                 "🛡️ " + waf if waf else "—",
             ])
-        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+        return _table_result(title=title, columns=columns, rows=rows)
 
     # ── APIM ──────────────────────────────────────────────────────────────────
     elif "apimanagement" in arm_type_lc:
@@ -14897,7 +15012,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                     backend_url or "—",
                     "🔑 Required" if req_sub else "Open",
                 ])
-            return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+            return _table_result(title=title, columns=columns, rows=rows)
 
         # Fallback: per-API summary from apim_api_routes
         title   = "APIM — API Routes"
@@ -14924,7 +15039,67 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 "🔑 Required" if req_sub else "Open",
                 protocols or "HTTPS",
             ])
-        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+        return _table_result(title=title, columns=columns, rows=rows)
+
+    # ── AKS cluster → ingress/service/deployment routes ──────────────────────
+    elif "managedcluster" in arm_type_lc:
+        n = len(names)
+        title   = f"AKS — Ingress Routes ({n} cluster{'s' if n != 1 else ''})"
+        columns = ["Cluster", "Namespace", "Ingress / Host", "Path", "Service:Port", "Deployment", "Repo"]
+
+        aks_route_rows: list = []
+        if resources and _table_exists(conn, "aks_routes"):
+            for res in resources:
+                rname = res.get("name") or ""
+                rrg   = res.get("rg") or ""
+                if not rname:
+                    continue
+                partial = conn.execute(
+                    """SELECT cluster_name, namespace, ingress_name, host, path,
+                              service_name, service_port, deployment_name,
+                              git_repository, resource_group
+                       FROM aks_routes
+                       WHERE subscription_id = ? AND cluster_name = ? AND resource_group = ?
+                       ORDER BY cluster_name, namespace, ingress_name, host, path, service_name""",
+                    (sub_id, rname, rrg),
+                ).fetchall()
+                if not partial and rrg:
+                    # Fallback: match by name only when rg is unknown/mismatched
+                    partial = conn.execute(
+                        """SELECT cluster_name, namespace, ingress_name, host, path,
+                                  service_name, service_port, deployment_name,
+                                  git_repository, resource_group
+                           FROM aks_routes
+                           WHERE subscription_id = ? AND cluster_name = ?
+                           ORDER BY cluster_name, namespace, ingress_name, host, path, service_name""",
+                        (sub_id, rname),
+                    ).fetchall()
+                aks_route_rows.extend(partial)
+
+        if not aks_route_rows:
+            return {
+                "title": title, "view_type": "table", "columns": columns, "rows": [],
+                "empty_message": (
+                    "No AKS routes harvested yet, or no labelled ingress/service/deployment "
+                    "found in this cluster. Re-run harvest to populate."
+                ),
+            }
+
+        rows = []
+        for cluster, ns, ingress, host, path, svc, svc_port, deploy, repo, _rg in aks_route_rows:
+            host_str  = host or "*"
+            path_str  = path or "/*"
+            svc_str   = f"{svc}:{svc_port}" if svc_port else (svc or "—")
+            rows.append([
+                cluster or "—",
+                ns or "—",
+                f"{ingress} / {host_str}" if ingress else host_str,
+                path_str,
+                svc_str,
+                deploy or "—",
+                repo or "—",
+            ])
+        return _table_result(title=title, columns=columns, rows=rows)
 
     # ── App Service Plan → hosted App Services ────────────────────────────────
     elif "serverfarms" in arm_type_lc:
@@ -14964,7 +15139,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 kind,
                 plan_name or "—",
             ])
-        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+        return _table_result(title=title, columns=columns, rows=rows)
 
     # ── Generic resources ─────────────────────────────────────────────────────
     else:
@@ -15022,7 +15197,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 ", ".join(entry_pts) if entry_pts else "—",
                 sku or "—",
             ])
-        return {"title": title, "view_type": "table", "columns": columns, "rows": rows}
+        return _table_result(title=title, columns=columns, rows=rows)
 
 
 @app.route("/api/subscriptions/<sub_id>/drilldown", methods=["POST"])
@@ -15047,235 +15222,6 @@ def api_subscription_drilldown(sub_id: str):
         return jsonify(result)
     finally:
         conn.close()
-
-
-def _build_drilldown_data(rows) -> dict:
-    """Build drilldown data grouped by resource type for interactive exploration.
-    
-    This data is used when user double-clicks a resource type to see details.
-    Returns organized by type: APIM, App Services, Databases, etc.
-    """
-    from collections import defaultdict as _dd
-    
-    by_type = _dd(list)
-    for row in rows:
-        name, rtype, rg, fqdn, is_public, sku, asset_id = row[:7] if len(row) > 6 else list(row) + [None]
-        type_key = (rtype or "").lower()
-        by_type[type_key].append({
-            "name": name,
-            "type": rtype,
-            "friendly_type": _friendly_type(rtype),
-            "resource_group": rg,
-            "fqdn": fqdn,
-            "is_public": is_public,
-            "sku": sku,
-            "asset_id": asset_id,
-        })
-    
-    return {
-        "by_type": dict(by_type),
-        "summary": {
-            type_key: len(items)
-            for type_key, items in by_type.items()
-        }
-    }
-
-
-def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: list, plan_links: list | None = None) -> list:
-    """Build separate Mermaid diagrams per resource group to avoid size limits.
-    
-    Returns a list of {rg, mermaid, asset_count, public_count} dicts.
-    Each resource group gets its own smaller diagram.
-    """
-    from collections import defaultdict as _dd
-
-    groups: dict[str, list[dict]] = _dd(list)
-    for asset in _subscription_assets_from_rows(rows):
-        groups[asset.get("rg") or "default"].append(asset)
-
-    diagrams = []
-
-    def _rg_asset_summary(rg_assets: list[dict]) -> dict:
-        return {
-            "entry_points": sum(1 for asset in rg_assets if asset.get("tier") == "entry"),
-            "api_layer": sum(1 for asset in rg_assets if asset.get("tier") == "api"),
-            "backends": sum(1 for asset in rg_assets if asset.get("tier") == "backend"),
-            "data_stores": sum(1 for asset in rg_assets if asset.get("tier") == "data"),
-            "public_assets": sum(1 for asset in rg_assets if asset.get("public")),
-        }
-
-    def _build_rg_view(rg: str, rg_assets: list[dict], mode: str) -> tuple[dict, int]:
-        entries = [a for a in rg_assets if a.get("tier") == "entry"]
-        apis = [a for a in rg_assets if a.get("tier") == "api"]
-        backends = [a for a in rg_assets if a.get("tier") == "backend"]
-        data = [a for a in rg_assets if a.get("tier") == "data"]
-        public_assets = [a for a in rg_assets if a.get("public")]
-        summary = _rg_asset_summary(rg_assets)
-
-        nodes: list[dict] = []
-        node_map: dict = {}
-        seen_nodes: set[str] = set()
-        if public_assets or entries:
-            nodes.append({"id": "Internet", "label": "🌐 Internet", "class_name": "internet"})
-            seen_nodes.add("Internet")
-
-        def _add_asset_node(asset: dict, *, badges: bool = False, include_fqdn: bool = False) -> None:
-            node_id = _subscription_node_id(asset)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
-            nodes.append({
-                "id": node_id,
-                "label": _subscription_asset_label(asset, include_badges=badges, include_fqdn=include_fqdn),
-                "arm_type": asset.get("arm_type"),
-                "class_name": _subscription_node_class(asset),
-            })
-            _subscription_register_node(node_map, asset)
-
-        for asset in rg_assets:
-            include = mode == "connectivity"
-            if mode == "exposure":
-                include = asset.get("public") or asset in entries or asset in apis or asset in backends[:3] or asset in data[:3]
-            elif mode == "attack_paths":
-                include = asset.get("public") or asset in entries[:2] or asset in apis[:2] or asset in backends[:3] or asset in data[:4]
-            if include:
-                _add_asset_node(asset, badges=mode == "attack_paths", include_fqdn=mode == "exposure")
-
-        edges: list[dict] = []
-        edge_keys: set[tuple[str, str, str]] = set()
-
-        def _add_edge(src: str, dst: str, label: str, color: str, *, width: str = "2px", dasharray: str | None = None) -> None:
-            if src not in seen_nodes or dst not in seen_nodes:
-                return
-            key = (src, dst, label)
-            if key in edge_keys:
-                return
-            edge_keys.add(key)
-            edge: dict = {"src": src, "dst": dst, "label": label, "color": color, "width": width}
-            if dasharray:
-                edge["dasharray"] = dasharray
-            edges.append(edge)
-
-        if mode in ("connectivity", "exposure", "attack_paths"):
-            for asset in public_assets:
-                label = _subscription_primary_fqdn(asset) or ("public edge" if asset.get("tier") == "entry" else "direct public")
-                color = "#f97316" if asset.get("tier") == "entry" and asset.get("has_waf") else "#ef4444"
-                dash = "6 4" if mode == "attack_paths" else None
-                _add_edge("Internet", _subscription_node_id(asset), label, color, width="3px", dasharray=dash)
-            for entry in entries:
-                if not entry.get("public"):
-                    continue
-                targets = apis[:2] or backends[:3]
-                for target in targets:
-                    _add_edge(
-                        _subscription_node_id(entry),
-                        _subscription_node_id(target),
-                        "route abuse" if mode == "attack_paths" else "routing",
-                        "#ef4444" if mode == "attack_paths" else "#f97316",
-                        dasharray="6 4" if mode == "attack_paths" else None,
-                    )
-            if apis and backends:
-                for api in apis[:2]:
-                    for backend in backends[:3]:
-                        _add_edge(
-                            _subscription_node_id(api),
-                            _subscription_node_id(backend),
-                            "backend exploit" if mode == "attack_paths" else "backend reach",
-                            "#ef4444" if mode == "attack_paths" else ("#f59e0b" if mode == "exposure" else "#ffffff"),
-                            dasharray="6 4" if mode == "attack_paths" else None,
-                        )
-            if backends and data:
-                for backend in backends[:2]:
-                    for store in data[:4]:
-                        _add_edge(
-                            _subscription_node_id(backend),
-                            _subscription_node_id(store),
-                            _subscription_data_attack_label(store) if mode == "attack_paths" else ("reachable next hop" if mode == "exposure" else "data flow"),
-                            "#ef4444" if mode == "attack_paths" else ("#94a3b8" if mode == "exposure" else "#ffffff"),
-                            dasharray="6 4" if mode == "attack_paths" else None,
-                        )
-
-        if plan_links and mode == "connectivity":
-            plan_assets = {
-                ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-                for asset in rg_assets
-                if "serverfarms" in (asset.get("arm_type") or "").lower()
-            }
-            site_assets = {
-                ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
-                for asset in rg_assets
-                if "sites" in (asset.get("arm_type") or "").lower()
-            }
-            for site_rg, site_name, plan_rg, plan_name in plan_links:
-                site_asset = site_assets.get((site_name.lower(), site_rg.lower()))
-                plan_asset = plan_assets.get((plan_name.lower(), plan_rg.lower()))
-                if site_asset and plan_asset:
-                    _add_edge(_subscription_node_id(site_asset), _subscription_node_id(plan_asset), "hosted on", "#ffffff")
-
-        if mode == "attack_paths" and not edges:
-            nodes.append({"id": "NoPath", "label": "No obvious public attack path\nfor this resource group", "class_name": "summary"})
-
-        descriptions = {
-            "connectivity": "Shows inferred application, API, data, and hosting relationships inside this resource group.",
-            "exposure": "Shows public assets in this resource group and the next internal hops they appear to expose.",
-            "attack_paths": "Shows plausible attacker movement from public footholds into workloads, then secrets or data.",
-        }
-        legends = {
-            "connectivity": [
-                "Red/orange edges: public or internet-reachable entry points",
-                "White edges: inferred internal application or hosting flow",
-            ],
-            "exposure": [
-                "Red edges: direct public surface",
-                "Orange edges: reachable routing chain behind a public edge",
-                "Grey edges: next likely internal hop",
-            ],
-            "attack_paths": [
-                "Dashed red edges: plausible attacker movement",
-                "Badges identify public footholds, executable workloads, secrets, and data targets",
-            ],
-        }
-        attack_paths = _build_subscription_attack_paths(rg_assets, f"resource group {rg}")
-        return (
-            _render_subscription_view(
-                nodes=nodes,
-                edges=edges,
-                node_map=node_map,
-                direction="TD",
-                title=f"{rg} — {mode.replace('_', ' ').title()}",
-                description=descriptions[mode],
-                legend=legends[mode],
-                attack_paths=attack_paths,
-                asset_summary=summary,
-            ),
-            len(edges),
-        )
-
-    for rg in sorted(groups.keys()):
-        rg_assets = groups[rg]
-        connectivity_view, relationship_count = _build_rg_view(rg, rg_assets, "connectivity")
-        exposure_view, _ = _build_rg_view(rg, rg_assets, "exposure")
-        attack_view, _ = _build_rg_view(rg, rg_assets, "attack_paths")
-        diagrams.append({
-            "rg": rg,
-            "mermaid": connectivity_view["mermaid"],
-            "css_code": connectivity_view["css_code"],
-            "icon_map": {},
-            "node_drilldown_map": connectivity_view["node_drilldown_map"],
-            "asset_count": len(rg_assets),
-            "public_count": sum(1 for asset in rg_assets if asset.get("public")),
-            "relationship_count": relationship_count,
-            "asset_summary": connectivity_view["asset_summary"],
-            "attack_paths": attack_view["attack_paths"],
-            "default_view": "connectivity",
-            "views": {
-                "connectivity": connectivity_view,
-                "exposure": exposure_view,
-                "attack_paths": attack_view,
-            },
-        })
-
-    return diagrams
 
 
 def _build_subscription_diagrams_by_rg(sub_name: str, environment: str, rows: list, plan_links: list | None = None) -> list[dict]:

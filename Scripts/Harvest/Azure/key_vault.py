@@ -20,13 +20,15 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
         endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
-        auth_methods = json.dumps(["azure_ad"])  # Key Vault always requires AAD
+        auth_methods = json.dumps(["azure_ad", "managed_identity"])
 
         extra = {
             "enable_soft_delete": props.get("enableSoftDelete", True),
             "enable_purge_protection": props.get("enablePurgeProtection", False),
             "network_default_action": _get_network_default_action(props),
             "sku_family": (props.get("sku") or {}).get("family"),
+            "managed_identity_supported": True,
+            "managed_identity_required": False,
         }
 
         results.append({

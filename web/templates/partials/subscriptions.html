@@ -28,18 +28,25 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   </div>
 
   {# Architecture diagram panel #}
-  <div id="subscription-diagram-wrap" style="display:none; margin-top:20px;">
-    <div class="subscription-diagram-header">
-      <span id="subscription-diagram-title" style="font-weight:600;"></span>
-      <button id="btn-refresh-routing" class="btn btn-sm" style="margin-left:12px; font-size:0.75rem;" title="Harvest App Gateway routing rules and WAF policies from Azure">🔄 Refresh WAF &amp; Routing</button>
-      <span id="routing-harvest-status" style="font-size:0.75rem; color:var(--text-muted); margin-left:8px; display:none;"></span>
-      <button id="subscription-diagram-close" class="btn btn-sm" style="margin-left:auto;">✕ Close</button>
+  <div id="subscription-diagram-wrap" class="subscription-diagram-modal" style="display:none;" role="dialog" aria-modal="true">
+    <div class="subscription-diagram-dialog">
+      <div class="subscription-diagram-header">
+        <div class="subscription-diagram-titlebar">
+          <span id="subscription-diagram-title" style="font-weight:600;"></span>
+          <div id="subscription-diagram-mode-host" class="subscription-diagram-mode-host"></div>
+        </div>
+        <button id="subscription-diagram-close" class="btn btn-sm">✕ Close</button>
+      </div>
+      <div id="subscription-diagram-loading" class="subscription-diagram-loading">
+        <span class="subscription-diagram-spinner" aria-hidden="true"></span>
+        <span class="subscription-diagram-loading-text">Generating diagram…</span>
+      </div>
+      <div id="subscription-diagram-container" class="diagram-container" style="display:none;"></div>
+      <div id="subscription-diagram-footer" class="subscription-diagram-footer" style="display:none;"></div>
     </div>
-    <div id="subscription-diagram-loading" style="padding:12px; color:var(--text-muted);">Generating diagram…</div>
-    <div id="subscription-diagram-container" class="diagram-container" style="display:none;"></div>
   </div>
 
-  {# Drill-down modal — shown when user double-clicks a drillable node #}
+  {# Drill-down modal — shown when user clicks a drillable node #}
   <div id="drilldown-modal" class="modal" style="display:none;" role="dialog" aria-modal="true">
     <div class="modal-content" style="max-width:min(92vw,1100px);width:92vw;max-height:90vh;display:flex;flex-direction:column;padding:20px;">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-shrink:0;">
@@ -56,9 +63,121 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 <style>
 .subscriptions-panel { padding: 16px; }
 .subscriptions-header { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
-.subscription-diagram-header { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border-color,#333); margin-bottom:8px; }
+.subscription-diagram-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.72);
+}
+.subscription-diagram-dialog {
+  width: calc(100vw - 10px);
+  max-width: none;
+  height: calc(100vh - 10px);
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-color,#333);
+  border-radius: 14px;
+  background: var(--bg-base);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.subscription-diagram-header {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  flex-shrink:0;
+}
+.subscription-diagram-titlebar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.subscription-diagram-mode-host {
+  display:flex;
+  align-items:center;
+  gap:4px;
+  flex-wrap:wrap;
+  min-width:0;
+}
+.subscription-diagram-mode-host .diagram-mode-btn {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color,#444);
+  background: transparent;
+  color: var(--text-primary,#e5e7eb);
+  cursor: pointer;
+}
+.subscription-diagram-mode-host .diagram-mode-btn.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
 #subscription-diagram-wrap { overflow-x: hidden; }
 .diagram-container { display:block !important; }
+.subscription-diagram-footer {
+  flex-shrink: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color,#333);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.subscription-diagram-footer .footer-label {
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 8px;
+}
+.subscription-diagram-footer .footer-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+}
+.subscription-diagram-footer .footer-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color,#333);
+}
+.subscription-diagram-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 200px;
+}
+.subscription-diagram-loading-text {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+.subscription-diagram-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid var(--border-color, #444);
+  border-top-color: var(--accent, #60a5fa);
+  animation: subscription-spinner 0.85s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes subscription-spinner {
+  to { transform: rotate(360deg); }
+}
 
 /* Drillable node visual affordance — JavaScript adds these classes to SVG <g> elements */
 .node-drillable rect,
@@ -85,6 +204,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   let _currentSubId = null;
   let _currentNodeMap = null;          // node_drilldown_map from ingress diagram
   const _breadcrumb = [];              // [{title, arm_type, resources}] stack
+  let _loadDiagramController = null;  // AbortController for in-flight diagram fetch
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function renderBadge(env, badge) {
@@ -130,7 +250,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   function buildControlsBar(containerId) {
     const btnStyle = 'padding:4px 8px;font-size:0.75rem;background:var(--btn-bg,#333);border:1px solid var(--border-color,#555);border-radius:3px;cursor:pointer;color:var(--text-primary,#ccc);';
     const bar = document.createElement('div');
-    bar.style.cssText = 'display:flex;gap:4px;margin-bottom:8px;';
+    bar.style.cssText = 'display:flex;gap:4px;margin-bottom:4px;';
     [['🔍+','data-diagram-zoom-in'],['🔍−','data-diagram-zoom-out'],['⊡ Fit','data-diagram-fit'],['💾 Export','data-diagram-export']].forEach(([txt, attr]) => {
       const btn = document.createElement('button');
       btn.textContent = txt;
@@ -142,7 +262,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   }
 
   /**
-   * After a Mermaid SVG renders, attach dblclick handlers to drillable nodes.
+   * After a Mermaid SVG renders, attach click handlers to drillable nodes.
    * Mermaid v11 flowchart nodes render as:  <g class="node" id="flowchart-{nodeId}-{seq}">
    * We recover nodeId by stripping prefix/suffix.
    *
@@ -167,7 +287,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       if (!entry || !entry.can_drill) return;
 
       el.classList.add('node-drillable');
-      el.setAttribute('title', `Double-click to explore ${entry.title}`);
+      el.setAttribute('title', `Click to explore ${entry.title}`);
       el.style.cursor = 'pointer';
 
       // Inject ⊕ badge near top-right of node bounding box
@@ -194,15 +314,11 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       });
     });
 
-    // ── Single delegated dblclick handler on the SVG ──
-    // This fires even when the user double-clicks HTML content inside a
+    // ── Single delegated click handler on the SVG ──
+    // This fires even when the user clicks HTML content inside a
     // <foreignObject> because the event reaches the SVG element via bubbling
     // regardless of which DOM context (HTML vs SVG) the target lives in.
-    // We deduplicate with a small timeout guard to avoid double-firing.
-    let _drillPending = false;
-    svgEl.addEventListener('dblclick', (evt) => {
-      if (_drillPending) return;
-
+    svgEl.addEventListener('click', (evt) => {
       // Walk up from evt.target to find the nearest SVG g.node with an id.
       // When the user clicks inside an HTML <foreignObject> label, evt.target is
       // an HTML element whose closest() searches the HTML sub-tree and can cross
@@ -255,8 +371,6 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
       evt.stopPropagation();
       evt.preventDefault();
-      _drillPending = true;
-      setTimeout(() => { _drillPending = false; }, 400);
       openDrilldown(entry, subId);
     });
   }
@@ -311,6 +425,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
       if (data.error) {
         loading.textContent = `⚠️ ${data.error}`;
+        loading.style.display = 'flex';
         return;
       }
 
@@ -331,6 +446,52 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         msg.style.cssText = 'color:var(--text-muted);font-size:0.875rem;padding:8px 0;';
         msg.textContent = data.empty_message || 'No data available.';
         content.appendChild(msg);
+
+        // Offer a UI-triggered routing harvest when routing tables are empty
+        const emptyMsg = (data.empty_message || '').toLowerCase();
+        if (emptyMsg.includes('harvest') && subId) {
+          const btn = document.createElement('button');
+          btn.textContent = '🔄 Refresh routing data';
+          btn.style.cssText = 'margin-top:10px;padding:6px 14px;background:#1e40af;color:#e2e8f0;border:none;border-radius:6px;cursor:pointer;font-size:0.82rem;';
+          const statusEl = document.createElement('p');
+          statusEl.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin-top:8px;';
+          content.appendChild(btn);
+          content.appendChild(statusEl);
+
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = '⏳ Harvesting…';
+            statusEl.textContent = 'Running routing harvest — this may take 1–3 minutes…';
+            try {
+              const startResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing`, { method: 'POST' });
+              const startData = await startResp.json();
+              const taskId = startData.task_id;
+              if (!taskId) throw new Error(startData.error || 'No task ID returned');
+
+              // Poll for completion
+              const pollInterval = setInterval(async () => {
+                try {
+                  const pollResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing/${taskId}`);
+                  const pollData = await pollResp.json();
+                  if (pollData.status === 'done') {
+                    clearInterval(pollInterval);
+                    statusEl.textContent = '✅ Done — reloading…';
+                    setTimeout(() => _loadDrilldownContent(entry, subId), 800);
+                  } else if (pollData.status === 'error') {
+                    clearInterval(pollInterval);
+                    statusEl.textContent = `❌ Harvest failed: ${(pollData.output || '').split('\n').pop()}`;
+                    btn.disabled = false;
+                    btn.textContent = '🔄 Retry';
+                  }
+                } catch (_) { /* keep polling */ }
+              }, 3000);
+            } catch(e) {
+              statusEl.textContent = `❌ ${e.message}`;
+              btn.disabled = false;
+              btn.textContent = '🔄 Retry';
+            }
+          });
+        }
         return;
       }
 
@@ -350,6 +511,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
       const table = document.createElement('table');
       table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.82rem;';
+      const iconPath = data.icon_path || '';
 
       // Header
       const thead = document.createElement('thead');
@@ -373,14 +535,38 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         tr.addEventListener('mouseenter', () => { tr.style.background = 'rgba(96,165,250,0.07)'; });
         tr.addEventListener('mouseleave', () => { tr.style.background = ri % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)'; });
 
-        row.forEach(cell => {
+        row.forEach((cell, ci) => {
           const td = document.createElement('td');
           td.style.cssText = 'padding:7px 12px;color:var(--text-primary,#e5e7eb);vertical-align:middle;';
-          if (cell && typeof cell === 'object' && cell.label) {
+          const val = cell == null ? '—' : String(cell);
+          if (ci === 0 && iconPath) {
+            const wrap = document.createElement('span');
+            wrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;min-width:0;';
+            const icon = document.createElement('img');
+            icon.src = iconPath;
+            icon.alt = '';
+            icon.width = 14;
+            icon.height = 14;
+            icon.loading = 'lazy';
+            icon.decoding = 'async';
+            icon.style.cssText = 'flex:0 0 auto;object-fit:contain;';
+            wrap.appendChild(icon);
+            if (cell && typeof cell === 'object' && cell.label) {
+              const badge = document.createElement('span');
+              badge.style.cssText = cell.style || '';
+              badge.textContent = cell.label;
+              wrap.appendChild(badge);
+            } else {
+              const text = document.createElement('span');
+              text.textContent = val;
+              if (val === '—') text.style.color = '#4b5563';
+              wrap.appendChild(text);
+            }
+            td.appendChild(wrap);
+          } else if (cell && typeof cell === 'object' && cell.label) {
             // Exposure badge cell
             td.innerHTML = `<span style="${cell.style || ''}">${cell.label}</span>`;
           } else {
-            const val = cell == null ? '—' : String(cell);
             td.textContent = val;
             if (val === '—') td.style.color = '#4b5563';
           }
@@ -404,6 +590,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
       });
 
     } catch(e) {
+      loading.style.display = 'flex';
       loading.textContent = `Failed: ${e.message}`;
     }
   }
@@ -457,39 +644,106 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     }
   }
 
-  function getDiagramView(diagram, mode) {
-    if (!diagram) return null;
-    return (diagram.views && diagram.views[mode]) || diagram;
+  function normalizeLegendItem(item) {
+    return String(item || '')
+      .replace(/\bApp Gating\b/g, 'App Gateway')
+      .replace(/\bHTTP Listener\b/g, 'HTTP listener')
+      .replace(/\bHTTPS Listener\b/g, 'HTTPS listener')
+      .trim();
   }
 
-  function createModeToggle(currentMode, onSelect) {
+  function normalizeMermaidText(mermaid) {
+    if (!mermaid) return mermaid;
+    return String(mermaid)
+      .replace(/\bApp Gating\b/g, 'App Gateway')
+      .replace(/\bHttp listener\b/g, 'HTTP listener')
+      .replace(/\bHttps listener\b/g, 'HTTPS listener');
+  }
+
+  function withNormalizedView(view, fallback = {}) {
+    const src = view || fallback || {};
+    return {
+      ...src,
+      mermaid: normalizeMermaidText(src.mermaid || fallback.mermaid || ''),
+      legend: (src.legend || fallback.legend || []).map(normalizeLegendItem).filter(Boolean),
+    };
+  }
+
+  function buildOverviewView(diagram) {
+    if (!diagram) return null;
+    const views = diagram.views || {};
+    const connectivity = views.connectivity || null;
+    const exposure = views.exposure || null;
+    const base = exposure || connectivity || diagram;
+    if (!base) return null;
+
+    const mergedLegend = Array.from(
+      new Set([
+        ...(connectivity?.legend || []),
+        ...(exposure?.legend || []),
+        ...(base.legend || []),
+      ].map(normalizeLegendItem).filter(Boolean))
+    );
+
+    const mergedDescription = [
+      base.description,
+      exposure && connectivity
+        ? 'Merged overview includes both connectivity context and exposure signaling.'
+        : '',
+    ].filter(Boolean).join(' ');
+
+    return withNormalizedView({
+      ...base,
+      description: mergedDescription,
+      legend: mergedLegend.length ? mergedLegend : (base.legend || []),
+      node_drilldown_map: base.node_drilldown_map || connectivity?.node_drilldown_map || exposure?.node_drilldown_map || diagram.node_drilldown_map,
+    }, diagram);
+  }
+
+  function getDiagramView(diagram, mode) {
+    if (!diagram) return null;
+    if (mode === 'overview') return buildOverviewView(diagram);
+    const specific = (diagram.views && diagram.views[mode]) || null;
+    if (specific) return withNormalizedView(specific, diagram);
+    return mode === 'attack_paths' ? buildOverviewView(diagram) : withNormalizedView(diagram);
+  }
+
+  function getDiagramModes(diagram) {
+    const views = diagram?.views || {};
+    const modes = [];
+    if (views.connectivity || views.exposure || diagram?.mermaid) modes.push('overview');
+    if (views.attack_paths || (Array.isArray(diagram?.attack_paths) && diagram.attack_paths.length > 0)) {
+      modes.push('attack_paths');
+    }
+    if (!modes.length) modes.push('overview');
+    return modes;
+  }
+
+  function buildModeButtons(diagram, currentMode, onSelect) {
+    const modes = getDiagramModes(diagram);
+    const labels = {
+      overview: 'Overview',
+      attack_paths: 'Attack paths',
+    };
+
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;';
-    [
-      ['connectivity', '🔗 Connectivity'],
-      ['exposure', '🌐 Exposure'],
-      ['attack_paths', '🎯 Attack Paths'],
-    ].forEach(([mode, label]) => {
+    wrap.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+    modes.forEach(mode => {
       const btn = document.createElement('button');
-      const active = mode === currentMode;
-      btn.textContent = label;
-      btn.className = 'btn btn-sm';
-      btn.style.cssText = [
-        'padding:6px 10px',
-        'font-size:0.78rem',
-        'border-radius:999px',
-        'border:1px solid',
-        active ? 'background:#2563eb;color:#fff;border-color:#2563eb;' : 'background:transparent;color:var(--text-primary,#e5e7eb);border-color:var(--border-color,#444);',
-      ].join(';');
+      btn.type = 'button';
+      btn.className = `diagram-mode-btn${mode === currentMode ? ' active' : ''}`;
+      btn.textContent = labels[mode] || mode.replace(/_/g, ' ');
       btn.addEventListener('click', () => onSelect(mode));
       wrap.appendChild(btn);
     });
+
     return wrap;
   }
 
   function createCardShell() {
     const card = document.createElement('div');
-    card.style.cssText = 'padding:16px;background:var(--bg-code,#1a1a1a);border-radius:8px;border:1px solid var(--border-color,#333);margin-bottom:12px;';
+      card.style.cssText = 'padding:6px;background:var(--bg-code,#1a1a1a);border-radius:8px;border:1px solid var(--border-color,#333);margin-bottom:4px;';
     return card;
   }
 
@@ -499,7 +753,108 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     return `<${tag} style="margin:8px 0 0 18px;padding:0;display:grid;gap:6px;">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</${tag}>`;
   }
 
-  async function renderDiagramSection(host, { subId, diagram, mode, heading, containerId, emptyText, minHeight = '360px' }) {
+  function collectDiagramLegend(diagram, view) {
+    const candidates = [
+      ...(view?.legend || []),
+      ...(diagram?.legend || []),
+      ...(diagram?.views?.overview?.legend || []),
+      ...(diagram?.views?.connectivity?.legend || []),
+      ...(diagram?.views?.exposure?.legend || []),
+      ...(diagram?.views?.attack_paths?.legend || []),
+    ];
+    const legend = candidates.map(normalizeLegendItem).filter(Boolean);
+    if (legend.length) return Array.from(new Set(legend));
+    return [
+      'Orange edges: WAF-protected entry point (Prevention mode)',
+      'Amber edges: WAF in Detection mode or IP-allowlisted access',
+      'Red edges: directly public — no WAF or network restriction',
+      'White edges: internal application or data flow',
+    ];
+  }
+
+  function renderDiagramFooter(diagram, view) {
+    const footer = document.getElementById('subscription-diagram-footer');
+    if (!footer) return;
+
+    const legend = collectDiagramLegend(diagram, view);
+    if (!legend.length) {
+      footer.style.display = 'none';
+      footer.innerHTML = '';
+      return;
+    }
+
+    footer.innerHTML = `
+      <div><span class="footer-label">Arrow key</span></div>
+      <div class="footer-items">
+        ${legend.map((item) => `<span class="footer-item">${escapeHtml(item)}</span>`).join('')}
+      </div>
+    `;
+    footer.style.display = 'block';
+  }
+
+  function parseAttackPathTarget(pathItem) {
+    const rawPath = String(pathItem?.path || '').trim();
+    if (!rawPath) return '';
+    const parts = rawPath.split('->').map(part => part.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : rawPath;
+  }
+
+  function normalizeAttackPathTargetKey(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function buildAttackPathMermaid(paths, attackTarget) {
+    const lines = ['graph LR'];
+    const nodeIds = new Map();
+    const linkStyles = [];
+    const targetKey = normalizeAttackPathTargetKey(attackTarget);
+    let linkIndex = 0;
+
+    const safeLabel = (value) => String(value || '').trim().replace(/"/g, '&quot;');
+    const nodeIdFor = (label) => {
+      const key = normalizeAttackPathTargetKey(label);
+      if (nodeIds.has(key)) return nodeIds.get(key);
+      const nodeId = `ap_${nodeIds.size}_${String(label || 'node').replace(/[^A-Za-z0-9_]/g, '_')}`;
+      nodeIds.set(key, nodeId);
+      const className = key === 'internet'
+        ? 'internet'
+        : (targetKey && key === targetKey ? 'attackTarget' : 'attackHop');
+      lines.push(`    ${nodeId}["${safeLabel(label)}"]`);
+      lines.push(`    class ${nodeId} ${className};`);
+      return nodeId;
+    };
+
+    nodeIdFor('Internet');
+
+    (paths || []).forEach((pathItem) => {
+      const rawPath = String(pathItem?.path || '').trim();
+      if (!rawPath) return;
+      const segments = rawPath
+        .split(/\s*(?:->|→)\s*/)
+        .map(part => part.trim())
+        .filter(Boolean);
+      if (segments.length < 2) return;
+      const firstNode = nodeIdFor(segments[0]);
+      for (let i = 1; i < segments.length; i++) {
+        const src = nodeIdFor(segments[i - 1]);
+        const dst = nodeIdFor(segments[i]);
+        lines.push(`    ${src} --> ${dst}`);
+        linkStyles.push(i === segments.length - 1 ? 'stroke:#f59e0b,stroke-width:3px' : 'stroke:#fb923c,stroke-width:2px');
+        linkIndex += 1;
+      }
+    });
+
+    lines.push('');
+    linkStyles.forEach((style, idx) => {
+      lines.push(`    linkStyle ${idx} ${style}`);
+    });
+    lines.push('    classDef internet stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a;');
+    lines.push('    classDef attackHop stroke:#ea580c,stroke-width:2px,fill:#2b1707;');
+    lines.push('    classDef attackTarget stroke:#8b5cf6,stroke-width:3px,fill:#2e1065;');
+    return lines.join('\n');
+  }
+
+  async function renderDiagramSection(host, { subId, diagram, mode, heading, containerId, emptyText, minHeight = '360px', attackTarget = '', onAttackTargetChange = null }) {
     host.innerHTML = '';
     const view = getDiagramView(diagram, mode);
     if (!view || !view.mermaid) {
@@ -512,7 +867,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     const section = createCardShell();
 
     const titleRow = document.createElement('div');
-    titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;';
+    titleRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;';
     const titleEl = document.createElement('h4');
     titleEl.textContent = heading;
     titleEl.style.margin = '0';
@@ -522,27 +877,95 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
     if (view.description) {
       const desc = document.createElement('div');
-      desc.style.cssText = 'font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;line-height:1.45;';
+      desc.style.cssText = 'font-size:0.82rem;color:var(--text-muted);margin-bottom:8px;line-height:1.45;';
       desc.textContent = view.description;
       section.appendChild(desc);
     }
 
-    const summary = view.asset_summary || diagram.asset_summary || {};
-    const summaryEntries = Object.entries(summary).filter(([, value]) => Number.isFinite(value));
-    if (summaryEntries.length) {
-      const chips = document.createElement('div');
-      chips.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
-      summaryEntries.forEach(([key, value]) => {
-        const chip = document.createElement('span');
-        chip.style.cssText = 'padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.06);font-size:0.74rem;color:var(--text-primary,#e5e7eb);';
-        chip.textContent = `${key.replace(/_/g, ' ')}: ${value}`;
-        chips.appendChild(chip);
+    if (mode === 'attack_paths') {
+      const attackPaths = (view.attack_paths || diagram.attack_paths || []);
+      const targets = Array.from(
+        new Set(
+          attackPaths
+            .map(parseAttackPathTarget)
+            .map(target => target.trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b));
+
+      const filterWrap = document.createElement('div');
+      filterWrap.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px;';
+      const filterLabel = document.createElement('label');
+      filterLabel.textContent = 'Asset name';
+      filterLabel.style.cssText = 'font-size:0.78rem;color:var(--text-muted);font-weight:600;';
+      filterLabel.setAttribute('for', `${containerId}-target-filter`);
+      filterWrap.appendChild(filterLabel);
+
+      const filterInput = document.createElement('input');
+      filterInput.type = 'search';
+      filterInput.id = `${containerId}-target-filter`;
+      filterInput.placeholder = 'Type asset name…';
+      filterInput.value = attackTarget || '';
+      filterInput.setAttribute('list', `${containerId}-target-options`);
+      filterInput.style.cssText = 'min-width:260px;flex:1 1 380px;padding:5px 8px;border-radius:6px;border:1px solid var(--border-color,#444);background:var(--bg-base);color:var(--text-primary,#e5e7eb);';
+      filterInput.addEventListener('input', () => {
+        if (typeof onAttackTargetChange === 'function') onAttackTargetChange(filterInput.value);
       });
-      section.appendChild(chips);
+      filterWrap.appendChild(filterInput);
+
+      const datalist = document.createElement('datalist');
+      datalist.id = `${containerId}-target-options`;
+      targets.forEach(target => {
+        const option = document.createElement('option');
+        option.value = target;
+        datalist.appendChild(option);
+      });
+      filterWrap.appendChild(datalist);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'btn btn-sm';
+      clearBtn.textContent = 'Clear';
+      clearBtn.style.padding = '4px 8px';
+      clearBtn.addEventListener('click', () => {
+        filterInput.value = '';
+        if (typeof onAttackTargetChange === 'function') onAttackTargetChange('');
+      });
+      filterWrap.appendChild(clearBtn);
+
+      section.appendChild(filterWrap);
+
+      const normalizedTarget = normalizeAttackPathTargetKey(attackTarget);
+      const filteredPaths = normalizedTarget
+        ? attackPaths.filter(path => normalizeAttackPathTargetKey(parseAttackPathTarget(path)).includes(normalizedTarget))
+        : attackPaths;
+
+      const summary = document.createElement('div');
+      summary.style.cssText = 'font-size:0.76rem;color:var(--text-muted);margin-bottom:8px;';
+      summary.textContent = normalizedTarget
+        ? `Showing ${filteredPaths.length} of ${attackPaths.length} attack paths for matching assets.`
+        : `Showing all ${attackPaths.length} modeled attack paths.`;
+      section.appendChild(summary);
+
+      if (normalizedTarget && !filteredPaths.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:0.78rem;color:var(--text-muted);padding:6px;border:1px dashed var(--border-color,#444);border-radius:6px;margin-bottom:8px;';
+        empty.textContent = 'No attack paths match that asset name.';
+        section.appendChild(empty);
+      }
+
+      const focusedDiagram = buildAttackPathMermaid(filteredPaths, attackTarget);
+      view.mermaid = focusedDiagram;
+      view.css_code = [
+        '/* Focused Attack Path Styling */',
+        '.internet { stroke: #d32f2f; stroke-width: 2px; fill: #3b0a0a; }',
+        '.attackHop { stroke: #ea580c; stroke-width: 2px; fill: #2b1707; }',
+        '.attackTarget { stroke: #8b5cf6; stroke-width: 3px; fill: #2e1065; }',
+      ].join('\n');
     }
 
     const viewport = document.createElement('div');
-    viewport.style.cssText = `overflow:auto;min-height:${minHeight};max-height:calc(100vh - 240px);`;
+    viewport.style.cssText = `overflow:auto;min-height:${minHeight};max-height:calc(100vh - 140px);`;
     const transformTarget = document.createElement('div');
     transformTarget.id = containerId;
     const mermaidEl = document.createElement('div');
@@ -580,6 +1003,13 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
   // ── Load ingress diagram ──────────────────────────────────────────────────
   async function loadDiagram(subId, subName) {
+    // Cancel any in-flight request from a previous click
+    if (_loadDiagramController) {
+      _loadDiagramController.abort();
+    }
+    _loadDiagramController = new AbortController();
+    const signal = _loadDiagramController.signal;
+
     _currentSubId = subId;
     _currentNodeMap = null;
     _breadcrumb.length = 0;
@@ -590,185 +1020,99 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
     const wrap = document.getElementById('subscription-diagram-wrap');
     const loading = document.getElementById('subscription-diagram-loading');
+    const loadingText = loading?.querySelector('.subscription-diagram-loading-text');
     const container = document.getElementById('subscription-diagram-container');
     const title = document.getElementById('subscription-diagram-title');
+    const footer = document.getElementById('subscription-diagram-footer');
+    const modeHost = document.getElementById('subscription-diagram-mode-host');
 
-    wrap.style.display = 'block';
-    loading.style.display = 'block';
+    wrap.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    loading.style.display = 'flex';
+    if (loadingText) loadingText.textContent = 'Fetching architecture data…';
     container.style.display = 'none';
     container.innerHTML = '';
     title.textContent = subName || subId;
-
-    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    footer.style.display = 'none';
+    footer.innerHTML = '';
 
     try {
-      const resp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/diagram`);
+      const resp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/diagram`, { signal });
       const data = await resp.json();
 
       if (data.error) {
-        loading.textContent = data.error;
+        if (loadingText) loadingText.textContent = data.error;
         return;
       }
 
-      loading.style.display = 'none';
+      if (loadingText) loadingText.textContent = 'Rendering diagram…';
       container.style.display = 'block';
 
       const ingressDiag = data.ingress_diagram;
-      const rgDiagrams = data.diagrams || [];
-      const state = {
-        mode: (ingressDiag && ingressDiag.default_view) || 'connectivity',
-        selectedRgIndex: 0,
-      };
+      const modes = getDiagramModes(ingressDiag);
+      const defaultMode = (ingressDiag?.default_view === 'attack_paths') ? 'attack_paths' : 'overview';
+      let currentMode = modes.includes(defaultMode) ? defaultMode : (modes[0] || 'overview');
+      let attackTarget = '';
 
-      const twoColWrap = document.createElement('div');
-      twoColWrap.style.cssText = 'display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;';
-      const leftCol = document.createElement('div');
-      leftCol.style.cssText = 'flex:1 1 760px;min-width:0;';
-      const rightCol = document.createElement('div');
-      rightCol.style.cssText = 'flex:0 0 360px;max-width:360px;min-width:280px;';
-      const modeHost = document.createElement('div');
-      const ingressHost = document.createElement('div');
-      const sidebarHost = document.createElement('div');
-      const rgListHost = document.createElement('div');
-      const rgHost = document.createElement('div');
-
-      leftCol.appendChild(modeHost);
-      leftCol.appendChild(ingressHost);
-      rightCol.appendChild(sidebarHost);
-      rightCol.appendChild(rgListHost);
-      rightCol.appendChild(rgHost);
-      twoColWrap.appendChild(leftCol);
-      twoColWrap.appendChild(rightCol);
-      container.appendChild(twoColWrap);
-
-      function selectedRg() {
-        return rgDiagrams[state.selectedRgIndex] || null;
-      }
-
-      function renderSidebar() {
-        const activeIngress = getDiagramView(ingressDiag, state.mode) || {};
-        const activeRg = selectedRg();
-        const activeRgView = getDiagramView(activeRg, state.mode) || {};
-        const card = createCardShell();
-        const attackPaths = (state.mode === 'attack_paths')
-          ? (activeRgView.attack_paths && activeRgView.attack_paths.length ? activeRgView.attack_paths : (activeIngress.attack_paths || []))
-          : [];
-        card.innerHTML = `
-          <div style="font-weight:600;margin-bottom:8px;">Current mode</div>
-          <div style="font-size:0.82rem;color:var(--text-muted);line-height:1.5;">${escapeHtml(activeIngress.description || '')}</div>
-          ${activeIngress.legend && activeIngress.legend.length ? `<div style="margin-top:12px;font-weight:600;font-size:0.82rem;">Legend</div>${renderSummaryList(activeIngress.legend)}` : ''}
-          ${attackPaths.length ? `<div style="margin-top:12px;font-weight:600;font-size:0.82rem;">Likely attack paths</div>${renderSummaryList(attackPaths.slice(0, 4).map(path => `${path.title}: ${path.path || path.summary || ''}`), true)}` : ''}
-          ${activeRg ? `<div style="margin-top:12px;font-size:0.78rem;color:var(--text-muted);">Selected RG: <strong style="color:var(--text-primary,#e5e7eb);">${escapeHtml(activeRg.rg)}</strong></div>` : ''}
-        `;
-        sidebarHost.innerHTML = '';
-        sidebarHost.appendChild(card);
-      }
-
-      function renderRgPicker() {
-        const card = createCardShell();
-        const heading = document.createElement('div');
-        heading.style.cssText = 'font-weight:600;margin-bottom:10px;';
-        heading.textContent = 'Resource group views';
-        card.appendChild(heading);
-
-        if (!rgDiagrams.length) {
-          const empty = document.createElement('div');
-          empty.style.cssText = 'font-size:0.82rem;color:var(--text-muted);';
-          empty.textContent = 'No resource-group diagrams available for this subscription.';
-          card.appendChild(empty);
-          rgListHost.innerHTML = '';
-          rgListHost.appendChild(card);
-          return;
-        }
-
-        const list = document.createElement('div');
-        list.style.cssText = 'display:grid;gap:6px;';
-        rgDiagrams.forEach((diagram, idx) => {
-          const btn = document.createElement('button');
-          const active = idx === state.selectedRgIndex;
-          btn.className = 'btn btn-sm';
-          btn.style.cssText = [
-            'display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;padding:8px 10px;border-radius:8px;border:1px solid',
-            active ? 'background:rgba(37,99,235,0.18);border-color:#2563eb;color:#fff;' : 'background:transparent;border-color:var(--border-color,#444);color:var(--text-primary,#e5e7eb);',
-          ].join(';');
-          btn.innerHTML = `
-            <span style="display:flex;flex-direction:column;gap:2px;">
-              <span>${escapeHtml(diagram.rg)}</span>
-              <small style="color:${active ? 'rgba(255,255,255,0.75)' : 'var(--text-muted)'};">${diagram.asset_count || 0} assets · ${diagram.public_count || 0} public · ${diagram.relationship_count || 0} links</small>
-            </span>
-          `;
-          btn.addEventListener('click', async () => {
-            state.selectedRgIndex = idx;
-            renderSidebar();
-            renderRgPicker();
-            await renderDiagramSection(rgHost, {
-              subId,
-              diagram: selectedRg(),
-              mode: state.mode,
-              heading: `🧩 ${selectedRg().rg} — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}`,
-              containerId: 'subscription-rg-diagram-div',
-              emptyText: 'No resource-group diagram available.',
-              minHeight: '300px',
-            });
-            if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
-          });
-          list.appendChild(btn);
-        });
-        card.appendChild(list);
-        rgListHost.innerHTML = '';
-        rgListHost.appendChild(card);
-      }
-
-      async function renderAll() {
+      const renderCurrentMode = async () => {
         modeHost.innerHTML = '';
-        const modeCard = createCardShell();
-        const modeTitle = document.createElement('div');
-        modeTitle.style.cssText = 'font-weight:600;margin-bottom:8px;';
-        modeTitle.textContent = 'Diagram mode';
-        modeCard.appendChild(modeTitle);
-        modeCard.appendChild(createModeToggle(state.mode, async (mode) => {
-          if (mode === state.mode) return;
-          state.mode = mode;
-          await renderAll();
+        modeHost.appendChild(buildModeButtons(ingressDiag, currentMode, async (mode) => {
+          if (mode === currentMode) return;
+          currentMode = mode;
+          await renderCurrentMode();
         }));
-        modeHost.appendChild(modeCard);
 
-        await renderDiagramSection(ingressHost, {
+        const view = getDiagramView(ingressDiag, currentMode) || ingressDiag || {};
+        await renderDiagramSection(container, {
           subId,
           diagram: ingressDiag,
-          mode: state.mode,
-          heading: `🌐 Subscription ingress — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}`,
+          mode: currentMode,
+          heading: '🌐 Subscription ingress',
           containerId: 'ingress-diagram-div',
           emptyText: 'No subscription ingress diagram available.',
-          minHeight: '420px',
+          minHeight: 'calc(100vh - 140px)',
+          attackTarget,
+          onAttackTargetChange: (nextValue) => {
+            attackTarget = nextValue || '';
+            renderCurrentMode();
+          },
         });
+        renderDiagramFooter(ingressDiag, view);
+      };
 
-        renderSidebar();
-        renderRgPicker();
+      await renderCurrentMode();
 
-        await renderDiagramSection(rgHost, {
-          subId,
-          diagram: selectedRg(),
-          mode: state.mode,
-          heading: selectedRg() ? `🧩 ${selectedRg().rg} — ${state.mode === 'attack_paths' ? 'Attack Paths' : state.mode === 'exposure' ? 'Exposure' : 'Connectivity'}` : '🧩 Resource group view',
-          containerId: 'subscription-rg-diagram-div',
-          emptyText: 'Choose a resource group to inspect its diagram.',
-          minHeight: '300px',
-        });
-
-        if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
-      }
-
-      await renderAll();
+      if (window.initSubscriptionDiagrams) await window.initSubscriptionDiagrams();
+      loading.style.display = 'none';
     } catch(e) {
-      loading.textContent = 'Failed to load diagram: ' + e.message;
+      if (e.name === 'AbortError') return; // Superseded by a newer click — silently discard
+      loading.style.display = 'flex';
+      if (loadingText) loadingText.textContent = 'Failed to load diagram: ' + e.message;
     }
   }
 
-  document.getElementById('subscription-diagram-close').addEventListener('click', () => {
+  function closeDiagram() {
     document.getElementById('subscription-diagram-wrap').style.display = 'none';
     document.getElementById('drilldown-modal').style.display = 'none';
+    const footer = document.getElementById('subscription-diagram-footer');
+    if (footer) {
+      footer.style.display = 'none';
+      footer.innerHTML = '';
+    }
+    const modeHost = document.getElementById('subscription-diagram-mode-host');
+    if (modeHost) modeHost.innerHTML = '';
     _breadcrumb.length = 0;
+    document.body.style.overflow = '';
+  }
+
+  document.getElementById('subscription-diagram-close').addEventListener('click', () => {
+    closeDiagram();
+  });
+
+  document.getElementById('subscription-diagram-wrap').addEventListener('click', (evt) => {
+    if (evt.target === document.getElementById('subscription-diagram-wrap')) {
+      closeDiagram();
+    }
   });
 
   // Escape key closes the drilldown modal
@@ -776,64 +1120,13 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     if (evt.key === 'Escape') {
       const modal = document.getElementById('drilldown-modal');
       if (modal && modal.style.display !== 'none') {
-        modal.style.display = 'none';
-        _breadcrumb.length = 0;
+        closeDiagram();
+        return;
       }
-    }
-  });
-
-  // Click outside modal content closes it
-  document.getElementById('drilldown-modal').addEventListener('click', (evt) => {
-    if (evt.target === document.getElementById('drilldown-modal')) {
-      document.getElementById('drilldown-modal').style.display = 'none';
-      _breadcrumb.length = 0;
-    }
-  });
-
-  // ── Refresh WAF & Routing button ─────────────────────────────────────────
-  document.getElementById('btn-refresh-routing').addEventListener('click', async () => {
-    const subId = _currentSubId;
-    if (!subId) return;
-    const btn = document.getElementById('btn-refresh-routing');
-    const statusEl = document.getElementById('routing-harvest-status');
-    btn.disabled = true;
-    btn.textContent = '⏳ Harvesting…';
-    statusEl.style.display = 'inline';
-    statusEl.textContent = 'Contacting Azure…';
-
-    try {
-      const startResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing`, { method: 'POST' });
-      const startData = await startResp.json();
-      const taskId = startData.task_id;
-      if (!taskId) throw new Error(startData.error || 'Failed to start harvest');
-
-      // Poll until done
-      const poll = async () => {
-        const r = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing/${taskId}`);
-        const d = await r.json();
-        if (d.status === 'running') {
-          statusEl.textContent = '⏳ Running…';
-          setTimeout(poll, 2000);
-        } else if (d.status === 'done') {
-          statusEl.textContent = '✅ Done — reloading diagram…';
-          btn.disabled = false;
-          btn.textContent = '🔄 Refresh WAF & Routing';
-          setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
-          // Re-fetch the diagram to reflect new WAF/routing data
-          const subName = document.getElementById('subscription-diagram-title').textContent;
-          await loadDiagram(subId, subName);
-        } else {
-          statusEl.textContent = '❌ Harvest failed — check az login';
-          btn.disabled = false;
-          btn.textContent = '🔄 Refresh WAF & Routing';
-          console.error('[routing-harvest] Error:', d.output);
-        }
-      };
-      poll();
-    } catch (err) {
-      statusEl.textContent = `❌ ${err.message}`;
-      btn.disabled = false;
-      btn.textContent = '🔄 Refresh WAF & Routing';
+      const subModal = document.getElementById('subscription-diagram-wrap');
+      if (subModal && subModal.style.display !== 'none') {
+        closeDiagram();
+      }
     }
   });
 

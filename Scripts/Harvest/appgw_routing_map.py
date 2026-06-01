@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Build a full App Gateway → backend routing map and persist it to cozo.db.
+"""Build a full App Gateway → backend and rewrite routing map and persist it to cozo.db.
 
 NOTE: This is now run automatically as part of the main harvest pipeline
 (Scripts/Harvest/harvest_azure_assets.py). You only need to run this script
-manually if you want to refresh routing/WAF data without re-harvesting all assets,
+manually if you want to refresh routing/rewrite/WAF data without re-harvesting all assets,
 or if you need to use the --dry-run flag to inspect what would be written.
 
 For each Application Gateway in the subscription this script:
   1. Calls `az network application-gateway show` per gateway to get full nested properties
   2. Builds the chain: public hostname (listener) → routing rule → URL path map → backend pool → backend FQDNs
-  3. Captures WAF policy references and mode/state for each listener/path rule
-  4. Cross-references backend pool addresses with provisioned_assets.fqdn
+  3. Captures rewrite rule sets associated with routing rules and path maps
+  4. Captures WAF policy references and mode/state for each listener/path rule
+  5. Cross-references backend pool addresses with provisioned_assets.fqdn
      to create resource_connections rows (type='appgw_routing')
-  5. Stores the routing map in appgw_routing_rules table
-  6. Stores WAF policy summary in appgw_waf_policies table
+  6. Stores the routing map in appgw_routing_rules table
+  7. Stores rewrite rule sets in appgw_rewrite_rule_sets table
+  8. Stores WAF policy summary in appgw_waf_policies table
 
 Usage:
     python Scripts/Harvest/appgw_routing_map.py --subscription "pipeline-customer-production"
@@ -23,9 +25,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
+import signal
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,6 +69,23 @@ CREATE INDEX IF NOT EXISTS idx_appgw_rules_sub     ON appgw_routing_rules(subscr
 CREATE INDEX IF NOT EXISTS idx_appgw_rules_gateway ON appgw_routing_rules(gateway_name);
 CREATE INDEX IF NOT EXISTS idx_appgw_rules_host    ON appgw_routing_rules(hostname);
 
+CREATE TABLE IF NOT EXISTS appgw_rewrite_rule_sets (
+    id                  TEXT PRIMARY KEY,   -- {gw_name}::{set_name}
+    subscription_id     TEXT NOT NULL,
+    gateway_name        TEXT NOT NULL,
+    gateway_resource_id TEXT,
+    resource_group      TEXT,
+    set_name            TEXT NOT NULL,
+    attached_routes     TEXT,               -- JSON array of routing-rule/path-rule references
+    attached_route_count INTEGER DEFAULT 0,
+    rewrite_rules       TEXT,               -- JSON array of rewrite rules
+    rewrite_rule_count  INTEGER DEFAULT 0,
+    provisioning_state  TEXT,
+    last_synced         DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_appgw_rewrite_sets_sub     ON appgw_rewrite_rule_sets(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_appgw_rewrite_sets_gateway ON appgw_rewrite_rule_sets(gateway_name);
+
 CREATE TABLE IF NOT EXISTS appgw_waf_policies (
     id                  TEXT PRIMARY KEY,   -- resource id
     subscription_id     TEXT NOT NULL,
@@ -94,12 +115,30 @@ def _ensure_appgw_schema(conn: sqlite3.Connection) -> None:
 
 def _az(*args: str, subscription_id: str, timeout: int = 120) -> Any:
     cmd = ["az", *args, "--subscription", subscription_id, "--output", "json"]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if result.returncode != 0:
-        print(f"    [warn] az {' '.join(args[:4])} failed: {result.stderr.strip()[:120]}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        print(f"    [warn] az {' '.join(args[:4])} timed out after {timeout}s; skipping")
+        return None
+    if proc.returncode != 0:
+        print(f"    [warn] az {' '.join(args[:4])} failed: {stderr.strip()[:120]}")
         return None
     try:
-        return json.loads(result.stdout or "null")
+        return json.loads(stdout or "null")
     except json.JSONDecodeError:
         return None
 
@@ -112,6 +151,16 @@ def show_appgw(name: str, rg: str, subscription_id: str) -> dict | None:
     return _az(
         "network", "application-gateway", "show",
         "--name", name, "-g", rg,
+        subscription_id=subscription_id,
+    )
+
+
+def show_url_path_map(name: str, rg: str, map_name: str, subscription_id: str) -> dict | None:
+    return _az(
+        "network", "application-gateway", "url-path-map", "show",
+        "--gateway-name", name,
+        "--name", map_name,
+        "--resource-group", rg,
         subscription_id=subscription_id,
     )
 
@@ -151,7 +200,7 @@ def _build_lookup(items: list[dict], key: str = "name") -> dict[str, dict]:
 # Core: extract routing chains from a fully-hydrated AppGW
 # ---------------------------------------------------------------------------
 
-def extract_routes(gw: dict) -> list[dict]:
+def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | None = None) -> list[dict]:
     """
     Return a flat list of route dicts, one per (listener × path_rule).
     Each dict has: rule_name, listener_name, hostname, protocol, url_path,
@@ -161,18 +210,18 @@ def extract_routes(gw: dict) -> list[dict]:
     props = gw.get("properties") or gw
 
     # Build lookups by resource name (last segment of id)
-    listeners_lkp   = _build_lookup(props.get("httpListeners") or [])
-    pools_lkp       = _build_lookup(props.get("backendAddressPools") or [])
-    http_cfg_lkp    = _build_lookup(props.get("backendHttpSettingsCollection") or [])
-    url_maps_lkp    = _build_lookup(props.get("urlPathMaps") or [])
+    listeners_lkp   = _build_lookup(props.get("httpListeners") or gw.get("httpListeners") or [])
+    pools_lkp       = _build_lookup(props.get("backendAddressPools") or gw.get("backendAddressPools") or [])
+    http_cfg_lkp    = _build_lookup(props.get("backendHttpSettingsCollection") or gw.get("backendHttpSettingsCollection") or [])
+    url_maps_lkp    = _build_lookup(props.get("urlPathMaps") or gw.get("urlPathMaps") or [])
     frontend_ports  = {
-        _id_tail(fp.get("id")): (fp.get("properties") or {}).get("port")
-        for fp in (props.get("frontendPorts") or [])
+        _id_tail(fp.get("id")): ((fp.get("properties") or fp).get("port"))
+        for fp in (props.get("frontendPorts") or gw.get("frontendPorts") or [])
     }
 
     def _pool_fqdns(pool_name: str) -> list[str]:
         pool = pools_lkp.get(pool_name) or {}
-        pp = pool.get("properties") or {}
+        pp = pool.get("properties") or pool
         return [
             (a.get("fqdn") or a.get("ipAddress") or "?")
             for a in (pp.get("backendAddresses") or [])
@@ -180,7 +229,7 @@ def extract_routes(gw: dict) -> list[dict]:
 
     def _http_cfg_detail(cfg_name: str) -> dict:
         cfg = http_cfg_lkp.get(cfg_name) or {}
-        cp = cfg.get("properties") or {}
+        cp = cfg.get("properties") or cfg
         return {
             "port": cp.get("port"),
             "protocol": cp.get("protocol"),
@@ -191,7 +240,7 @@ def extract_routes(gw: dict) -> list[dict]:
 
     def _listener_detail(listener_name: str) -> dict:
         l = listeners_lkp.get(listener_name) or {}
-        lp = l.get("properties") or {}
+        lp = l.get("properties") or l
         port_id = _id_tail((lp.get("frontendPort") or {}).get("id"))
         hosts = lp.get("hostNames") or ([lp["hostName"]] if lp.get("hostName") else [])
         return {
@@ -202,10 +251,19 @@ def extract_routes(gw: dict) -> list[dict]:
         }
 
     routes: list[dict] = []
+    if routing_rules is None:
+        route_source = (gw.get("requestRoutingRules") or props.get("requestRoutingRules") or []) + (gw.get("routingRules") or props.get("routingRules") or [])
+    else:
+        route_source = routing_rules
 
-    for rule in (props.get("requestRoutingRules") or []):
-        rp = rule.get("properties") or {}
-        rule_name    = rule.get("name", "")
+    seen_rule_names: set[str] = set()
+    for rule in route_source:
+        rule_name = rule.get("name") or _id_tail(rule.get("id"))
+        if not rule_name or rule_name in seen_rule_names:
+            continue
+        seen_rule_names.add(rule_name)
+
+        rp = rule.get("properties") or rule
         listener_name = _id_tail((rp.get("httpListener") or {}).get("id"))
         listener     = _listener_detail(listener_name)
         hostnames    = listener["hostnames"] or ["*"]
@@ -235,7 +293,11 @@ def extract_routes(gw: dict) -> list[dict]:
                 })
         elif url_map_name:
             url_map = url_maps_lkp.get(url_map_name) or {}
-            mp = url_map.get("properties") or {}
+            if not url_map:
+                gw_name = gw.get("name") or props.get("name") or ""
+                rg = gw.get("resourceGroup") or props.get("resourceGroup") or ""
+                url_map = show_url_path_map(gw_name, rg, url_map_name, subscription_id) or {}
+            mp = url_map.get("properties") or url_map
 
             # Default path
             default_pool = _id_tail((mp.get("defaultBackendAddressPool") or {}).get("id"))
@@ -260,7 +322,7 @@ def extract_routes(gw: dict) -> list[dict]:
 
             # Path-specific rules
             for path_rule in (mp.get("pathRules") or []):
-                prp = path_rule.get("properties") or {}
+                prp = path_rule.get("properties") or path_rule
                 pool_name = _id_tail((prp.get("backendAddressPool") or {}).get("id"))
                 cfg_name  = _id_tail((prp.get("backendHttpSettings") or {}).get("id"))
                 path_waf  = _id_tail((prp.get("firewallPolicy") or {}).get("id")) or rule_waf
@@ -286,6 +348,103 @@ def extract_routes(gw: dict) -> list[dict]:
     return routes
 
 
+def _collect_rewrite_rule_links(props: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Collect routing-rule and path-rule references for each rewrite set."""
+    links: dict[str, list[dict[str, Any]]] = {}
+    path_map_contexts: dict[str, dict[str, Any]] = {}
+
+    for rule in props.get("requestRoutingRules") or []:
+        rp = rule.get("properties") or rule
+        rule_name = rule.get("name") or _id_tail(rule.get("id"))
+        if not rule_name:
+            continue
+
+        listener_name = _id_tail((rp.get("httpListener") or {}).get("id")) or None
+        url_map_name = _id_tail((rp.get("urlPathMap") or {}).get("id")) or None
+        context = {
+            "routing_rule_name": rule_name,
+            "listener_name": listener_name,
+            "rule_type": rp.get("ruleType"),
+        }
+        if url_map_name:
+            path_map_contexts[url_map_name] = context
+
+        set_name = _id_tail((rp.get("rewriteRuleSet") or {}).get("id"))
+        if set_name:
+            links.setdefault(set_name, []).append({
+                "kind": "requestRoutingRule",
+                "url_path_map": url_map_name,
+                **context,
+            })
+
+    for path_map in props.get("urlPathMaps") or []:
+        mp = path_map.get("properties") or path_map
+        map_name = path_map.get("name") or _id_tail(path_map.get("id"))
+        base_context = (path_map_contexts.get(map_name) or {}).copy()
+
+        default_set = _id_tail((mp.get("defaultRewriteRuleSet") or {}).get("id"))
+        if default_set:
+            links.setdefault(default_set, []).append({
+                "kind": "urlPathMapDefault",
+                "url_path_map": map_name,
+                **base_context,
+            })
+
+        for path_rule in (mp.get("pathRules") or []):
+            prp = path_rule.get("properties") or path_rule
+            set_name = _id_tail((prp.get("rewriteRuleSet") or {}).get("id"))
+            if not set_name:
+                continue
+            route_context = base_context.copy()
+            route_context.update({
+                "kind": "pathRule",
+                "url_path_map": map_name,
+                "path_rule_name": path_rule.get("name") or _id_tail(path_rule.get("id")),
+                "paths": prp.get("paths") or ["/*"],
+            })
+            links.setdefault(set_name, []).append(route_context)
+
+    return links
+
+
+def extract_rewrite_rule_sets(gw: dict) -> list[dict[str, Any]]:
+    """Return one row per rewrite rule set with attached routing references."""
+    props = gw.get("properties") or gw
+    rewrite_sets = props.get("rewriteRuleSets") or gw.get("rewriteRuleSets") or []
+    links = _collect_rewrite_rule_links(props)
+
+    rows: list[dict[str, Any]] = []
+    for rewrite_set in rewrite_sets:
+        set_name = rewrite_set.get("name") or _id_tail(rewrite_set.get("id"))
+        if not set_name:
+            continue
+
+        set_props = rewrite_set.get("properties") or rewrite_set
+        rewrite_rules = []
+        for rule in set_props.get("rewriteRules") or []:
+            action_set = rule.get("actionSet") or {}
+            rewrite_rules.append({
+                "name": rule.get("name"),
+                "rule_sequence": rule.get("ruleSequence"),
+                "conditions": rule.get("conditions") or [],
+                "request_header_configurations": action_set.get("requestHeaderConfigurations") or [],
+                "response_header_configurations": action_set.get("responseHeaderConfigurations") or [],
+                "url_configuration": action_set.get("urlConfiguration") or {},
+            })
+
+        rows.append({
+            "set_name": set_name,
+            "set_id": rewrite_set.get("id"),
+            "attached_routes": links.get(set_name, []),
+            "attached_route_count": len(links.get(set_name, [])),
+            "rewrite_rules": rewrite_rules,
+            "rewrite_rule_count": len(rewrite_rules),
+            "provisioning_state": set_props.get("provisioningState"),
+        })
+
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Process one gateway
 # ---------------------------------------------------------------------------
@@ -294,29 +453,61 @@ def process_gateway(
     gw_stub: dict,
     subscription_id: str,
     conn: sqlite3.Connection,
-    fqdn_to_asset: dict[str, tuple[str, str]],
+    fqdn_to_asset: dict[str, tuple[str, str, str | None]],
     dry_run: bool,
     now: str,
+    gw: dict | None = None,
 ) -> tuple[int, int]:
     name = gw_stub["name"]
     rg   = gw_stub["resourceGroup"]
     print(f"\n  [appgw] {name} (rg={rg})")
 
-    print(f"    fetching full config...", end=" ", flush=True)
-    gw = show_appgw(name, rg, subscription_id)
-    if not gw:
-        print("FAILED")
-        return 0, 0
+    if gw is None:
+        print(f"    fetching full config...", end=" ", flush=True)
+        gw = show_appgw(name, rg, subscription_id)
+        if not gw:
+            print("FAILED")
+            return 0, 0
+    else:
+        print(f"    using cached full config...", end=" ", flush=True)
 
-    routes = extract_routes(gw)
+    routes = extract_routes(gw, subscription_id, routing_rules=None)
     print(f"{len(routes)} route entries")
 
+    experiment_id = f"harvest-{subscription_id}"
     gw_resource_id = gw.get("id") or gw_stub.get("id")
     gw_asset_rows  = conn.execute(
-        "SELECT id FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
+        "SELECT type FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
         (subscription_id, name),
     ).fetchall()
-    gw_asset_id = gw_asset_rows[0][0] if gw_asset_rows else gw_resource_id
+    gw_asset_type = gw_asset_rows[0][0] if gw_asset_rows else gw.get("type") or gw_stub.get("type") or "Microsoft.Network/applicationGateways"
+
+    def _lookup_resource_id(resource_name: str, resource_type: str | None = None) -> int | None:
+        if not resource_name:
+            return None
+        if resource_type:
+            row = conn.execute(
+                """
+                SELECT id FROM resources
+                WHERE experiment_id = ? AND resource_name = ? AND resource_type = ?
+                LIMIT 1
+                """,
+                (experiment_id, resource_name, resource_type),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id FROM resources
+                WHERE experiment_id = ? AND resource_name = ?
+                LIMIT 1
+                """,
+                (experiment_id, resource_name),
+            ).fetchone()
+        return row[0] if row else None
+
+    source_resource_id = _lookup_resource_id(name, gw_asset_type)
+    if source_resource_id is None:
+        print("    [warn] no numeric resource graph row for this gateway; skipping connection writes")
 
     rules_upserted = 0
     connections_created = 0
@@ -360,38 +551,120 @@ def process_gateway(
             rules_upserted += 1
 
             # resource_connections: AppGW → backend asset
-            for fqdn in route["backend_fqdns"]:
-                target_asset_id = None
-                for known_fqdn, (asset_id, _) in fqdn_to_asset.items():
-                    if known_fqdn == fqdn or fqdn.endswith(f".{known_fqdn}") or known_fqdn.endswith(f".{fqdn}"):
-                        target_asset_id = asset_id
-                        break
+            if source_resource_id is not None:
+                for fqdn in route["backend_fqdns"]:
+                    target_asset_name: str | None = None
+                    target_asset_type: str | None = None
+                    for known_fqdn, (_asset_id, asset_name, asset_type) in fqdn_to_asset.items():
+                        if known_fqdn == fqdn or fqdn.endswith(f".{known_fqdn}") or known_fqdn.endswith(f".{fqdn}"):
+                            target_asset_name = asset_name
+                            target_asset_type = asset_type
+                            break
 
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO resource_connections
-                        (source_id, target_id, connection_type, metadata)
-                    VALUES (?, ?, 'appgw_routing', ?)
-                    """,
-                    (
-                        gw_asset_id,
-                        target_asset_id or f"fqdn:{fqdn}",
-                        json.dumps({
-                            "hostname": route["hostname"],
-                            "url_path": route["url_path"],
-                            "backend_pool": route["backend_pool_name"],
-                            "backend_fqdn": fqdn,
-                            "waf_policy": route["waf_policy_name"],
-                        }),
-                    ),
-                )
-                connections_created += 1
+                    target_resource_id = _lookup_resource_id(target_asset_name or "", target_asset_type) if target_asset_name else None
+
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO resource_connections
+                            (experiment_id, source_resource_id, target_resource_id, connection_type,
+                             target_external, connection_metadata)
+                        VALUES (?, ?, ?, 'appgw_routing', ?, ?)
+                        """,
+                        (
+                            experiment_id,
+                            source_resource_id,
+                            target_resource_id,
+                            None if target_resource_id else fqdn,
+                            json.dumps({
+                                "hostname": route["hostname"],
+                                "url_path": route["url_path"],
+                                "backend_pool": route["backend_pool_name"],
+                                "backend_fqdn": fqdn,
+                                "waf_policy": route["waf_policy_name"],
+                            }),
+                        ),
+                    )
+                    connections_created += 1
 
     if not dry_run:
         conn.commit()
 
     print(f"    → {rules_upserted} rules upserted, {connections_created} connections created")
     return rules_upserted, connections_created
+
+
+def process_rewrite_rule_sets(
+    gw_stub: dict,
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool,
+    now: str,
+    gw: dict | None = None,
+) -> tuple[int, int]:
+    name = gw_stub["name"]
+    rg   = gw_stub["resourceGroup"]
+    print(f"\n  [appgw-rewrites] {name} (rg={rg})")
+
+    if gw is None:
+        print(f"    fetching full config...", end=" ", flush=True)
+        gw = show_appgw(name, rg, subscription_id)
+        if not gw:
+            print("FAILED")
+            return 0, 0
+    else:
+        print(f"    using cached full config...", end=" ", flush=True)
+
+    rewrite_sets = extract_rewrite_rule_sets(gw)
+    print(f"{len(rewrite_sets)} rewrite rule set entries")
+
+    gw_resource_id = gw.get("id") or gw_stub.get("id")
+    set_count = 0
+    rule_count = 0
+
+    if not dry_run:
+        conn.execute(
+            "DELETE FROM appgw_rewrite_rule_sets WHERE subscription_id = ? AND gateway_name = ?",
+            (subscription_id, name),
+        )
+        for rewrite_set in rewrite_sets:
+            set_id = f"{name}::{rewrite_set['set_name']}"
+            conn.execute(
+                """
+                INSERT INTO appgw_rewrite_rule_sets
+                    (id, subscription_id, gateway_name, gateway_resource_id, resource_group,
+                     set_name, attached_routes, attached_route_count,
+                     rewrite_rules, rewrite_rule_count, provisioning_state, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    gateway_resource_id = excluded.gateway_resource_id,
+                    resource_group       = excluded.resource_group,
+                    attached_routes      = excluded.attached_routes,
+                    attached_route_count = excluded.attached_route_count,
+                    rewrite_rules        = excluded.rewrite_rules,
+                    rewrite_rule_count   = excluded.rewrite_rule_count,
+                    provisioning_state   = excluded.provisioning_state,
+                    last_synced          = excluded.last_synced
+                """,
+                (
+                    set_id, subscription_id, name, gw_resource_id, rg,
+                    rewrite_set["set_name"],
+                    json.dumps(rewrite_set["attached_routes"]),
+                    rewrite_set["attached_route_count"],
+                    json.dumps(rewrite_set["rewrite_rules"]),
+                    rewrite_set["rewrite_rule_count"],
+                    rewrite_set["provisioning_state"],
+                    now,
+                ),
+            )
+            set_count += 1
+            rule_count += rewrite_set["rewrite_rule_count"]
+        conn.commit()
+    else:
+        set_count = len(rewrite_sets)
+        rule_count = sum(rewrite_set["rewrite_rule_count"] for rewrite_set in rewrite_sets)
+
+    print(f"    → {set_count} rewrite rule sets upserted, {rule_count} rewrite rules recorded")
+    return set_count, rule_count
 
 
 # ---------------------------------------------------------------------------
@@ -493,12 +766,76 @@ def process_waf_policies(
 
 
 # ---------------------------------------------------------------------------
+# Public harvest entry point
+# ---------------------------------------------------------------------------
+
+def harvest_routing(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> tuple[int, int, int, int]:
+    """Harvest App Gateway listener→backend routing rules, rewrites, and WAF policies.
+
+    Returns (routing_rules, rewrite_rule_sets, rewrite_rules, waf_policies).
+    """
+    _ensure_appgw_schema(conn)
+
+    gateways = list_appgw(subscription_id)
+    if not gateways:
+        print("  No Application Gateways found — skipping")
+        return 0, 0, 0, 0
+
+    total_rules = 0
+    total_rewrite_sets = 0
+    total_rewrite_rules = 0
+    total_waf = 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Build FQDN → asset map for cross-referencing backend pools.
+    fqdn_to_asset: dict[str, tuple[str, str, str | None]] = {
+        row[3].lower().rstrip("."): (row[0], row[1], row[2])
+        for row in conn.execute(
+            "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
+            (subscription_id,),
+        ).fetchall()
+    }
+
+    full_gateways = []
+    for gw_stub in gateways:
+        name = gw_stub["name"]
+        rg = gw_stub.get("resourceGroup", "")
+        print(f"    [appgw-routing] {name}...", end=" ", flush=True)
+
+        gw = show_appgw(name, rg, subscription_id)
+        if not gw:
+            print("FAILED (show returned nothing)")
+            continue
+
+        full_gateways.append(gw)
+        rules, _connections = process_gateway(
+            gw_stub, subscription_id, conn, fqdn_to_asset, dry_run, now, gw=gw
+        )
+        total_rules += rules
+        rewrite_sets, rewrite_rules = process_rewrite_rule_sets(
+            gw_stub, subscription_id, conn, dry_run, now, gw=gw
+        )
+        total_rewrite_sets += rewrite_sets
+        total_rewrite_rules += rewrite_rules
+
+    if total_rules == 0:
+        print("  [warn] no App Gateway routing rows were harvested; check routingRules/requestRoutingRules coverage")
+
+    total_waf = process_waf_policies(subscription_id, full_gateways, conn, dry_run, now)
+    return total_rules, total_rewrite_sets, total_rewrite_rules, total_waf
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build App Gateway + WAF routing map from live Azure subscription"
+        description="Build App Gateway routing, rewrite, and WAF maps from a live Azure subscription"
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--subscription", metavar="NAME_OR_ID")
@@ -536,45 +873,26 @@ def main() -> None:
     _ensure_appgw_schema(conn)
 
     total_rules = 0
-    total_connections = 0
-    now = datetime.now(timezone.utc).isoformat()
+    total_rewrite_sets = 0
+    total_rewrite_rules = 0
+    total_waf = 0
 
     for sub in target_subs:
         sub_id   = sub["id"]
         sub_name = sub.get("name") or sub_id
         print(f"\n[subscription] {sub_name}")
-
-        gateways = list_appgw(sub_id)
-        if not gateways:
-            print("  No Application Gateways found — skipping")
-            continue
-
-        # Load FQDN → asset map for cross-referencing
-        fqdn_to_asset: dict[str, tuple[str, str]] = {
-            row[2]: (row[0], row[1])
-            for row in conn.execute(
-                "SELECT id, name, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
-                (sub_id,),
-            ).fetchall()
-        }
-
-        # Fetch full gateway configs and process routing
-        full_gateways = []
-        for gw_stub in gateways:
-            full_gw = show_appgw(gw_stub["name"], gw_stub["resourceGroup"], sub_id)
-            if full_gw:
-                full_gateways.append(full_gw)
-                rules, conns = process_gateway(
-                    gw_stub, sub_id, conn, fqdn_to_asset, args.dry_run, now
-                )
-                total_rules += rules
-                total_connections += conns
-
-        # Process WAF policies
-        process_waf_policies(sub_id, full_gateways, conn, args.dry_run, now)
+        rules, rewrite_sets, rewrite_rules, waf = harvest_routing(sub_id, conn, dry_run=args.dry_run)
+        total_rules += rules
+        total_rewrite_sets += rewrite_sets
+        total_rewrite_rules += rewrite_rules
+        total_waf += waf
 
     conn.close()
-    print(f"\n[appgw-routing] Done. {total_rules} routing rules, {total_connections} connections across {len(target_subs)} subscription(s).")
+    print(
+        f"\n[appgw-routing] Done. {total_rules} routing rules, "
+        f"{total_rewrite_sets} rewrite rule sets ({total_rewrite_rules} rewrite rules), "
+        f"{total_waf} WAF policies across {len(target_subs)} subscription(s)."
+    )
 
 
 if __name__ == "__main__":

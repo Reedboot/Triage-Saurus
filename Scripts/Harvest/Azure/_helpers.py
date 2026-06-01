@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import ssl
 import subprocess
+import signal
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -27,11 +31,29 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
     registered in the subscription) so providers degrade gracefully.
     """
     cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            return []
-        return json.loads(result.stdout or "[]") or []
+        stdout, stderr = proc.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return []
+
+    if proc.returncode != 0:
+        return []
+    try:
+        return json.loads(stdout or "[]") or []
     except Exception:
         return []
 
@@ -41,10 +63,32 @@ def _az_rest(url: str, resource: str | None = None) -> dict:
     cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
     if resource:
         cmd += ["--resource", resource]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip()[:200])
-    return json.loads(result.stdout)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise RuntimeError(f"az rest timed out after 60s: {url}") from exc
+
+    if proc.returncode != 0:
+        raise RuntimeError(stderr.strip()[:200])
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        preview = (stdout or "").replace("\n", " ")[:200]
+        raise RuntimeError(f"az rest returned invalid JSON: {exc.msg}; output={preview!r}") from exc
 
 
 def safe_str(value: Any) -> str | None:
@@ -207,12 +251,29 @@ def build_endpoints(
 
     Probes are run for each endpoint if probing is enabled.
     """
+    if not entries:
+        return json.dumps([])
+
     results: list[dict[str, Any]] = []
-    for address, port, protocol in entries:
-        ep = build_endpoint(address, port, protocol, timeout=timeout)
-        if ep is not None:
-            results.append(ep)
+    if _PROBES_ENABLED and len(entries) > 1 and all(protocol != "dns" for _, _, protocol in entries):
+        with ThreadPoolExecutor(max_workers=min(8, len(entries))) as pool:
+            for ep in pool.map(partial(_build_endpoint_from_entry, timeout=timeout), entries):
+                if ep is not None:
+                    results.append(ep)
+    else:
+        for address, port, protocol in entries:
+            ep = build_endpoint(address, port, protocol, timeout=timeout)
+            if ep is not None:
+                results.append(ep)
     return json.dumps(results)
+
+
+def _build_endpoint_from_entry(
+    entry: tuple[str | None, int, str],
+    timeout: int = 5,
+) -> dict[str, Any] | None:
+    address, port, protocol = entry
+    return build_endpoint(address, port, protocol, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------

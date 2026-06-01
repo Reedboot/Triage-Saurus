@@ -129,7 +129,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             enriched_endpoints.append(entry)
 
         monitor_config = profile.get("monitorConfig") or {}
+        inbound_traffic_type = "dns"
         extra = {
+            "inbound_traffic_type": inbound_traffic_type,
             "routing_method": profile.get("trafficRoutingMethod"),
             "profile_status": profile.get("profileStatus"),
             "dns_ttl": dns_config.get("ttl"),
@@ -139,6 +141,17 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "monitor_path": monitor_config.get("path"),
             "endpoint_count": len(raw_endpoints),
             "endpoints": enriched_endpoints,
+            "routing_targets": [
+                {
+                    "name": ep.get("name"),
+                    "target": safe_str(ep.get("target")),
+                    "target_resource_id": ep.get("targetResourceId"),
+                    "weight": ep.get("weight"),
+                    "priority": ep.get("priority"),
+                    "endpoint_status": ep.get("endpointStatus"),
+                }
+                for ep in raw_endpoints
+            ],
         }
 
         # is_public is config-based: TM profiles with an FQDN are DNS-publicly advertised.

@@ -127,7 +127,44 @@
     .ca-table tbody tr:hover { background: var(--bg-hover); }
     .ca-table tbody td { padding: 9px 12px; vertical-align: middle; }
 
-    .asset-name { font-weight: 600; color: var(--text); }
+    .asset-header-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      margin-bottom: 2px;
+    }
+    .asset-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .expand-toggle {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      user-select: none;
+    }
+    .child-count-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.68rem;
+      font-weight: 700;
+      line-height: 1;
+    }
     .asset-fqdn { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; word-break: break-all; }
     .asset-rg   { font-size: 0.75rem; color: var(--text-faint); margin-top: 1px; }
 
@@ -248,7 +285,7 @@
 
     <!-- Toolbar -->
     <div class="ca-toolbar">
-      <input class="ca-search" id="ca-search" type="search" placeholder="🔍 Search name, FQDN, resource group…" oninput="applyFilters()">
+      <input class="ca-search" id="ca-search" type="search" placeholder="🔍 Search name, type, FQDN, resource group…" oninput="applyFilters()">
       <select class="ca-filter-select" id="filter-status" onchange="applyFilters()">
         <option value="">All statuses</option>
         <option value="active">Active</option>
@@ -290,7 +327,6 @@ python Scripts/Harvest/harvest_azure_assets.py --subscription "My-Prod-Sub"</pre
             <th data-col="location">Location <span class="sort-arrow">↕</span></th>
             <th>Public</th>
             <th data-col="env">Environment <span class="sort-arrow">↕</span></th>
-            <th>Status</th>
             <th>Linked Repo</th>
           </tr>
         </thead>
@@ -306,8 +342,7 @@ let _allAssets = [];
 let _subscriptions = [];
 let _activeSubId = null;   // null = show all
 let _activeType  = null;   // null = show all
-let _sortCol     = null;
-let _sortAsc     = true;
+let _expandedParents = new Set();
 
 // ── Env helpers ──────────────────────────────────────────────────────────────
 function envClass(env) {
@@ -324,10 +359,23 @@ function envDotClass(env) {
 function envBadgeHtml(env) {
   return `<span class="env-badge env-${envClass(env)}">${env || 'unknown'}</span>`;
 }
-function statusHtml(s) {
-  if (s === 'potentially_removed') return `<span class="status-potentially_removed" title="Not seen on last harvest — may have been deleted">⚠ check</span>`;
-  if (s === 'removed')             return `<span class="status-removed">✗ removed</span>`;
-  return `<span class="status-active">✓</span>`;
+function displayTypeLabel(a) {
+  return a.display_type_label || a.type_label || 'Resource';
+}
+function assetSearchText(a) {
+  return [
+    a.name,
+    a.fqdn,
+    a.resource_group,
+    a.type_label,
+    a.display_type_label,
+    a.kind,
+    a.parent_name,
+    a.sub_name,
+    a.location,
+    a.sku,
+    a.linked_repo,
+  ].filter(Boolean).join(' ').toLowerCase();
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
@@ -434,35 +482,108 @@ function applyFilters() {
   const publicF    = document.getElementById('filter-public').value;
   const sortKey    = document.getElementById('filter-sort').value;
 
-  let filtered = _allAssets.filter(a => {
+  const byId = new Map(_allAssets.map(a => [String(a.id || ''), a]));
+  const childrenAll = new Map();
+  _allAssets.forEach(a => {
+    const parentId = String(a.parent_id || '');
+    if (!parentId) return;
+    if (!childrenAll.has(parentId)) childrenAll.set(parentId, []);
+    childrenAll.get(parentId).push(a);
+  });
+
+  const directMatches = _allAssets.filter(a => {
     if (_activeSubId && a.sub_id !== _activeSubId) return false;
-    if (_activeType   && a.type_label !== _activeType)  return false;
+    if (_activeType && displayTypeLabel(a) !== _activeType) return false;
     if (statusF && a.status !== statusF) return false;
     if (publicF === 'public'  && !a.is_public) return false;
     if (publicF === 'private' &&  a.is_public) return false;
-    if (search) {
-      const haystack = [a.name, a.fqdn, a.resource_group, a.type_label, a.sub_name, a.location]
-        .filter(Boolean).join(' ').toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
+    if (search && !assetSearchText(a).includes(search)) return false;
     return true;
   });
 
-  // Sort
-  const sortFn = {
-    name: (a, b) => (a.name||'').localeCompare(b.name||''),
-    type: (a, b) => (a.type_label||'').localeCompare(b.type_label||'') || (a.name||'').localeCompare(b.name||''),
-    rg:   (a, b) => (a.resource_group||'').localeCompare(b.resource_group||''),
-    env:  (a, b) => (a.environment||'').localeCompare(b.environment||'') || (a.sub_name||'').localeCompare(b.sub_name||''),
-  };
-  if (sortFn[sortKey]) filtered.sort(sortFn[sortKey]);
+  const includeIds = new Set();
+  const stack = [];
+  directMatches.forEach(a => {
+    const id = String(a.id || '');
+    if (!id || includeIds.has(id)) return;
+    includeIds.add(id);
+    stack.push(id);
+  });
 
-  renderTable(filtered, sortKey);
+  while (stack.length) {
+    const id = stack.pop();
+    const item = byId.get(id);
+    if (!item) continue;
+
+    const parentId = String(item.parent_id || '');
+    if (parentId && byId.has(parentId) && !includeIds.has(parentId)) {
+      includeIds.add(parentId);
+      stack.push(parentId);
+    }
+
+    const children = childrenAll.get(id) || [];
+    children.forEach(child => {
+      const childId = String(child.id || '');
+      if (!childId || includeIds.has(childId)) return;
+      includeIds.add(childId);
+      stack.push(childId);
+    });
+  }
+
+  let filtered = _allAssets.filter(a => includeIds.has(String(a.id || '')));
+  const filteredById = new Map(filtered.map(a => [String(a.id || ''), a]));
+  const childrenByParent = new Map();
+  filtered.forEach(a => {
+    const parentId = String(a.parent_id || '');
+    if (!parentId || !filteredById.has(parentId)) return;
+    if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+    childrenByParent.get(parentId).push(a);
+  });
+
+  const sortItems = items => {
+    const out = items.slice();
+    out.sort((a, b) => {
+      if (sortKey === 'type') {
+        return displayTypeLabel(a).localeCompare(displayTypeLabel(b)) ||
+          (a.name || '').localeCompare(b.name || '');
+      }
+      if (sortKey === 'rg') {
+        return (a.resource_group || '').localeCompare(b.resource_group || '') ||
+          (a.name || '').localeCompare(b.name || '');
+      }
+      if (sortKey === 'env') {
+        return (a.environment || '').localeCompare(b.environment || '') ||
+          (a.sub_name || '').localeCompare(b.sub_name || '') ||
+          (a.name || '').localeCompare(b.name || '');
+      }
+      return (a.name || '').localeCompare(b.name || '') ||
+        displayTypeLabel(a).localeCompare(displayTypeLabel(b));
+    });
+    return out;
+  };
+
+  const ordered = [];
+  const seen = new Set();
+  const appendNode = (node, depth) => {
+    const nodeId = String(node.id || '');
+    if (!nodeId || seen.has(nodeId) || depth > 10) return;
+    seen.add(nodeId);
+    ordered.push(node);
+    sortItems(childrenByParent.get(nodeId) || []).forEach(child => appendNode(child, depth + 1));
+  };
+
+  sortItems(filtered.filter(a => !a.parent_id || !filteredById.has(String(a.parent_id)))).forEach(root => appendNode(root, 0));
+  filtered.forEach(a => {
+    const id = String(a.id || '');
+    if (id && !seen.has(id)) ordered.push(a);
+  });
+
+  renderTable(ordered, childrenByParent);
   document.getElementById('ca-count').textContent =
-    `${filtered.length.toLocaleString()} of ${_allAssets.length.toLocaleString()} assets`;
+    `${ordered.length.toLocaleString()} of ${_allAssets.length.toLocaleString()} assets`;
 }
 
-function renderTable(assets, groupBy) {
+function renderTable(assets, childrenByParent) {
   const tbody = document.getElementById('ca-tbody');
   const table = document.getElementById('ca-table');
 
@@ -474,31 +595,47 @@ function renderTable(assets, groupBy) {
   }
 
   table.style.display = '';
-
-  // Grouping
-  const groupKey = { type: 'type_label', env: 'environment', rg: 'resource_group' }[groupBy] || 'type_label';
-  let lastGroup = null;
+  const byId = new Map(assets.map(a => [String(a.id || ''), a]));
   const rows = [];
+  const visibleChildCounts = {};
+  for (const [parentId, children] of childrenByParent.entries()) {
+    visibleChildCounts[parentId] = children.length;
+  }
 
   assets.forEach(a => {
-    const g = a[groupKey] || '—';
-    if (g !== lastGroup) {
-      lastGroup = g;
-      rows.push(`<tr class="ca-group-row"><td colspan="8">${g}</td></tr>`);
-    }
+    const id = String(a.id || '');
+    const parentId = String(a.parent_id || '');
+    const isChild = !!(parentId && byId.has(parentId));
+    const isOpen = _expandedParents.has(id);
+    const childCount = visibleChildCounts[id] || 0;
+    const parent = isChild ? byId.get(parentId) : null;
+    const visible = !isChild || _expandedParents.has(parentId);
+    const typeLabel = displayTypeLabel(a);
+    const parentHint = isChild && (a.parent_name || parent?.name)
+      ? `<span class="asset-parent-hint">Hosted on ${esc(a.parent_name || parent?.name)}</span>`
+      : '';
+    const toggle = childCount
+      ? `<span class="expand-toggle${isOpen ? ' open' : ''}" data-parent-id="${esc(id)}" title="Expand/collapse sub-assets">▶</span>`
+      : '';
+    const childBadge = childCount
+      ? `<span class="child-count-badge" title="${childCount} sub-asset(s)">${childCount}</span>`
+      : '';
     rows.push(`
-      <tr>
+      <tr${isChild ? ' class="child-row"' : ''} data-resource-id="${esc(id)}" data-parent-id="${esc(parentId)}" data-children-count="${childCount}" data-is-child="${isChild ? 1 : 0}" style="${visible ? '' : 'display:none;'}">
         <td>
-          <div class="asset-name">${esc(a.name)}</div>
+          <div class="asset-header-line">
+            ${toggle}
+            <div class="asset-name">${esc(a.name)}${childBadge}</div>
+          </div>
+          ${parentHint}
           ${a.fqdn ? `<div class="asset-fqdn">${esc(a.fqdn)}</div>` : ''}
           <div class="asset-rg">${esc(a.sub_name || '')}</div>
         </td>
-        <td><span class="type-badge">${esc(a.type_label)}</span></td>
+        <td><span class="type-badge">${esc(typeLabel)}</span></td>
         <td style="font-size:0.78rem; color:var(--text-muted);">${esc(a.resource_group||'—')}</td>
         <td style="font-size:0.78rem; color:var(--text-muted);">${esc(a.location||'—')}</td>
         <td class="${a.is_public ? 'public-yes' : 'public-no'}">${a.is_public ? '🌐 Yes' : '—'}</td>
         <td>${envBadgeHtml(a.environment)}</td>
-        <td>${statusHtml(a.status)}</td>
         <td>${a.linked_repo ? `<span class="repo-chip">🔗 ${esc(a.linked_repo)}</span>` : '<span style="color:var(--text-faint)">—</span>'}</td>
       </tr>
     `);
@@ -516,6 +653,20 @@ const urlParams = new URLSearchParams(window.location.search);
 const subParam = urlParams.get('sub');
 if (subParam) {
   _activeSubId = decodeURIComponent(subParam);
+}
+
+const tableWrap = document.getElementById('ca-table-wrap');
+if (tableWrap && !tableWrap.__expand_bound) {
+  tableWrap.__expand_bound = true;
+  tableWrap.addEventListener('click', (e) => {
+    const toggle = e.target.closest('.expand-toggle');
+    if (!toggle) return;
+    const parentId = toggle.getAttribute('data-parent-id');
+    if (!parentId) return;
+    if (_expandedParents.has(parentId)) _expandedParents.delete(parentId);
+    else _expandedParents.add(parentId);
+    applyFilters();
+  });
 }
 
 loadData();

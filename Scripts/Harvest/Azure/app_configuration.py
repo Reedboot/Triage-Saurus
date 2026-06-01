@@ -8,27 +8,24 @@ from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
 
 RESOURCE_TYPE = "Microsoft.AppConfiguration/configurationStores"
 
-# Role definition names that represent RBAC-controlled App Config access.
-# If neither is assigned, apps are almost certainly using access keys.
-_APPCONFIG_DATA_ROLES = {
-    "App Configuration Data Owner",
-    "App Configuration Data Reader",
-}
-
-
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["appconfig", "list"], subscription_id)
     results = []
 
-    for store in raw:
+    total = len(raw)
+    for idx, store in enumerate(raw, start=1):
         props = store.get("properties") or {}
         resource_id = store.get("id", "")
         endpoint = safe_str(props.get("endpoint", "").replace("https://", "").rstrip("/")) or None
+        store_name = safe_str(store.get("name")) or f"store-{idx}"
 
+        print(f"    [App Configuration {idx}/{total}] {store_name}...", end=" ", flush=True)
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
-        endpoints = build_endpoints([(endpoint, 443, "https")] if endpoint else [])
+        # App Configuration endpoints are useful for inventory, but probing them
+        # during every harvest adds noticeable latency, so keep the timeout short.
+        endpoints = build_endpoints([(endpoint, 443, "https")] if endpoint else [], timeout=2)
         auth_methods = json.dumps(_get_auth_methods(props))
-        rbac_check = _check_rbac(resource_id, subscription_id, props, store)
+        rbac_check = _check_rbac(resource_id, props, store)
 
         extra = {
             "sku": (store.get("sku") or {}).get("name"),
@@ -58,6 +55,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "pipeline_tag": (store.get("tags") or {}).get("pipeline") or (store.get("tags") or {}).get("ado-pipeline"),
             "raw_json": json.dumps({**store, "_extra": extra}),
         })
+        print("done")
 
     return results
 
@@ -84,19 +82,10 @@ def _get_auth_methods(props: dict[str, Any]) -> list[str]:
 
 def _check_rbac(
     resource_id: str,
-    subscription_id: str,
     props: dict[str, Any],
     store: dict[str, Any],
 ) -> dict[str, Any]:
-    """Assess RBAC posture for an App Configuration store.
-
-    Checks:
-    - disableLocalAuth  — when False, access keys are still enabled (not RBAC-only)
-    - Role assignments  — presence of App Configuration Data Owner/Reader roles
-                         indicates RBAC is actively used; absence suggests key auth
-    - Managed identity  — system/user-assigned identity enables keyless MSI auth
-    - Private endpoints — no private endpoint + public access = internet-exposed
-    """
+    """Assess App Configuration posture from local resource properties only."""
     local_auth_disabled = bool(props.get("disableLocalAuth", False))
 
     # Managed identity on the store itself (not the consuming app)
@@ -113,33 +102,14 @@ def _check_rbac(
         if (c.get("properties") or {}).get("privateLinkServiceConnectionState", {}).get("status") == "Approved"
     )
 
-    # Role assignments scoped to this resource
-    assignments = az(
-        ["role", "assignment", "list", "--scope", resource_id, "--include-inherited"],
-        subscription_id,
-    )
-    data_role_assignments = [
-        a for a in assignments
-        if a.get("roleDefinitionName") in _APPCONFIG_DATA_ROLES
-    ]
-    # Flag assignments granted at subscription scope (overly broad)
-    broad_data_assignments = [
-        a for a in data_role_assignments
-        if "/resourceGroups/" not in a.get("scope", "")
-    ]
-
     # Derive findings
     findings: list[str] = []
     if not local_auth_disabled:
         findings.append("access_keys_enabled")
-    if not data_role_assignments:
-        findings.append("no_data_rbac_roles_found")
     if not has_identity:
         findings.append("no_managed_identity")
     if not has_private_endpoint and props.get("publicNetworkAccess", "Enabled") != "Disabled":
         findings.append("no_private_endpoint")
-    if broad_data_assignments:
-        findings.append("data_role_granted_at_subscription_scope")
 
     return {
         "local_auth_disabled": local_auth_disabled,
@@ -149,8 +119,9 @@ def _check_rbac(
         "user_identity_count": len(user_identities),
         "has_private_endpoint": has_private_endpoint,
         "approved_private_endpoint_count": approved_pe_count,
-        "data_role_assignment_count": len(data_role_assignments),
-        "broad_data_assignment_count": len(broad_data_assignments),
+        "role_assignment_lookup": "skipped",
+        "data_role_assignment_count": None,
+        "broad_data_assignment_count": None,
         "findings": findings,
         "risk": _rbac_risk_level(findings),
     }

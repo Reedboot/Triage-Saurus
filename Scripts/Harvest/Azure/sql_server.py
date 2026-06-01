@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._helpers import az, build_endpoints, extract_ip_restrictions, safe_str
+from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
 
 RESOURCE_TYPE = "Microsoft.Sql/servers"
 
@@ -17,9 +17,9 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         props = server.get("properties") or {}
         fqdn = safe_str(props.get("fullyQualifiedDomainName"))
         is_public, is_restricted, ip_restrictions, firewall_rules = _classify_exposure(server, subscription_id)
+        auth_methods = json.dumps(_get_auth_methods(server, subscription_id))
 
         endpoints = build_endpoints([(fqdn, 1433, "tds/tcp")] if fqdn else [])
-        auth_methods = json.dumps(_get_auth_methods(server, subscription_id))
 
         extra = {
             "public_network_access": props.get("publicNetworkAccess", "Enabled"),
@@ -46,6 +46,8 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             "pipeline_tag": None,
             "raw_json": json.dumps({**server, "_extra": extra}),
         })
+
+        results.extend(_harvest_databases(subscription_id, server, fqdn, is_public, is_restricted, ip_restrictions, auth_methods))
 
     return results
 
@@ -108,3 +110,61 @@ def _get_auth_methods(server: dict[str, Any], subscription_id: str) -> list[str]
                 methods.append("azure_ad")
 
     return methods
+
+
+def _harvest_databases(
+    subscription_id: str,
+    server: dict[str, Any],
+    server_fqdn: str | None,
+    server_is_public: int,
+    server_is_restricted: int,
+    server_ip_restrictions: list[str],
+    server_auth_methods: str,
+) -> list[dict[str, Any]]:
+    server_name = safe_str(server.get("name"))
+    resource_group = safe_str(server.get("resourceGroup"))
+    server_id = safe_str(server.get("id"))
+    if not server_name or not resource_group:
+        return []
+
+    databases = az(
+        [
+            "sql", "db", "list",
+            "--server", server_name,
+            "--resource-group", resource_group,
+        ],
+        subscription_id,
+    )
+    if not databases:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for db in databases:
+        name = safe_str(db.get("name"))
+        if not name or name.lower() == "master":
+            continue
+
+        db_id = safe_str(db.get("id")) or (f"{server_id}/databases/{name}" if server_id else None)
+        if not db_id:
+            continue
+
+        rows.append({
+            "id": db_id,
+            "subscription_id": subscription_id,
+            "resource_group": safe_str(db.get("resourceGroup")) or resource_group,
+            "name": name,
+            "type": "Microsoft.Sql/servers/databases",
+            "location": safe_str(db.get("location")) or server.get("location"),
+            "sku": infer_sku(db),
+            "tags": json.dumps(db.get("tags") or {}),
+            "is_public": int(bool(server_is_public)),
+            "is_restricted": int(bool(server_is_restricted)),
+            "ip_restrictions": json.dumps(server_ip_restrictions),
+            "endpoints": json.dumps([]),
+            "auth_methods": server_auth_methods,
+            "fqdn": server_fqdn,
+            "pipeline_tag": None,
+            "raw_json": json.dumps(db),
+        })
+
+    return rows

@@ -569,6 +569,7 @@ _BASE_TABLES_SQL = """
         ip_restrictions TEXT,               -- JSON array of allowed CIDRs e.g. ["10.0.0.0/8"]
         endpoints       TEXT,               -- JSON array of {address,port,protocol,reachable,...}
         auth_methods    TEXT,               -- JSON array of auth mechanisms e.g. ["azure_ad","api_key"]
+        waf_mode        TEXT,               -- WAF mode if present: "Prevention" | "Detection" | null
         FOREIGN KEY (subscription_id) REFERENCES subscriptions(id)
     );
 
@@ -1306,6 +1307,27 @@ def _ensure_schema(conn: sqlite3.Connection):
     lock_path = COZO_DB.with_name(COZO_DB.name + ".schema_lock")
     lock_fd = None
     acquired = False
+
+    def _remove_stale_lock_if_possible() -> bool:
+        try:
+            with open(lock_path, "r", encoding="utf-8") as fh:
+                lock_pid = int(fh.read().strip())
+        except (OSError, ValueError):
+            return False
+
+        try:
+            os.kill(lock_pid, 0)
+        except ProcessLookupError:
+            try:
+                os.unlink(lock_path)
+                return True
+            except OSError:
+                return False
+        except PermissionError:
+            return False
+
+        return False
+
     # Try to acquire an exclusive lock file with retries
     for attempt in range(6):
         try:
@@ -1319,6 +1341,8 @@ def _ensure_schema(conn: sqlite3.Connection):
             acquired = True
             break
         except FileExistsError:
+            if _remove_stale_lock_if_possible():
+                continue
             # Another process is running migrations; wait and retry
             time.sleep(1 + attempt)
             continue
@@ -1327,6 +1351,7 @@ def _ensure_schema(conn: sqlite3.Connection):
             break
 
     if not acquired:
+        _remove_stale_lock_if_possible()
         # If lock couldn't be acquired, wait for the lock file to disappear and
         # attempt to acquire it again. If the lock appears stale (>5min) remove it.
         wait_start = time.time()
@@ -1719,12 +1744,13 @@ def _ensure_schema(conn: sqlite3.Connection):
                 "CREATE INDEX IF NOT EXISTS idx_provisioned_assets_status "
                 "ON provisioned_assets(subscription_id, status)"
             )
-            # Migration: add exposure / endpoint / auth columns
+            # Migration: add exposure / endpoint / auth / waf columns
             for col_name, col_type in (
                 ("is_restricted", "INTEGER DEFAULT 0"),
                 ("ip_restrictions", "TEXT"),
                 ("endpoints",      "TEXT"),
                 ("auth_methods",   "TEXT"),
+                ("waf_mode",       "TEXT"),
             ):
                 if col_name not in pa_columns:
                     conn.execute(

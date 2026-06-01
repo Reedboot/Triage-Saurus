@@ -233,25 +233,13 @@ def match_repos(
 # ---------------------------------------------------------------------------
 
 def refresh_public_flags(conn: sqlite3.Connection, sub_id: str) -> None:
-    """Re-evaluate is_public for storage accounts (blob public access = explicit check)."""
-    rows = conn.execute(
-        "SELECT id, type, raw_json FROM provisioned_assets WHERE subscription_id = ?",
-        (sub_id,),
-    ).fetchall()
-    for asset_id, asset_type, raw in rows:
-        if "storage" not in (asset_type or "").lower():
-            continue
-        try:
-            data = json.loads(raw or "{}")
-            props = data.get("properties") or {}
-            is_public = 1 if props.get("allowBlobPublicAccess") else 0
-            conn.execute(
-                "UPDATE provisioned_assets SET is_public = ? WHERE id = ?",
-                (is_public, asset_id),
-            )
-        except Exception:
-            pass
-    conn.commit()
+    """Keep harvested network exposure flags authoritative.
+
+    Blob public access is still captured in raw_json/_extra for analysis, but it
+    should not override the network exposure classification used by the cloud
+    diagram.
+    """
+    _ = conn, sub_id
 
 
 # ---------------------------------------------------------------------------

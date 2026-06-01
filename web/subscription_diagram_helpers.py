@@ -6,6 +6,7 @@ from typing import Callable
 SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.network/applicationgateways",
     "microsoft.apimanagement/service",
+    "microsoft.appconfiguration/configurationstores",
     "microsoft.keyvault/vaults",
     "microsoft.storage/storageaccounts",
     "microsoft.sql/servers",
@@ -43,7 +44,7 @@ def subscription_is_function_app(item: dict) -> bool:
 def subscription_asset_tier(arm_type: str, name: str = "") -> str:
     type_key = (arm_type or "").lower()
     item = {"name": name}
-    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key:
+    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key or "cdn/profiles" in type_key or "network/loadbalancers" in type_key:
         return "entry"
     if "apimanagement" in type_key:
         return "api"
@@ -82,6 +83,8 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
         asset_id = row[6] if len(row) > 6 else None
         has_waf = bool(row[7]) if len(row) > 7 else False
         listeners = row[8] if len(row) > 8 else None
+        is_restricted = bool(row[9]) if len(row) > 9 else False
+        waf_mode = row[10] if len(row) > 10 else None
         asset = {
             "name": name,
             "arm_type": rtype,
@@ -92,7 +95,9 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
             "sku": sku,
             "id": asset_id,
             "has_waf": has_waf,
+            "waf_mode": waf_mode,
             "listeners": listeners,
+            "is_restricted": is_restricted,
             "tier": subscription_asset_tier(rtype, name),
             "friendly_type": friendly_type(rtype),
             "short_name": subscription_short_name(name or "resource"),
@@ -101,9 +106,70 @@ def subscription_assets_from_rows(rows: list, friendly_type: Callable[[str], str
     return assets
 
 
+def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | None = None) -> list[dict]:
+    """Fold hosted App Services / Function Apps into their App Service Plan.
+
+    The returned list keeps App Service Plans visible, hides hosted sites that have a
+    matching plan in scope, and aggregates the hosted sites' FQDN/public exposure
+    onto the plan node so the diagram stays clickable and accurate.
+    """
+    from collections import defaultdict
+
+    if not plan_links:
+        return [dict(asset) for asset in assets]
+
+    def _key(asset: dict) -> tuple[str, str]:
+        return ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower())
+
+    def _type(asset: dict) -> str:
+        return (asset.get("arm_type") or asset.get("type") or "").lower()
+
+    asset_map = {_key(asset): dict(asset) for asset in assets}
+    hidden_keys: set[tuple[str, str]] = set()
+    hosted_by_plan: dict[tuple[str, str], list[dict]] = defaultdict(list)
+
+    for site_rg, site_name, plan_rg, plan_name in plan_links:
+        site_key = ((site_name or "").lower(), (site_rg or "").lower())
+        plan_key = ((plan_name or "").lower(), (plan_rg or "").lower())
+        site_asset = asset_map.get(site_key)
+        plan_asset = asset_map.get(plan_key)
+        if not site_asset or not plan_asset:
+            continue
+        if "sites" not in _type(site_asset) or "serverfarms" not in _type(plan_asset):
+            continue
+        if site_key in hidden_keys:
+            continue
+        hidden_keys.add(site_key)
+        hosted_by_plan[plan_key].append(site_asset)
+
+    visible_assets: list[dict] = []
+    for asset in assets:
+        asset_copy = dict(asset)
+        key = _key(asset_copy)
+        if key in hidden_keys:
+            continue
+
+        children = hosted_by_plan.get(key)
+        if children and "serverfarms" in _type(asset_copy):
+            child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
+            merged_fqdns = list(dict.fromkeys([*(asset_copy.get("fqdns") or []), *child_fqdns]))
+            asset_copy["fqdns"] = merged_fqdns
+            asset_copy["public"] = bool(asset_copy.get("public") or any(child.get("public") for child in children))
+            asset_copy["is_restricted"] = bool(asset_copy.get("is_restricted") or any(child.get("is_restricted") for child in children))
+            asset_copy["hosted_site_count"] = len(children)
+        elif "fqdns" not in asset_copy and asset_copy.get("fqdn"):
+            asset_copy["fqdns"] = [asset_copy["fqdn"]]
+
+        visible_assets.append(asset_copy)
+
+    return visible_assets
+
+
 def subscription_primary_fqdn(asset: dict) -> str:
     fqdns = asset.get("fqdns") or []
-    return str(fqdns[0]).strip() if fqdns else ""
+    if fqdns:
+        return str(fqdns[0]).strip()
+    return str(asset.get("fqdn") or "").strip()
 
 
 def subscription_is_secret_store(arm_type: str) -> bool:
@@ -126,6 +192,37 @@ def subscription_data_attack_label(asset: dict) -> str:
     if "cache/redis" in type_key:
         return "dump cache"
     return "access data"
+
+
+def subscription_allowlist_label(asset: dict) -> str:
+    family = str(asset.get("type") or asset.get("label") or asset.get("friendly_type") or "").strip()
+    return f"IP allowlist ({family})" if family else "IP allowlist"
+
+
+def subscription_is_allowlist_target(asset: dict) -> bool:
+    type_key = (asset.get("arm_type") or asset.get("type") or "").lower()
+    return any(
+        token in type_key
+        for token in (
+            "apimanagement",
+            "sites",
+            "managedcluster",
+            "containerinstance",
+            "datafactory",
+            "cognitiveservices",
+            "containerregistry",
+            "servicefabric",
+            "keyvault",
+            "storage",
+            "sql",
+            "documentdb",
+            "servicebus",
+            "eventhub",
+            "cache/redis",
+            "search/search",
+            "appconfiguration",
+        )
+    )
 
 
 def subscription_attack_badges(asset: dict) -> list[str]:
@@ -153,6 +250,9 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
     fqdn = subscription_primary_fqdn(asset)
     if include_fqdn and fqdn:
         parts.append(fqdn if len(fqdn) <= 42 else fqdn[:40] + "...")
+    hosted_site_count = asset.get("hosted_site_count")
+    if hosted_site_count:
+        parts.append(f"{hosted_site_count} app{'s' if hosted_site_count != 1 else ''}")
     badges = subscription_attack_badges(asset) if include_badges else []
     if badges:
         parts.append(" - ".join(badges))
@@ -204,7 +304,9 @@ def subscription_register_node(
         "title": asset.get("name") or asset.get("friendly_type") or "resource",
         "arm_type": asset.get("arm_type"),
         "resources": resources,
-        "can_drill": arm_type in SUBSCRIPTION_DRILLABLE_ARM_TYPES and bool(resources),
+        "can_drill": bool(resources) and (
+            arm_type in SUBSCRIPTION_DRILLABLE_ARM_TYPES or len(resources) > 1
+        ),
     }
 
 
@@ -425,8 +527,8 @@ def build_subscription_overlay_views(
     normalize_attack_paths: Callable[[object, str | None], list[dict]],
     plan_links: list | None = None,
 ) -> dict:
-    del plan_links
     assets = subscription_assets_from_rows(rows, friendly_type)
+    assets = subscription_apply_plan_hierarchy(assets, plan_links)
     entries = [a for a in assets if a.get("tier") == "entry"]
     apis = [a for a in assets if a.get("tier") == "api"]
     backends = [a for a in assets if a.get("tier") == "backend"]
@@ -480,14 +582,35 @@ def build_subscription_overlay_views(
         exp_edges.append({"src": src, "dst": dst, "label": label, "color": color, "width": width})
 
     for entry in entries[:4]:
-        label = subscription_primary_fqdn(entry) or ("WAF protected" if entry.get("has_waf") else "Public edge")
-        add_exp_edge("Internet", subscription_node_id(entry, sanitise_node_id), label, "#f97316" if entry.get("has_waf") else "#ef4444", "3px")
+        has_waf = entry.get("has_waf")
+        waf_mode = (entry.get("waf_mode") or "").strip()
+        if has_waf:
+            if "prevention" in waf_mode.lower():
+                waf_label = "WAF (Prev)"
+                arrow_color = "#f97316"
+            elif "detection" in waf_mode.lower():
+                waf_label = "WAF (Det)"
+                arrow_color = "#f59e0b"
+            else:
+                waf_label = "WAF"
+                arrow_color = "#f97316"
+            label = subscription_primary_fqdn(entry) or waf_label
+        else:
+            label = subscription_primary_fqdn(entry) or "Public edge"
+            arrow_color = "#ef4444"
+        add_exp_edge("Internet", subscription_node_id(entry, sanitise_node_id), label, arrow_color, "3px")
     for api in [a for a in apis if a.get("public")][:2]:
         add_exp_edge("Internet", subscription_node_id(api, sanitise_node_id), subscription_primary_fqdn(api) or "Public API", "#ef4444", "3px")
+    for api in [a for a in apis if a.get("is_restricted") and not a.get("public")][:2]:
+        add_exp_edge("Internet", subscription_node_id(api, sanitise_node_id), subscription_allowlist_label(api), "#f59e0b", "2px")
     for backend in [a for a in backends if a.get("public")][:4]:
         add_exp_edge("Internet", subscription_node_id(backend, sanitise_node_id), subscription_primary_fqdn(backend) or "Direct workload", "#ef4444", "3px")
+    for backend in [a for a in backends if a.get("is_restricted") and not a.get("public") and subscription_is_allowlist_target(a)][:3]:
+        add_exp_edge("Internet", subscription_node_id(backend, sanitise_node_id), subscription_allowlist_label(backend), "#f59e0b", "2px")
     for store in [a for a in data if a.get("public")][:3]:
         add_exp_edge("Internet", subscription_node_id(store, sanitise_node_id), subscription_primary_fqdn(store) or "Direct data plane", "#ef4444", "3px")
+    for store in [a for a in data if a.get("is_restricted") and not a.get("public") and subscription_is_allowlist_target(a)][:3]:
+        add_exp_edge("Internet", subscription_node_id(store, sanitise_node_id), subscription_allowlist_label(store), "#f59e0b", "2px")
     if entries and apis:
         for entry in entries[:2]:
             for api in apis[:2]:
@@ -505,6 +628,32 @@ def build_subscription_overlay_views(
             for store in data[:4]:
                 add_exp_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), "reachable next hop", "#94a3b8")
 
+    if plan_links:
+        plan_assets = {
+            ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
+            for asset in assets
+            if "serverfarms" in (asset.get("arm_type") or "").lower()
+        }
+        site_assets = {
+            ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
+            for asset in assets
+            if "sites" in (asset.get("arm_type") or "").lower()
+        }
+        emitted_plan_edges: set[tuple[str, str]] = set()
+        for site_rg, site_name, plan_rg, plan_name in plan_links:
+            site_asset = site_assets.get(((site_name or "").lower(), (site_rg or "").lower()))
+            plan_asset = plan_assets.get(((plan_name or "").lower(), (plan_rg or "").lower()))
+            if not site_asset or not plan_asset:
+                continue
+            edge = (
+                subscription_node_id(site_asset, sanitise_node_id),
+                subscription_node_id(plan_asset, sanitise_node_id),
+            )
+            if edge in emitted_plan_edges:
+                continue
+            emitted_plan_edges.add(edge)
+            add_exp_edge(edge[0], edge[1], "hosted on", "#ffffff")
+
     exposure_view = render_subscription_view(
         nodes=exp_nodes,
         edges=exp_edges,
@@ -513,63 +662,10 @@ def build_subscription_overlay_views(
         title="Exposure view",
         description="Shows internet-reachable entry points, directly public assets, and the next internal hops they can reach.",
         legend=[
-            "Orange edges: internet-reachable routing chain",
-            "Red edges: directly public workload or data-plane exposure",
+            "Orange edges: WAF-protected entry point (Prevention mode)",
+            "Amber edges: WAF in Detection mode or IP-allowlisted access",
+            "Red edges: directly public — no WAF or network restriction",
             "Grey edges: likely next hop once the public edge is crossed",
-        ],
-        attack_paths=attack_paths,
-        asset_summary=asset_summary,
-    )
-
-    attack_assets: list[dict] = []
-    attack_assets.extend(entries[:3])
-    attack_assets.extend(apis[:2])
-    attack_assets.extend(backends[:3])
-    attack_assets.extend([a for a in data if subscription_is_secret_store(a.get("arm_type") or "")][:2])
-    attack_assets.extend([a for a in data if not subscription_is_secret_store(a.get("arm_type") or "")][:3])
-    atk_nodes, atk_node_map = make_scope_nodes(attack_assets, badges=True, include_fqdn=False)
-    atk_edges: list[dict] = []
-    seen_attack_edges: set[tuple[str, str, str]] = set()
-
-    def add_atk_edge(src: str, dst: str, label: str) -> None:
-        key = (src, dst, label)
-        if key in seen_attack_edges:
-            return
-        seen_attack_edges.add(key)
-        atk_edges.append({"src": src, "dst": dst, "label": label, "color": "#ef4444", "width": "3px", "dasharray": "6 4"})
-
-    public_origins = entries[:3] + [a for a in apis if a.get("public")][:2] + [a for a in backends if a.get("public")][:2] + [a for a in data if a.get("public")][:2]
-    for asset in public_origins:
-        add_atk_edge("Internet", subscription_node_id(asset, sanitise_node_id), subscription_primary_fqdn(asset) or "public foothold")
-    if entries and apis:
-        for entry in entries[:2]:
-            for api in apis[:2]:
-                add_atk_edge(subscription_node_id(entry, sanitise_node_id), subscription_node_id(api, sanitise_node_id), "route abuse")
-    upstream_for_backends = apis[:2] or entries[:2] or [a for a in backends if a.get("public")][:2]
-    for src in upstream_for_backends[:2]:
-        for backend in backends[:3]:
-            if src.get("name") == backend.get("name") and src.get("rg") == backend.get("rg"):
-                continue
-            add_atk_edge(subscription_node_id(src, sanitise_node_id), subscription_node_id(backend, sanitise_node_id), "backend exploit")
-    for backend in backends[:3]:
-        for store in [a for a in data if subscription_is_secret_store(a.get("arm_type") or "")][:2]:
-            add_atk_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), subscription_data_attack_label(store))
-        for store in [a for a in data if not subscription_is_secret_store(a.get("arm_type") or "")][:3]:
-            add_atk_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), subscription_data_attack_label(store))
-
-    if not atk_edges:
-        atk_nodes.append({"id": "PrivateOnly", "label": "No direct public attack chain<br/>from harvested exposure", "class_name": "summary"})
-
-    attack_view = render_subscription_view(
-        nodes=atk_nodes,
-        edges=atk_edges,
-        get_icon_path=get_icon_path,
-        node_map=atk_node_map,
-        title="Attack-path view",
-        description="Shows plausible compromise chains: public foothold, backend compromise, then secrets or data access.",
-        legend=[
-            "Dashed red edges: plausible attacker movement",
-            "Node badges: public edge, executable workload, secrets, or data target",
         ],
         attack_paths=attack_paths,
         asset_summary=asset_summary,
@@ -577,7 +673,6 @@ def build_subscription_overlay_views(
 
     return {
         "exposure": exposure_view,
-        "attack_paths": attack_view,
         "attack_paths_summary": attack_paths,
         "asset_summary": asset_summary,
     }
@@ -613,6 +708,7 @@ def build_subscription_diagrams_by_rg(
         }
 
     def build_rg_view(rg: str, rg_assets: list[dict], mode: str) -> tuple[dict, int]:
+        rg_assets = subscription_apply_plan_hierarchy(rg_assets, plan_links)
         entries = [a for a in rg_assets if a.get("tier") == "entry"]
         apis = [a for a in rg_assets if a.get("tier") == "api"]
         backends = [a for a in rg_assets if a.get("tier") == "backend"]
@@ -645,11 +741,9 @@ def build_subscription_diagrams_by_rg(
         for asset in rg_assets:
             include = mode == "connectivity"
             if mode == "exposure":
-                include = asset.get("public") or asset in entries or asset in apis or asset in backends[:3] or asset in data[:3]
-            elif mode == "attack_paths":
-                include = asset.get("public") or asset in entries[:2] or asset in apis[:2] or asset in backends[:3] or asset in data[:4]
+                include = asset.get("public") or asset.get("is_restricted") or asset in entries or asset in apis or asset in backends[:3] or asset in data[:3]
             if include:
-                add_asset_node(asset, badges=mode == "attack_paths", include_fqdn=mode == "exposure")
+                add_asset_node(asset, badges=False, include_fqdn=mode == "exposure")
 
         edges: list[dict] = []
         edge_keys: set[tuple[str, str, str]] = set()
@@ -667,10 +761,23 @@ def build_subscription_diagrams_by_rg(
             edges.append(edge)
 
         for asset in public_assets:
+            has_waf = asset.get("has_waf")
+            waf_mode = (asset.get("waf_mode") or "").strip()
+            if has_waf and "prevention" in waf_mode.lower():
+                color = "#f97316"
+            elif has_waf and "detection" in waf_mode.lower():
+                color = "#f59e0b"
+            elif has_waf:
+                color = "#f97316"
+            else:
+                color = "#ef4444"
             label = subscription_primary_fqdn(asset) or ("public edge" if asset.get("tier") == "entry" else "direct public")
-            color = "#f97316" if asset.get("tier") == "entry" and asset.get("has_waf") else "#ef4444"
-            dash = "6 4" if mode == "attack_paths" else None
-            add_edge("Internet", subscription_node_id(asset, sanitise_node_id), label, color, width="3px", dasharray=dash)
+            add_edge("Internet", subscription_node_id(asset, sanitise_node_id), label, color, width="3px")
+
+        for asset in [a for a in rg_assets if a.get("is_restricted") and not a.get("public") and subscription_is_allowlist_target(a)]:
+            node_id = subscription_node_id(asset, sanitise_node_id)
+            if node_id in seen_nodes:
+                add_edge("Internet", node_id, subscription_allowlist_label(asset), "#f59e0b", width="2px")
 
         for entry in entries:
             if not entry.get("public"):
@@ -680,9 +787,8 @@ def build_subscription_diagrams_by_rg(
                 add_edge(
                     subscription_node_id(entry, sanitise_node_id),
                     subscription_node_id(target, sanitise_node_id),
-                    "route abuse" if mode == "attack_paths" else "routing",
-                    "#ef4444" if mode == "attack_paths" else "#f97316",
-                    dasharray="6 4" if mode == "attack_paths" else None,
+                    "routing",
+                    "#f97316",
                 )
 
         if apis and backends:
@@ -691,9 +797,8 @@ def build_subscription_diagrams_by_rg(
                     add_edge(
                         subscription_node_id(api, sanitise_node_id),
                         subscription_node_id(backend, sanitise_node_id),
-                        "backend exploit" if mode == "attack_paths" else "backend reach",
-                        "#ef4444" if mode == "attack_paths" else ("#f59e0b" if mode == "exposure" else "#ffffff"),
-                        dasharray="6 4" if mode == "attack_paths" else None,
+                        "backend reach",
+                        "#f59e0b" if mode == "exposure" else "#ffffff",
                     )
 
         if backends and data:
@@ -702,12 +807,11 @@ def build_subscription_diagrams_by_rg(
                     add_edge(
                         subscription_node_id(backend, sanitise_node_id),
                         subscription_node_id(store, sanitise_node_id),
-                        subscription_data_attack_label(store) if mode == "attack_paths" else ("reachable next hop" if mode == "exposure" else "data flow"),
-                        "#ef4444" if mode == "attack_paths" else ("#94a3b8" if mode == "exposure" else "#ffffff"),
-                        dasharray="6 4" if mode == "attack_paths" else None,
+                        "reachable next hop" if mode == "exposure" else "data flow",
+                        "#94a3b8" if mode == "exposure" else "#ffffff",
                     )
 
-        if plan_links and mode == "connectivity":
+        if mode == "connectivity" and plan_links:
             plan_assets = {
                 ((asset.get("name") or "").lower(), (asset.get("rg") or "").lower()): asset
                 for asset in rg_assets
@@ -724,27 +828,22 @@ def build_subscription_diagrams_by_rg(
                 if site_asset and plan_asset:
                     add_edge(subscription_node_id(site_asset, sanitise_node_id), subscription_node_id(plan_asset, sanitise_node_id), "hosted on", "#ffffff")
 
-        if mode == "attack_paths" and not edges:
-            nodes.append({"id": "NoPath", "label": "No obvious public attack path<br/>for this resource group", "class_name": "summary"})
-
         descriptions = {
             "connectivity": "Shows inferred application, API, data, and hosting relationships inside this resource group.",
-            "exposure": "Shows public assets in this resource group and the next internal hops they appear to expose.",
-            "attack_paths": "Shows plausible attacker movement from public footholds into workloads, then secrets or data.",
+            "exposure": "Shows public and IP-restricted assets in this resource group and the next internal hops they appear to expose.",
         }
         legends = {
             "connectivity": [
-                "Red/orange edges: public or internet-reachable entry points",
+                "Orange edges: WAF-protected entry point",
+                "Red edges: directly public — no WAF or network restriction",
+                "Amber edges: WAF in Detection mode or IP-allowlisted access",
                 "White edges: inferred internal application or hosting flow",
             ],
             "exposure": [
-                "Red edges: direct public surface",
-                "Orange edges: reachable routing chain behind a public edge",
+                "Red edges: direct public surface — no WAF or restriction",
+                "Orange edges: WAF (Prevention) protected entry",
+                "Amber edges: WAF (Detection) or IP allowlist",
                 "Grey edges: next likely internal hop",
-            ],
-            "attack_paths": [
-                "Dashed red edges: plausible attacker movement",
-                "Badges identify public footholds, executable workloads, secrets, and data targets",
             ],
         }
         attack_paths = build_subscription_attack_paths(rg_assets, f"resource group {rg}", normalize_attack_paths)
@@ -756,8 +855,8 @@ def build_subscription_diagrams_by_rg(
                 node_map=node_map,
                 direction="TD",
                 title=f"{rg} - {mode.replace('_', ' ').title()}",
-                description=descriptions[mode],
-                legend=legends[mode],
+                description=descriptions.get(mode, ""),
+                legend=legends.get(mode, []),
                 attack_paths=attack_paths,
                 asset_summary=summary,
             ),
@@ -768,7 +867,6 @@ def build_subscription_diagrams_by_rg(
         rg_assets = groups[rg]
         connectivity_view, relationship_count = build_rg_view(rg, rg_assets, "connectivity")
         exposure_view, _ = build_rg_view(rg, rg_assets, "exposure")
-        attack_view, _ = build_rg_view(rg, rg_assets, "attack_paths")
         diagrams.append(
             {
                 "rg": rg,
@@ -780,12 +878,11 @@ def build_subscription_diagrams_by_rg(
                 "public_count": sum(1 for asset in rg_assets if asset.get("public")),
                 "relationship_count": relationship_count,
                 "asset_summary": connectivity_view["asset_summary"],
-                "attack_paths": attack_view["attack_paths"],
+                "attack_paths": connectivity_view.get("attack_paths", []),
                 "default_view": "connectivity",
                 "views": {
                     "connectivity": connectivity_view,
                     "exposure": exposure_view,
-                    "attack_paths": attack_view,
                 },
             }
         )

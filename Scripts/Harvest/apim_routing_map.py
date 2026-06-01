@@ -7,6 +7,8 @@ For each APIM instance in the subscription this script:
   3. Cross-references API serviceUrl / named-backend with provisioned_assets.fqdn
      to create resource_connections rows (type='apim_routing')
   4. Stores the raw API→backend mapping in a new apim_api_routes table
+  5. Can also be imported by the main harvest pipeline to derive backend rows
+     from those routes without making extra Azure CLI calls
 
 Usage:
     python Scripts/Harvest/apim_routing_map.py --subscription "mysub"
@@ -16,12 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
+import signal
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "Scripts" / "Persist"))
@@ -102,13 +107,37 @@ def _ensure_apim_schema(conn: sqlite3.Connection) -> None:
 
 def _az(*args: str, subscription_id: str) -> Any:
     cmd = ["az", *args, "--subscription", subscription_id, "--output", "json"]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        print(f"    [warn] az {' '.join(args[:3])} failed: {result.stderr.strip()[:120]}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = proc.communicate()
+        print(f"    [warn] az {' '.join(args[:3])} timed out after 120s; skipping")
+        return []
+
+    if proc.returncode != 0:
+        print(f"    [warn] az {' '.join(args[:3])} failed: {stderr.strip()[:120]}")
         return []
     try:
-        return json.loads(result.stdout or "[]")
-    except json.JSONDecodeError:
+        return json.loads(stdout or "[]")
+    except json.JSONDecodeError as exc:
+        preview = (stdout or "").replace("\n", " ")[:200]
+        print(
+            f"    [warn] az {' '.join(args[:3])} returned invalid JSON: {exc.msg}; "
+            f"output={preview!r}"
+        )
         return []
 
 
@@ -174,6 +203,7 @@ def process_apim(
     resource_group = apim["resourceGroup"]
     apim_resource_id = apim.get("id")
     now = datetime.now(timezone.utc).isoformat()
+    experiment_id = f"harvest-{subscription_id}"
 
     print(f"\n  [apim] {apim_name} (rg={resource_group})")
 
@@ -232,21 +262,45 @@ def process_apim(
 
     # --- Load existing provisioned_assets FQDNs for cross-reference ---
     asset_fqdn_rows = conn.execute(
-        "SELECT id, name, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
+        "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
         (subscription_id,),
     ).fetchall()
-    fqdn_to_asset: dict[str, tuple[str, str]] = {
-        row[2]: (row[0], row[1]) for row in asset_fqdn_rows if row[2]
+    fqdn_to_asset: dict[str, tuple[str, str, str | None]] = {
+        row[3]: (row[0], row[1], row[2]) for row in asset_fqdn_rows if row[3]
     }
 
     routes_upserted = 0
     connections_created = 0
+    connections_skipped = 0
 
     apim_asset_rows = conn.execute(
-        "SELECT id FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
+        "SELECT type FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
         (subscription_id, apim_name),
     ).fetchall()
-    apim_asset_id = apim_asset_rows[0][0] if apim_asset_rows else apim_resource_id
+    apim_asset_type = apim_asset_rows[0][0] if apim_asset_rows else apim.get("type") or "Microsoft.ApiManagement/service"
+
+    def _lookup_resource_id(resource_name: str, resource_type: str | None = None) -> int | None:
+        if not resource_name:
+            return None
+        if resource_type:
+            row = conn.execute(
+                """
+                SELECT id FROM resources
+                WHERE experiment_id = ? AND resource_name = ? AND resource_type = ?
+                LIMIT 1
+                """,
+                (experiment_id, resource_name, resource_type),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id FROM resources
+                WHERE experiment_id = ? AND resource_name = ?
+                LIMIT 1
+                """,
+                (experiment_id, resource_name),
+            ).fetchone()
+        return row[0] if row else None
 
     for api in apis_raw:
         api_name = api.get("name") or ""
@@ -337,21 +391,32 @@ def process_apim(
             backend_fqdn = _url_to_fqdn(backend_url)
             if backend_fqdn and not _is_fabric_url(backend_url):
                 # Find asset by FQDN (exact or suffix match)
-                target_asset_id = None
-                for fqdn, (asset_id, asset_name) in fqdn_to_asset.items():
+                target_asset_name: str | None = None
+                target_asset_type: str | None = None
+                for fqdn, (_asset_id, asset_name, asset_type) in fqdn_to_asset.items():
                     if fqdn == backend_fqdn or backend_fqdn.endswith(f".{fqdn}") or fqdn.endswith(f".{backend_fqdn}"):
-                        target_asset_id = asset_id
+                        target_asset_name = asset_name
+                        target_asset_type = asset_type
                         break
 
+                source_resource_id = _lookup_resource_id(apim_name, apim_asset_type)
+                if source_resource_id is None:
+                    connections_skipped += 1
+                    continue
+
+                target_resource_id = _lookup_resource_id(target_asset_name or "", target_asset_type) if target_asset_name else None
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO resource_connections
-                        (source_id, target_id, connection_type, metadata)
-                    VALUES (?, ?, 'apim_routing', ?)
+                        (experiment_id, source_resource_id, target_resource_id, connection_type,
+                         target_external, connection_metadata)
+                    VALUES (?, ?, ?, 'apim_routing', ?, ?)
                     """,
                     (
-                        apim_asset_id,
-                        target_asset_id or f"fqdn:{backend_fqdn}",
+                        experiment_id,
+                        source_resource_id,
+                        target_resource_id,
+                        None if target_resource_id else backend_fqdn or backend_url,
                         json.dumps({
                             "api_name": api_name,
                             "api_path": api_path,
@@ -365,8 +430,128 @@ def process_apim(
     if not dry_run:
         conn.commit()
 
+    if connections_skipped:
+        print(f"    [warn] skipped {connections_skipped} connection rows because the numeric resource graph is unavailable")
     print(f"    → {routes_upserted} routes upserted, {connections_created} connections created")
     return routes_upserted
+
+
+def harvest_backends(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """Derive APIM backend rows from already harvested API routes.
+
+    This fast sub-step avoids extra Azure CLI calls. It reads apim_api_routes
+    and materialises a backend row for each unique backend URL per APIM.
+    """
+    _ensure_schema(conn)
+    _ensure_apim_schema(conn)
+
+    route_rows = conn.execute(
+        """
+        SELECT apim_name, api_name, backend_id, backend_url, service_url,
+               requires_subscription, last_synced
+        FROM apim_api_routes
+        WHERE subscription_id = ?
+        ORDER BY apim_name, api_name
+        """,
+        (subscription_id,),
+    ).fetchall()
+    if not route_rows:
+        print("    [apim-backends] no APIM routes harvested yet")
+        return 0, 0
+
+    now = datetime.now(timezone.utc).isoformat()
+    def _backend_key(url: str | None) -> str | None:
+        if not url:
+            return None
+        value = url.strip()
+        if not value:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme:
+            host = (parsed.netloc or parsed.path).lower().rstrip("/")
+            path = parsed.path.strip("/").lower()
+            return f"{host}/{path}" if path else host or None
+        return value.rstrip("/").lower() or None
+
+    backend_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    linked_routes = 0
+
+    for apim_name, api_name, backend_id, backend_url, service_url, requires_subscription, last_synced in route_rows:
+        resolved_url = (backend_url or service_url or "").strip()
+        if not resolved_url:
+            continue
+        linked_routes += 1
+        backend_key = _backend_key(backend_id or resolved_url)
+        if not backend_key:
+            continue
+        row_key = (apim_name, backend_key)
+        if row_key in backend_rows:
+            continue
+
+        protocol = urlparse(resolved_url).scheme or ("https" if resolved_url.startswith("https://") else "http")
+        backend_rows[row_key] = {
+            "id": f"{apim_name}::{backend_key}",
+            "subscription_id": subscription_id,
+            "apim_name": apim_name,
+            "backend_id": backend_key,
+            "title": _url_to_fqdn(resolved_url) or backend_key,
+            "description": f"Derived from APIM API {api_name}",
+            "url": resolved_url,
+            "protocol": protocol,
+            "circuit_breaker": None,
+            "credentials": None,
+            "tls_validate_cert": 1 if protocol == "https" else 0,
+            "last_synced": last_synced or now,
+        }
+
+    if not dry_run:
+        conn.execute(
+            "DELETE FROM apim_backends WHERE subscription_id = ?",
+            (subscription_id,),
+        )
+        for backend in backend_rows.values():
+            conn.execute(
+                """
+                INSERT INTO apim_backends
+                    (id, subscription_id, apim_name, backend_id, title, description,
+                     url, protocol, circuit_breaker, credentials, tls_validate_cert, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title,
+                    description=excluded.description,
+                    url=excluded.url,
+                    protocol=excluded.protocol,
+                    circuit_breaker=excluded.circuit_breaker,
+                    credentials=excluded.credentials,
+                    tls_validate_cert=excluded.tls_validate_cert,
+                    last_synced=excluded.last_synced
+                """,
+                (
+                    backend["id"],
+                    backend["subscription_id"],
+                    backend["apim_name"],
+                    backend["backend_id"],
+                    backend["title"],
+                    backend["description"],
+                    backend["url"],
+                    backend["protocol"],
+                    backend["circuit_breaker"],
+                    backend["credentials"],
+                    backend["tls_validate_cert"],
+                    backend["last_synced"],
+                ),
+            )
+        conn.commit()
+
+    print(f"    [apim-backends] derived {len(backend_rows)} backends from {linked_routes} routes")
+    if not backend_rows:
+        print("    [apim-backends] no backend URLs were available to derive")
+
+    return len(backend_rows), linked_routes
 
 
 # ---------------------------------------------------------------------------
@@ -386,9 +571,19 @@ def main() -> None:
     # Resolve subscriptions
     subs_raw = subprocess.run(
         ["az", "account", "list", "--output", "json"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
     )
-    all_subs: list[dict] = json.loads(subs_raw.stdout or "[]")
+    if subs_raw.returncode != 0:
+        raise RuntimeError(f"az account list failed: {subs_raw.stderr.strip()[:200]}")
+    try:
+        all_subs: list[dict] = json.loads(subs_raw.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        preview = (subs_raw.stdout or "").replace("\n", " ")[:200]
+        raise RuntimeError(f"az account list returned invalid JSON: {exc.msg}; output={preview!r}") from exc
 
     if args.all_subs:
         target_subs = all_subs

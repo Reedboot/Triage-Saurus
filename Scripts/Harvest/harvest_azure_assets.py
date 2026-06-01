@@ -43,6 +43,8 @@ from Azure import redis_cache, event_hub, app_configuration, service_fabric, cog
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import front_door, firewall
 from Azure._helpers import set_probe_enabled
+import appgw_routing_map
+import apim_routing_map
 
 # ---------------------------------------------------------------------------
 # Providers registry — order matters: gateways/APIM first for correlation
@@ -214,8 +216,8 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
         INSERT INTO provisioned_assets
             (id, subscription_id, resource_group, name, type, location, sku,
              tags, is_public, fqdn, pipeline_tag, raw_json, first_detected, last_synced, status,
-             is_restricted, ip_restrictions, endpoints, auth_methods)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+             is_restricted, ip_restrictions, endpoints, auth_methods, waf_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             subscription_id = excluded.subscription_id,
             resource_group  = excluded.resource_group,
@@ -234,7 +236,8 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
             is_restricted   = excluded.is_restricted,
             ip_restrictions = excluded.ip_restrictions,
             endpoints       = excluded.endpoints,
-            auth_methods    = excluded.auth_methods
+            auth_methods    = excluded.auth_methods,
+            waf_mode        = excluded.waf_mode
         """,
         (
             asset["id"],
@@ -255,6 +258,7 @@ def upsert_asset(conn: sqlite3.Connection, asset: dict[str, Any]) -> None:
             asset.get("ip_restrictions"),
             asset.get("endpoints"),
             asset.get("auth_methods"),
+            asset.get("waf_mode"),
         ),
     )
 
@@ -349,12 +353,16 @@ def harvest_subscription(
             print("  To confirm removal:  UPDATE provisioned_assets SET status='removed' WHERE id='<id>';")
             print("  To restore (false positive):  UPDATE provisioned_assets SET status='active' WHERE id='<id>';")
 
-    # App Gateway routing + WAF — runs after assets so fqdn_to_asset lookup is populated
-    print(f"  [App Gateway Routing] harvesting listeners, routing rules & WAF policies...", flush=True)
+    # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
+    print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
     try:
-        rules, waf = app_gateway.harvest_routing(sub_id, conn, dry_run=dry_run)
+        rules, rewrite_sets, rewrite_rules, waf = appgw_routing_map.harvest_routing(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [App Gateway Routing] {rules} routing rules, {waf} WAF policies {action}")
+        print(
+            f"  [App Gateway Routing] {rules} routing rules, "
+            f"{rewrite_sets} rewrite rule sets ({rewrite_rules} rewrite rules), "
+            f"{waf} WAF policies {action}"
+        )
     except Exception as exc:
         print(f"  [App Gateway Routing] FAILED ({exc})")
 
@@ -375,6 +383,15 @@ def harvest_subscription(
         print(f"  [APIM Routes] {route_count} routes {action}")
     except Exception as exc:
         print(f"  [APIM Routes] FAILED ({exc})")
+
+    # APIM backend inventory + API-to-backend links
+    print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
+    try:
+        backend_count, link_count = apim_routing_map.harvest_backends(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action}")
+    except Exception as exc:
+        print(f"  [APIM Backend Links] FAILED ({exc})")
 
     # Function App HTTP triggers
     print(f"  [Function App Triggers] harvesting HTTP trigger routes...", flush=True)
