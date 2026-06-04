@@ -673,6 +673,26 @@ _PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("huaweicloud_", "huaweicloud"),
 ]
 
+
+_AZURE_ARM_ALIASES: dict[str, str] = {
+    "microsoft.servicebus/namespaces": "azurerm_servicebus_namespace",
+    "microsoft.servicebus/namespaces/queues": "azurerm_servicebus_queue",
+    "microsoft.servicebus/namespaces/topics": "azurerm_servicebus_topic",
+    "microsoft.servicebus/namespaces/topics/subscriptions": "azurerm_servicebus_subscription",
+    "microsoft.eventhub/namespaces": "azurerm_eventhub_namespace",
+    "microsoft.eventhub/namespaces/eventhubs": "azurerm_eventhub",
+    "microsoft.eventhub/namespaces/eventhubs/consumergroups": "azurerm_eventhub_consumer_group",
+}
+
+
+def _normalize_lookup_type(terraform_type: str) -> str:
+    """Map Azure ARM resource types to canonical Terraform-style names."""
+    lookup_type = (terraform_type or "").strip()
+    if not lookup_type:
+        return ""
+    return _AZURE_ARM_ALIASES.get(lookup_type.lower(), lookup_type)
+
+
 # Category keyword patterns for derive fallback — ordered by priority
 _CATEGORY_KEYWORDS: list[tuple[str, str]] = [
     ("kubernetes", "Container"), ("aks", "Container"), ("eks", "Container"),
@@ -717,6 +737,8 @@ def get_resource_type(conn: sqlite3.Connection | None, terraform_type: str) -> d
 
     conn may be None; in that case the DB query is skipped and _FALLBACK / _derive() are used.
     """
+    terraform_type = _normalize_lookup_type(terraform_type)
+
     # 1. Query DB
     if conn is None:
         # No DB — derive provider then fall back to _FALLBACK / _derive()
@@ -935,6 +957,7 @@ def get_service_pattern(resource_type: str) -> tuple[str | None, dict | None]:
         aws_s3_bucket -> ("storage", {...})
         azurerm_servicebus_topic -> ("messaging", {...})
     """
+    resource_type = _normalize_lookup_type(resource_type)
     for pattern_name, pattern in _SERVICE_PATTERNS.items():
         for provider_key, provider_config in pattern.get("providers", {}).items():
             for component_key, component_type in provider_config.items():

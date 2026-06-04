@@ -13588,6 +13588,8 @@ def _cloud_asset_display_type(arm_type: str, kind: str | None = None) -> str:
         if "functionapp" in kind_lc or "function app" in kind_lc:
             return "Function App"
         return "App Service"
+    if "microsoft.containerregistry/registries" in arm_type_lc:
+        return "ACR"
     if "microsoft.storage/storageaccounts/blobservices/containers/blobs" in arm_type_lc:
         return "Blob"
     if "microsoft.storage/storageaccounts/blobservices/containers" in arm_type_lc:

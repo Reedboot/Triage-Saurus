@@ -2369,6 +2369,7 @@ def _cloud_assets_payload():
     listener_id = "listener::gw-one::https::gw.example.com"
     storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
     container_id = f"{storage_id}/blobServices/default/containers/logs"
+    acr_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"
     sql_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"
     db_id = f"{sql_id}/databases/appdb"
 
@@ -2664,6 +2665,35 @@ def _cloud_assets_payload():
             "depth": 1,
         },
         {
+            "id": acr_id,
+            "name": "acr-one",
+            "type": "Microsoft.ContainerRegistry/registries",
+            "type_label": "Container Registry",
+            "display_type_label": "ACR",
+            "resource_group": "rg-data",
+            "location": "westus",
+            "sku": "Standard",
+            "fqdn": "acr-one.azurecr.io",
+            "is_public": False,
+            "status": "active",
+            "pipeline_tag": None,
+            "first_detected": "2026-06-01T00:00:00Z",
+            "last_synced": "2026-06-01T00:00:00Z",
+            "sub_id": "sub-1",
+            "sub_name": "Demo Subscription",
+            "environment": "production",
+            "cloud_provider": "Azure",
+            "linked_repo": None,
+            "kind": None,
+            "parent_id": None,
+            "parent_name": None,
+            "parent_resource_group": None,
+            "parent_type_label": None,
+            "children_count": 0,
+            "is_child": False,
+            "depth": 0,
+        },
+        {
             "id": sql_id,
             "name": "sql-one",
             "type": "Microsoft.Sql/servers",
@@ -2731,7 +2761,7 @@ def _cloud_assets_payload():
             "cloud_provider": "Azure",
             "state": "Enabled",
             "last_synced": "2026-06-01T00:00:00Z",
-            "total": 12,
+            "total": 13,
             "public_count": 8,
             "stale_count": 0,
         }],
@@ -2744,12 +2774,13 @@ def _cloud_assets_payload():
             {"label": "App Gateway", "count": 1},
             {"label": "App Gateway Listener", "count": 1},
             {"label": "Storage Account", "count": 1},
+            {"label": "ACR", "count": 1},
             {"label": "Blob Container", "count": 1},
             {"label": "SQL Server", "count": 1},
             {"label": "SQL Database", "count": 1},
         ],
         "totals": {
-            "assets": 12,
+            "assets": 13,
             "public": 8,
             "stale": 0,
             "linked": 1,
@@ -2808,6 +2839,8 @@ class TestCloudAssetsPage:
         expect(storage_toggle).to_have_count(1)
         storage_toggle.click()
         expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"] .type-badge')).to_contain_text("Blob Container")
+        expect(page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"] .type-badge')).to_contain_text("ACR")
+        expect(page.locator("#sidebar-types")).to_contain_text("ACR")
 
         sql_toggle = page.locator('tr[data-resource-id="/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"] .expand-toggle')
         expect(sql_toggle).to_have_count(1)
@@ -2880,6 +2913,7 @@ class TestCloudAssetsApi:
         gw_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one"
         storage_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
         container_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"
+        acr_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"
         blob_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs/blobs/hello.txt"
         sql_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"
         db_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one/databases/appdb"
@@ -2932,6 +2966,10 @@ class TestCloudAssetsApi:
                 (container_id, "sub-1", "rg-data", "logs", "Microsoft.Storage/storageAccounts/blobServices/containers", "westus", "blob",
                  None, 1, "sa-one.blob.core.windows.net/logs", None, json.dumps({
                      "publicAccess": "blob",
+                 }), now, now, "active"),
+                (acr_id, "sub-1", "rg-data", "acr-one", "Microsoft.ContainerRegistry/registries", "westus", "Standard",
+                 None, 0, "acr-one.azurecr.io", None, json.dumps({
+                     "loginServer": "acr-one.azurecr.io",
                  }), now, now, "active"),
                 (blob_id, "sub-1", "rg-data", "hello.txt", "Microsoft.Storage/storageAccounts/blobServices/containers/blobs", "westus", "Hot",
                  None, 1, "sa-one.blob.core.windows.net/logs/hello.txt", None, json.dumps({
@@ -2987,6 +3025,7 @@ class TestCloudAssetsApi:
         listener = assets["listener::gw-one::https::gw.example.com"]
 
         storage = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"]
+        acr = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.ContainerRegistry/registries/acr-one"]
         container = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs"]
         blob = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one/blobServices/default/containers/logs/blobs/hello.txt"]
         sql = assets["/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-one"]
@@ -3006,6 +3045,7 @@ class TestCloudAssetsApi:
         assert listener["is_child"] is True
         assert storage["display_type_label"] == "Storage Account"
         assert storage["children_count"] == 1
+        assert acr["display_type_label"] == "ACR"
         assert container["parent_id"] == storage["id"]
         assert container["parent_type_label"] == "Storage Account"
         assert container["children_count"] == 1
@@ -3016,3 +3056,4 @@ class TestCloudAssetsApi:
         assert db["display_type_label"] == "SQL Database"
         assert any(item["label"] == "App Service Environment" for item in data["type_summary"])
         assert any(item["label"] == "Function App" for item in data["type_summary"])
+        assert any(item["label"] == "ACR" for item in data["type_summary"])
