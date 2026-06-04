@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Callable
 
 from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
 
@@ -17,18 +17,40 @@ def set_include_blob_children(enabled: bool) -> None:
     _INCLUDE_BLOB_CHILDREN = enabled
 
 
-def harvest(subscription_id: str) -> list[dict[str, Any]]:
+def harvest(
+    subscription_id: str,
+    progress: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
     raw = az(["storage", "account", "list"], subscription_id)
     if not raw:
         return []
 
-    if len(raw) == 1:
-        return _harvest_storage_account(subscription_id, raw[0])
+    if progress:
+        progress(f"discovered {len(raw)} storage account(s)")
 
-    results: list[dict[str, Any]] = []
+    if len(raw) == 1:
+        rows = _harvest_storage_account(subscription_id, raw[0])
+        if progress:
+            progress("1/1 storage account complete")
+        return rows
+
+    results_by_index: list[list[dict[str, Any]] | None] = [None] * len(raw)
     with ThreadPoolExecutor(max_workers=min(8, len(raw))) as pool:
-        for rows in pool.map(lambda acct: _harvest_storage_account(subscription_id, acct), raw):
-            results.extend(rows)
+        futures = [
+            pool.submit(_harvest_storage_account, subscription_id, acct)
+            for acct in raw
+        ]
+        completed = 0
+        future_index = {future: idx for idx, future in enumerate(futures)}
+        for future in as_completed(futures):
+            idx = future_index[future]
+            results_by_index[idx] = future.result()
+            completed += 1
+            if progress:
+                progress(f"{completed}/{len(raw)} storage accounts complete")
+    results: list[dict[str, Any]] = []
+    for rows in results_by_index:
+        results.extend(rows or [])
     return results
 
 

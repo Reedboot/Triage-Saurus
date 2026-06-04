@@ -1580,6 +1580,76 @@ class TestIngressDiagramGeneration:
             "The same FQDN is being applied to every listener arrow."
         )
 
+    def test_traffic_manager_routes_to_enabled_target(self):
+        """Traffic Manager should route to its enabled target instead of the APIM fallback."""
+        import json
+
+        tm_targets = json.dumps([
+            {
+                "name": "disabled-apim",
+                "target": "apim.example.com",
+                "target_resource_id": "/subscriptions/sub/resourceGroups/rg-api/providers/Microsoft.ApiManagement/service/apim",
+                "endpoint_status": "Disabled",
+            },
+            {
+                "name": "appgw-endpoint",
+                "target": "backend.example.com",
+                "target_resource_id": "/subscriptions/sub/resourceGroups/rg-app/providers/Microsoft.Network/publicIPAddresses/appgw",
+                "endpoint_status": "Enabled",
+            },
+        ])
+        rows = [
+            (
+                "tm",
+                "Microsoft.Network/trafficManagerProfiles",
+                "rg-tm",
+                "tm.example.trafficmanager.net",
+                1,
+                None,
+                "tm-id",
+                0,
+                None,
+                0,
+                None,
+                tm_targets,
+            ),
+            (
+                "appgw",
+                "Microsoft.Network/applicationGateways",
+                "rg-app",
+                "",
+                0,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443",
+                0,
+                None,
+                None,
+            ),
+            (
+                "apim",
+                "Microsoft.ApiManagement/service",
+                "rg-api",
+                "",
+                0,
+                None,
+                "apim-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        tm_node = "rg_tm_tm"
+        appgw_node = "rg_app_appgw"
+        apim_node = "grp_APIM_Private"
+        assert f'{tm_node} -->|"DNS routing"| {appgw_node}' in mermaid, mermaid
+        assert f'{tm_node} -->|"DNS routing"| {apim_node}' not in mermaid, mermaid
+
     def test_drilldown_map_contains_appgw(self):
         """App Gateway must appear in node_drilldown_map with can_drill=True."""
         result = self._call()
@@ -1837,6 +1907,55 @@ class TestIngressDiagramGeneration:
         assert children[0]["cells"][1]["label"] == "GET", children[0]["cells"]
         assert children[1]["cells"][1]["label"] == "POST", children[1]["cells"]
 
+    def test_gateway_waf_mode_marks_entry_edges_protected(self):
+        """Gateway-wide WAF should label entry edges as WAF instead of FQDN/protocol."""
+        rows = [
+            (
+                "appgwone",
+                "Microsoft.Network/applicationGateways",
+                "rgnet",
+                "appgwone.example.com",
+                1,
+                "WAF_v2",
+                "appgw-id",
+                0,
+                "HTTPS:443, HTTP:80",
+                0,
+                "PolicyAttached",
+                None,
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'Internet -->|"WAF"| l_rgnet_appgwone_HTTPS_443' in mermaid, mermaid
+        assert 'Internet -->|"WAF"| l_rgnet_appgwone_HTTP_80' in mermaid, mermaid
+        assert "class rgnet_appgwone entryPointProtected;" in mermaid, mermaid
+        assert "linkStyle 0 stroke:#f97316" in mermaid, mermaid
+        assert "linkStyle 1 stroke:#f97316" in mermaid, mermaid
+
+    def test_ip_restricted_key_vault_uses_allowlist_edge(self):
+        """IP-restricted data stores should be rendered as orange allowlist edges."""
+        rows = [
+            (
+                "kvone",
+                "Microsoft.KeyVault/vaults",
+                "rgdata",
+                "kvone.vault.azure.net",
+                0,
+                "standard",
+                "kv-id",
+                0,
+                None,
+                1,
+                None,
+                None,
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'Internet -->|"IP allowlist (Key Vault)"| rgdata_kvone' in mermaid, mermaid
+        assert "linkStyle 0 stroke:#f59e0b" in mermaid, mermaid
+
 
 class TestSubscriptionResourceGroupDiagrams:
     """Unit tests for per-resource-group subscription diagrams."""
@@ -2030,6 +2149,209 @@ class TestCosmosDbFqdnResolution:
         assert result["rows"], result
         assert result["rows"][0][2] == "cosmos-one.documents.azure.com", result["rows"]
         assert result["rows"][0][3]["label"] == "🌐 Public", result["rows"]
+
+
+class TestSubscriptionOverlayViews:
+    """Regression tests for the shared subscription overlay helper."""
+
+    def _call(self, rows):
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.subscription_diagram_helpers import build_subscription_overlay_views
+
+        return build_subscription_overlay_views(
+            rows,
+            sanitise_node_id=lambda value: "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value),
+            friendly_type=lambda arm_type: "App Gateway" if "applicationgateway" in (arm_type or "").lower() else (arm_type.split("/")[-1] if arm_type else "Resource"),
+            get_icon_path=lambda _arm_type: None,
+            normalize_attack_paths=lambda raw_paths, reviewer=None: raw_paths,
+        )
+
+    def test_gateway_waf_mode_labels_entry_edges(self):
+        rows = [
+            (
+                "appgwone",
+                "Microsoft.Network/applicationGateways",
+                "rgnet",
+                "appgwone.example.com",
+                1,
+                "WAF_v2",
+                "gw-id",
+                0,
+                "HTTPS:443, HTTP:80",
+                0,
+                "PolicyAttached",
+                None,
+            ),
+        ]
+        overlay = self._call(rows)
+        mermaid = overlay["exposure"]["mermaid"]
+        assert 'Internet -->|"WAF"| rgnet_appgwone' in mermaid, mermaid
+        assert "class rgnet_appgwone entryPointProtected;" in mermaid, mermaid
+        assert "linkStyle 0 stroke:#f97316" in mermaid, mermaid
+
+
+class TestCloudPosture:
+    """Regression tests for cloud posture inference."""
+
+    def _make_conn(self):
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE repositories (
+                id INTEGER PRIMARY KEY,
+                experiment_id TEXT,
+                repo_name TEXT
+            );
+            CREATE TABLE repository_subscriptions (
+                repository_id INTEGER,
+                subscription_id TEXT,
+                deploy_role TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                resource_group TEXT,
+                name TEXT,
+                type TEXT,
+                location TEXT,
+                sku TEXT,
+                tags TEXT,
+                is_public INTEGER DEFAULT 0,
+                is_restricted INTEGER DEFAULT 0,
+                ip_restrictions TEXT,
+                endpoints TEXT,
+                auth_methods TEXT,
+                fqdn TEXT,
+                pipeline_tag TEXT,
+                raw_json TEXT,
+                first_detected TEXT,
+                last_synced TEXT,
+                status TEXT DEFAULT 'active'
+            );
+            CREATE TABLE appgw_routing_rules (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                gateway_name TEXT,
+                backend_fqdn TEXT,
+                backend_pool_name TEXT,
+                protocol TEXT,
+                port INTEGER,
+                waf_policy_name TEXT,
+                listener_protocol TEXT
+            );
+            CREATE TABLE appgw_waf_policies (
+                name TEXT,
+                subscription_id TEXT,
+                state TEXT,
+                associated_gateways TEXT
+            );
+            """
+        )
+
+        conn.execute(
+            "INSERT INTO repositories (id, experiment_id, repo_name) VALUES (1, 'exp-1', 'orders')"
+        )
+        conn.execute(
+            "INSERT INTO repository_subscriptions (repository_id, subscription_id, deploy_role) VALUES (1, 'sub-1', 'prod')"
+        )
+        conn.executemany(
+            """
+            INSERT INTO provisioned_assets (
+                id, subscription_id, resource_group, name, type, location, sku, tags,
+                is_public, is_restricted, ip_restrictions, endpoints, auth_methods,
+                fqdn, pipeline_tag, raw_json, first_detected, last_synced, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-api",
+                    "sub-1",
+                    "rg-app",
+                    "orders-api",
+                    "Microsoft.Web/sites",
+                    "westus",
+                    "B1",
+                    "{}",
+                    1,
+                    0,
+                    "[]",
+                    "[]",
+                    "[]",
+                    "orders.example.com",
+                    None,
+                    "{}",
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "active",
+                ),
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/appgwone",
+                    "sub-1",
+                    "rg-net",
+                    "appgwone",
+                    "Microsoft.Network/applicationGateways",
+                    "westus",
+                    "WAF_v2",
+                    "{}",
+                    1,
+                    0,
+                    "[]",
+                    "[]",
+                    "[]",
+                    "appgwone.example.com",
+                    None,
+                    '{"_extra": {"waf_mode": "PolicyAttached"}}',
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "active",
+                ),
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_routing_rules (
+                id, subscription_id, gateway_name, backend_fqdn, backend_pool_name,
+                protocol, port, waf_policy_name, listener_protocol
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "appgwone::rule-1",
+                "sub-1",
+                "appgwone",
+                "orders.example.com",
+                "backend-pool",
+                "HTTPS",
+                443,
+                None,
+                "HTTPS",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO appgw_waf_policies (name, subscription_id, state, associated_gateways)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("policy-one", "sub-1", "Enabled", '["appgwone"]'),
+        )
+        return conn
+
+    def test_gateway_waf_policy_marks_repo_behind_waf(self):
+        import os
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        from web.app import _compute_cloud_posture
+
+        posture = _compute_cloud_posture(self._make_conn(), "exp-1", "orders")
+        assert posture["behind_app_gateway"] is True, posture
+        assert posture["app_gateway_name"] == "appgwone", posture
+        assert posture["behind_waf"] is True, posture
 
 
 def _cloud_assets_payload():

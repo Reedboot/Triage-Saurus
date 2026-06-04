@@ -5,8 +5,11 @@ These tests use only pure Python (no az CLI, no DB) by exercising functions
 that are isolated from external dependencies.
 """
 import json
+import ipaddress
+import re
 import sys
 import sqlite3
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,8 +22,25 @@ import harvest_azure_assets
 import apim_routing_map
 import appgw_routing_map
 import correlate_assets
-from Azure._helpers import safe_str, infer_fqdn, build_endpoints, extract_ip_restrictions, infer_sku
-from Azure import app_configuration, storage
+import db_helpers
+from Azure._helpers import (
+    safe_str,
+    infer_fqdn,
+    build_endpoints,
+    extract_ip_restrictions,
+    infer_sku,
+    normalize_route_path,
+    route_path_matches,
+)
+from Azure import app_configuration, storage, aks, key_vault
+
+
+def _is_ip_address(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +152,20 @@ class TestBuildEndpoints:
         assert [item["address"] for item in parsed] == [f"host{i}.example.com" for i in range(4)]
 
 
+class TestRoutePathHelpers:
+    def test_normalize_route_path_adds_leading_slash_and_trims_trailing(self):
+        assert normalize_route_path("api/v1/") == "/api/v1"
+
+    def test_route_path_matches_prefix_wildcard(self):
+        assert route_path_matches("/api/*", "/api/orders/123")
+
+    def test_route_path_matches_template_variables(self):
+        assert route_path_matches("/api/{id}", "/api/orders")
+
+    def test_route_path_matches_rejects_different_roots(self):
+        assert route_path_matches("/api/*", "/admin") is False
+
+
 class TestStorageHarvest:
     def test_accounts_run_concurrently(self, monkeypatch):
         import threading
@@ -195,6 +229,46 @@ class TestStorageHarvest:
         assert account_two_id in ids
         assert f"{account_one_id}/blobServices/default/containers/logs" in ids
         assert f"{account_two_id}/blobServices/default/containers/logs" in ids
+
+    def test_reports_account_progress(self, monkeypatch):
+        messages: list[str] = []
+        account_one_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+        account_two_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-two"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [
+                    {
+                        "id": account_one_id,
+                        "name": "sa-one",
+                        "resourceGroup": "rg-data",
+                        "location": "westus",
+                        "type": "Microsoft.Storage/storageAccounts",
+                        "properties": {},
+                    },
+                    {
+                        "id": account_two_id,
+                        "name": "sa-two",
+                        "resourceGroup": "rg-data",
+                        "location": "westus",
+                        "type": "Microsoft.Storage/storageAccounts",
+                        "properties": {},
+                    },
+                ]
+            if args[:3] == ["storage", "container", "list"]:
+                return []
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+
+        rows = storage.harvest("sub-1", progress=messages.append)
+        ids = {row["id"] for row in rows}
+
+        assert account_one_id in ids
+        assert account_two_id in ids
+        assert messages[0] == "discovered 2 storage account(s)"
+        assert set(messages[1:]) == {"1/2 storage accounts complete", "2/2 storage accounts complete"}
 
     def test_blob_children_run_concurrently(self, monkeypatch):
         import threading
@@ -346,6 +420,7 @@ from Azure.aks import (
     _build_route_model,
     _make_route_id,
 )
+from Azure import apim
 from Azure.apim import _get_gateway_hosts, _get_apim_exposure_level
 from Azure.function_apps import _extract_http_triggers
 from Azure.firewall import _extract_nat_rules, _extract_app_rules, _get_firewall_exposure_level
@@ -515,14 +590,24 @@ class TestBuildRouteModel:
     def _make_cluster(self):
         return {"id": "/subscriptions/sub/rg/rg1/aks/cl1", "name": "cl1", "resourceGroup": "rg1"}
 
-    def _make_ingress(self, host, path, svc_name):
-        return {
+    def _make_ingress(self, host, path, svc_name, host_aliases=None):
+        ingress = {
             "metadata": {"namespace": "default", "name": "ing1"},
             "spec": {"rules": [{
                 "host": host,
                 "http": {"paths": [{"path": path, "backend": {"service": {"name": svc_name, "port": {"number": 80}}}}]},
             }]},
         }
+        if host_aliases:
+            ingress["status"] = {
+                "loadBalancer": {
+                    "ingress": [
+                        {"ip": alias} if _is_ip_address(alias) else {"hostname": alias}
+                        for alias in host_aliases
+                    ]
+                }
+            }
+        return ingress
 
     def _make_service(self, name, selector):
         return {
@@ -547,6 +632,14 @@ class TestBuildRouteModel:
         assert routes[0]["team"] == "platform"
         assert routes[0]["service_name"] == "api-svc"
 
+    def test_private_ingress_marks_route_internal(self):
+        ingress = self._make_ingress("api.example.com", "/v1", "api-svc", host_aliases=["10.0.0.1"])
+        service = self._make_service("api-svc", {"app": "api"})
+        deploy = self._make_deployment({"app": "api", "git_repository": "my-repo", "team": "platform"})
+        routes = _build_route_model(self._make_cluster(), [ingress], [service], [deploy])
+        assert len(routes) == 1
+        assert routes[0]["exposure_level"] == "Internal"
+
     def test_missing_git_repository_excluded(self):
         ingress = self._make_ingress("api.example.com", "/v1", "api-svc")
         service = self._make_service("api-svc", {"app": "api"})
@@ -567,6 +660,68 @@ class TestBuildRouteModel:
         deploy = self._make_deployment({"app": "api", "git_repository": "repo", "team": "team"})
         routes = _build_route_model(self._make_cluster(), [ingress], [service], [deploy])
         assert routes == []
+
+
+class TestAksHarvestRoutesPersistence:
+    def test_persists_route_exposure(self, monkeypatch):
+        cluster = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg1/providers/Microsoft.ContainerService/managedClusters/cluster1",
+            "name": "cluster1",
+            "resourceGroup": "rg1",
+        }
+        ingress = {
+            "metadata": {"namespace": "default", "name": "ing1"},
+            "spec": {
+                "rules": [{
+                    "host": "api.example.com",
+                    "http": {"paths": [{"path": "/v1", "backend": {"service": {"name": "api-svc", "port": {"number": 80}}}}]},
+                }],
+            },
+            "status": {"loadBalancer": {"ingress": [{"ip": "10.0.0.1"}]}},
+        }
+        service = {
+            "metadata": {"namespace": "default", "name": "api-svc"},
+            "spec": {"selector": {"app": "api"}, "ports": [{"port": 80}]},
+        }
+        deployment = {
+            "metadata": {"namespace": "default", "name": "deploy1", "labels": {}},
+            "spec": {"template": {"metadata": {"labels": {"app": "api", "git_repository": "my-repo", "team": "platform"}}}},
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["aks", "list"]:
+                return [cluster]
+            return []
+
+        def fake_get_cluster_portal_fqdn(cluster_id):
+            assert cluster_id == cluster["id"]
+            return "cluster1.portal.azure"
+
+        def fake_get_kubernetes_resources(portal_fqdn, resource_type):
+            assert portal_fqdn == "cluster1.portal.azure"
+            return {
+                "ingresses": [ingress],
+                "services": [service],
+                "deployments": [deployment],
+            }[resource_type]
+
+        monkeypatch.setattr(aks, "az", fake_az)
+        monkeypatch.setattr(aks, "_get_cluster_portal_fqdn", fake_get_cluster_portal_fqdn)
+        monkeypatch.setattr(aks, "_get_kubernetes_resources", fake_get_kubernetes_resources)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets._ensure_schema(conn)
+            count = aks.harvest_routes("sub-1", conn, dry_run=False)
+            row = conn.execute(
+                "SELECT exposure_level, path FROM aks_routes WHERE cluster_name = ?",
+                ("cluster1",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert count == 1
+        assert row == ("Internal", "/v1")
 
 
 class TestMakeRouteId:
@@ -619,6 +774,296 @@ class TestApimExposureLevel:
 
     def test_public_otherwise(self):
         assert _get_apim_exposure_level({"properties": {"virtualNetworkType": "External"}}) == "Public"
+
+
+class TestApimHarvestConcurrency:
+    def test_counts_apim_services_in_parallel(self, monkeypatch):
+        barrier = threading.Barrier(2)
+        services = [
+            {
+                "id": "svc-1",
+                "name": "apim-one",
+                "resourceGroup": "rg-one",
+                "type": "Microsoft.ApiManagement/service",
+                "location": "westeurope",
+                "properties": {
+                    "gatewayUrl": "https://one.azure-api.net/",
+                    "portalUrl": "https://portal.one.azure-api.net/",
+                    "virtualNetworkType": "External",
+                },
+            },
+            {
+                "id": "svc-2",
+                "name": "apim-two",
+                "resourceGroup": "rg-two",
+                "type": "Microsoft.ApiManagement/service",
+                "location": "westeurope",
+                "properties": {
+                    "gatewayUrl": "https://two.azure-api.net/",
+                    "portalUrl": "https://portal.two.azure-api.net/",
+                    "virtualNetworkType": "External",
+                },
+            },
+        ]
+
+        def fake_az(args, subscription_id):
+            if args == ["apim", "list"]:
+                return services
+            return []
+
+        def fake_get_api_count(service_name, subscription_id, rg):
+            barrier.wait(timeout=2)
+            return 7 if service_name == "apim-one" else 3
+
+        monkeypatch.setattr(apim, "az", fake_az)
+        monkeypatch.setattr(apim, "_get_api_count", fake_get_api_count)
+        monkeypatch.setattr(apim, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+
+        assets = apim.harvest("sub-1")
+        counts = {
+            asset["name"]: json.loads(asset["raw_json"])["_extra"]["api_count"]
+            for asset in assets
+        }
+
+        assert counts == {"apim-one": 7, "apim-two": 3}
+
+
+class TestApimRouteHarvestConcurrency:
+    def test_harvest_routes_emits_progress_bars(self, monkeypatch, capsys):
+        barrier = threading.Barrier(2)
+        service = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+            "properties": {
+                "gatewayUrl": "https://api.contoso.test/",
+                "portalUrl": "https://portal.contoso.test/",
+                "virtualNetworkType": "External",
+            },
+        }
+        apis = [
+            {
+                "name": "orders",
+                "properties": {
+                    "displayName": "Orders API",
+                    "path": "orders",
+                    "serviceUrl": "https://orders-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+            {
+                "name": "customers",
+                "properties": {
+                    "displayName": "Customers API",
+                    "path": "customers",
+                    "serviceUrl": "https://customers-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+        ]
+
+        def fake_az(args, subscription_id):
+            if args == ["apim", "list"]:
+                return [service]
+            return []
+
+        def fake_list_apis(service_name, resource_group, subscription_id):
+            return apis
+
+        def fake_list_operations(service_name, resource_group, api_id, subscription_id):
+            return [
+                {
+                    "name": f"{api_id}-get",
+                    "displayName": f"Get {api_id}",
+                    "method": "get",
+                    "urlTemplate": "/",
+                }
+            ]
+
+        def fake_show_policy(resource_kind, service_name, resource_group, subscription_id, *, api_id=None, operation_id=None):
+            if resource_kind == "api":
+                barrier.wait(timeout=2)
+            return None
+
+        monkeypatch.setattr(apim, "az", fake_az)
+        monkeypatch.setattr(apim, "_az_list_apis", fake_list_apis)
+        monkeypatch.setattr(apim, "_az_list_operations", fake_list_operations)
+        monkeypatch.setattr(apim, "_az_show_policy", fake_show_policy)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets._ensure_schema(conn)
+            apim._ensure_apim_schema(conn)
+            route_count = apim.harvest_routes("sub-1", conn, dry_run=False)
+        finally:
+            conn.close()
+
+        out = capsys.readouterr().out
+        assert route_count == 2
+        assert "[apim-routes] services" in out
+        assert "[apim-routes] orders-apim APIs" in out
+        assert re.search(r"\[[#-]{8,}\]", out), out
+
+    def test_processes_api_policies_in_parallel(self, monkeypatch):
+        barrier = threading.Barrier(2)
+        service = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+            "properties": {
+                "gatewayUrl": "https://api.contoso.test/",
+                "portalUrl": "https://portal.contoso.test/",
+                "virtualNetworkType": "External",
+            },
+        }
+        apis = [
+            {
+                "name": "orders",
+                "properties": {
+                    "displayName": "Orders API",
+                    "path": "orders",
+                    "serviceUrl": "https://orders-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+            {
+                "name": "customers",
+                "properties": {
+                    "displayName": "Customers API",
+                    "path": "customers",
+                    "serviceUrl": "https://customers-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+        ]
+
+        def fake_az(args, subscription_id):
+            if args == ["apim", "list"]:
+                return [service]
+            return []
+
+        def fake_list_apis(service_name, resource_group, subscription_id):
+            return apis
+
+        def fake_list_operations(service_name, resource_group, api_id, subscription_id):
+            return [
+                {
+                    "name": f"{api_id}-get",
+                    "displayName": f"Get {api_id}",
+                    "method": "get",
+                    "urlTemplate": "/",
+                }
+            ]
+
+        def fake_show_policy(resource_kind, service_name, resource_group, subscription_id, *, api_id=None, operation_id=None):
+            if resource_kind == "api":
+                barrier.wait(timeout=2)
+            return None
+
+        monkeypatch.setattr(apim, "az", fake_az)
+        monkeypatch.setattr(apim, "_az_list_apis", fake_list_apis)
+        monkeypatch.setattr(apim, "_az_list_operations", fake_list_operations)
+        monkeypatch.setattr(apim, "_az_show_policy", fake_show_policy)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets._ensure_schema(conn)
+            apim._ensure_apim_schema(conn)
+            route_count = apim.harvest_routes("sub-1", conn, dry_run=False)
+            route_rows = conn.execute("SELECT COUNT(*) FROM apim_api_routes").fetchone()[0]
+            op_rows = conn.execute("SELECT COUNT(*) FROM apim_api_operations").fetchone()[0]
+        finally:
+            conn.close()
+
+        assert route_count == 2
+        assert route_rows == 2
+        assert op_rows == 2
+
+
+class TestApimRoutingMapConcurrency:
+    def test_processes_api_operations_lookup_in_parallel(self, monkeypatch):
+        barrier = threading.Barrier(2)
+        apim_instance = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+        }
+        apis = [
+            {
+                "name": "orders",
+                "displayName": "Orders API",
+                "path": "orders",
+                "serviceUrl": "https://orders-backend.contoso.test/v1",
+                "subscriptionRequired": True,
+                "protocols": ["https"],
+            },
+            {
+                "name": "customers",
+                "displayName": "Customers API",
+                "path": "customers",
+                "serviceUrl": "https://customers-backend.contoso.test/v1",
+                "subscriptionRequired": True,
+                "protocols": ["https"],
+            },
+        ]
+
+        def fake_list_backends(apim_name, resource_group, subscription_id):
+            return []
+
+        def fake_list_apis(apim_name, resource_group, subscription_id):
+            return apis
+
+        def fake_list_operations(apim_name, resource_group, api_id, subscription_id):
+            barrier.wait(timeout=5)
+            return [
+                {
+                    "name": f"{api_id}-get",
+                    "displayName": f"Get {api_id}",
+                    "method": "get",
+                    "urlTemplate": "/",
+                }
+            ]
+
+        monkeypatch.setattr(apim_routing_map, "list_backends", fake_list_backends)
+        monkeypatch.setattr(apim_routing_map, "list_apis", fake_list_apis)
+        monkeypatch.setattr(apim_routing_map, "list_operations", fake_list_operations)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    name TEXT,
+                    type TEXT,
+                    fqdn TEXT
+                );
+                CREATE TABLE IF NOT EXISTS resources (
+                    id INTEGER PRIMARY KEY,
+                    experiment_id TEXT,
+                    resource_name TEXT,
+                    resource_type TEXT
+                );
+                """
+            )
+            apim_routing_map._ensure_apim_schema(conn)
+            route_count = apim_routing_map.process_apim(apim_instance, "sub-1", conn, dry_run=False)
+            route_rows = conn.execute("SELECT COUNT(*) FROM apim_api_routes").fetchone()[0]
+            op_rows = conn.execute("SELECT COUNT(*) FROM apim_api_operations").fetchone()[0]
+        finally:
+            conn.close()
+
+        assert route_count == 2
+        assert route_rows == 2
+        assert op_rows == 2
 
 
 class TestFunctionTriggerParsing:
@@ -745,6 +1190,58 @@ class TestHarvestSubscription:
             conn.close()
 
         assert calls == [("sub-1", True)]
+
+
+class TestHarvestSubscriptionParallelism:
+    def test_runs_provider_harvesters_in_parallel(self, monkeypatch):
+        barrier = threading.Barrier(2, timeout=2)
+        started: list[str] = []
+
+        def fake_first(subscription_id):
+            started.append("first")
+            barrier.wait(timeout=2)
+            return [{"id": "first", "subscription_id": subscription_id}]
+
+        def fake_second(subscription_id):
+            started.append("second")
+            barrier.wait(timeout=2)
+            return [{"id": "second", "subscription_id": subscription_id}]
+
+        monkeypatch.setattr(
+            harvest_azure_assets,
+            "PROVIDERS",
+            [("Storage", fake_first), ("SQL Servers", fake_second)],
+        )
+        monkeypatch.setattr(harvest_azure_assets.appgw_routing_map, "harvest_routing", lambda *args, **kwargs: (0, 0, 0, 0))
+        monkeypatch.setattr(harvest_azure_assets.aks, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.apim, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.apim_routing_map, "harvest_backends", lambda *args, **kwargs: (0, 0))
+        monkeypatch.setattr(harvest_azure_assets.function_apps, "harvest_http_triggers", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.front_door, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.firewall, "harvest_rules", lambda *args, **kwargs: (0, 0))
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            total = harvest_azure_assets.harvest_subscription({"id": "sub-1", "name": "sub"}, conn, dry_run=True)
+        finally:
+            conn.close()
+
+        assert total == 2
+        assert set(started) == {"first", "second"}
+
+
+class TestHarvestProgressRendering:
+    def test_renders_a_progress_bar_for_each_resource_type(self, monkeypatch, capsys):
+        monkeypatch.setattr(harvest_azure_assets.time, "monotonic", lambda: 100.0)
+
+        progress = harvest_azure_assets.HarvestProgress(["App Gateways", "APIM"])
+        progress.mark_running("App Gateways")
+        progress.render(force=True)
+
+        out = capsys.readouterr().out
+        assert "[harvest] provider progress 0/2" in out
+        assert re.search(r"App Gateways\s+\[[=>\-]{24}\] running 00:00 — fetching inventory", out), out
+        assert re.search(r"APIM\s+\[-{24}\] queued", out), out
 
 class TestAppGatewayRewriteHarvest:
     def test_persists_rewrite_rule_sets(self):
@@ -1037,6 +1534,75 @@ class TestFrontDoorAfdRoutes:
         }
 
 
+class TestAppGatewayRouteExposure:
+    def _make_gateway(self, *, public: bool) -> dict:
+        frontend_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/frontendIPConfigurations/fe-one"
+        frontend_port_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/frontendPorts/port-one"
+        listener_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/httpListeners/listener-one"
+        pool_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/backendAddressPools/pool-one"
+        settings_id = "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/applicationGateways/gw-one/backendHttpSettingsCollection/http-one"
+
+        frontend_props: dict[str, object] = {}
+        if public:
+            frontend_props["publicIPAddress"] = {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/pip-one"}
+
+        return {
+            "name": "gw-one",
+            "resourceGroup": "rg-net",
+            "properties": {
+                "frontendIPConfigurations": [{
+                    "name": "fe-one",
+                    "id": frontend_id,
+                    "properties": frontend_props,
+                }],
+                "frontendPorts": [{
+                    "name": "port-one",
+                    "id": frontend_port_id,
+                    "properties": {"port": 443},
+                }],
+                "httpListeners": [{
+                    "name": "listener-one",
+                    "id": listener_id,
+                    "properties": {
+                        "protocol": "Https",
+                        "hostName": "api.example.com",
+                        "frontendIPConfiguration": {"id": frontend_id},
+                        "frontendPort": {"id": frontend_port_id},
+                    },
+                }],
+                "backendAddressPools": [{
+                    "name": "pool-one",
+                    "id": pool_id,
+                    "properties": {"backendAddresses": [{"fqdn": "backend.example.local"}]},
+                }],
+                "backendHttpSettingsCollection": [{
+                    "name": "http-one",
+                    "id": settings_id,
+                    "properties": {"port": 443, "protocol": "Https"},
+                }],
+                "requestRoutingRules": [{
+                    "name": "rule-one",
+                    "properties": {
+                        "ruleType": "Basic",
+                        "httpListener": {"id": listener_id},
+                        "backendAddressPool": {"id": pool_id},
+                        "backendHttpSettings": {"id": settings_id},
+                    },
+                }],
+            },
+        }
+
+    def test_public_frontend_marks_route_public(self):
+        routes = appgw_routing_map.extract_routes(self._make_gateway(public=True), "sub-1")
+        assert len(routes) == 1
+        assert routes[0]["exposure_level"] == "Public"
+
+    def test_private_frontend_marks_route_internal(self):
+        routes = appgw_routing_map.extract_routes(self._make_gateway(public=False), "sub-1")
+        assert len(routes) == 1
+        assert routes[0]["exposure_level"] == "Internal"
+
+
 # ---------------------------------------------------------------------------
 # subscription_assets_from_rows — new columns (is_restricted, waf_mode)
 # ---------------------------------------------------------------------------
@@ -1149,3 +1715,68 @@ class TestSubscriptionOverlayPlanLinks:
         titles = {v.get("title") for v in view["exposure"]["node_drilldown_map"].values()}
         assert "functions_plan" in titles, titles
         assert "functions_windows" not in titles, titles
+
+
+class TestKeyVaultHarvest:
+    def test_classifies_ip_allowlisted_vault_as_restricted(self, monkeypatch):
+        vault_id = "/subscriptions/sub-1/resourceGroups/rg-sec/providers/Microsoft.KeyVault/vaults/kv-one"
+        vault = {
+            "id": vault_id,
+            "name": "kv-one",
+            "resourceGroup": "rg-sec",
+            "location": "westus",
+            "type": "Microsoft.KeyVault/vaults",
+            "properties": {
+                "vaultUri": "https://kv-one.vault.azure.net/",
+                "publicNetworkAccess": "Enabled",
+                "networkAcls": {
+                    "defaultAction": "Deny",
+                    "ipRules": [
+                        {"value": "51.132.44.20/32"},
+                        {"value": "51.137.137.41/32"},
+                    ],
+                    "virtualNetworkRules": [
+                        {
+                            "virtualNetworkResourceId": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prodgreen",
+                        }
+                    ],
+                    "bypass": "AzureServices",
+                },
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["keyvault", "list"]:
+                return [vault]
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(key_vault, "az", fake_az)
+        monkeypatch.setattr(
+            key_vault,
+            "build_endpoints",
+            lambda entries, timeout=5: json.dumps([
+                {"address": address, "port": port, "protocol": protocol}
+                for address, port, protocol in entries
+            ]),
+        )
+
+        rows = key_vault.harvest("sub-1")
+        assert len(rows) == 1
+
+        row = rows[0]
+        assert row["id"] == vault_id
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 1
+        assert json.loads(row["ip_restrictions"]) == [
+            "51.132.44.20/32",
+            "51.137.137.41/32",
+            "vnet:prodgreen",
+        ]
+
+        extra = json.loads(row["raw_json"])["_extra"]
+        assert extra["public_network_access"] == "Enabled"
+        assert extra["network_default_action"] == "Deny"
+        assert extra["network_access_mode"] == "ip_restricted"
+        assert extra["ip_rule_count"] == 2
+        assert extra["virtual_network_rule_count"] == 1
+        assert extra["ip_restriction_count"] == 3

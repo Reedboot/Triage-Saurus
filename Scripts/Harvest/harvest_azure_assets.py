@@ -22,14 +22,19 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
 # Path setup so this script works from any cwd
@@ -87,6 +92,192 @@ PROVIDERS = [
     ("Virtual Networks",        virtual_network.harvest),
     ("Firewalls",               firewall.harvest),
 ]
+
+ProviderFn = Callable[..., list[dict[str, Any]]]
+ProgressCallback = Callable[[str], None]
+_MAX_PROVIDER_WORKERS = 6
+_PROGRESS_REFRESH_SECONDS = 10.0
+_PROVIDER_WRITE_CHUNK = 250
+
+
+@dataclass
+class _ProviderState:
+    label: str
+    state: str = "queued"
+    detail: str = ""
+    started_at: float | None = None
+    finished_at: float | None = None
+
+
+class HarvestProgress:
+    """Render progress for the parallel resource-type harvest queue."""
+
+    def __init__(self, labels: list[str]) -> None:
+        self._labels = labels
+        self._states = {label: _ProviderState(label=label) for label in labels}
+        self._lock = threading.Lock()
+        self._started_at = time.monotonic()
+        self._last_render = 0.0
+
+    def mark_running(self, label: str, detail: str = "fetching inventory") -> None:
+        with self._lock:
+            state = self._states[label]
+            state.state = "running"
+            state.detail = detail
+            if state.started_at is None:
+                state.started_at = time.monotonic()
+
+    def update(self, label: str, detail: str) -> None:
+        with self._lock:
+            self._states[label].detail = detail
+
+    def mark_done(self, label: str, detail: str = "") -> None:
+        with self._lock:
+            state = self._states[label]
+            state.state = "done"
+            state.detail = detail
+            if state.started_at is None:
+                state.started_at = time.monotonic()
+            state.finished_at = time.monotonic()
+
+    def mark_failed(self, label: str, detail: str) -> None:
+        with self._lock:
+            state = self._states[label]
+            state.state = "failed"
+            state.detail = detail
+            if state.started_at is None:
+                state.started_at = time.monotonic()
+            state.finished_at = time.monotonic()
+
+    def render(self, force: bool = False) -> None:
+        if not self._labels:
+            return
+
+        with self._lock:
+            now = time.monotonic()
+            if not force and now - self._last_render < 1.0:
+                return
+
+            states = [self._states[label] for label in self._labels]
+            self._last_render = now
+
+        total = len(states)
+        completed = sum(1 for state in states if state.state in {"done", "failed"})
+        running = sum(1 for state in states if state.state == "running")
+        queued = total - completed - running
+        failed = sum(1 for state in states if state.state == "failed")
+        percent = int((completed / total) * 100) if total else 100
+        bar = _format_progress_bar(completed, total)
+        elapsed = _format_duration(now - self._started_at)
+        print(
+            f"[harvest] provider progress {completed}/{total} {bar} {percent}% "
+            f"| running={running} queued={queued} failed={failed} | elapsed {elapsed}",
+            flush=True,
+        )
+
+        label_width = max(len(state.label) for state in states)
+        for state in states:
+            print(
+                f"  {state.label.ljust(label_width)}  {_format_provider_state(state, now)}",
+                flush=True,
+            )
+
+
+def _format_progress_bar(completed: int, total: int, width: int = 24) -> str:
+    if total <= 0:
+        return f"[{'#' * width}]"
+    filled = min(width, max(0, int((completed / total) * width)))
+    return f"[{'#' * filled}{'-' * (width - filled)}]"
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_provider_state(state: _ProviderState, now: float) -> str:
+    bar = _format_provider_progress_bar(state, now)
+    detail = f" — {state.detail}" if state.detail else ""
+    if state.state == "queued":
+        return f"{bar} queued"
+
+    started_at = state.started_at or now
+    if state.state == "running":
+        return f"{bar} running {_format_duration(now - started_at)}{detail}"
+
+    finished_at = state.finished_at or now
+    elapsed = _format_duration(finished_at - started_at)
+    status = "done" if state.state == "done" else "FAILED"
+    return f"{bar} {status} {elapsed}{detail}"
+
+
+def _format_provider_progress_bar(state: _ProviderState, now: float, width: int = 24) -> str:
+    if width <= 0:
+        return "[]"
+
+    if state.state == "done":
+        return _format_progress_bar(1, 1, width=width)
+
+    if state.state == "failed":
+        return f"[{'x' * width}]"
+
+    if state.state == "running":
+        started_at = state.started_at or now
+        span = max(1, width - 4)
+        tick = int((now - started_at) * 4)
+        offset = sum(ord(ch) for ch in state.label)
+        start = (tick + offset) % span
+        segment = min(5, width)
+        bar = ["-"] * width
+        for idx in range(segment):
+            pos = start + idx
+            if pos >= width:
+                break
+            bar[pos] = "="
+        end = min(width - 1, start + segment - 1)
+        bar[end] = ">"
+        return f"[{''.join(bar)}]"
+
+    return _format_progress_bar(0, 1, width=width)
+
+
+def _supports_progress(provider_fn: ProviderFn) -> bool:
+    try:
+        signature = inspect.signature(provider_fn)
+    except (TypeError, ValueError):
+        return False
+    if "progress" in signature.parameters:
+        return True
+    return any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+
+
+def _invoke_provider(
+    provider_fn: ProviderFn,
+    sub_id: str,
+    progress: ProgressCallback | None = None,
+) -> list[dict[str, Any]]:
+    if progress and _supports_progress(provider_fn):
+        return provider_fn(sub_id, progress=progress)
+    return provider_fn(sub_id)
+
+
+def _run_provider_task(
+    label: str,
+    provider_fn: ProviderFn,
+    sub_id: str,
+    progress: HarvestProgress,
+) -> list[dict[str, Any]]:
+    progress.mark_running(label)
+    progress_cb: ProgressCallback | None = (
+        (lambda detail, _label=label: progress.update(_label, detail))
+        if label == "Storage"
+        else None
+    )
+    return _invoke_provider(provider_fn, sub_id, progress_cb)
 
 
 # ---------------------------------------------------------------------------
@@ -322,28 +513,61 @@ def harvest_subscription(
 
     seen_ids: set[str] = set()
     total = 0
-    for label, provider_fn in PROVIDERS:
-        print(f"  [{label}] harvesting...", end=" ", flush=True)
-        try:
-            assets = provider_fn(sub_id)
-        except Exception as exc:
-            print(f"FAILED ({exc})")
-            continue
+    provider_specs = list(PROVIDERS)
+    if provider_specs:
+        print(
+            f"  [providers] harvesting {len(provider_specs)} resource types "
+            f"in parallel ({min(_MAX_PROVIDER_WORKERS, len(provider_specs))} workers)...",
+            flush=True,
+        )
+        progress = HarvestProgress([label for label, _ in provider_specs])
+        future_map: dict[Any, str] = {}
 
-        if not assets:
-            print("0 assets")
-            continue
+        with ThreadPoolExecutor(max_workers=min(_MAX_PROVIDER_WORKERS, len(provider_specs))) as pool:
+            for label, provider_fn in provider_specs:
+                future = pool.submit(_run_provider_task, label, provider_fn, sub_id, progress)
+                future_map[future] = label
 
-        if dry_run:
-            print(f"{len(assets)} assets (dry-run, not written)")
-        else:
-            for asset in assets:
-                upsert_asset(conn, asset)
-                seen_ids.add(asset["id"])
-            conn.commit()
-            print(f"{len(assets)} assets")
+            progress.render(force=True)
+            pending = set(future_map)
+            while pending:
+                done, pending = wait(pending, timeout=_PROGRESS_REFRESH_SECONDS, return_when=FIRST_COMPLETED)
+                if not done:
+                    progress.render(force=True)
+                    continue
 
-        total += len(assets)
+                for future in done:
+                    label = future_map[future]
+                    try:
+                        assets = future.result()
+                    except Exception as exc:
+                        progress.mark_failed(label, str(exc))
+                        progress.render(force=True)
+                        continue
+
+                    asset_count = len(assets or [])
+                    total += asset_count
+
+                    if dry_run:
+                        progress.mark_done(label, f"{asset_count} assets (dry-run)")
+                        progress.render(force=True)
+                        continue
+
+                    if asset_count:
+                        progress.update(label, f"writing {asset_count} assets")
+                        progress.render(force=True)
+                        for idx, asset in enumerate(assets, start=1):
+                            upsert_asset(conn, asset)
+                            seen_ids.add(asset["id"])
+                            if idx % _PROVIDER_WRITE_CHUNK == 0 and idx < asset_count:
+                                progress.update(label, f"writing {idx}/{asset_count} assets")
+                                progress.render(force=True)
+                        conn.commit()
+
+                    progress.mark_done(label, f"{asset_count} assets")
+                    progress.render(force=True)
+    else:
+        print("  [providers] no parallel harvesters configured")
 
     # Stale detection (skip on dry-run)
     if not dry_run and seen_ids:
@@ -381,18 +605,20 @@ def harvest_subscription(
     # APIM API → backend routes
     print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
     try:
+        phase_started = time.perf_counter()
         route_count = apim.harvest_routes(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [APIM Routes] {route_count} routes {action}")
+        print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
         print(f"  [APIM Routes] FAILED ({exc})")
 
     # APIM backend inventory + API-to-backend links
     print(f"  [APIM Backend Links] harvesting backend inventory and route links...", flush=True)
     try:
+        phase_started = time.perf_counter()
         backend_count, link_count = apim_routing_map.harvest_backends(sub_id, conn, dry_run=dry_run)
         action = "would write" if dry_run else "written"
-        print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action}")
+        print(f"  [APIM Backend Links] {backend_count} backends, {link_count} links {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
         print(f"  [APIM Backend Links] FAILED ({exc})")
 

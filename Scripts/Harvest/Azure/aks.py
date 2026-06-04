@@ -4,9 +4,18 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from ._helpers import _az_rest, az, build_endpoints, infer_sku, safe_str
+from ._helpers import (
+    _az_rest,
+    az,
+    build_endpoints,
+    classify_host_alias_exposure,
+    infer_sku,
+    normalize_route_path,
+    safe_str,
+)
 
 RESOURCE_TYPE = "Microsoft.ContainerService/managedClusters"
 
@@ -19,6 +28,7 @@ _K8S_RESOURCE_PATHS: dict[str, str] = {
     "services": "/api/v1/services",
     "deployments": "/apis/apps/v1/deployments",
 }
+_AKS_CLUSTER_WORKERS = 4
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -108,6 +118,10 @@ def _total_node_count(cluster: dict[str, Any]) -> int:
     for pool in cluster.get("agentPoolProfiles") or []:
         total += pool.get("count") or 0
     return total
+
+
+def _get_ingress_route_exposure_level(host_aliases: list[str] | None) -> str:
+    return classify_host_alias_exposure(host_aliases)
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +324,26 @@ def _build_route_model(
                 ),
                 "git_repository": git_repo,
                 "team": team,
+                "exposure_level": _get_ingress_route_exposure_level(ref["host_aliases"]),
             })
 
     return routes
+
+
+def _harvest_cluster_route_bundle(cluster: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
+    cluster_id = cluster.get("id", "")
+    cluster_name = cluster.get("name", "")
+    if not cluster_id or not cluster_name:
+        return None, []
+
+    print(f"    [aks-routes] {cluster_name}...", end=" ", flush=True)
+    portal_fqdn = _get_cluster_portal_fqdn(cluster_id)
+    ingresses = _get_kubernetes_resources(portal_fqdn, "ingresses")
+    services = _get_kubernetes_resources(portal_fqdn, "services")
+    deployments = _get_kubernetes_resources(portal_fqdn, "deployments")
+    routes = _build_route_model(cluster, ingresses, services, deployments)
+    print(f"{len(routes)} routes")
+    return cluster_name, routes
 
 
 def _make_route_id(
@@ -328,7 +359,7 @@ def _make_route_id(
 ) -> str:
     """Build a deterministic unique ID for an AKS route row."""
     h = host or "*"
-    p = path.rstrip("/") if path else "/"
+    p = normalize_route_path(path) or "/"
     svc = service_name or ""
     port = str(service_port) if service_port is not None else ""
     deploy = deployment_name or ""
@@ -355,28 +386,32 @@ def harvest_routes(
 
     now = datetime.now(timezone.utc).isoformat()
     total = 0
+    max_workers = min(_AKS_CLUSTER_WORKERS, len(clusters))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_harvest_cluster_route_bundle, cluster): cluster.get("name") or cluster.get("id") or "<unknown>"
+            for cluster in clusters
+        }
+        for future in as_completed(futures):
+            cluster_name = futures[future]
+            try:
+                returned_cluster_name, routes = future.result()
+            except Exception as exc:
+                print(f"    [aks-routes] {cluster_name} SKIPPED ({exc})")
+                continue
 
-    for cluster in clusters:
-        cluster_id = cluster.get("id", "")
-        cluster_name = cluster.get("name", "")
-        print(f"    [aks-routes] {cluster_name}...", end=" ", flush=True)
-
-        try:
-            portal_fqdn = _get_cluster_portal_fqdn(cluster_id)
-            ingresses = _get_kubernetes_resources(portal_fqdn, "ingresses")
-            services = _get_kubernetes_resources(portal_fqdn, "services")
-            deployments = _get_kubernetes_resources(portal_fqdn, "deployments")
-            routes = _build_route_model(cluster, ingresses, services, deployments)
+            if not returned_cluster_name:
+                continue
 
             if not dry_run and routes:
                 # Replace all existing routes for this cluster before inserting
                 conn.execute(
                     "DELETE FROM aks_routes WHERE subscription_id = ? AND cluster_name = ?",
-                    (subscription_id, cluster_name),
+                    (subscription_id, returned_cluster_name),
                 )
                 for r in routes:
                     route_id = _make_route_id(
-                        cluster_name,
+                        returned_cluster_name,
                         r["namespace"] or "",
                         r["ingress_name"] or "",
                         r["host"],
@@ -393,8 +428,8 @@ def harvest_routes(
                             resource_group, namespace, ingress_name, host, host_aliases,
                             path, is_default_backend, service_name, service_port,
                             service_ports, deployment_name, deployment_namespace,
-                            pod_template_labels, git_repository, team, last_synced
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            pod_template_labels, git_repository, team, exposure_level, last_synced
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(id) DO UPDATE SET
                             subscription_id      = excluded.subscription_id,
                             cluster_resource_id  = excluded.cluster_resource_id,
@@ -406,12 +441,13 @@ def harvest_routes(
                             pod_template_labels  = excluded.pod_template_labels,
                             git_repository       = excluded.git_repository,
                             team                 = excluded.team,
+                            exposure_level       = excluded.exposure_level,
                             last_synced          = excluded.last_synced
                         """,
                         (
                             route_id,
                             subscription_id,
-                            cluster_name,
+                            returned_cluster_name,
                             r["cluster_resource_id"],
                             r["resource_group"],
                             r["namespace"],
@@ -428,15 +464,12 @@ def harvest_routes(
                             json.dumps(r["pod_template_labels"]),
                             r["git_repository"],
                             r["team"],
+                            r["exposure_level"],
                             now,
                         ),
                     )
                 conn.commit()
 
             total += len(routes)
-            print(f"{len(routes)} routes")
-        except Exception as exc:
-            print(f"SKIPPED ({exc})")
 
     return total
-

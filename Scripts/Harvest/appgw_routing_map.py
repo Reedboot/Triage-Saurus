@@ -30,6 +30,7 @@ import sqlite3
 import subprocess
 import sys
 import signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ sys.path.insert(0, str(REPO_ROOT / "Scripts" / "Persist"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from db_helpers import _ensure_schema  # type: ignore
+from Azure._helpers import normalize_host_key, normalize_route_path, route_path_matches  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -63,6 +65,7 @@ CREATE TABLE IF NOT EXISTS appgw_routing_rules (
     backend_protocol    TEXT,
     host_override       TEXT,               -- backend host header override
     waf_policy_name     TEXT,               -- per-rule/per-listener WAF policy
+    exposure_level      TEXT DEFAULT 'Public',
     last_synced         DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_appgw_rules_sub     ON appgw_routing_rules(subscription_id);
@@ -102,10 +105,16 @@ CREATE TABLE IF NOT EXISTS appgw_waf_policies (
     last_synced         DATETIME
 );
 """
+_APPGW_FETCH_WORKERS = 4
 
 
 def _ensure_appgw_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_APPGW_DDL)
+    existing_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(appgw_routing_rules)").fetchall()
+    }
+    if "exposure_level" not in existing_columns:
+        conn.execute("ALTER TABLE appgw_routing_rules ADD COLUMN exposure_level TEXT DEFAULT 'Public'")
     conn.commit()
 
 
@@ -196,6 +205,25 @@ def _build_lookup(items: list[dict], key: str = "name") -> dict[str, dict]:
     return {_id_tail(item.get("id", "")) or item.get(key, ""): item for item in items}
 
 
+def _dedupe_route_paths(paths: list[str] | None) -> list[str]:
+    """Normalize and de-duplicate path patterns while preserving order."""
+    unique_paths: list[str] = []
+    for raw_path in paths or []:
+        path = normalize_route_path(raw_path)
+        if not path:
+            continue
+
+        duplicate = any(
+            route_path_matches(existing, path) and route_path_matches(path, existing)
+            for existing in unique_paths
+        )
+        if duplicate:
+            continue
+
+        unique_paths.append(path)
+    return unique_paths
+
+
 # ---------------------------------------------------------------------------
 # Core: extract routing chains from a fully-hydrated AppGW
 # ---------------------------------------------------------------------------
@@ -218,6 +246,16 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
         _id_tail(fp.get("id")): ((fp.get("properties") or fp).get("port"))
         for fp in (props.get("frontendPorts") or gw.get("frontendPorts") or [])
     }
+    frontend_exposure_lookup: dict[str, str] = {}
+    for fip in (props.get("frontendIPConfigurations") or gw.get("frontendIPConfigurations") or []):
+        fip_props = fip.get("properties") or fip
+        exposure_level = "Public" if fip_props.get("publicIPAddress") else "Internal"
+        fip_id = _id_tail(fip.get("id"))
+        fip_name = fip.get("name") or fip_id
+        if fip_id:
+            frontend_exposure_lookup[fip_id] = exposure_level
+        if fip_name:
+            frontend_exposure_lookup[fip_name] = exposure_level
 
     def _pool_fqdns(pool_name: str) -> list[str]:
         pool = pools_lkp.get(pool_name) or {}
@@ -243,11 +281,13 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
         lp = l.get("properties") or l
         port_id = _id_tail((lp.get("frontendPort") or {}).get("id"))
         hosts = lp.get("hostNames") or ([lp["hostName"]] if lp.get("hostName") else [])
+        listener_frontend_id = _id_tail((lp.get("frontendIPConfiguration") or {}).get("id"))
         return {
             "protocol": lp.get("protocol"),
             "port": frontend_ports.get(port_id),
             "hostnames": hosts,
             "waf_policy": _id_tail((lp.get("firewallPolicy") or {}).get("id")),
+            "exposure_level": frontend_exposure_lookup.get(listener_frontend_id, "Public"),
         }
 
     routes: list[dict] = []
@@ -282,7 +322,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                     "listener_name": listener_name,
                     "hostname": hostname,
                     "protocol": listener["protocol"],
-                    "url_path": "/*",
+                    "url_path": normalize_route_path("/*") or "/*",
                     "backend_pool_name": direct_pool,
                     "backend_fqdns": _pool_fqdns(direct_pool),
                     "http_settings_name": direct_cfg,
@@ -290,6 +330,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                     "backend_protocol": cfg_detail["protocol"],
                     "host_override": cfg_detail["host_override"],
                     "waf_policy_name": rule_waf or None,
+                    "exposure_level": listener["exposure_level"],
                 })
         elif url_map_name:
             url_map = url_maps_lkp.get(url_map_name) or {}
@@ -310,7 +351,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                         "listener_name": listener_name,
                         "hostname": hostname,
                         "protocol": listener["protocol"],
-                        "url_path": "/*",
+                        "url_path": normalize_route_path("/*") or "/*",
                         "backend_pool_name": default_pool,
                         "backend_fqdns": _pool_fqdns(default_pool),
                         "http_settings_name": default_cfg,
@@ -318,6 +359,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                         "backend_protocol": cfg_detail["protocol"],
                         "host_override": cfg_detail["host_override"],
                         "waf_policy_name": rule_waf or None,
+                        "exposure_level": listener["exposure_level"],
                     })
 
             # Path-specific rules
@@ -326,7 +368,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                 pool_name = _id_tail((prp.get("backendAddressPool") or {}).get("id"))
                 cfg_name  = _id_tail((prp.get("backendHttpSettings") or {}).get("id"))
                 path_waf  = _id_tail((prp.get("firewallPolicy") or {}).get("id")) or rule_waf
-                paths     = prp.get("paths") or ["/*"]
+                paths     = _dedupe_route_paths(prp.get("paths") or ["/*"])
                 cfg_detail = _http_cfg_detail(cfg_name)
                 for hostname in hostnames:
                     for path in paths:
@@ -343,6 +385,7 @@ def extract_routes(gw: dict, subscription_id: str, routing_rules: list[dict] | N
                             "backend_protocol": cfg_detail["protocol"],
                             "host_override": cfg_detail["host_override"],
                             "waf_policy_name": path_waf or None,
+                            "exposure_level": listener["exposure_level"],
                         })
 
     return routes
@@ -513,7 +556,8 @@ def process_gateway(
     connections_created = 0
 
     for route in routes:
-        rule_id = f"{name}::{route['rule_name']}::{route['url_path']}"
+        route_path = normalize_route_path(route["url_path"]) or route["url_path"]
+        rule_id = f"{name}::{route['rule_name']}::{route_path}"
 
         if not dry_run:
             conn.execute(
@@ -523,8 +567,8 @@ def process_gateway(
                      rule_name, listener_name, hostname, protocol, url_path,
                      backend_pool_name, backend_fqdns, http_settings_name,
                      backend_port, backend_protocol, host_override,
-                     waf_policy_name, last_synced)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     waf_policy_name, exposure_level, last_synced)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     hostname          = excluded.hostname,
                     protocol          = excluded.protocol,
@@ -534,6 +578,7 @@ def process_gateway(
                     backend_protocol  = excluded.backend_protocol,
                     host_override     = excluded.host_override,
                     waf_policy_name   = excluded.waf_policy_name,
+                    exposure_level    = excluded.exposure_level,
                     last_synced       = excluded.last_synced
                 """,
                 (
@@ -545,6 +590,7 @@ def process_gateway(
                     route["http_settings_name"],
                     route["backend_port"], route["backend_protocol"],
                     route["host_override"], route["waf_policy_name"],
+                    route["exposure_level"],
                     now,
                 ),
             )
@@ -555,8 +601,13 @@ def process_gateway(
                 for fqdn in route["backend_fqdns"]:
                     target_asset_name: str | None = None
                     target_asset_type: str | None = None
+                    backend_key = normalize_host_key(fqdn) or fqdn.lower().rstrip(".")
                     for known_fqdn, (_asset_id, asset_name, asset_type) in fqdn_to_asset.items():
-                        if known_fqdn == fqdn or fqdn.endswith(f".{known_fqdn}") or known_fqdn.endswith(f".{fqdn}"):
+                        if (
+                            known_fqdn == backend_key or
+                            backend_key.endswith(f".{known_fqdn}") or
+                            known_fqdn.endswith(f".{backend_key}")
+                        ):
                             target_asset_name = asset_name
                             target_asset_type = asset_type
                             break
@@ -578,9 +629,11 @@ def process_gateway(
                             json.dumps({
                                 "hostname": route["hostname"],
                                 "url_path": route["url_path"],
+                                "normalized_url_path": route_path,
                                 "backend_pool": route["backend_pool_name"],
                                 "backend_fqdn": fqdn,
                                 "waf_policy": route["waf_policy_name"],
+                                "exposure_level": route["exposure_level"],
                             }),
                         ),
                     )
@@ -694,13 +747,26 @@ def process_waf_policies(
 
     count = 0
     unconfigured = []
-    for pol_stub in policies:
+    policy_results: list[tuple[dict, dict]] = []
+    if policies:
+        max_workers = min(_APPGW_FETCH_WORKERS, len(policies))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(show_waf_policy, pol_stub["name"], pol_stub["resourceGroup"], subscription_id): pol_stub
+                for pol_stub in policies
+            }
+            for future in as_completed(futures):
+                pol_stub = futures[future]
+                try:
+                    pol = future.result() or pol_stub
+                except Exception:
+                    pol = pol_stub
+                policy_results.append((pol_stub, pol))
+
+    for pol_stub, pol in policy_results:
         pol_name = pol_stub["name"]
         pol_rg   = pol_stub["resourceGroup"]
         pol_id   = pol_stub.get("id", "")
-
-        # Get full policy details
-        pol = show_waf_policy(pol_name, pol_rg, subscription_id) or pol_stub
         pp  = pol.get("properties") or {}
         ps  = pp.get("policySettings") or {}
         managed = pp.get("managedRules") or {}
@@ -793,7 +859,7 @@ def harvest_routing(
 
     # Build FQDN → asset map for cross-referencing backend pools.
     fqdn_to_asset: dict[str, tuple[str, str, str | None]] = {
-        row[3].lower().rstrip("."): (row[0], row[1], row[2])
+        (normalize_host_key(row[3]) or row[3].lower().rstrip(".")): (row[0], row[1], row[2])
         for row in conn.execute(
             "SELECT id, name, type, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
             (subscription_id,),
@@ -801,16 +867,28 @@ def harvest_routing(
     }
 
     full_gateways = []
-    for gw_stub in gateways:
-        name = gw_stub["name"]
-        rg = gw_stub.get("resourceGroup", "")
-        print(f"    [appgw-routing] {name}...", end=" ", flush=True)
+    gateway_results: list[tuple[dict, dict]] = []
+    max_workers = min(_APPGW_FETCH_WORKERS, len(gateways))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for gw_stub in gateways:
+            name = gw_stub["name"]
+            rg = gw_stub.get("resourceGroup", "")
+            print(f"    [appgw-routing] {name}...", end=" ", flush=True)
+            futures[pool.submit(show_appgw, name, rg, subscription_id)] = gw_stub
 
-        gw = show_appgw(name, rg, subscription_id)
-        if not gw:
-            print("FAILED (show returned nothing)")
-            continue
+        for future in as_completed(futures):
+            gw_stub = futures[future]
+            try:
+                gw = future.result()
+            except Exception:
+                gw = None
+            if not gw:
+                print("FAILED (show returned nothing)")
+                continue
+            gateway_results.append((gw_stub, gw))
 
+    for gw_stub, gw in gateway_results:
         full_gateways.append(gw)
         rules, _connections = process_gateway(
             gw_stub, subscription_id, conn, fqdn_to_asset, dry_run, now, gw=gw

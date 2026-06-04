@@ -15,17 +15,30 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     for kv in raw:
         props = kv.get("properties") or {}
+        network_acls = _get_network_acls(props)
         vault_uri = props.get("vaultUri")
         fqdn = safe_str(vault_uri.replace("https://", "").rstrip("/")) if vault_uri else None
 
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
         endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
         auth_methods = json.dumps(["azure_ad", "managed_identity"])
+        public_network_access = _get_public_network_access(props)
+        network_default_action = _get_network_default_action(props)
+        network_access_mode = (
+            "private"
+            if public_network_access.lower() == "disabled"
+            else "ip_restricted" if is_restricted else "public"
+        )
 
         extra = {
             "enable_soft_delete": props.get("enableSoftDelete", True),
             "enable_purge_protection": props.get("enablePurgeProtection", False),
-            "network_default_action": _get_network_default_action(props),
+            "public_network_access": public_network_access,
+            "network_default_action": network_default_action,
+            "network_access_mode": network_access_mode,
+            "ip_rule_count": len(network_acls.get("ipRules") or []),
+            "virtual_network_rule_count": len(network_acls.get("virtualNetworkRules") or []),
+            "ip_restriction_count": len(ip_restrictions),
             "sku_family": (props.get("sku") or {}).get("family"),
             "managed_identity_supported": True,
             "managed_identity_required": False,
@@ -55,18 +68,19 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_cidrs)."""
-    if props.get("publicNetworkAccess") == "Disabled":
+    public_network_access = _get_public_network_access(props)
+    if public_network_access.lower() == "disabled":
         return 0, 0, []
 
-    network_acls = props.get("networkAcls") or {}
-    default_action = network_acls.get("defaultAction", "Allow")
+    network_acls = _get_network_acls(props)
+    default_action = _get_network_default_action(props)
 
-    if default_action == "Deny":
+    if default_action.lower() == "deny":
         cidrs = extract_ip_restrictions(network_acls=network_acls)
         return 0, 1, cidrs
 
-    ip_rules = network_acls.get("ipRules") or []
-    vnet_rules = network_acls.get("virtualNetworkRules") or []
+    ip_rules = network_acls.get("ipRules") or network_acls.get("ip_rules") or []
+    vnet_rules = network_acls.get("virtualNetworkRules") or network_acls.get("virtual_network_rules") or []
     if ip_rules or vnet_rules:
         cidrs = extract_ip_restrictions(network_acls=network_acls)
         return 0, 1, cidrs
@@ -74,6 +88,14 @@ def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
     return 1, 0, []
 
 
+def _get_network_acls(props: dict[str, Any]) -> dict[str, Any]:
+    return props.get("networkAcls") or props.get("network_acls") or {}
+
+
+def _get_public_network_access(props: dict[str, Any]) -> str:
+    return safe_str(props.get("publicNetworkAccess") or props.get("public_network_access") or "Enabled") or "Enabled"
+
+
 def _get_network_default_action(props: dict[str, Any]) -> str:
-    network_acls = props.get("networkAcls") or {}
-    return network_acls.get("defaultAction", "Allow")
+    network_acls = _get_network_acls(props)
+    return safe_str(network_acls.get("defaultAction") or network_acls.get("default_action") or "Allow") or "Allow"

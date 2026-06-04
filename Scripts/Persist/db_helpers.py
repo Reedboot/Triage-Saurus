@@ -646,6 +646,7 @@ _BASE_TABLES_SQL = """
         backend_protocol    TEXT,
         host_override       TEXT,               -- backend host header override
         waf_policy_name     TEXT,               -- per-rule/per-listener WAF policy ref
+        exposure_level      TEXT DEFAULT 'Public',
         last_synced         DATETIME
     );
     CREATE INDEX IF NOT EXISTS idx_appgw_rules_sub     ON appgw_routing_rules(subscription_id);
@@ -690,6 +691,7 @@ _BASE_TABLES_SQL = """
         pod_template_labels  TEXT,               -- JSON object
         git_repository       TEXT,
         team                 TEXT,
+        exposure_level       TEXT DEFAULT 'Unknown',
         last_synced          DATETIME
     );
     CREATE INDEX IF NOT EXISTS idx_aks_routes_sub        ON aks_routes(subscription_id);
@@ -1299,8 +1301,10 @@ def _ensure_schema(conn: sqlite3.Connection):
     is locked" errors on sqlite.
     """
     # Skip DDL entirely if this process has already ensured the schema for this DB.
+    # In-memory SQLite connections report an empty database path, so do not memoize them.
     db_file = conn.execute("PRAGMA database_list").fetchone()[2]
-    if db_file in _schema_ensured_for:
+    cache_key = db_file if db_file and db_file != ":memory:" else None
+    if cache_key and cache_key in _schema_ensured_for:
         return
 
     # Migration lock file (sibling to DB file)
@@ -1426,6 +1430,18 @@ def _ensure_schema(conn: sqlite3.Connection):
         resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resources)").fetchall()}
         if "parent_resource_id" not in resource_columns:
             conn.execute("ALTER TABLE resources ADD COLUMN parent_resource_id INTEGER")
+
+        for table_name, columns in (
+            ("apim_api_routes", (("exposure_level", "TEXT"),)),
+            ("appgw_routing_rules", (("exposure_level", "TEXT DEFAULT 'Public'"),)),
+            ("aks_routes", (("exposure_level", "TEXT DEFAULT 'Unknown'"),)),
+        ):
+            existing_columns = {
+                row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
+            for col_name, col_type in columns:
+                if col_name not in existing_columns:
+                    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
 
         connection_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_connections)").fetchall()}
         for col_name, col_type in (
@@ -1822,7 +1838,8 @@ def _ensure_schema(conn: sqlite3.Connection):
             pass
 
     # Mark schema as ensured for this DB path so subsequent connections skip DDL.
-    _schema_ensured_for.add(db_file)
+    if cache_key:
+        _schema_ensured_for.add(cache_key)
 
 
 @contextmanager

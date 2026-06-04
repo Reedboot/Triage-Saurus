@@ -23,6 +23,8 @@ import sqlite3
 import subprocess
 import sys
 import signal
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -199,6 +201,7 @@ def process_apim(
     conn: sqlite3.Connection,
     dry_run: bool,
 ) -> int:
+    started = time.perf_counter()
     apim_name = apim["name"]
     resource_group = apim["resourceGroup"]
     apim_resource_id = apim.get("id")
@@ -208,6 +211,7 @@ def process_apim(
     print(f"\n  [apim] {apim_name} (rg={resource_group})")
 
     # --- Backends ---
+    backends_started = time.perf_counter()
     print(f"    fetching backends...", end=" ", flush=True)
     backends_raw = list_backends(apim_name, resource_group, subscription_id)
     # Build lookup: backend name → URL
@@ -217,7 +221,7 @@ def process_apim(
         b_url = b.get("url") or ""
         if b_url:
             backend_map[b_name] = b_url
-    print(f"{len(backends_raw)} backends")
+    print(f"{len(backends_raw)} backends in {time.perf_counter() - backends_started:.2f}s")
 
     # Persist full backend details
     if not dry_run:
@@ -256,9 +260,10 @@ def process_apim(
             )
 
     # --- APIs ---
+    apis_started = time.perf_counter()
     print(f"    fetching APIs...", end=" ", flush=True)
     apis_raw = list_apis(apim_name, resource_group, subscription_id)
-    print(f"{len(apis_raw)} APIs")
+    print(f"{len(apis_raw)} APIs in {time.perf_counter() - apis_started:.2f}s")
 
     # --- Load existing provisioned_assets FQDNs for cross-reference ---
     asset_fqdn_rows = conn.execute(
@@ -272,6 +277,7 @@ def process_apim(
     routes_upserted = 0
     connections_created = 0
     connections_skipped = 0
+    api_jobs: list[dict[str, Any]] = []
 
     apim_asset_rows = conn.execute(
         "SELECT type FROM provisioned_assets WHERE subscription_id = ? AND name = ?",
@@ -349,43 +355,13 @@ def process_apim(
                 ),
             )
             routes_upserted += 1
-
-            # --- Harvest operations for this API ---
-            ops_raw = list_operations(apim_name, resource_group, api_name, subscription_id)
-            ops_upserted = 0
-            for op in ops_raw:
-                op_id   = op.get("name") or op.get("id", "").split("/")[-1] or ""
-                op_disp = op.get("displayName") or op_id
-                method  = op.get("method") or ""
-                url_tpl = op.get("urlTemplate") or op.get("url") or ""
-                desc    = op.get("description") or ""
-                conn.execute(
-                    """
-                    INSERT INTO apim_api_operations
-                        (id, subscription_id, apim_name, api_name, api_display_name,
-                         api_path, backend_url, operation_id, display_name,
-                         method, url_template, description, requires_subscription, last_synced)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        display_name=excluded.display_name,
-                        method=excluded.method,
-                        url_template=excluded.url_template,
-                        description=excluded.description,
-                        api_path=excluded.api_path,
-                        backend_url=excluded.backend_url,
-                        requires_subscription=excluded.requires_subscription,
-                        last_synced=excluded.last_synced
-                    """,
-                    (
-                        f"{apim_name}::{api_name}::{op_id}",
-                        subscription_id, apim_name, api_name, api_display,
-                        api_path, backend_url, op_id, op_disp,
-                        method.upper(), url_tpl, desc, requires_sub, now,
-                    ),
-                )
-                ops_upserted += 1
-            if ops_raw:
-                print(f"      {api_display}: {ops_upserted} operations")
+            api_jobs.append({
+                "api_name": api_name,
+                "api_display": api_display,
+                "api_path": api_path,
+                "backend_url": backend_url,
+                "requires_sub": requires_sub,
+            })
 
             # --- Create resource_connection: APIM → backend asset ---
             backend_fqdn = _url_to_fqdn(backend_url)
@@ -427,12 +403,83 @@ def process_apim(
                 )
                 connections_created += 1
 
+    api_operation_results: dict[str, list[dict[str, Any]]] = {}
+    if not dry_run and api_jobs:
+        ops_started = time.perf_counter()
+        print(f"    [apim] fetching API operation lists in parallel for {len(api_jobs)} APIs...", flush=True)
+        with ThreadPoolExecutor(max_workers=min(8, len(api_jobs))) as pool:
+            futures = {
+                pool.submit(list_operations, apim_name, resource_group, job["api_name"], subscription_id): job
+                for job in api_jobs
+            }
+            completed = 0
+            total_jobs = len(futures)
+            for future in as_completed(futures):
+                completed += 1
+                job = futures[future]
+                try:
+                    api_operation_results[job["api_name"]] = future.result() or []
+                except Exception as exc:
+                    print(f"      {job['api_display']}: FAILED ({exc})")
+                    api_operation_results[job["api_name"]] = []
+                if completed == 1 or completed % 5 == 0 or completed == total_jobs:
+                    print(f"    [apim] {apim_name}: {completed}/{total_jobs} API operation lists fetched", flush=True)
+        print(f"    [apim] API operation phase completed in {time.perf_counter() - ops_started:.2f}s", flush=True)
+
+        for job in api_jobs:
+            ops_raw = api_operation_results.get(job["api_name"], [])
+            ops_upserted = 0
+            for op in ops_raw:
+                op_id = op.get("name") or op.get("id", "").split("/")[-1] or ""
+                op_disp = op.get("displayName") or op_id
+                method = op.get("method") or ""
+                url_tpl = op.get("urlTemplate") or op.get("url") or ""
+                desc = op.get("description") or ""
+                conn.execute(
+                    """
+                    INSERT INTO apim_api_operations
+                        (id, subscription_id, apim_name, api_name, api_display_name,
+                         api_path, backend_url, operation_id, display_name,
+                         method, url_template, description, requires_subscription, last_synced)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        display_name=excluded.display_name,
+                        method=excluded.method,
+                        url_template=excluded.url_template,
+                        description=excluded.description,
+                        api_path=excluded.api_path,
+                        backend_url=excluded.backend_url,
+                        requires_subscription=excluded.requires_subscription,
+                        last_synced=excluded.last_synced
+                    """,
+                    (
+                        f"{apim_name}::{job['api_name']}::{op_id}",
+                        subscription_id,
+                        apim_name,
+                        job["api_name"],
+                        job["api_display"],
+                        job["api_path"],
+                        job["backend_url"],
+                        op_id,
+                        op_disp,
+                        method.upper(),
+                        url_tpl,
+                        desc,
+                        job["requires_sub"],
+                        now,
+                    ),
+                )
+                ops_upserted += 1
+            if ops_raw:
+                print(f"      {job['api_display']}: {ops_upserted} operations")
+
     if not dry_run:
         conn.commit()
 
     if connections_skipped:
         print(f"    [warn] skipped {connections_skipped} connection rows because the numeric resource graph is unavailable")
     print(f"    → {routes_upserted} routes upserted, {connections_created} connections created")
+    print(f"    [apim-routing] {apim_name} finished in {time.perf_counter() - started:.2f}s", flush=True)
     return routes_upserted
 
 
@@ -446,6 +493,7 @@ def harvest_backends(
     This fast sub-step avoids extra Azure CLI calls. It reads apim_api_routes
     and materialises a backend row for each unique backend URL per APIM.
     """
+    started = time.perf_counter()
     _ensure_schema(conn)
     _ensure_apim_schema(conn)
 
@@ -461,6 +509,7 @@ def harvest_backends(
     ).fetchall()
     if not route_rows:
         print("    [apim-backends] no APIM routes harvested yet")
+        print(f"    [apim-backends] finished in {time.perf_counter() - started:.2f}s", flush=True)
         return 0, 0
 
     now = datetime.now(timezone.utc).isoformat()
@@ -550,6 +599,7 @@ def harvest_backends(
     print(f"    [apim-backends] derived {len(backend_rows)} backends from {linked_routes} routes")
     if not backend_rows:
         print("    [apim-backends] no backend URLs were available to derive")
+    print(f"    [apim-backends] finished in {time.perf_counter() - started:.2f}s", flush=True)
 
     return len(backend_rows), linked_routes
 
