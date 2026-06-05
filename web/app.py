@@ -15676,6 +15676,37 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     }
     result["default_view"] = "connectivity"
     result["attack_paths"] = overlays["attack_paths_summary"]
+
+    # P2-F: Populate structured nodes list for programmatic content checks and
+    # drilldown UI. Each entry includes tier, node_id, and key fields so callers
+    # don't need to parse the Mermaid string to enumerate diagram nodes.
+    _nodes_list = []
+    for _tier, _items in (
+        ("entry", shown_entry),
+        ("api", shown_api),
+        ("backend", shown_backend),
+        ("data", shown_data),
+    ):
+        for _item in _items:
+            if _item.get("type") == "summary":
+                continue
+            _nodes_list.append({
+                "node_id":   _get_node_id(_item),
+                "tier":      _tier,
+                "name":      _item.get("name") or "",
+                "label":     _item.get("label") or _item.get("name") or "",
+                "type":      _item.get("type") or "",
+                "arm_type":  _item.get("arm_type") or _item.get("type") or "",
+                "public":    bool(_item.get("public")),
+                "is_group":  bool(_item.get("is_group")),
+                "count":     int(_item.get("count") or 1),
+                "fqdns":     list(_item.get("fqdns") or []),
+                "rg":        _item.get("rg") or "",
+                "has_waf":   bool(_item.get("has_waf") or _item.get("waf_mode")),
+                "dns_verified_private": bool(_item.get("dns_verified_private")),
+            })
+    result["nodes"] = _nodes_list
+
     return result
 
 
