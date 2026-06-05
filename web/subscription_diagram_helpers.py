@@ -60,7 +60,7 @@ def subscription_known_fqdn_suffix(arm_type: str) -> str | None:
 def subscription_asset_tier(arm_type: str, name: str = "") -> str:
     type_key = (arm_type or "").lower()
     item = {"name": name}
-    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key or "cdn/profiles" in type_key or "network/loadbalancers" in type_key:
+    if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key or "cdn/profiles" in type_key or "network/loadbalancers" in type_key or "azurefirewalls" in type_key:
         return "entry"
     if "apimanagement" in type_key:
         return "api"
@@ -73,6 +73,7 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "cognitiveservices" in type_key
         or "containerregistry" in type_key
         or "servicefabric" in type_key
+        or "insights/components" in type_key
     ):
         return "backend"
     if "sites" in type_key:

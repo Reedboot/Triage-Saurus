@@ -13645,6 +13645,7 @@ def _get_icon_path(resource_type: str) -> str | None:
             "microsoft.network/applicationgateways": "azurerm_app_gateway",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
+            "microsoft.network/azurefirewalls": "azurerm_firewall",
             "microsoft.apimanagement/service": "azurerm_apim",
             "microsoft.containerservice/managedclusters": "azurerm_aks",
             "microsoft.storage/storageaccounts": "azurerm_storage_account",
@@ -14280,10 +14281,19 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "routing_targets": routing_targets,
         }
         type_key = (rtype or "").lower()
+
+        # Skip child resources (e.g. storageAccounts/blobServices/containers,
+        # servers/databases). These have no independent public FQDNs and inflating
+        # parent counts distorts exposure counts dramatically.
+        if len(type_key.split("/")) > 2:
+            continue
+
         type_groups[type_key].append(item)
-        
+
         # Classify for ingress flow
-        if "applicationgateway" in type_key or "frontdoor" in type_key or "publicipaddress" in type_key or "trafficmanager" in type_key:
+        if ("applicationgateway" in type_key or "frontdoor" in type_key
+                or "publicipaddress" in type_key or "trafficmanager" in type_key
+                or "azurefirewalls" in type_key):
             entry_points.append(item)
         elif "apimanagement" in type_key:
             api_layer.append(item)
@@ -14291,7 +14301,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
               or "serverfarms" in type_key or "hostingenvironment" in type_key
               or "datafactory" in type_key or "cognitiveservices" in type_key
               or "containerregistry" in type_key or "servicefabric" in type_key
-              or "sites" in type_key):
+              or "sites" in type_key or "insights/components" in type_key):
             backends.append(item)
         elif ("sql" in type_key or "documentdb" in type_key or "storage" in type_key
               or "keyvault" in type_key or "servicebus" in type_key or "eventhub" in type_key
@@ -14330,6 +14340,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 category = "Front Door"
             elif "trafficmanager" in type_key:
                 category = "Traffic Manager"
+            elif "azurefirewalls" in type_key:
+                category = "Azure Firewall"
             elif "publicip" in type_key:
                 category = "Public IP"
             else:
@@ -14456,6 +14468,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 category = "AI Services"
             elif "servicefabric" in type_key:
                 category = "Service Fabric"
+            elif "insights/components" in type_key:
+                category = "App Insights"
             else:
                 category = _friendly_type(item.get("type"))
             grouped[category].append(item)
@@ -14840,7 +14854,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _data_exposure_label(arm_type: str, count: int) -> str:
         """Protocol-appropriate 🔴 label for direct Internet exposure arrows."""
         t = (arm_type or "").lower()
-        if "keyvault" in t or "storage" in t or "servicebus" in t or "eventhub" in t or "appconfiguration" in t:
+        if "eventhub" in t or "servicebus" in t:
+            proto = "AMQP"
+        elif "keyvault" in t or "storage" in t or "appconfiguration" in t:
             proto = "HTTPS"
         elif "sql" in t:
             proto = "TCP:1433"
@@ -15058,11 +15074,52 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _add_link(f'    {api_node} --> {_get_node_id(backend)}', "white")
 
     # Backends → Data Stores (white — internal connections)
+    # Connect one representative from each major backend category rather than just
+    # shown_backend[0] (which is always AKS after prioritization). This ensures App
+    # Service Plans, Service Fabric, etc. also show outbound data access edges.
     if shown_backend and shown_data:
-        backend_node = _get_node_id(shown_backend[0])
-        for store in shown_data:
-            store_proto = _internal_link_label(store.get("arm_type") or "")
-            _add_link(f'    {backend_node} -->|"{store_proto}"| {_get_node_id(store)}', "white")
+        def _pick_backend_representatives(backends: list) -> list:
+            """Return one representative per major compute category, capped at 4.
+
+            Prioritises heavy-compute tiers (AKS, App Service Plan, ASE, SF, Data
+            Factory) to ensure they always get data-store edges. Lighter categories
+            (App Insights, Container Registry, AI Services) are only included if
+            slots remain.
+            """
+            # Ordered preference: show compute-heavy types first
+            priority_categories = [
+                "AKS", "App Service Plan", "App Service Environment",
+                "Service Fabric", "Data Factory",
+            ]
+            seen: set[str] = set()
+            reps: list = []
+
+            # First pass: priority categories in order
+            for pcat in priority_categories:
+                for b in backends:
+                    if b.get("type") == pcat and pcat not in seen:
+                        seen.add(pcat)
+                        reps.append(b)
+                        break
+                if len(reps) >= 4:
+                    break
+
+            # Second pass: remaining categories to fill up to 4
+            for b in backends:
+                cat = b.get("type") or ""
+                if cat and cat not in seen:
+                    seen.add(cat)
+                    reps.append(b)
+                if len(reps) >= 4:
+                    break
+
+            return reps
+
+        for backend_rep in _pick_backend_representatives(shown_backend):
+            backend_node = _get_node_id(backend_rep)
+            for store in shown_data:
+                store_proto = _internal_link_label(store.get("arm_type") or "")
+                _add_link(f'    {backend_node} -->|"{store_proto}"| {_get_node_id(store)}', "white")
 
     # Fallback hosted-on arrows for any site nodes that remain visible
     if plan_links:
