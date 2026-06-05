@@ -15219,20 +15219,49 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 if endpoint_status and endpoint_status not in ("enabled", "disabled"):
                     # Unknown status — skip to avoid noise
                     continue
+
                 target_node_id = _resolve_routing_target(target)
-                if not target_node_id or target_node_id in seen_targets:
+
+                # Build a human-readable next-hop label from target host/name
+                _raw_target = str(target.get("target") or "").strip()
+                if _raw_target:
+                    # First DNS label = resource name; apply _short_name for readability
+                    _t_label = _short_name(_raw_target.split(".")[0], max_len=24)
+                else:
+                    _t_label = _short_name(str(target.get("name") or "endpoint"), max_len=24)
+
+                if not target_node_id:
+                    # Target is outside this subscription (e.g. legacy App Service, external IP).
+                    # Create a stub node so the routing path remains visible.
+                    _stub_id = _sanitise_node_id(f"ext_{entry.get('name', '')}_{_t_label}")
+                    if _stub_id not in seen_targets:
+                        seen_targets.add(_stub_id)
+                        _status_icon = "⚠️ disabled" if is_disabled else "🌐"
+                        lines.append(f'    {_stub_id}["[External] {_t_label} {_status_icon}"]')
+                        edge_color = "#94a3b8" if is_disabled else "orange"
+                        _dns_label = f"DNS → {_t_label} (disabled)" if is_disabled else f"DNS → {_t_label}"
+                        _add_link(
+                            f'    {source_node_id} -.->|"{_dns_label}"| {_stub_id}',
+                            "#94a3b8",
+                            dasharray="5,5",
+                        )
+                    continue
+
+                if target_node_id in seen_targets:
                     continue
                 seen_targets.add(target_node_id)
+
+                _dns_label = f"DNS → {_t_label}"
                 if is_disabled:
                     # Show disabled (failover) endpoints as dashed grey so the path
                     # is visible without implying active traffic flows there.
                     _add_link(
-                        f'    {source_node_id} -.->|"DNS (disabled)"| {target_node_id}',
+                        f'    {source_node_id} -.->|"DNS → {_t_label} (disabled)"| {target_node_id}',
                         "#94a3b8",
                         dasharray="5,5",
                     )
                 else:
-                    _add_link(f'    {source_node_id} -->|"DNS routing"| {target_node_id}', "orange")
+                    _add_link(f'    {source_node_id} -->|"{_dns_label}"| {target_node_id}', "orange")
 
     # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
