@@ -13510,8 +13510,22 @@ def api_subscription_diagram(sub_id: str):
         except Exception:
             pass  # Non-critical — proceed without ASE links if query fails
 
+        # Query APIM backend URLs for verified connection detection.
+        # Used to flag App Service Plans whose hosted apps aren't confirmed
+        # in APIM routing as potentially unprotected.
+        apim_backend_urls: set[str] = set()
+        try:
+            apim_rows = conn.execute(
+                "SELECT url FROM apim_backends WHERE subscription_id = ? AND url IS NOT NULL",
+                (sub_id,),
+            ).fetchall()
+            for (url,) in apim_rows:
+                apim_backend_urls.add(str(url).strip().lower().rstrip("/"))
+        except Exception:
+            pass  # Non-critical — proceed without APIM backend data
+
         # Build high-level ingress diagram (simplified for readability)
-        ingress_diagram = _build_ingress_diagram(rows, plan_links=plan_links)
+        ingress_diagram = _build_ingress_diagram(rows, plan_links=plan_links, apim_backend_urls=apim_backend_urls)
         
         payload = {
             "subscription_name": sub_name,
@@ -14186,13 +14200,17 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
     This avoids Mermaid text size limits by only showing critical path elements.
     Groups data stores by type AND access level (public vs. IP-restricted).
     Double-clicking elements allows drill-down to details.
+    
+    apim_backend_urls: set of lowercase backend URLs from apim_backends table.
+    Used to flag App Service Plans whose hosted apps aren't confirmed in APIM
+    routing (potentially unprotected public exposure).
     """
     from collections import defaultdict as _dd
     
@@ -14566,6 +14584,43 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     shown_backend = grouped_backends
     shown_data = grouped_data_stores
 
+    # Flag App Service Plans whose publicly-exposed hosted apps are not confirmed
+    # in APIM routing. Derive "APIM resource names" from backend URLs by taking the
+    # hostname prefix (e.g. "prodgreen-account-viewing-permissions" from
+    # "https://prodgreen-account-viewing-permissions.internal.cbinnovation.uk").
+    # A plan is flagged ⚠️ when it is publicly exposed AND none of its hosted site
+    # names appear among the APIM backend names — indicating the apps may bypass
+    # the API gateway layer.
+    if apim_backend_urls:
+        _apim_names: set[str] = set()
+        for _url in apim_backend_urls:
+            try:
+                import re as _re2
+                # strip scheme, take first label of hostname
+                _host = _re2.sub(r"^https?://", "", _url).split("/")[0].split(":")[0]
+                _apim_names.add(_host.lower())
+                _apim_names.add(_host.lower().split(".")[0])  # e.g. "prodgreen-fi-api"
+            except Exception:
+                pass
+        for _item in shown_backend:
+            if not _item.get("public"):
+                continue
+            _arm_t = (_item.get("arm_type") or "").lower()
+            if "serverfarms" not in _arm_t and "hostingenvironment" not in _arm_t:
+                continue
+            # Collect candidate names: from fqdns and resources
+            _site_names: set[str] = set()
+            for _fqdn_val in _item.get("fqdns") or []:
+                _site_names.add(str(_fqdn_val).split(".")[0].lower())
+            for _res in _item.get("resources") or []:
+                _site_names.add(str(_res.get("name") or "").lower())
+            _item_name = str(_item.get("name") or "").lower()
+            if _item_name:
+                _site_names.add(_item_name)
+            # Flag if none of the site names appear in APIM backend names
+            if not _site_names.intersection(_apim_names):
+                _item["apim_unverified"] = True
+
     def _iter_item_resources(item: dict):
         resources = item.get("resources") or []
         if resources:
@@ -14574,6 +14629,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
 
     node_by_resource: dict[tuple[str, str], str] = {}
     node_by_fqdn: dict[str, str] = {}
+    # Name-only fallback: keyed by just the resource name, used when the
+    # target_resource_id points to a resource type not in provisioned_assets
+    # (e.g. Traffic Manager endpoints that reference a Public IP whose App Gateway
+    # shares the same name but the Public IP itself was never harvested).
+    node_by_name: dict[str, str] = {}
     for item in shown_entry + shown_api + shown_backend + shown_data:
         node_id = _get_node_id(item)
         for resource in _iter_item_resources(item):
@@ -14581,6 +14641,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             name_key = str(resource.get("name") or "").strip().lower()
             if rg_key or name_key:
                 node_by_resource.setdefault((rg_key, name_key), node_id)
+            if name_key:
+                node_by_name.setdefault(name_key, node_id)
         for fqdn_value in item.get("fqdns") or []:
             fqdn_key = str(fqdn_value or "").strip().lower()
             if fqdn_key:
@@ -14594,12 +14656,26 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
                 node_id = node_by_resource.get((target_rg.strip().lower(), target_name.strip().lower()))
                 if node_id:
                     return node_id
+                # Fallback: Public IP resources are not harvested as separate assets.
+                # When a TM endpoint targets a Public IP, the associated App Gateway
+                # typically shares the same name — try a name-only lookup.
+                if "publicipaddresses" in target_resource_id.lower():
+                    node_id = node_by_name.get(target_name.strip().lower())
+                    if node_id:
+                        return node_id
 
         target_host = str(target.get("target") or "").strip().lower().rstrip(".")
         if target_host:
             node_id = node_by_fqdn.get(target_host)
             if node_id:
                 return node_id
+            # For .cloudapp.azure.com FQDNs, the first label is the resource name.
+            # Try a name-only lookup in case the FQDN isn't stored in the DB.
+            if ".cloudapp.azure.com" in target_host:
+                resource_name = target_host.split(".")[0]
+                node_id = node_by_name.get(resource_name)
+                if node_id:
+                    return node_id
         return None
 
     def _node_line(node_id: str, label: str, arm_type: str) -> str:
@@ -14678,6 +14754,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
         arm_type = item.get("arm_type") or item["type"]
         label = item.get("label") or item.get("type") or _friendly_type(arm_type)
         access_indicator = " 🌐" if item.get("public") else " 🔒"
+        # ⚠️ badge for publicly-exposed App Service Plans not confirmed in APIM routing
+        if item.get("apim_unverified"):
+            access_indicator += " ⚠️"
         lines.append(_node_line(node_id, f"{label}{access_indicator}", arm_type))
     
     for item in shown_data:
@@ -14693,10 +14772,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     # Add connections — track link index so linkStyle can colour each arrow
     # Convention: red = direct internet exposure, orange = internet-reachable path, white = internal/OK
     lines.append("")
-    link_colors = []  # one color string per edge, in order appended
+    # Tracks per-edge style: each entry is either a plain color string ("orange",
+    # "#ef4444") for a solid line, or a tuple (color, dasharray) for a dashed line.
+    link_styles: list[str | tuple[str, str]] = []
 
-    def _add_link(line, color):
-        link_colors.append(color)
+    def _add_link(line: str, color: str, *, dasharray: str | None = None) -> None:
+        link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
 
     def _fqdn_label(fqdns: list, suffix: str = "") -> str:
@@ -14838,7 +14919,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
             return "HTTPS"
         return "TCP/IP"
 
-    # Traffic Manager → resolved targets (orange — DNS-level routing to enabled endpoints)
+    # Traffic Manager → resolved targets (orange — DNS-level routing to enabled endpoints,
+    # grey dashed — disabled/failover endpoints so their paths remain visible)
     if shown_entry:
         for entry in shown_entry:
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
@@ -14846,20 +14928,27 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
                 continue
 
             source_node_id = _get_node_id(entry)
-            resolved_targets: list[str] = []
             seen_targets: set[str] = set()
             for target in _parse_routing_targets(entry.get("routing_targets")):
                 endpoint_status = str(target.get("endpoint_status") or target.get("endpointStatus") or "").strip().lower()
-                if endpoint_status and endpoint_status != "enabled":
+                is_disabled = endpoint_status == "disabled"
+                if endpoint_status and endpoint_status not in ("enabled", "disabled"):
+                    # Unknown status — skip to avoid noise
                     continue
                 target_node_id = _resolve_routing_target(target)
                 if not target_node_id or target_node_id in seen_targets:
                     continue
                 seen_targets.add(target_node_id)
-                resolved_targets.append(target_node_id)
-
-            for target_node_id in resolved_targets:
-                _add_link(f'    {source_node_id} -->|"DNS routing"| {target_node_id}', "orange")
+                if is_disabled:
+                    # Show disabled (failover) endpoints as dashed grey so the path
+                    # is visible without implying active traffic flows there.
+                    _add_link(
+                        f'    {source_node_id} -.->|"DNS (disabled)"| {target_node_id}',
+                        "#94a3b8",
+                        dasharray="5,5",
+                    )
+                else:
+                    _add_link(f'    {source_node_id} -->|"DNS routing"| {target_node_id}', "orange")
 
     # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
@@ -15060,9 +15149,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None) -> dict:
     
     # Styling - stroke-only (no fill) to match ArchitectureAgent standards
     lines.append("")
-    # Apply per-link colours: red = direct exposure, orange = internet-reachable path, white = internal/OK
-    for idx, color in enumerate(link_colors):
-        lines.append(f'    linkStyle {idx} stroke:{color},stroke-width:2px')
+    # Apply per-link styles: solid or dashed, coloured by exposure level.
+    for idx, style in enumerate(link_styles):
+        if isinstance(style, tuple):
+            color, dasharray = style
+            lines.append(f'    linkStyle {idx} stroke:{color},stroke-width:2px,stroke-dasharray:{dasharray}')
+        else:
+            lines.append(f'    linkStyle {idx} stroke:{style},stroke-width:2px')
     lines.append("")
     # classDef declarations for semantic node roles
     lines.append('    classDef entryPoint stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry (no WAF)

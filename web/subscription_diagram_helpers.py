@@ -667,9 +667,12 @@ def build_subscription_overlay_views(
         # In exposure mode, connect every visible backend to every visible data hop.
         # This keeps internal hops attached even when plan hierarchies collapse the
         # hosted sites into their parent plan.
+        # Label each edge with the backend's short name so the reader can tell
+        # which service accesses each data store, rather than a generic "reachable next hop".
         for backend in exposure_backends:
+            accessor_label = backend.get("short_name") or backend.get("name") or "backend"
             for store in exposure_data:
-                add_exp_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), "reachable next hop", "#94a3b8")
+                add_exp_edge(subscription_node_id(backend, sanitise_node_id), subscription_node_id(store, sanitise_node_id), accessor_label, "#94a3b8")
 
     if plan_links:
         plan_assets = {
@@ -759,12 +762,38 @@ def build_subscription_diagrams_by_rg(
         public_assets = [a for a in rg_assets if a.get("public")]
         summary = rg_asset_summary(rg_assets)
 
+        # Detect AKS/SF-only RGs: compute clusters with no entry points or API layer
+        # in scope. These clusters are connected at the subscription level (via APIM)
+        # but appear orphaned in the per-RG view without a context hint.
+        _cluster_arm_types = ("managedclusters", "servicefabric/clusters")
+        _is_cluster_only_rg = (
+            not entries
+            and not apis
+            and any(
+                any(t in (a.get("arm_type") or "").lower() for t in _cluster_arm_types)
+                for a in backends
+            )
+        )
+
         nodes: list[dict] = []
         node_map: dict = {}
         seen_nodes: set[str] = set()
         if public_assets or entries:
             nodes.append({"id": "Internet", "label": "Internet", "class_name": "internet"})
             seen_nodes.add("Internet")
+
+        # For cluster-only RGs add a synthetic context node so the user knows
+        # the cluster is reachable via the subscription-level APIM, not truly orphaned.
+        _sub_ctx_node_id: str | None = None
+        if _is_cluster_only_rg and mode == "connectivity":
+            _sub_ctx_node_id = "sub_level_apim_context"
+            nodes.append({
+                "id": _sub_ctx_node_id,
+                "label": "🔗 APIM<br/>(subscription level)",
+                "arm_type": "microsoft.apimanagement/service",
+                "class_name": "apiGateway",
+            })
+            seen_nodes.add(_sub_ctx_node_id)
 
         def add_asset_node(asset: dict, *, badges: bool = False, include_fqdn: bool = False) -> None:
             node_id = subscription_node_id(asset, sanitise_node_id)
@@ -835,6 +864,16 @@ def build_subscription_diagrams_by_rg(
                 return subscription_allowlist_label(asset), "#f59e0b"
             return subscription_primary_fqdn(asset) or "public edge", "#ef4444"
 
+        # For cluster-only RGs, connect each cluster to the synthetic APIM context node
+        # so it's clear the cluster is not orphaned — it's reachable from the subscription-level APIM.
+        if _sub_ctx_node_id:
+            for backend in backends:
+                arm_type_low = (backend.get("arm_type") or "").lower()
+                if any(t in arm_type_low for t in _cluster_arm_types):
+                    cluster_nid = subscription_node_id(backend, sanitise_node_id)
+                    if cluster_nid in seen_nodes:
+                        add_edge(_sub_ctx_node_id, cluster_nid, "routes to", "#f97316", dasharray="6,3")
+
         for asset in public_assets:
             if asset.get("tier") == "entry":
                 label, color = _entry_edge_style(asset)
@@ -881,11 +920,12 @@ def build_subscription_diagrams_by_rg(
 
         if exposure_backends and exposure_data:
             for backend in exposure_backends:
+                accessor_label = backend.get("short_name") or backend.get("name") or "backend"
                 for store in exposure_data:
                     add_edge(
                         subscription_node_id(backend, sanitise_node_id),
                         subscription_node_id(store, sanitise_node_id),
-                        "reachable next hop" if mode == "exposure" else "data flow",
+                        accessor_label if mode == "exposure" else "data flow",
                         "#94a3b8" if mode == "exposure" else "#ffffff",
                     )
 
@@ -910,6 +950,11 @@ def build_subscription_diagrams_by_rg(
             "connectivity": "Shows inferred application, API, data, and hosting relationships inside this resource group.",
             "exposure": "Shows public and IP-restricted assets in this resource group and the next internal hops they appear to expose.",
         }
+        if _is_cluster_only_rg:
+            descriptions["connectivity"] = (
+                "This resource group contains a compute cluster (AKS or Service Fabric) with no entry points in scope. "
+                "The dashed orange edge shows the cluster is connected at the subscription level via APIM."
+            )
         legends = {
             "connectivity": [
                 "Orange edges: WAF-protected entry point",
@@ -924,6 +969,10 @@ def build_subscription_diagrams_by_rg(
                 "Grey edges: next likely internal hop",
             ],
         }
+        if _is_cluster_only_rg:
+            legends["connectivity"] = [
+                "Dashed orange: subscription-level APIM connection (cross-RG)",
+            ] + legends["connectivity"]
         attack_paths = build_subscription_attack_paths(rg_assets, f"resource group {rg}", normalize_attack_paths)
         return (
             render_subscription_view(
