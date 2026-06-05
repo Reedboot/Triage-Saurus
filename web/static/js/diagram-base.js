@@ -55,6 +55,7 @@ export async function waitForMermaid(timeoutMs = 10000) {
 export function applyDiagramScale(container, scale) {
   if (!container) return;
   const scaledVal = Math.min(4, Math.max(0.1, scale));
+  container.style.transformOrigin = '0 0';
   container.style.transform = `scale(${scaledVal})`;
   return scaledVal;
 }
@@ -80,7 +81,7 @@ export function autoFitDiagram(container, scrollEl) {
   let fitScale = 1;
   if (sw > 0 && sh > 0) {
     fitScale = Math.min(cw / sw, ch / sh) * 0.90;
-    fitScale = Math.min(4, Math.max(0.40, fitScale));
+    fitScale = Math.min(4, Math.max(0.05, fitScale));
   }
   
   applyDiagramScale(container, fitScale);

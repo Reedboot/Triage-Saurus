@@ -10,6 +10,7 @@ import re
 import sys
 import sqlite3
 import threading
+from concurrent.futures import Future
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,7 @@ from Azure._helpers import (
     normalize_route_path,
     route_path_matches,
 )
+from Azure._staged import BackfillJob, StagedRows
 from Azure import app_configuration, storage, aks, key_vault
 
 
@@ -41,6 +43,13 @@ def _is_ip_address(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+class _ImmediateExecutor:
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +393,44 @@ class TestStorageHarvest:
         assert account_id in ids
         assert f"{account_id}/blobServices/default/containers/logs" in ids
         assert not any("/blobs/" in row["id"] for row in rows)
+
+    def test_stage_backfill_returns_core_rows_and_backfill_jobs(self, monkeypatch):
+        account_id = "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/sa-one"
+
+        def fake_az(args, subscription_id):
+            if args[:3] == ["storage", "account", "list"]:
+                return [{
+                    "id": account_id,
+                    "name": "sa-one",
+                    "resourceGroup": "rg-data",
+                    "location": "westus",
+                    "type": "Microsoft.Storage/storageAccounts",
+                    "properties": {},
+                }]
+            if args[:3] == ["storage", "container", "list"]:
+                return [{"name": "logs", "publicAccess": "blob"}]
+            if args[:3] == ["storage", "blob", "list"]:
+                return [{
+                    "name": "hello.txt",
+                    "properties": {"accessTier": "Hot", "blobType": "BlockBlob"},
+                }]
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(storage, "az", fake_az)
+        monkeypatch.setattr(storage, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+        monkeypatch.setattr(storage, "_get_backfill_executor", lambda: _ImmediateExecutor())
+
+        staged = storage.harvest("sub-1", stage_backfill=True)
+
+        assert isinstance(staged, StagedRows)
+        assert [row["id"] for row in staged.core_rows] == [account_id]
+        assert len(staged.backfill_jobs) == 1
+
+        blob_rows = staged.backfill_jobs[0].future.result()
+        ids = {row["id"] for row in blob_rows}
+
+        assert f"{account_id}/blobServices/default/containers/logs" in ids
+        assert f"{account_id}/blobServices/default/containers/logs/blobs/hello.txt" in ids
 
 
 # ---------------------------------------------------------------------------
@@ -811,21 +858,19 @@ class TestApimHarvestConcurrency:
                 return services
             return []
 
-        def fake_get_api_count(service_name, subscription_id, rg):
+        def fake_build_endpoints(entries, timeout=5):
             barrier.wait(timeout=2)
-            return 7 if service_name == "apim-one" else 3
+            return json.dumps([])
 
         monkeypatch.setattr(apim, "az", fake_az)
-        monkeypatch.setattr(apim, "_get_api_count", fake_get_api_count)
-        monkeypatch.setattr(apim, "build_endpoints", lambda entries, timeout=5: json.dumps([]))
+        monkeypatch.setattr(apim, "build_endpoints", fake_build_endpoints)
 
         assets = apim.harvest("sub-1")
-        counts = {
-            asset["name"]: json.loads(asset["raw_json"])["_extra"]["api_count"]
-            for asset in assets
-        }
+        names = {asset["name"] for asset in assets}
+        counts = [json.loads(asset["raw_json"])["_extra"]["api_count"] for asset in assets]
 
-        assert counts == {"apim-one": 7, "apim-two": 3}
+        assert names == {"apim-one", "apim-two"}
+        assert counts == [None, None]
 
 
 class TestApimRouteHarvestConcurrency:
@@ -984,6 +1029,84 @@ class TestApimRouteHarvestConcurrency:
         assert route_count == 2
         assert route_rows == 2
         assert op_rows == 2
+
+    def test_stages_operation_policy_backfill(self, monkeypatch):
+        service = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-one/providers/Microsoft.ApiManagement/service/orders-apim",
+            "name": "orders-apim",
+            "resourceGroup": "rg-one",
+            "type": "Microsoft.ApiManagement/service",
+            "properties": {
+                "gatewayUrl": "https://api.contoso.test/",
+                "portalUrl": "https://portal.contoso.test/",
+                "virtualNetworkType": "External",
+            },
+        }
+        apis = [
+            {
+                "name": "orders",
+                "properties": {
+                    "displayName": "Orders API",
+                    "path": "orders",
+                    "serviceUrl": "https://orders-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+            {
+                "name": "customers",
+                "properties": {
+                    "displayName": "Customers API",
+                    "path": "customers",
+                    "serviceUrl": "https://customers-backend.contoso.test/v1",
+                    "subscriptionRequired": True,
+                    "protocols": ["https"],
+                },
+            },
+        ]
+
+        def fake_az(args, subscription_id):
+            if args == ["apim", "list"]:
+                return [service]
+            return []
+
+        def fake_list_apis(service_name, resource_group, subscription_id):
+            return apis
+
+        def fake_list_operations(service_name, resource_group, api_id, subscription_id):
+            return [
+                {
+                    "name": f"{api_id}-get",
+                    "displayName": f"Get {api_id}",
+                    "method": "get",
+                    "urlTemplate": "/",
+                }
+            ]
+
+        monkeypatch.setattr(apim, "az", fake_az)
+        monkeypatch.setattr(apim, "_az_list_apis", fake_list_apis)
+        monkeypatch.setattr(apim, "_az_list_operations", fake_list_operations)
+        monkeypatch.setattr(apim, "_az_show_policy", lambda *args, **kwargs: None)
+        monkeypatch.setattr(apim, "_get_backfill_executor", lambda: _ImmediateExecutor())
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            apim._ensure_apim_schema(conn)
+            staged = apim.harvest_routes("sub-1", conn, dry_run=False, stage_backfill=True)
+        finally:
+            conn.close()
+
+        assert isinstance(staged, StagedRows)
+        assert len(staged.core_rows) == 2
+        assert len(staged.backfill_jobs) == 2
+
+        op_rows = [job.future.result() for job in staged.backfill_jobs]
+        ids = {row["id"] for row in op_rows}
+
+        assert ids == {
+            "orders-apim::orders::orders-get",
+            "orders-apim::customers::customers-get",
+        }
 
 
 class TestApimRoutingMapConcurrency:
@@ -1228,6 +1351,76 @@ class TestHarvestSubscriptionParallelism:
 
         assert total == 2
         assert set(started) == {"first", "second"}
+
+    def test_consumes_staged_provider_results(self, monkeypatch):
+        future = Future()
+        future.set_result([
+            {
+                "id": "child",
+                "subscription_id": "sub-1",
+                "resource_group": "rg-data",
+                "name": "child",
+                "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+                "location": "westus",
+                "sku": "blob",
+                "tags": json.dumps({}),
+                "is_public": 0,
+                "is_restricted": 0,
+                "ip_restrictions": json.dumps([]),
+                "endpoints": json.dumps([]),
+                "auth_methods": json.dumps([]),
+                "fqdn": None,
+                "pipeline_tag": None,
+                "raw_json": json.dumps({"name": "child"}),
+            }
+        ])
+
+        def fake_staged_provider(subscription_id, progress=None, stage_backfill=False):
+            return StagedRows(
+                core_rows=[{
+                    "id": "core",
+                    "subscription_id": subscription_id,
+                    "resource_group": "rg-data",
+                    "name": "core",
+                    "type": "Microsoft.Storage/storageAccounts",
+                    "location": "westus",
+                    "sku": "Standard_LRS",
+                    "tags": json.dumps({}),
+                    "is_public": 1,
+                    "is_restricted": 0,
+                    "ip_restrictions": json.dumps([]),
+                    "endpoints": json.dumps([]),
+                    "auth_methods": json.dumps([]),
+                    "fqdn": None,
+                    "pipeline_tag": None,
+                    "raw_json": json.dumps({"name": "core"}),
+                }],
+                backfill_jobs=[BackfillJob(label="core", future=future)],
+            )
+
+        monkeypatch.setattr(
+            harvest_azure_assets,
+            "PROVIDERS",
+            [("Storage", fake_staged_provider)],
+        )
+        monkeypatch.setattr(harvest_azure_assets.appgw_routing_map, "harvest_routing", lambda *args, **kwargs: (0, 0, 0, 0))
+        monkeypatch.setattr(harvest_azure_assets.aks, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.apim, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.apim_routing_map, "harvest_backends", lambda *args, **kwargs: (0, 0))
+        monkeypatch.setattr(harvest_azure_assets.function_apps, "harvest_http_triggers", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.front_door, "harvest_routes", lambda *args, **kwargs: 0)
+        monkeypatch.setattr(harvest_azure_assets.firewall, "harvest_rules", lambda *args, **kwargs: (0, 0))
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            harvest_azure_assets._ensure_schema(conn)
+            total = harvest_azure_assets.harvest_subscription({"id": "sub-1", "name": "sub"}, conn, dry_run=False)
+            rows = conn.execute("SELECT id FROM provisioned_assets ORDER BY id").fetchall()
+        finally:
+            conn.close()
+
+        assert total == 2
+        assert rows == [("child",), ("core",)]
 
 
 class TestHarvestProgressRendering:

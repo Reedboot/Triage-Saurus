@@ -6,10 +6,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
+from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.Storage/storageAccounts"
 _SKIP_BLOB_CHILD_PREFIXES = ("bootdiagnostics-",)
 _INCLUDE_BLOB_CHILDREN = True
+_BACKFILL_WORKERS = 8
+_BACKFILL_EXECUTOR: ThreadPoolExecutor | None = None
 
 
 def set_include_blob_children(enabled: bool) -> None:
@@ -17,16 +20,31 @@ def set_include_blob_children(enabled: bool) -> None:
     _INCLUDE_BLOB_CHILDREN = enabled
 
 
+def _get_backfill_executor() -> ThreadPoolExecutor:
+    global _BACKFILL_EXECUTOR
+    if _BACKFILL_EXECUTOR is None:
+        _BACKFILL_EXECUTOR = ThreadPoolExecutor(
+            max_workers=_BACKFILL_WORKERS,
+            thread_name_prefix="storage-backfill",
+        )
+    return _BACKFILL_EXECUTOR
+
+
 def harvest(
     subscription_id: str,
     progress: Callable[[str], None] | None = None,
-) -> list[dict[str, Any]]:
+    *,
+    stage_backfill: bool = False,
+) -> list[dict[str, Any]] | StagedRows:
     raw = az(["storage", "account", "list"], subscription_id)
     if not raw:
-        return []
+        return StagedRows([], []) if stage_backfill else []
 
     if progress:
         progress(f"discovered {len(raw)} storage account(s)")
+
+    if stage_backfill:
+        return _harvest_storage_accounts_stage(subscription_id, raw, progress)
 
     if len(raw) == 1:
         rows = _harvest_storage_account(subscription_id, raw[0])
@@ -54,7 +72,76 @@ def harvest(
     return results
 
 
-def _harvest_storage_account(subscription_id: str, acct: dict[str, Any]) -> list[dict[str, Any]]:
+def _harvest_storage_accounts_stage(
+    subscription_id: str,
+    raw: list[dict[str, Any]],
+    progress: Callable[[str], None] | None = None,
+) -> StagedRows:
+    results_by_index: list[list[dict[str, Any]] | None] = [None] * len(raw)
+    backfill_jobs: list[BackfillJob] = []
+    with ThreadPoolExecutor(max_workers=min(8, len(raw))) as pool:
+        futures = [
+            pool.submit(_harvest_storage_account_stage, subscription_id, acct)
+            for acct in raw
+        ]
+        completed = 0
+        future_index = {future: idx for idx, future in enumerate(futures)}
+        for future in as_completed(futures):
+            idx = future_index[future]
+            rows, jobs = future.result()
+            results_by_index[idx] = rows
+            backfill_jobs.extend(jobs)
+            completed += 1
+            if progress:
+                progress(f"{completed}/{len(raw)} storage accounts core ready")
+    results: list[dict[str, Any]] = []
+    for rows in results_by_index:
+        results.extend(rows or [])
+    return StagedRows(results, backfill_jobs)
+
+
+def _harvest_storage_account_stage(
+    subscription_id: str,
+    acct: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[BackfillJob]]:
+    row, context = _build_storage_account_core(subscription_id, acct)
+    jobs: list[BackfillJob] = []
+    if row and context["include_children"]:
+        account_name = context["account_name"]
+        account_id = context["account_id"]
+        job = _get_backfill_executor().submit(
+            _harvest_blob_containers,
+            subscription_id,
+            acct,
+            context["fqdn"],
+            context["is_public"],
+            context["is_restricted"],
+            context["ip_restrictions"],
+            context["auth_methods"],
+        )
+        jobs.append(BackfillJob(label=account_name or account_id or "storage", future=job))
+    return ([row] if row else []), jobs
+
+
+def _build_storage_account_core(
+    subscription_id: str,
+    acct: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    account_name = safe_str(acct.get("name"))
+    account_id = safe_str(acct.get("id"))
+    resource_group = safe_str(acct.get("resourceGroup"))
+    if not account_name or not account_id or not resource_group:
+        return None, {
+            "include_children": False,
+            "account_name": account_name,
+            "account_id": account_id,
+            "fqdn": None,
+            "is_public": 0,
+            "is_restricted": 0,
+            "ip_restrictions": [],
+            "auth_methods": json.dumps(["azure_ad"]),
+        }
+
     props = acct.get("properties") or {}
     fqdn = _get_primary_endpoint(props)
     is_public, is_restricted, ip_restrictions = _classify_exposure(props)
@@ -74,7 +161,7 @@ def _harvest_storage_account(subscription_id: str, acct: dict[str, Any]) -> list
         "managed_identity_required": not allow_shared_key,
     }
 
-    results = [{
+    row = {
         "id": acct["id"],
         "subscription_id": subscription_id,
         "resource_group": acct.get("resourceGroup"),
@@ -91,17 +178,35 @@ def _harvest_storage_account(subscription_id: str, acct: dict[str, Any]) -> list
         "fqdn": fqdn,
         "pipeline_tag": None,
         "raw_json": json.dumps({**acct, "_extra": extra}),
-    }]
+    }
+    return row, {
+        "include_children": True,
+        "account_name": account_name,
+        "account_id": account_id,
+        "fqdn": fqdn,
+        "is_public": is_public,
+        "is_restricted": is_restricted,
+        "ip_restrictions": ip_restrictions,
+        "auth_methods": auth_methods,
+    }
+
+
+def _harvest_storage_account(subscription_id: str, acct: dict[str, Any]) -> list[dict[str, Any]]:
+    row, context = _build_storage_account_core(subscription_id, acct)
+    if not row:
+        return []
+
+    results = [row]
 
     results.extend(
         _harvest_blob_containers(
             subscription_id,
             acct,
-            fqdn,
-            is_public,
-            is_restricted,
-            ip_restrictions,
-            auth_methods,
+            context["fqdn"],
+            context["is_public"],
+            context["is_restricted"],
+            context["ip_restrictions"],
+            context["auth_methods"],
         )
     )
     return results

@@ -50,6 +50,7 @@ from Azure import cosmos_db, app_service_plan, service_bus, container_registry, 
 from Azure import redis_cache, event_hub, app_configuration, service_fabric, cognitive_services
 from Azure import data_factory, app_service_environment, app_insights, private_endpoint, traffic_manager
 from Azure import front_door, firewall
+from Azure._staged import BackfillJob, StagedRows
 from Azure._helpers import set_probe_enabled
 import appgw_routing_map
 import apim_routing_map
@@ -93,7 +94,8 @@ PROVIDERS = [
     ("Firewalls",               firewall.harvest),
 ]
 
-ProviderFn = Callable[..., list[dict[str, Any]]]
+HarvestOutput = list[dict[str, Any]] | StagedRows
+ProviderFn = Callable[..., HarvestOutput]
 ProgressCallback = Callable[[str], None]
 _MAX_PROVIDER_WORKERS = 6
 _PROGRESS_REFRESH_SECONDS = 10.0
@@ -255,13 +257,30 @@ def _supports_progress(provider_fn: ProviderFn) -> bool:
     return any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
 
 
+def _supports_stage_backfill(provider_fn: ProviderFn) -> bool:
+    try:
+        signature = inspect.signature(provider_fn)
+    except (TypeError, ValueError):
+        return False
+    if "stage_backfill" in signature.parameters:
+        return True
+    return any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+
+
 def _invoke_provider(
     provider_fn: ProviderFn,
     sub_id: str,
     progress: ProgressCallback | None = None,
-) -> list[dict[str, Any]]:
+    *,
+    stage_backfill: bool = False,
+) -> HarvestOutput:
+    kwargs: dict[str, Any] = {}
     if progress and _supports_progress(provider_fn):
-        return provider_fn(sub_id, progress=progress)
+        kwargs["progress"] = progress
+    if stage_backfill and _supports_stage_backfill(provider_fn):
+        kwargs["stage_backfill"] = True
+    if kwargs:
+        return provider_fn(sub_id, **kwargs)
     return provider_fn(sub_id)
 
 
@@ -270,14 +289,93 @@ def _run_provider_task(
     provider_fn: ProviderFn,
     sub_id: str,
     progress: HarvestProgress,
-) -> list[dict[str, Any]]:
+) -> HarvestOutput:
     progress.mark_running(label)
     progress_cb: ProgressCallback | None = (
         (lambda detail, _label=label: progress.update(_label, detail))
         if label == "Storage"
         else None
     )
-    return _invoke_provider(provider_fn, sub_id, progress_cb)
+    return _invoke_provider(
+        provider_fn,
+        sub_id,
+        progress_cb,
+        stage_backfill=(label == "Storage"),
+    )
+
+
+def _normalize_rows(result: Any) -> list[dict[str, Any]]:
+    if result is None:
+        return []
+    if isinstance(result, StagedRows):
+        return result.core_rows
+    if isinstance(result, dict):
+        return [result]
+    if isinstance(result, list):
+        return [row for row in result if row is not None]
+    raise TypeError(f"unexpected harvest result type: {type(result)!r}")
+
+
+def _persist_rows(
+    conn: sqlite3.Connection,
+    dry_run: bool,
+    rows: list[dict[str, Any]],
+    seen_ids: set[str],
+) -> int:
+    count = 0
+    for asset in rows:
+        asset_id = asset["id"]
+        if asset_id in seen_ids:
+            continue
+        seen_ids.add(asset_id)
+        count += 1
+        if not dry_run:
+            upsert_asset(conn, asset)
+    return count
+
+
+def _drain_ready_backfill_jobs(
+    jobs: list[BackfillJob],
+    conn: sqlite3.Connection,
+    dry_run: bool,
+    seen_ids: set[str],
+) -> int:
+    processed = 0
+    remaining: list[BackfillJob] = []
+    for job in jobs:
+        if not job.future.done():
+            remaining.append(job)
+            continue
+        try:
+            result = job.future.result()
+        except Exception as exc:
+            print(f"  [backfill] {job.label} FAILED ({exc})")
+            continue
+        processed += _persist_rows(conn, dry_run, _normalize_rows(result), seen_ids)
+    jobs[:] = remaining
+    return processed
+
+
+def _flush_backfill_jobs(
+    jobs: list[BackfillJob],
+    conn: sqlite3.Connection,
+    dry_run: bool,
+    seen_ids: set[str],
+) -> int:
+    processed = 0
+    pending = {job.future: job for job in jobs}
+    while pending:
+        done, _ = wait(set(pending), return_when=FIRST_COMPLETED)
+        for future in done:
+            job = pending.pop(future)
+            try:
+                result = future.result()
+            except Exception as exc:
+                print(f"  [backfill] {job.label} FAILED ({exc})")
+                continue
+            processed += _persist_rows(conn, dry_run, _normalize_rows(result), seen_ids)
+    jobs.clear()
+    return processed
 
 
 # ---------------------------------------------------------------------------
@@ -512,8 +610,23 @@ def harvest_subscription(
         upsert_subscription(conn, sub)
 
     seen_ids: set[str] = set()
+    pending_backfill_jobs: list[BackfillJob] = []
     total = 0
     provider_specs = list(PROVIDERS)
+
+    def _store_result(result: HarvestOutput) -> tuple[int, int]:
+        nonlocal total
+        if isinstance(result, StagedRows):
+            core_count = _persist_rows(conn, dry_run, result.core_rows, seen_ids)
+            total += core_count
+            pending_backfill_jobs.extend(result.backfill_jobs)
+            return core_count, len(result.backfill_jobs)
+
+        rows = _normalize_rows(result)
+        row_count = _persist_rows(conn, dry_run, rows, seen_ids)
+        total += row_count
+        return row_count, 0
+
     if provider_specs:
         print(
             f"  [providers] harvesting {len(provider_specs)} resource types "
@@ -533,6 +646,10 @@ def harvest_subscription(
             while pending:
                 done, pending = wait(pending, timeout=_PROGRESS_REFRESH_SECONDS, return_when=FIRST_COMPLETED)
                 if not done:
+                    processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+                    total += processed_backfills
+                    if processed_backfills and not dry_run:
+                        conn.commit()
                     progress.render(force=True)
                     continue
 
@@ -545,40 +662,33 @@ def harvest_subscription(
                         progress.render(force=True)
                         continue
 
-                    asset_count = len(assets or [])
-                    total += asset_count
+                    asset_count, backfill_count = _store_result(assets)
+
+                    processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+                    total += processed_backfills
+                    if processed_backfills and not dry_run:
+                        conn.commit()
 
                     if dry_run:
-                        progress.mark_done(label, f"{asset_count} assets (dry-run)")
+                        if backfill_count:
+                            progress.mark_done(label, f"{asset_count} core assets, {backfill_count} backfills (dry-run)")
+                        else:
+                            progress.mark_done(label, f"{asset_count} assets (dry-run)")
                         progress.render(force=True)
                         continue
 
                     if asset_count:
                         progress.update(label, f"writing {asset_count} assets")
                         progress.render(force=True)
-                        for idx, asset in enumerate(assets, start=1):
-                            upsert_asset(conn, asset)
-                            seen_ids.add(asset["id"])
-                            if idx % _PROVIDER_WRITE_CHUNK == 0 and idx < asset_count:
-                                progress.update(label, f"writing {idx}/{asset_count} assets")
-                                progress.render(force=True)
                         conn.commit()
 
-                    progress.mark_done(label, f"{asset_count} assets")
+                    if backfill_count:
+                        progress.mark_done(label, f"{asset_count} core assets, {backfill_count} backfills")
+                    else:
+                        progress.mark_done(label, f"{asset_count} assets")
                     progress.render(force=True)
     else:
         print("  [providers] no parallel harvesters configured")
-
-    # Stale detection (skip on dry-run)
-    if not dry_run and seen_ids:
-        stale = mark_stale_assets(conn, sub_id, seen_ids)
-        conn.commit()
-        if stale:
-            print(f"\n  ⚠ {len(stale)} asset(s) not seen this run — marked as 'potentially_removed':")
-            for a in stale:
-                print(f"    - {a['type']}/{a['name']} (rg: {a['resource_group']}, last seen: {a['last_synced']})")
-            print("  To confirm removal:  UPDATE provisioned_assets SET status='removed' WHERE id='<id>';")
-            print("  To restore (false positive):  UPDATE provisioned_assets SET status='active' WHERE id='<id>';")
 
     # App Gateway routing + rewrites + WAF — runs after assets so fqdn_to_asset lookup is populated
     print(f"  [App Gateway Routing] harvesting listeners, routing rules, rewrite rules & WAF policies...", flush=True)
@@ -606,9 +716,21 @@ def harvest_subscription(
     print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
     try:
         phase_started = time.perf_counter()
-        route_count = apim.harvest_routes(sub_id, conn, dry_run=dry_run)
+        route_result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
+        if isinstance(route_result, StagedRows):
+            route_count, backfill_count = _store_result(route_result)
+        else:
+            route_count = route_result
+            backfill_count = 0
+        if route_count and not dry_run:
+            conn.commit()
         action = "would write" if dry_run else "written"
-        print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
+        backfill_note = f" (+{backfill_count} operation backfills)" if backfill_count else ""
+        print(f"  [APIM Routes] {route_count} routes {action}{backfill_note} in {time.perf_counter() - phase_started:.2f}s")
+        processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+        total += processed_backfills
+        if processed_backfills and not dry_run:
+            conn.commit()
     except Exception as exc:
         print(f"  [APIM Routes] FAILED ({exc})")
 
@@ -648,6 +770,21 @@ def harvest_subscription(
         print(f"  [Firewall Rules] {nat_count} NAT rules, {app_count} app rules {action}")
     except Exception as exc:
         print(f"  [Firewall Rules] FAILED ({exc})")
+
+    processed_backfills = _flush_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
+    total += processed_backfills
+    if processed_backfills and not dry_run:
+        conn.commit()
+
+    if not dry_run and seen_ids:
+        stale = mark_stale_assets(conn, sub_id, seen_ids)
+        conn.commit()
+        if stale:
+            print(f"\n  ⚠ {len(stale)} asset(s) not seen this run — marked as 'potentially_removed':")
+            for a in stale:
+                print(f"    - {a['type']}/{a['name']} (rg: {a['resource_group']}, last seen: {a['last_synced']})")
+            print("  To confirm removal:  UPDATE provisioned_assets SET status='removed' WHERE id='<id>';")
+            print("  To restore (false positive):  UPDATE provisioned_assets SET status='active' WHERE id='<id>';")
 
     print(f"  [total] {total} assets for {sub_name}")
     return total

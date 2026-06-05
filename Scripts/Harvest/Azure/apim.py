@@ -14,11 +14,24 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ._helpers import az, build_endpoints, infer_sku, normalize_route_path, safe_str
+from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.ApiManagement/service"
 _APIM_SERVICE_WORKERS = 4
 _APIM_API_WORKERS = 4
 _APIM_OPERATION_WORKERS = 4
+_BACKFILL_WORKERS = 8
+_BACKFILL_EXECUTOR: ThreadPoolExecutor | None = None
+
+
+def _get_backfill_executor() -> ThreadPoolExecutor:
+    global _BACKFILL_EXECUTOR
+    if _BACKFILL_EXECUTOR is None:
+        _BACKFILL_EXECUTOR = ThreadPoolExecutor(
+            max_workers=_BACKFILL_WORKERS,
+            thread_name_prefix="apim-backfill",
+        )
+    return _BACKFILL_EXECUTOR
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -137,8 +150,6 @@ def _build_service_asset(svc: dict[str, Any], subscription_id: str) -> dict[str,
     exposure_level = _get_apim_exposure_level(svc)
     vnet_type = props.get("virtualNetworkType", "None")
 
-    api_count = _get_api_count(svc.get("name"), subscription_id, svc.get("resourceGroup"))
-
     is_public, is_restricted = _classify_exposure(svc)
     endpoints = build_endpoints([(fqdn, 443, "https")] if fqdn else [])
     auth_methods = json.dumps(["subscription_key", "oauth2", "client_certificate"])
@@ -146,7 +157,7 @@ def _build_service_asset(svc: dict[str, Any], subscription_id: str) -> dict[str,
     extra = {
         "gateway_url": gateway_url,
         "portal_url": props.get("portalUrl"),
-        "api_count": api_count,
+        "api_count": None,
         "virtual_network_type": vnet_type,
         "gateway_hosts": gateway_hosts,
         "exposure_level": exposure_level,
@@ -466,6 +477,8 @@ def _harvest_service_route_bundle(
     service: dict[str, Any],
     subscription_id: str,
     now: str,
+    *,
+    stage_backfill: bool = False,
 ) -> tuple[str | None, list[dict[str, Any]], list[dict[str, Any]]]:
     bundle_started = time.perf_counter()
     apim_name = safe_str(service.get("name"))
@@ -528,6 +541,18 @@ def _harvest_service_route_bundle(
 
     print(f"    [apim-routes] {apim_name}: {len(route_rows)} routes from {len(apis)} APIs")
 
+    if stage_backfill:
+        print(
+            f"    [apim-routes] {apim_name}: queued {len(operation_specs)} operation policy backfill job(s)",
+            flush=True,
+        )
+        print(
+            f"    [apim-routes] {apim_name}: bundle complete in {_format_elapsed(time.perf_counter() - bundle_started)} "
+            f"({len(route_rows)} route(s), {len(operation_specs)} operation backfill spec(s))",
+            flush=True,
+        )
+        return apim_name, route_rows, operation_specs
+
     operation_rows: list[dict[str, Any]] = []
     if operation_specs:
         print(
@@ -579,22 +604,36 @@ def harvest_routes(
     subscription_id: str,
     conn: sqlite3.Connection,
     dry_run: bool = False,
-) -> int:
+    *,
+    stage_backfill: bool = False,
+) -> int | StagedRows:
     """Harvest APIM API→backend route mappings into apim_api_routes."""
     started = time.perf_counter()
     _ensure_apim_schema(conn)
 
     services = az(["apim", "list"], subscription_id)
     if not services:
-        return 0
+        return StagedRows([], []) if stage_backfill else 0
 
     now = datetime.now(timezone.utc).isoformat()
     total = 0
     max_workers = min(_APIM_SERVICE_WORKERS, len(services))
     service_phase_started = time.perf_counter()
+    if stage_backfill:
+        core_rows: list[dict[str, Any]] = []
+        backfill_jobs: list[BackfillJob] = []
+    else:
+        core_rows = []
+        backfill_jobs = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_harvest_service_route_bundle, service, subscription_id, now): safe_str(service.get("name")) or safe_str(service.get("id")) or "<unknown>"
+            pool.submit(
+                _harvest_service_route_bundle,
+                service,
+                subscription_id,
+                now,
+                stage_backfill=stage_backfill,
+            ): safe_str(service.get("name")) or safe_str(service.get("id")) or "<unknown>"
             for service in services
         }
         completed_services = 0
@@ -626,6 +665,30 @@ def harvest_routes(
                         len(services),
                         service_phase_started,
                         suffix=f"last={service_name}",
+                    ),
+                    flush=True,
+                )
+                continue
+
+            if stage_backfill:
+                if route_rows:
+                    core_rows.extend(route_rows)
+                for spec in operation_rows:
+                    backfill_future = _get_backfill_executor().submit(_materialize_operation_row, spec)
+                    backfill_jobs.append(
+                        BackfillJob(
+                            label=f"{apim_name}::{safe_str(spec.get('operation_id') or spec.get('id')) or 'operation'}",
+                            future=backfill_future,
+                        )
+                    )
+                completed_services += 1
+                print(
+                    _format_progress_line(
+                        "[apim-routes] services",
+                        completed_services,
+                        len(services),
+                        service_phase_started,
+                        suffix=f"last={apim_name}",
                     ),
                     flush=True,
                 )
@@ -734,6 +797,14 @@ def harvest_routes(
                 ),
                 flush=True,
             )
+
+    if stage_backfill:
+        print(
+            f"    [apim-routes] staged {len(core_rows)} route(s) and queued {len(backfill_jobs)} operation backfill job(s)",
+            flush=True,
+        )
+        print(f"    [apim-routes] completed in {_format_elapsed(time.perf_counter() - started)}", flush=True)
+        return StagedRows(core_rows, backfill_jobs)
 
     if total == 0:
         print("  [warn] no APIM API routes were harvested; check CLI access and policy permissions")
