@@ -12903,48 +12903,62 @@ def api_cloud_assets_all():
             """
         ).fetchall()
 
-        # All assets with subscription context
+        # All assets with subscription context.
+        # CTEs pre-filter sites to avoid O(n²) self-join across the full
+        # provisioned_assets table (11k+ rows including blob containers).
         rows = conn.execute(
             """
+            WITH sites AS (
+                SELECT id, subscription_id,
+                     lower(COALESCE(
+                         json_extract(raw_json, '$.appServicePlanId'),
+                         json_extract(raw_json, '$.serverFarmId')
+                     )) AS plan_arm_id,
+                     lower(COALESCE(
+                         json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                         json_extract(raw_json, '$.hostingEnvironmentProfile.id')
+                     )) AS ase_arm_id
+                FROM provisioned_assets
+                WHERE lower(type) LIKE '%/sites%'
+            ),
+            plans AS (
+                SELECT id, name, resource_group, type, subscription_id
+                FROM provisioned_assets
+                WHERE lower(type) LIKE '%/serverfarms%'
+            ),
+            ases AS (
+                SELECT id, name, resource_group, type, subscription_id
+                FROM provisioned_assets
+                WHERE lower(type) LIKE '%/hostingenvironments%'
+            )
             SELECT pa.id, pa.name, pa.type, pa.resource_group, pa.location,
-                   pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
-                   pa.first_detected, pa.last_synced,
-                   s.id AS sub_id, s.display_name AS sub_name,
-                   s.environment,
-                   r.repo_name,
-                   json_extract(pa.raw_json, '$.kind') AS kind,
-                   CASE
-                       WHEN p.id IS NOT NULL THEN p.id
-                      WHEN pe.id IS NOT NULL THEN pe.id
-                      ELSE NULL
-                  END AS parent_id,
-                  COALESCE(p.name, pe.name) AS parent_name,
-                  COALESCE(p.resource_group, pe.resource_group) AS parent_resource_group,
-                  COALESCE(p.type, pe.type) AS parent_arm_type
+                 pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
+                 pa.first_detected, pa.last_synced,
+                 s.id AS sub_id, s.display_name AS sub_name,
+                 s.environment,
+                 r.repo_name,
+                 json_extract(pa.raw_json, '$.kind') AS kind,
+                 CASE
+                     WHEN p.id IS NOT NULL THEN p.id
+                     WHEN pe.id IS NOT NULL THEN pe.id
+                     ELSE NULL
+                 END AS parent_id,
+                 COALESCE(p.name, pe.name) AS parent_name,
+                 COALESCE(p.resource_group, pe.resource_group) AS parent_resource_group,
+                 COALESCE(p.type, pe.type) AS parent_arm_type
             FROM provisioned_assets pa
             JOIN subscriptions s ON s.id = pa.subscription_id
             LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
             LEFT JOIN repositories r ON r.id = parl.repository_id
-            LEFT JOIN provisioned_assets p
+            LEFT JOIN sites si ON si.id = pa.id
+            LEFT JOIN plans p
              ON p.subscription_id = pa.subscription_id
-             AND lower(p.type) LIKE '%/serverfarms%'
-             AND lower(pa.type) LIKE '%/sites%'
-             AND lower(p.id) = lower(
-                    COALESCE(
-                        json_extract(pa.raw_json, '$.appServicePlanId'),
-                        json_extract(pa.raw_json, '$.serverFarmId')
-                    )
-                 )
-            LEFT JOIN provisioned_assets pe
+             AND si.plan_arm_id IS NOT NULL
+             AND lower(p.id) = si.plan_arm_id
+            LEFT JOIN ases pe
              ON pe.subscription_id = pa.subscription_id
-             AND lower(pe.type) LIKE '%/hostingenvironments%'
-             AND lower(pa.type) LIKE '%/sites%'
-             AND lower(pe.id) = lower(
-                   COALESCE(
-                       json_extract(pa.raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                       json_extract(pa.raw_json, '$.hostingEnvironmentProfile.id')
-                   )
-                )
+             AND si.ase_arm_id IS NOT NULL
+             AND lower(pe.id) = si.ase_arm_id
             ORDER BY s.environment, s.display_name, pa.type, pa.name
             """
         ).fetchall()
@@ -13524,8 +13538,62 @@ def api_subscription_diagram(sub_id: str):
         except Exception:
             pass  # Non-critical — proceed without APIM backend data
 
+        # Count APIM APIs that require no subscription key (unauthenticated / open).
+        apim_open_api_count: int = 0
+        try:
+            _open_row = conn.execute(
+                "SELECT COUNT(*) FROM apim_api_routes WHERE subscription_id=? AND requires_subscription=0",
+                (sub_id,),
+            ).fetchone()
+            if _open_row:
+                apim_open_api_count = int(_open_row[0])
+        except Exception:
+            pass  # Non-critical
+
+        # Fetch AppGW routing rules for hostname count labels (P1-B) and
+        # direct-backend edge detection (P1-A). Each row: (gateway_name, hostname, backend_fqdns_json).
+        appgw_routes: list = []
+        try:
+            if _table_exists(conn, "appgw_routing_rules"):
+                appgw_routes = conn.execute(
+                    "SELECT gateway_name, hostname, backend_fqdns FROM appgw_routing_rules WHERE subscription_id=?",
+                    (sub_id,),
+                ).fetchall()
+        except Exception:
+            pass  # Non-critical
+
+        # Build set of ILB ASE names using raw_json's internalLoadBalancingMode.
+        # The harvest _extra.is_ilb can be wrong if az CLI returns partial data;
+        # reading from raw_json directly is more reliable.
+        ilb_ase_names: set[str] = set()
+        try:
+            ase_rows = conn.execute(
+                """SELECT name,
+                          COALESCE(
+                            json_extract(raw_json, '$.internalLoadBalancingMode'),
+                            json_extract(raw_json, '$._extra.internal_load_balancing_mode'),
+                            'None'
+                          ) AS ilb_mode
+                   FROM provisioned_assets
+                   WHERE subscription_id=?
+                     AND LOWER(type) LIKE '%hostingenvironment%'""",
+                (sub_id,),
+            ).fetchall()
+            for ase_name, ilb_mode in ase_rows:
+                if ilb_mode and "web" in str(ilb_mode).lower():
+                    ilb_ase_names.add((ase_name or "").lower())
+        except Exception:
+            pass  # Non-critical
+
         # Build high-level ingress diagram (simplified for readability)
-        ingress_diagram = _build_ingress_diagram(rows, plan_links=plan_links, apim_backend_urls=apim_backend_urls)
+        ingress_diagram = _build_ingress_diagram(
+            rows,
+            plan_links=plan_links,
+            apim_backend_urls=apim_backend_urls,
+            apim_open_api_count=apim_open_api_count,
+            appgw_routes=appgw_routes,
+            ilb_ase_names=ilb_ase_names,
+        )
         
         payload = {
             "subscription_name": sub_name,
@@ -14201,7 +14269,7 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, ilb_ase_names: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -14288,6 +14356,19 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if len(type_key.split("/")) > 2:
             continue
 
+        # Skip AKS-managed or Kubernetes-managed RG noise (managed-rg-*, MC_*).
+        # Resources inside these RGs are infrastructure managed by AKS/k8s and
+        # should not appear as customer-owned data store or backend nodes.
+        rg_lower = (rg or "").lower()
+        if rg_lower.startswith(("managed-rg-", "mc_")):
+            continue
+
+        # Override is_public for ILB App Service Environments: the harvest script
+        # can incorrectly mark them as public. ILB ASEs are VNet-internal only.
+        if "hostingenvironment" in type_key and ilb_ase_names:
+            if (name or "").lower() in ilb_ase_names:
+                item["public"] = False
+
         type_groups[type_key].append(item)
 
         # Classify for ingress flow
@@ -14301,7 +14382,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
               or "serverfarms" in type_key or "hostingenvironment" in type_key
               or "datafactory" in type_key or "cognitiveservices" in type_key
               or "containerregistry" in type_key or "servicefabric" in type_key
-              or "sites" in type_key or "insights/components" in type_key):
+              or "sites" in type_key):
+            # App Insights (insights/components) intentionally excluded — monitoring
+            # sink, not a compute backend; showing it implies it routes traffic.
             backends.append(item)
         elif ("sql" in type_key or "documentdb" in type_key or "storage" in type_key
               or "keyvault" in type_key or "servicebus" in type_key or "eventhub" in type_key
@@ -14592,7 +14675,33 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     grouped_api_layer = _group_api_services(api_layer)
     grouped_backends = _group_backends_by_type(_prioritize_backends(backends))
     grouped_data_stores = _group_data_stores_by_type(data_stores)
-    
+
+    # P1-B: Annotate AppGW nodes with the count of distinct public hostnames they serve.
+    # This gives the hacker-recon view ("28 hostnames" = 28 potential entry paths).
+    if appgw_routes:
+        import re as _re_gw
+        _gw_hostnames: dict[str, set[str]] = {}
+        for _gw_name, _hostname, _be_fqdns_json in appgw_routes:
+            if _hostname and _hostname.lower() not in ("", "none", "null"):
+                _gw_hostnames.setdefault(_gw_name.lower(), set()).add(_hostname.lower())
+        for _ep_item in grouped_entry_points:
+            if "applicationgateway" in (_ep_item.get("arm_type") or "").lower():
+                _ep_name = (_ep_item.get("name") or "").lower()
+                _hostnames = _gw_hostnames.get(_ep_name, set())
+                if _hostnames:
+                    _cnt = len(_hostnames)
+                    _ep_item["label"] = f'{_ep_item.get("label", _ep_name)} ({_cnt} 🌐)'
+                    _ep_item["hostname_count"] = _cnt
+
+    # P1-C: Badge APIM nodes that expose unauthenticated APIs (requires_subscription=0).
+    # These APIs are directly callable from the Internet without any subscription key.
+    if apim_open_api_count and grouped_api_layer:
+        for _api_item in grouped_api_layer:
+            if (_api_item.get("type") or "").upper() == "APIM":
+                _api_item["label"] = f'{_api_item.get("label", "APIM")} ⚠️ ({apim_open_api_count} open)'
+                _api_item["apim_open_count"] = apim_open_api_count
+                break
+
     shown_entry = grouped_entry_points
     shown_api = grouped_api_layer
     shown_backend = grouped_backends
@@ -14620,7 +14729,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if not _item.get("public"):
                 continue
             _arm_t = (_item.get("arm_type") or "").lower()
-            if "serverfarms" not in _arm_t and "hostingenvironment" not in _arm_t:
+            # Only check App Service Plans (serverfarms); ASEs are checked via the
+            # apps they host, not the ASE container itself. Checking ASE name against
+            # APIM backend URLs always fails (false positive) because APIM backends
+            # reference app hostnames, not the ASE resource name.
+            if "serverfarms" not in _arm_t:
                 continue
             # Collect candidate names: from fqdns and resources
             _site_names: set[str] = set()
@@ -15034,7 +15147,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
             if "trafficmanager" in arm_type_low:
                 continue
-            if "cdn/profiles" in arm_type_low:
+            if "azurefirewalls" in arm_type_low:
+                routing_label = '"Network (DNAT/SNAT)"'
+            elif "cdn/profiles" in arm_type_low:
                 routing_label = '"CDN routing"'
             elif "loadbalancers" in arm_type_low:
                 routing_label = '"Load balancing"'
@@ -15055,7 +15170,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
             if "trafficmanager" in arm_type_low:
                 continue
-            if "cdn/profiles" in arm_type_low:
+            if "azurefirewalls" in arm_type_low:
+                routing_label = '"Network (DNAT/SNAT)"'
+            elif "cdn/profiles" in arm_type_low:
                 routing_label = '"CDN routing"'
             elif "loadbalancers" in arm_type_low:
                 routing_label = '"Load balancing"'
@@ -15073,7 +15190,48 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         for backend in shown_backend:
             _add_link(f'    {api_node} --> {_get_node_id(backend)}', "white")
 
-    # Backends → Data Stores (white — internal connections)
+    # P1-A: AppGW → Direct Backend edges (routes that bypass APIM).
+    # Some AppGW routing rules point directly to ASE/app backends rather than APIM.
+    # These backends are VNet-internal (ILB ASE, *.internal.cbinnovation.uk) and are
+    # NOT directly Internet-accessible — they require going via AppGW. The edge label
+    # "VNet-routed (no APIM)" highlights that APIM auth is bypassed for these paths
+    # even though an attacker still needs to reach them via AppGW.
+    # Only rendered when APIM is also present (otherwise all routes are direct by design).
+    if shown_api and appgw_routes:
+        import re as _re_appgw
+        _direct_edges_emitted: set[tuple[str, str]] = set()
+        for _gw_name, _hostname, _be_fqdns_json in appgw_routes:
+            _gw_nid = node_by_name.get(_gw_name.lower())
+            if not _gw_nid:
+                continue
+            try:
+                _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
+            except Exception:
+                _be_fqdns = []
+            for _fqdn in _be_fqdns:
+                _fqdn_s = str(_fqdn).lower().strip()
+                if "azure-api.net" in _fqdn_s:
+                    continue  # APIM endpoint — covered by AppGW→APIM edge already
+                # Try exact FQDN match, then ASE-name extraction, then hostname prefix
+                _be_nid = node_by_fqdn.get(_fqdn_s)
+                if not _be_nid:
+                    # Extract ASE name from FQDN: "app.ase-name.appserviceenvironment.net"
+                    _ase_match = _re_appgw.search(r'\.([^.]+)\.appserviceenvironment\.net$', _fqdn_s)
+                    if _ase_match:
+                        _be_nid = node_by_name.get(_ase_match.group(1))
+                if not _be_nid:
+                    _prefix = _fqdn_s.split(".")[0]
+                    _be_nid = node_by_name.get(_prefix)
+                if _be_nid and _be_nid != _gw_nid:
+                    _edge = (_gw_nid, _be_nid)
+                    if _edge not in _direct_edges_emitted:
+                        _direct_edges_emitted.add(_edge)
+                        _add_link(
+                            f'    {_gw_nid} -->|"VNet-routed (no APIM) 🔶"| {_be_nid}',
+                            "#f59e0b",
+                        )
+
+
     # Connect one representative from each major backend category rather than just
     # shown_backend[0] (which is always AKS after prioritization). This ensures App
     # Service Plans, Service Fabric, etc. also show outbound data access edges.
@@ -15106,12 +15264,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
             # Second pass: remaining categories to fill up to 4
             for b in backends:
+                if len(reps) >= 4:
+                    break
                 cat = b.get("type") or ""
                 if cat and cat not in seen:
                     seen.add(cat)
                     reps.append(b)
-                if len(reps) >= 4:
-                    break
 
             return reps
 

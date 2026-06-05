@@ -73,7 +73,8 @@ def subscription_asset_tier(arm_type: str, name: str = "") -> str:
         or "cognitiveservices" in type_key
         or "containerregistry" in type_key
         or "servicefabric" in type_key
-        or "insights/components" in type_key
+        # insights/components intentionally excluded — App Insights is a monitoring
+        # sink, not a compute backend; classifying it as backend implies it routes traffic
     ):
         return "backend"
     if "sites" in type_key:
