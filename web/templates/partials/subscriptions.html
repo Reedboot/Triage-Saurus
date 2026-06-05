@@ -1094,7 +1094,8 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     const views = diagram.views || {};
     const connectivity = views.connectivity || null;
     const exposure = views.exposure || null;
-    const base = exposure || connectivity || diagram;
+    // Prefer connectivity (rich DNS-gated routing diagram) over the simpler exposure overlay.
+    const base = connectivity || exposure || diagram;
     if (!base) return null;
 
     const mergedLegend = Array.from(
