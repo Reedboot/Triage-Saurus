@@ -13392,6 +13392,25 @@ def api_subscription_diagram(sub_id: str):
     try:
         pa_columns = _table_columns(conn, "provisioned_assets")
         waf_mode_expr = "pa.waf_mode" if "waf_mode" in pa_columns else "NULL AS waf_mode"
+        # When waf_mode column is null but resource is a WAF_v2 App Gateway, infer mode from
+        # appgw_waf_policies table. If mode still null, fall back to 'WAF_v2' (known active WAF
+        # of unknown mode) so the diagram shows the shield rather than treating it as unprotected.
+        if _table_exists(conn, "appgw_waf_policies"):
+            waf_mode_expr = """
+                COALESCE(
+                    pa.waf_mode,
+                    (SELECT pwp.mode FROM appgw_waf_policies pwp
+                     WHERE pwp.subscription_id = pa.subscription_id
+                       AND pwp.mode IS NOT NULL
+                       AND json_extract(pwp.associated_gateways, '$') LIKE '%' || pa.name || '%'
+                     LIMIT 1),
+                    CASE WHEN LOWER(pa.type) LIKE '%applicationgateway%'
+                              AND LOWER(json_extract(pa.raw_json, '$.sku.name')) LIKE '%waf%'
+                         THEN 'WAF_v2'
+                         ELSE pa.waf_mode
+                    END
+                ) AS waf_mode
+            """ if "waf_mode" in pa_columns else "NULL AS waf_mode"
         waf_mode_flag_expr = "COALESCE(NULLIF(TRIM(pa.waf_mode), ''), '') <> ''" if "waf_mode" in pa_columns else "0"
         route_waf_expr = "(SELECT COUNT(*) > 0 FROM appgw_routing_rules ar WHERE ar.subscription_id = pa.subscription_id AND ar.gateway_name = pa.name AND ar.waf_policy_name IS NOT NULL)"
         appgw_policy_expr = "0"
@@ -15180,6 +15199,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 return "WAF (Prev) 🛡️", "#f97316"
             if "detection" in waf_mode:
                 return "WAF (Det) ⚠️", "#f59e0b"
+            if "waf_v2" in waf_mode or "policyattached" in waf_mode:
+                # WAF_v2 SKU confirmed active — mode (Prevention/Detection) not in DB yet
+                return "WAF_v2 🛡️ (mode?)", "#f97316"
             return "WAF 🛡️", "#f97316"
         if restricted:
             return _allowlist_target_label(item), "#f59e0b"
@@ -15517,21 +15539,22 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item)
+            # Prefix backends that bypass AppGW/APIM with ⚠️ to highlight the exposure
+            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
     for item in shown_api:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item)
+            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
     for item in shown_data:
         arm_type = (item.get("arm_type") or "").lower()
         if item.get("public"):
             node_id = _get_node_id(item)
-            arrow_label = _direct_exposure_label(arm_type, item)
+            arrow_label = "⚠️ " + _direct_exposure_label(arm_type, item)
             _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "red")
 
     for item in shown_api + shown_backend + shown_data:
@@ -15675,7 +15698,69 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         "exposure": overlays["exposure"],
     }
     result["default_view"] = "connectivity"
-    result["attack_paths"] = overlays["attack_paths_summary"]
+
+    # Build DNS-gated attack paths that reflect only resources confirmed reachable
+    # by DNS resolution, overriding the raw-DB overlay attack paths which include
+    # Private Link resources (false positives with +600 counts).
+    _dns_attack_paths: list[dict] = []
+
+    # Entry points confirmed public by DNS
+    _public_entries = [i for i in shown_entry if i.get("public") and i.get("name")]
+    if _public_entries:
+        _entry_names = ", ".join(i["name"] for i in _public_entries[:3])
+        _extra = len(_public_entries) - 3
+        _name_str = _entry_names + (f" +{_extra}" if _extra > 0 else "")
+        _dns_attack_paths.append({
+            "title":      "Confirmed public ingress (DNS-verified)",
+            "confidence": "high",
+            "path":       f"Internet → {_name_str}",
+            "evidence":   [f"{len(_public_entries)} entry point(s) DNS-confirmed public"],
+        })
+
+    # Backends/APIs confirmed public by DNS (bypass AppGW — highest risk)
+    _direct_backends = [i for i in shown_backend + shown_api if i.get("public") and i.get("name")]
+    if _direct_backends:
+        _be_names = ", ".join(i["name"] for i in _direct_backends[:3])
+        _extra_be = len(_direct_backends) - 3
+        _be_str = _be_names + (f" +{_extra_be}" if _extra_be > 0 else "")
+        _dns_attack_paths.append({
+            "title":      "Direct workload exposure — bypasses gateway (DNS-verified)",
+            "confidence": "high",
+            "path":       f"Internet → {_be_str}",
+            "evidence":   [
+                f"{len(_direct_backends)} backend/API resource(s) publicly reachable without AppGW/WAF",
+                "No APIM subscription key enforcement on direct endpoints",
+            ],
+        })
+
+    # Data stores confirmed public by DNS (critical: direct data access)
+    _direct_data = [i for i in shown_data if i.get("public") and i.get("name")]
+    if _direct_data:
+        _ds_names = ", ".join(i["name"] for i in _direct_data[:3])
+        _extra_ds = len(_direct_data) - 3
+        _ds_str = _ds_names + (f" +{_extra_ds}" if _extra_ds > 0 else "")
+        _dns_attack_paths.append({
+            "title":      "Direct data store exposure (DNS-verified) — critical",
+            "confidence": "critical",
+            "path":       f"Internet → {_ds_str}",
+            "evidence":   [
+                f"{len(_direct_data)} data store(s) publicly reachable by DNS",
+                "No network-layer proxy between Internet and data tier",
+            ],
+        })
+
+    # Append overlay paths that aren't covered by DNS-gated ones, e.g. lateral movement
+    _overlay_paths = overlays.get("attack_paths_summary") or []
+    _dns_titles = {p["title"] for p in _dns_attack_paths}
+    for _op in _overlay_paths:
+        # Keep lateral movement / secrets pivot paths — exclude exposure duplicates
+        _title = _op.get("title", "")
+        if any(kw in _title.lower() for kw in ("ingress", "workload exposure", "data exposure")):
+            continue  # replaced by DNS-gated version above
+        if _title not in _dns_titles:
+            _dns_attack_paths.append(_op)
+
+    result["attack_paths"] = _dns_attack_paths or _overlay_paths
 
     # P2-F: Populate structured nodes list for programmatic content checks and
     # drilldown UI. Each entry includes tier, node_id, and key fields so callers
@@ -15965,8 +16050,30 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         ).fetchall() if names else []
 
         if not apim_rows:
+            # Try to provide basic APIM context from provisioned_assets even without routes
+            apim_summary = []
+            for res in resources:
+                apim_name = str(res.get("name") or "")
+                if apim_name:
+                    pa_row = conn.execute(
+                        """SELECT json_extract(raw_json, '$.sku.name'),
+                                  json_extract(raw_json, '$.properties.virtualNetworkType')
+                           FROM provisioned_assets WHERE subscription_id=? AND name=? LIMIT 1""",
+                        (sub_id, apim_name),
+                    ).fetchone()
+                    if pa_row:
+                        sku, vnet_type = pa_row
+                        apim_summary.append(
+                            f"{apim_name} — SKU: {sku or 'Unknown'}, "
+                            f"VNet: {vnet_type or 'None'}"
+                        )
+            note = (
+                "No API routes harvested yet. "
+                + ("Summary: " + "; ".join(apim_summary) + ". " if apim_summary else "")
+                + "Run Scripts/Harvest/Azure/apim.py to populate API routes."
+            )
             return {"title": title, "view_type": "table", "columns": columns, "rows": [],
-                    "empty_message": "No API routes harvested yet — run Scripts/Harvest/apim_routing_map.py"}
+                    "empty_message": note}
 
         rows = []
         for apim_n, api_display, api_path, backend_url, svc_url, req_sub, protocols in apim_rows:
