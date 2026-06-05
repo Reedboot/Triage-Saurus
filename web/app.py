@@ -12903,65 +12903,68 @@ def api_cloud_assets_all():
             """
         ).fetchall()
 
-        # All assets with subscription context.
-        # CTEs pre-filter sites to avoid O(n²) self-join across the full
-        # provisioned_assets table (11k+ rows including blob containers).
+        # All assets — simple query without self-joins (avoids O(n²) on 11k+ rows).
         rows = conn.execute(
             """
-            WITH sites AS (
-                SELECT id, subscription_id,
-                     lower(COALESCE(
-                         json_extract(raw_json, '$.appServicePlanId'),
-                         json_extract(raw_json, '$.serverFarmId')
-                     )) AS plan_arm_id,
-                     lower(COALESCE(
-                         json_extract(raw_json, '$.properties.hostingEnvironmentProfile.id'),
-                         json_extract(raw_json, '$.hostingEnvironmentProfile.id')
-                     )) AS ase_arm_id
-                FROM provisioned_assets
-                WHERE lower(type) LIKE '%/sites%'
-            ),
-            plans AS (
-                SELECT id, name, resource_group, type, subscription_id
-                FROM provisioned_assets
-                WHERE lower(type) LIKE '%/serverfarms%'
-            ),
-            ases AS (
-                SELECT id, name, resource_group, type, subscription_id
-                FROM provisioned_assets
-                WHERE lower(type) LIKE '%/hostingenvironments%'
-            )
             SELECT pa.id, pa.name, pa.type, pa.resource_group, pa.location,
-                 pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
-                 pa.first_detected, pa.last_synced,
-                 s.id AS sub_id, s.display_name AS sub_name,
-                 s.environment,
-                 r.repo_name,
-                 json_extract(pa.raw_json, '$.kind') AS kind,
-                 CASE
-                     WHEN p.id IS NOT NULL THEN p.id
-                     WHEN pe.id IS NOT NULL THEN pe.id
-                     ELSE NULL
-                 END AS parent_id,
-                 COALESCE(p.name, pe.name) AS parent_name,
-                 COALESCE(p.resource_group, pe.resource_group) AS parent_resource_group,
-                 COALESCE(p.type, pe.type) AS parent_arm_type
+                   pa.sku, pa.fqdn, pa.is_public, pa.status, pa.pipeline_tag,
+                   pa.first_detected, pa.last_synced,
+                   s.id AS sub_id, s.display_name AS sub_name,
+                   s.environment,
+                   r.repo_name,
+                   json_extract(pa.raw_json, '$.kind') AS kind
             FROM provisioned_assets pa
             JOIN subscriptions s ON s.id = pa.subscription_id
             LEFT JOIN provisioned_asset_repo_links parl ON parl.asset_id = pa.id
             LEFT JOIN repositories r ON r.id = parl.repository_id
-            LEFT JOIN sites si ON si.id = pa.id
-            LEFT JOIN plans p
-             ON p.subscription_id = pa.subscription_id
-             AND si.plan_arm_id IS NOT NULL
-             AND lower(p.id) = si.plan_arm_id
-            LEFT JOIN ases pe
-             ON pe.subscription_id = pa.subscription_id
-             AND si.ase_arm_id IS NOT NULL
-             AND lower(pe.id) = si.ase_arm_id
             ORDER BY s.environment, s.display_name, pa.type, pa.name
             """
         ).fetchall()
+
+        # Build site→plan/ASE parent map using a small targeted query (only sites rows).
+        parent_map: dict = {}
+        try:
+            site_parents = conn.execute(
+                """
+                SELECT pa.id,
+                       lower(COALESCE(
+                           json_extract(pa.raw_json, '$.appServicePlanId'),
+                           json_extract(pa.raw_json, '$.serverFarmId')
+                       )) AS plan_arm_id,
+                       lower(COALESCE(
+                           json_extract(pa.raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                           json_extract(pa.raw_json, '$.hostingEnvironmentProfile.id')
+                       )) AS ase_arm_id
+                FROM provisioned_assets pa
+                WHERE lower(pa.type) LIKE '%/sites%'
+                  AND COALESCE(
+                        json_extract(pa.raw_json, '$.appServicePlanId'),
+                        json_extract(pa.raw_json, '$.serverFarmId'),
+                        json_extract(pa.raw_json, '$.properties.hostingEnvironmentProfile.id'),
+                        json_extract(pa.raw_json, '$.hostingEnvironmentProfile.id')
+                      ) IS NOT NULL
+                """
+            ).fetchall()
+            # Build ARM-id → parent asset lookup (plans + ASEs only — small sets)
+            parents_by_arm_id: dict = {}
+            for p_row in conn.execute(
+                """
+                SELECT lower(id), id, name, resource_group, type
+                FROM provisioned_assets
+                WHERE lower(type) LIKE '%/serverfarms%'
+                   OR lower(type) LIKE '%/hostingenvironments%'
+                """
+            ).fetchall():
+                parents_by_arm_id[p_row[0]] = {
+                    "parent_id": p_row[1], "parent_name": p_row[2],
+                    "parent_resource_group": p_row[3], "parent_arm_type": p_row[4],
+                }
+            for sp in site_parents:
+                arm_id = sp[1] or sp[2]
+                if arm_id and arm_id in parents_by_arm_id:
+                    parent_map[sp[0]] = parents_by_arm_id[arm_id]
+        except Exception:
+            pass  # Non-critical — parent info is decorative
 
         subscriptions = []
         for s in subs:
@@ -12987,13 +12990,13 @@ def api_cloud_assets_all():
                 "environment": r[14], "cloud_provider": "Azure",
                 "linked_repo": r[15],
                 "kind": r[16],
-                "parent_id": r[17],
-                "parent_name": r[18],
-                "parent_resource_group": r[19],
-                "parent_type_label": _friendly_type(r[20]) if r[20] else None,
+                "parent_id": parent_map.get(r[0], {}).get("parent_id"),
+                "parent_name": parent_map.get(r[0], {}).get("parent_name"),
+                "parent_resource_group": parent_map.get(r[0], {}).get("parent_resource_group"),
+                "parent_type_label": _friendly_type(parent_map.get(r[0], {}).get("parent_arm_type") or "") or None,
                 "children_count": 0,
-                "is_child": bool(r[17]),
-                "depth": 1 if r[17] else 0,
+                "is_child": r[0] in parent_map,
+                "depth": 1 if r[0] in parent_map else 0,
             })
 
         # Build a lookup of subscription metadata for virtual assets
@@ -14258,6 +14261,83 @@ def _build_subscription_attack_paths(assets: list[dict], scope_label: str) -> li
     return _normalize_attack_paths(raw_paths, reviewer="subscription-diagram")
 
 
+# ---------------------------------------------------------------------------
+# DNS Reachability Helpers
+# ---------------------------------------------------------------------------
+
+_ARM_TYPE_FQDN_SUFFIX: dict[str, str] = {
+    "keyvault/vaults":                       "{name}.vault.azure.net",
+    "storage/storageaccounts":               "{name}.blob.core.windows.net",
+    "documentdb/databaseaccounts":           "{name}.documents.azure.com",
+    "servicebus/namespaces":                 "{name}.servicebus.windows.net",
+    "eventhub/namespaces":                   "{name}.servicebus.windows.net",
+    "apimanagement/service":                 "{name}.azure-api.net",
+    "cache/redis":                           "{name}.redis.cache.windows.net",
+    "search/searchservices":                 "{name}.search.windows.net",
+    "appconfiguration/configurationstores":  "{name}.azconfig.io",
+    "sql/servers":                           "{name}.database.windows.net",
+    "trafficmanager/profiles":               "{name}.trafficmanager.net",
+    "cdn/profiles":                          "{name}.azureedge.net",
+    "datafactory/factories":                 "{name}.datafactory.azure.net",
+    "containerregistry/registries":          "{name}.azurecr.io",
+}
+
+def _fqdn_for_type(name: str, arm_type: str) -> str | None:
+    """Construct canonical Azure FQDN for a resource when fqdn column is NULL."""
+    t = (arm_type or "").lower()
+    for key, template in _ARM_TYPE_FQDN_SUFFIX.items():
+        if key in t:
+            return template.format(name=name)
+    return None
+
+
+_DNS_CACHE: dict[str, tuple[float, bool]] = {}
+_DNS_CACHE_TTL = 3600  # seconds
+
+
+def _dns_is_internet_reachable(fqdn: str) -> bool:
+    """Return True if fqdn resolves to a public IP, False if private/NXDOMAIN/CGNAT.
+
+    Fast-path heuristics avoid the network stack for well-known private suffixes.
+    Results are cached for one hour so repeated calls are instant.
+    """
+    import socket as _socket, time as _time
+    fqdn_l = fqdn.lower().strip(".")
+
+    # Fast-path: well-known private suffixes never resolve publicly
+    if (
+        ".internal." in fqdn_l
+        or fqdn_l.endswith(".appserviceenvironment.net")
+        or ".privatelink." in fqdn_l
+        or fqdn_l.endswith(".local")
+    ):
+        return False
+
+    cached = _DNS_CACHE.get(fqdn_l)
+    if cached and (_time.monotonic() - cached[0]) < _DNS_CACHE_TTL:
+        return cached[1]
+
+    try:
+        ips = [r[4][0] for r in _socket.getaddrinfo(fqdn_l, None, _socket.AF_INET)]
+        ip = ips[0]
+        parts = ip.split(".")
+        p0, p1 = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        if (
+            ip.startswith("10.")
+            or ip.startswith("192.168.")
+            or (ip.startswith("172.") and 16 <= p1 <= 31)
+            or (p0 == 100 and 64 <= p1 <= 127)  # CGNAT — treat as private
+        ):
+            result = False
+        else:
+            result = True
+    except Exception:
+        result = False  # NXDOMAIN / timeout → treat as private
+
+    _DNS_CACHE[fqdn_l] = (_time.monotonic(), result)
+    return result
+
+
 def _build_subscription_overlay_views(rows: list, plan_links: list | None = None) -> dict:
     return _shared_build_subscription_overlay_views(
         rows,
@@ -14392,7 +14472,70 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             data_stores.append(item)
 
     backends = _shared_subscription_apply_plan_hierarchy(backends, plan_links)
-    
+
+    # ------------------------------------------------------------------
+    # P0: DNS Reachability Gate — override item["public"] for every tier
+    # based on live DNS resolution.  No resource type is auto-trusted.
+    # ------------------------------------------------------------------
+    from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+
+    # --- Entry points: AppGW via listener hostnames; others via FQDN ---
+    # Build per-gateway reachability map from known listener hostnames
+    _gw_public: dict[str, bool] = {}
+    for _gw_name, _hostname, _be in (appgw_routes or []):
+        if _hostname and _dns_is_internet_reachable(str(_hostname)):
+            _gw_public[(_gw_name or "").lower()] = True
+        elif (_gw_name or "").lower() not in _gw_public:
+            _gw_public[(_gw_name or "").lower()] = False
+
+    # Collect (item, fqdn) pairs for parallel resolution
+    _dns_work: list[tuple[dict, str]] = []
+    for _item in entry_points:
+        _arm_l = (_item.get("arm_type") or _item.get("type") or "").lower()
+        if "applicationgateway" in _arm_l:
+            _item["public"] = _gw_public.get((_item.get("name") or "").lower(), False)
+        else:
+            _fqdn = _item.get("fqdn") or _fqdn_for_type(_item.get("name", ""), _arm_l)
+            if _fqdn:
+                _dns_work.append((_item, _fqdn))
+
+    for _item in api_layer + backends + data_stores:
+        _arm_l = (_item.get("arm_type") or _item.get("type") or "").lower()
+        _fqdn = _item.get("fqdn") or _fqdn_for_type(_item.get("name", ""), _arm_l)
+        if _fqdn:
+            _dns_work.append((_item, _fqdn))
+
+    if _dns_work:
+        # Deduplicate by FQDN to avoid redundant lookups
+        _seen_fqdns: set[str] = set()
+        _deduped: list[tuple[dict, str]] = []
+        for _item, _fqdn in _dns_work:
+            if _fqdn.lower() not in _seen_fqdns:
+                _seen_fqdns.add(_fqdn.lower())
+                _deduped.append((_item, _fqdn))
+            # Still need to apply result to all items sharing this FQDN
+        _fqdn_result: dict[str, bool] = {}
+        try:
+            with _TPE(max_workers=10) as _pool:
+                _futures = {_pool.submit(_dns_is_internet_reachable, _f): _f for _, _f in _deduped}
+                for _future in _as_completed(_futures, timeout=10.0):
+                    _fqdn_result[_futures[_future].lower()] = _future.result()
+        except Exception:
+            pass  # on total failure, leave existing public flags unchanged
+
+        # Apply resolved results to ALL items (including duplicates not in _deduped)
+        for _item, _fqdn in _dns_work:
+            _key = _fqdn.lower()
+            if _key in _fqdn_result:
+                _resolved = _fqdn_result[_key]
+                if not _resolved:
+                    _item["public"] = False
+                    _item["dns_verified_private"] = True
+                else:
+                    # Only promote to public if it wasn't already overridden (e.g. ILB ASE)
+                    if _item.get("public") is None:
+                        _item["public"] = True
+
     # Build simplified Mermaid diagram focusing on entry flow
     lines = [
         "graph LR",
@@ -15015,21 +15158,33 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         )
 
     def _entry_point_edge_style(item: dict) -> tuple[str, str] | tuple[None, None]:
-        """Label protected entry edges instead of exposing FQDN/protocol details."""
+        """Label protected entry edges instead of exposing FQDN/protocol details.
+
+        Returns (label, color). When there is no WAF and no IP restriction, returns
+        ('⚠️ No WAF', red) to highlight the unprotected exposure to a security reviewer.
+        Azure Firewall is a special case: it's a network-layer gateway with no L7 WAF.
+        """
+        arm_t = (item.get("arm_type") or item.get("type") or "").lower()
         has_waf = bool(item.get("has_waf") or item.get("waf_mode"))
         restricted = bool(item.get("is_restricted"))
         waf_mode = (item.get("waf_mode") or "").strip().lower()
+
+        # Azure Firewall provides network-layer protection (DNAT/SNAT) but not L7 WAF
+        if "azurefirewall" in arm_t:
+            return "Network Firewall 🔒", "#f97316"
+
         if has_waf and restricted:
             return "WAF + IP allowlist", "#f97316"
         if has_waf:
             if "prevention" in waf_mode:
-                return "WAF (Prev)", "#f97316"
+                return "WAF (Prev) 🛡️", "#f97316"
             if "detection" in waf_mode:
-                return "WAF (Det)", "#f59e0b"
-            return "WAF", "#f97316"
+                return "WAF (Det) ⚠️", "#f59e0b"
+            return "WAF 🛡️", "#f97316"
         if restricted:
             return _allowlist_target_label(item), "#f59e0b"
-        return None, None
+        # No WAF and no IP restriction — flag as unprotected
+        return "⚠️ No WAF", "#ef4444"
 
     def _internal_link_label(arm_type: str) -> str:
         """Protocol label for internal backend→data-store arrows."""
@@ -15082,6 +15237,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Internet → Entry Points (orange — internet-reachable entry path, FQDN on arrow)
     if shown_entry:
         for item in shown_entry:
+            # P0-D: skip Internet → node edge if DNS confirms this entry point is private
+            if not item.get("public"):
+                continue
             node_id = _get_node_id(item)
             arm_type_low = (item.get("arm_type") or item.get("type") or "").lower()
             fqdns = item.get("fqdns") or []
@@ -15125,20 +15283,11 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                         _add_link(f'    {w_nid} --> {node_id}', "orange")
             elif w_nid:
                 # No listener data but WAF / allowlist protection known.
-                if protected_label:
-                    _add_link(f'    Internet -->|"{protected_label}"| {w_nid}', protected_color or "orange")
-                    _add_link(f'    {w_nid} --> {node_id}', protected_color or "orange")
-                else:
-                    _add_link(f'    Internet -->|"{fqdn_label}"| {w_nid}', "orange")
-                    _add_link(f'    {w_nid} --> {node_id}', "orange")
+                _add_link(f'    Internet -->|"{protected_label}"| {w_nid}', protected_color or "orange")
+                _add_link(f'    {w_nid} --> {node_id}', protected_color or "orange")
             else:
-                # Non-App Gateway or no listener data: existing behaviour.
-                if protected_label:
-                    _add_link(f'    Internet -->|"{protected_label}"| {node_id}', protected_color or "orange")
-                else:
-                    waf_suffix = "🛡️ WAF" if item.get("has_waf") else ""
-                    arrow_label = _fqdn_label(fqdns, waf_suffix)
-                    _add_link(f'    Internet -->|"{arrow_label}"| {node_id}', "orange")
+                # Non-App Gateway or no listener data.
+                _add_link(f'    Internet -->|"{protected_label}"| {node_id}', protected_color or "orange")
 
     # Entry Points → API Layer (orange — still part of the internet-reachable routing chain)
     if shown_entry and shown_api:
