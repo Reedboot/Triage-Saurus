@@ -57,11 +57,11 @@ If the server is not running, instruct the user to start it (e.g. `bash Scripts/
 
 ### Phase 3 — Drilldown Smoke Test
 
-11. In the ingress diagram SVG, find the first node with class `node-drillable` (these have the `⊕` badge).
-12. Dispatch a `dblclick` event on it.
-13. Wait up to 3 seconds for `#drilldown-panel` to become visible.
-14. Record result (pass/fail + node id + drilldown panel content summary) in `drilldown_smoke.json`.
-15. **Pass criteria:** Drilldown panel appears within 3 seconds.
+11. In the ingress diagram SVG, find the first node with class `node-drillable` (these have the `⤵` badge).
+12. Dispatch a `click` event on it using `node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}))`.
+13. Wait up to 3 seconds for `#drilldown-modal` to become visible (i.e. `style.display !== 'none'`).
+14. Record result (pass/fail + node id + drilldown modal content summary) in `drilldown_smoke.json`.
+15. **Pass criteria:** Drilldown modal appears within 3 seconds.
 
 ### Phase 4 — Content Accuracy Check
 
@@ -98,11 +98,17 @@ If the server is not running, instruct the user to start it (e.g. `bash Scripts/
 
 ### Phase 7 — SQL Asset Disambiguation Check
 
-25. Query for SQL Databases:
+25. Query for SQL Databases (data is in `provisioned_assets`, not `resources`):
     ```sql
-    SELECT r.resource_name, p.resource_name as server_name
-    FROM resources r JOIN resources p ON r.parent_resource_id = p.id
-    WHERE r.resource_type LIKE '%database%' AND r.resource_type LIKE '%sql%'
+    SELECT db.name AS db_name, srv.name AS server_name
+    FROM provisioned_assets db
+    JOIN provisioned_assets srv
+      ON  srv.subscription_id = db.subscription_id
+      AND srv.resource_group  = db.resource_group
+      AND LOWER(srv.type)     = 'microsoft.sql/servers'
+    WHERE db.subscription_id = ?
+      AND LOWER(db.type)      = 'microsoft.sql/servers/databases'
+    ORDER BY srv.name, db.name
     ```
 26. For each database, confirm the assets table renders a parent server hint below the database name.
 27. Flag databases that share a name across different servers but lack the hint.
@@ -135,6 +141,7 @@ If the server is not running, instruct the user to start it (e.g. `bash Scripts/
 ### [FAIL] Drilldown smoke test
 - No node with class `node-drillable` found in ingress SVG
 - Possible cause: `_attachDrilldownHandlers()` not called / node_drilldown_map empty
+- Note: handler uses `click` event (not `dblclick`); modal element is `#drilldown-modal` (not `#drilldown-panel`)
 
 ### [WARN] Content accuracy
 - `microsoft.web/sites` has 12 public instances in DB but only 8 visible in diagram
@@ -158,5 +165,8 @@ If the server is not running, instruct the user to start it (e.g. `bash Scripts/
 | Drilldown fails | `_attachDrilldownHandlers` not called or `node_drilldown_map` empty | Check `subscriptions.html` render flow + `_build_ingress_diagram` node registration |
 | WAF node missing | `has_waf` is False in DB despite policy existing | Re-run harvest with `🔄 Refresh WAF & Routing` button; check `appgw_waf_policies` table |
 | HTTP listener missing | `listeners` field null in `provisioned_assets` | Re-run routing harvest; verify `appgw_routing_rules` table for this gateway |
-| Public asset not in diagram | Resource type not in `_drillable_arm_types` or `_classify_exposure` bug | Add type to diagram categorisation or fix harvest classification |
+| Public asset not in diagram | DNS failure in web server env overriding `is_public=1` from harvest | Fixed in `_build_ingress_diagram`: `harvest_is_public` flag prevents DNS downgrade of confirmed-public resources |
+| App Gateway not in diagram | `is_public=0` despite public routing rules | Fixed: `public_appgw_names` seeded from `appgw_routing_rules.exposure_level='Public'` before DNS check |
+| WAF mode NULL | `waf-policy show` failed; list stub also missing `policySettings` | Fixed in `harvest_routing`: tries list stub properties as fallback; also captures per-listener policy associations |
+| Orphaned per-listener WAF policies | `associated_gateways=[]` because only gateway-level policy was indexed | Fixed in `harvest_routing`: per-listener `firewallPolicy` refs now populate `gw_waf_map` |
 | ILB ASE marked public | `fetch_ase_ilb_map()` returned empty (permissions) | Check `az appservice ase list` permissions; verify ASE `internalLoadBalancingMode` |

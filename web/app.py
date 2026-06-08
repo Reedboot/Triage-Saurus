@@ -13575,12 +13575,22 @@ def api_subscription_diagram(sub_id: str):
         # Fetch AppGW routing rules for hostname count labels (P1-B) and
         # direct-backend edge detection (P1-A). Each row: (gateway_name, hostname, backend_fqdns_json).
         appgw_routes: list = []
+        # Set of gateway names that have at least one routing rule with exposure_level='Public'.
+        # Used to seed _gw_public in _build_ingress_diagram so DNS failure on external
+        # hostnames (e.g. clearbank.co.uk) never hides a genuinely internet-facing gateway.
+        public_appgw_names: set[str] = set()
         try:
             if _table_exists(conn, "appgw_routing_rules"):
                 appgw_routes = conn.execute(
                     "SELECT gateway_name, hostname, backend_fqdns FROM appgw_routing_rules WHERE subscription_id=?",
                     (sub_id,),
                 ).fetchall()
+                _pub_rows = conn.execute(
+                    "SELECT DISTINCT gateway_name FROM appgw_routing_rules"
+                    " WHERE subscription_id=? AND LOWER(exposure_level)='public'",
+                    (sub_id,),
+                ).fetchall()
+                public_appgw_names = {r[0].lower() for r in _pub_rows if r[0]}
         except Exception:
             pass  # Non-critical
 
@@ -13615,6 +13625,7 @@ def api_subscription_diagram(sub_id: str):
             apim_open_api_count=apim_open_api_count,
             appgw_routes=appgw_routes,
             ilb_ase_names=ilb_ase_names,
+            public_appgw_names=public_appgw_names,
         )
         
         payload = {
@@ -14368,7 +14379,7 @@ def _build_subscription_overlay_views(rows: list, plan_links: list | None = None
     )
 
 
-def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, ilb_ase_names: set[str] | None = None) -> dict:
+def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_backend_urls: set[str] | None = None, apim_open_api_count: int = 0, appgw_routes: list | None = None, ilb_ase_names: set[str] | None = None, public_appgw_names: set[str] | None = None) -> dict:
     """Build a high-level ingress flow diagram showing entry points and key services.
     
     Simplifies the architecture to: HTTP → WAF → App Gateway → APIM → Backend services
@@ -14440,6 +14451,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "type": rtype,
             "fqdn": fqdn,
             "public": is_public,
+            "harvest_is_public": bool(is_public),  # immutable harvest verdict; DNS check must not override
             "rg": rg,
             "has_waf": has_waf,
             "listeners": listeners,
@@ -14499,13 +14511,16 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
 
     # --- Entry points: AppGW via listener hostnames; others via FQDN ---
-    # Build per-gateway reachability map from known listener hostnames
-    _gw_public: dict[str, bool] = {}
+    # Build per-gateway reachability map from known listener hostnames.
+    # Seed with gateways confirmed public via routing-rules exposure_level so that
+    # DNS failure on listener hostnames never hides a genuinely public gateway.
+    _gw_public: dict[str, bool] = {name.lower(): True for name in (public_appgw_names or set())}
     for _gw_name, _hostname, _be in (appgw_routes or []):
+        _gw_key = (_gw_name or "").lower()
         if _hostname and _dns_is_internet_reachable(str(_hostname)):
-            _gw_public[(_gw_name or "").lower()] = True
-        elif (_gw_name or "").lower() not in _gw_public:
-            _gw_public[(_gw_name or "").lower()] = False
+            _gw_public[_gw_key] = True
+        elif _gw_key not in _gw_public:
+            _gw_public[_gw_key] = False
 
     # Collect (item, fqdn) pairs for parallel resolution
     _dns_work: list[tuple[dict, str]] = []
@@ -14548,8 +14563,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             if _key in _fqdn_result:
                 _resolved = _fqdn_result[_key]
                 if not _resolved:
-                    _item["public"] = False
-                    _item["dns_verified_private"] = True
+                    # Only downgrade if the harvest did not explicitly flag this resource as
+                    # public.  DNS failure (NXDOMAIN / timeout / env restriction) must not
+                    # silently remove public data-store nodes that the harvest script
+                    # confirmed are internet-accessible (e.g. EventHub, ServiceBus,
+                    # Container Registry with public network access enabled).
+                    if not _item.get("harvest_is_public"):
+                        _item["public"] = False
+                        _item["dns_verified_private"] = True
                 else:
                     # Only promote to public if it wasn't already overridden (e.g. ILB ASE)
                     if _item.get("public") is None:

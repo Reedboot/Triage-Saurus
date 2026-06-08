@@ -416,11 +416,25 @@ def harvest_routing(
     waf_policies = az(["network", "application-gateway", "waf-policy", "list"], subscription_id)
     gw_waf_map: dict[str, list[str]] = {}
     for gw in gateways:
+        gw_name = gw["name"]
         props = gw.get("properties") or gw
+
+        # Gateway-level WAF policy association
         pol_id = (props.get("firewallPolicy") or {}).get("id", "")
         pol_name = pol_id.split("/")[-1] if pol_id else None
         if pol_name:
-            gw_waf_map.setdefault(pol_name, []).append(gw["name"])
+            gw_waf_map.setdefault(pol_name, []).append(gw_name)
+
+        # Per-listener WAF policy associations (per-listener policies are NOT linked
+        # at the gateway level, so they would otherwise have associated_gateways=[]).
+        for listener in props.get("httpListeners") or []:
+            lp = listener.get("properties") or {}
+            l_pol_id = (lp.get("firewallPolicy") or {}).get("id", "")
+            l_pol_name = l_pol_id.split("/")[-1] if l_pol_id else None
+            if l_pol_name and l_pol_name != pol_name:
+                gw_entry = gw_waf_map.setdefault(l_pol_name, [])
+                if gw_name not in gw_entry:
+                    gw_entry.append(gw_name)
 
     for pol_stub in waf_policies:
         pol_name = pol_stub["name"]
@@ -433,6 +447,10 @@ def harvest_routing(
             subscription_id,
         ) or pol_stub
         pp  = pol.get("properties") or {}
+        # If the show command fell back to pol_stub (from the list command), try its
+        # properties too — the list output usually includes policySettings.mode/state.
+        if not pp.get("policySettings"):
+            pp = pol_stub.get("properties") or pp
         ps  = pp.get("policySettings") or {}
         managed      = pp.get("managedRules") or {}
         rule_sets    = managed.get("managedRuleSets") or []
