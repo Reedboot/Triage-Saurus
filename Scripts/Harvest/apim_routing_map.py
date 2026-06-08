@@ -291,20 +291,20 @@ def process_apim(
         if resource_type:
             row = conn.execute(
                 """
-                SELECT id FROM resources
-                WHERE experiment_id = ? AND resource_name = ? AND resource_type = ?
+                SELECT rowid FROM provisioned_assets
+                WHERE subscription_id = ? AND name = ? AND type = ?
                 LIMIT 1
                 """,
-                (experiment_id, resource_name, resource_type),
+                (subscription_id, resource_name, resource_type),
             ).fetchone()
         else:
             row = conn.execute(
                 """
-                SELECT id FROM resources
-                WHERE experiment_id = ? AND resource_name = ?
+                SELECT rowid FROM provisioned_assets
+                WHERE subscription_id = ? AND name = ?
                 LIMIT 1
                 """,
-                (experiment_id, resource_name),
+                (subscription_id, resource_name),
             ).fetchone()
         return row[0] if row else None
 

@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for reg in raw:
-        props = reg.get("properties") or {}
+        props = reg.get("properties") or reg
         login_server = safe_str(props.get("loginServer"))
         is_public, is_restricted, ip_restrictions = _classify_exposure(props)
 

@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlparse
 
-from ._helpers import az, build_endpoints, infer_sku, normalize_route_path, safe_str
+from ._helpers import az, build_endpoints, infer_sku, normalize_route_path, safe_str, _is_msal_lock_error, _AZ_RETRY_MAX, _AZ_RETRY_BACKOFF
 from ._staged import BackfillJob, StagedRows
 
 RESOURCE_TYPE = "Microsoft.ApiManagement/service"
@@ -199,33 +199,40 @@ def _az_list_apis(service_name: str, resource_group: str, subscription_id: str) 
 
 
 def _run_az_json(cmd: list[str], timeout: int = 120) -> Any:
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+    last_stderr = ""
+    for attempt in range(_AZ_RETRY_MAX):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=True,
+        )
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        raise TimeoutError(f"{' '.join(cmd[:6])} timed out after {timeout}s") from exc
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            raise TimeoutError(f"{' '.join(cmd[:6])} timed out after {timeout}s") from exc
 
-    if proc.returncode != 0:
-        raise RuntimeError(stderr.strip()[:200])
+        if proc.returncode == 0:
+            try:
+                return json.loads(stdout or "null")
+            except json.JSONDecodeError as exc:
+                preview = (stdout or "").replace("\n", " ")[:200]
+                raise RuntimeError(f"invalid JSON from {' '.join(cmd[:6])}: {exc.msg}; output={preview!r}") from exc
 
-    try:
-        return json.loads(stdout or "null")
-    except json.JSONDecodeError as exc:
-        preview = (stdout or "").replace("\n", " ")[:200]
-        raise RuntimeError(f"invalid JSON from {' '.join(cmd[:6])}: {exc.msg}; output={preview!r}") from exc
+        last_stderr = stderr.strip()
+        if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(last_stderr):
+            time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
+            continue
+        raise RuntimeError(last_stderr[:200])
+    raise RuntimeError(last_stderr[:200])
 
 
 def _az_list_operations(

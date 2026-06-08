@@ -21,7 +21,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for factory in raw:
-        props = factory.get("properties") or {}
+        props = factory.get("properties") or factory
         is_public = _is_public(props)
 
         extra = {

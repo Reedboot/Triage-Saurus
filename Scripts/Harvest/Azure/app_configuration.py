@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
     total = len(raw)
     for idx, store in enumerate(raw, start=1):
-        props = store.get("properties") or {}
+        props = store.get("properties") or store
         resource_id = store.get("id", "")
         endpoint = safe_str(props.get("endpoint", "").replace("https://", "").rstrip("/")) or None
         store_name = safe_str(store.get("name")) or f"store-{idx}"

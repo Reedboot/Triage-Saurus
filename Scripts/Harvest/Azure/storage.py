@@ -142,7 +142,7 @@ def _build_storage_account_core(
             "auth_methods": json.dumps(["azure_ad"]),
         }
 
-    props = acct.get("properties") or {}
+    props = acct.get("properties") or acct
     fqdn = _get_primary_endpoint(props)
     is_public, is_restricted, ip_restrictions = _classify_exposure(props)
     allow_shared_key = props.get("allowSharedKeyAccess", True)

@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for kv in raw:
-        props = kv.get("properties") or {}
+        props = kv.get("properties") or kv
         network_acls = _get_network_acls(props)
         vault_uri = props.get("vaultUri")
         fqdn = safe_str(vault_uri.replace("https://", "").rstrip("/")) if vault_uri else None

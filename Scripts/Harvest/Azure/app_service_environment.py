@@ -19,7 +19,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for ase in raw:
-        props = ase.get("properties") or {}
+        props = ase.get("properties") or ase
 
         # Internal ASE DNS suffix: <ase-name>.<region>.appserviceenvironment.net
         dns_suffix = safe_str(props.get("dnsSuffix"))

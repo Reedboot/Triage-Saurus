@@ -55,8 +55,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 def _classify_exposure(
     server: dict[str, Any], subscription_id: str
 ) -> tuple[int, int, list[str], list[dict]]:
-    """Return (is_public, is_restricted, ip_cidrs, raw_firewall_rules)."""
-    props = server.get("properties") or {}
+    props = server.get("properties") or server
 
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
         return 0, 0, [], []
@@ -89,7 +88,7 @@ def _classify_exposure(
 
 
 def _get_auth_methods(server: dict[str, Any], subscription_id: str) -> list[str]:
-    props = server.get("properties") or {}
+    props = server.get("properties") or server
     methods = ["sql_auth"]
 
     # Check for AAD admin configured

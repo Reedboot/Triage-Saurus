@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for acct in raw:
-        props = acct.get("properties") or {}
+        props = acct.get("properties") or acct  # az cosmosdb list flattens properties to root
         doc_endpoint = props.get("documentEndpoint", "")
         fqdn = safe_str(doc_endpoint.replace("https://", "").rstrip("/")) or None
 
@@ -87,7 +87,9 @@ def _get_auth_methods(props: dict[str, Any]) -> list[str]:
 
 def _infer_api(acct: dict[str, Any]) -> str:
     """Return a human-readable Cosmos DB API name."""
-    caps = {c.get("name") for c in (acct.get("properties", {}).get("capabilities") or [])}
+    # az cosmosdb list flattens properties to root; fall back to root-level capabilities
+    props = acct.get("properties") or acct
+    caps = {c.get("name") for c in (props.get("capabilities") or [])}
     kind = acct.get("kind", "")
     if "EnableMongo" in caps or kind == "MongoDB":
         return "MongoDB"

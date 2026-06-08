@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ._helpers import az, build_endpoints, fetch_ase_ilb_map, infer_fqdn, infer_sku, safe_str
+from ._helpers import az, build_endpoints, fetch_ase_ilb_map, infer_fqdn, infer_sku, safe_str, _is_msal_lock_error, _AZ_RETRY_MAX, _AZ_RETRY_BACKOFF
 
 RESOURCE_TYPE = "Microsoft.Web/sites"  # function apps share the same ARM type
 
@@ -56,7 +57,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _classify_exposure(app: dict[str, Any], ase_ilb_map: dict[str, bool] | None = None) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_restriction_cidrs)."""
-    props = app.get("properties") or {}
+    props = app.get("properties") or app
 
     # ILB App Service Environment: web endpoint is VNet-internal only.
     # Only short-circuit when the ASE is confirmed in the map — if the lookup
@@ -162,13 +163,23 @@ def _az_list_functions(app_name: str, resource_group: str, subscription_id: str)
         "--subscription", subscription_id,
         "--output", "json",
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except Exception as exc:
-        raise RuntimeError(str(exc)[:200]) from exc
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip()[:200])
-    return json.loads(result.stdout or "[]") or []
+    last_stderr = ""
+    for attempt in range(_AZ_RETRY_MAX):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except Exception as exc:
+            raise RuntimeError(str(exc)[:200]) from exc
+        if result.returncode == 0:
+            return json.loads(result.stdout or "[]") or []
+        last_stderr = result.stderr.strip()
+        if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(last_stderr):
+            time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
+            continue
+        # Extract the last meaningful line for a clean error message
+        last_line = next((ln.strip() for ln in reversed(last_stderr.splitlines()) if ln.strip()), last_stderr)
+        raise RuntimeError(last_line[:200])
+    last_line = next((ln.strip() for ln in reversed(last_stderr.splitlines()) if ln.strip()), last_stderr)
+    raise RuntimeError(last_line[:200])
 
 
 def harvest_http_triggers(

@@ -716,21 +716,11 @@ def harvest_subscription(
     print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
     try:
         phase_started = time.perf_counter()
-        route_result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
-        if isinstance(route_result, StagedRows):
-            route_count, backfill_count = _store_result(route_result)
-        else:
-            route_count = route_result
-            backfill_count = 0
+        route_count = apim.harvest_routes(sub_id, conn, dry_run=dry_run)
         if route_count and not dry_run:
             conn.commit()
         action = "would write" if dry_run else "written"
-        backfill_note = f" (+{backfill_count} operation backfills)" if backfill_count else ""
-        print(f"  [APIM Routes] {route_count} routes {action}{backfill_note} in {time.perf_counter() - phase_started:.2f}s")
-        processed_backfills = _drain_ready_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
-        total += processed_backfills
-        if processed_backfills and not dry_run:
-            conn.commit()
+        print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
         print(f"  [APIM Routes] FAILED ({exc})")
 

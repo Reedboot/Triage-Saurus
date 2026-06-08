@@ -56,7 +56,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 
 def _classify_exposure(cache: dict[str, Any], subscription_id: str) -> tuple[int, int, list[str]]:
-    props = cache.get("properties") or {}
+    props = cache.get("properties") or cache
 
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
         return 0, 0, []

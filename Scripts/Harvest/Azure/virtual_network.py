@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for vnet in raw:
-        props = vnet.get("properties") or {}
+        props = vnet.get("properties") or vnet
         subnets = props.get("subnets") or []
 
         extra = {

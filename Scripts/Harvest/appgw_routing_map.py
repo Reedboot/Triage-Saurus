@@ -531,26 +531,24 @@ def process_gateway(
         if resource_type:
             row = conn.execute(
                 """
-                SELECT id FROM resources
-                WHERE experiment_id = ? AND resource_name = ? AND resource_type = ?
+                SELECT rowid FROM provisioned_assets
+                WHERE subscription_id = ? AND name = ? AND type = ?
                 LIMIT 1
                 """,
-                (experiment_id, resource_name, resource_type),
+                (subscription_id, resource_name, resource_type),
             ).fetchone()
         else:
             row = conn.execute(
                 """
-                SELECT id FROM resources
-                WHERE experiment_id = ? AND resource_name = ?
+                SELECT rowid FROM provisioned_assets
+                WHERE subscription_id = ? AND name = ?
                 LIMIT 1
                 """,
-                (experiment_id, resource_name),
+                (subscription_id, resource_name),
             ).fetchone()
         return row[0] if row else None
 
     source_resource_id = _lookup_resource_id(name, gw_asset_type)
-    if source_resource_id is None:
-        print("    [warn] no numeric resource graph row for this gateway; skipping connection writes")
 
     rules_upserted = 0
     connections_created = 0

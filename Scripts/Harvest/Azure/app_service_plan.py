@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for plan in raw:
-        props = plan.get("properties") or {}
+        props = plan.get("properties") or plan
         sku_info = plan.get("sku") or {}
 
         extra = {

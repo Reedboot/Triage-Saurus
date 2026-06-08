@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for cluster in raw:
-        props = cluster.get("properties") or {}
+        props = cluster.get("properties") or cluster
         # managementEndpoint looks like https://hostname:19080
         mgmt = props.get("managementEndpoint", "")
         fqdn = safe_str(

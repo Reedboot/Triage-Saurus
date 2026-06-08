@@ -50,7 +50,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
 
 def _classify_exposure(app: dict[str, Any], ase_ilb_map: dict[str, bool] | None = None) -> tuple[int, int, list[str]]:
     """Return (is_public, is_restricted, ip_restriction_cidrs)."""
-    props = app.get("properties") or {}
+    props = app.get("properties") or app
 
     # ILB App Service Environment: web endpoint is VNet-internal only.
     # Only short-circuit when the ASE is confirmed in the map — if the lookup

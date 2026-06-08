@@ -21,6 +21,25 @@ from typing import Any
 # ---------------------------------------------------------------------------
 _PROBES_ENABLED: bool = True
 
+# ---------------------------------------------------------------------------
+# Az CLI retry configuration
+# ---------------------------------------------------------------------------
+# The Windows MSAL token cache uses a lockfile that multiple concurrent az
+# subprocesses (running from WSL) can race to acquire.  When one loses the
+# race the CLI exits non-zero with "Permission denied: ...lockfile".
+# Retrying with a short back-off resolves the contention in practice.
+_AZ_RETRY_MAX = 3
+_AZ_RETRY_BACKOFF = 1.0  # seconds; multiplied by attempt number (1×, 2×, 3×)
+_MSAL_LOCK_RE = re.compile(
+    r"msal_token_cache.*\.lockfile|Permission denied.*lockfile",
+    re.IGNORECASE,
+)
+
+
+def _is_msal_lock_error(stderr: str) -> bool:
+    """Return True when az CLI failed due to MSAL token-cache lock contention."""
+    return bool(_MSAL_LOCK_RE.search(stderr))
+
 
 def set_probe_enabled(enabled: bool) -> None:
     global _PROBES_ENABLED
@@ -32,66 +51,84 @@ def az(args: list[str], subscription_id: str) -> list[dict[str, Any]]:
 
     Returns an empty list on failure (e.g. no permission, resource type not
     registered in the subscription) so providers degrade gracefully.
+    Retries up to _AZ_RETRY_MAX times when the MSAL token cache is locked.
     """
     cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=120)
-    except subprocess.TimeoutExpired:
+    for attempt in range(_AZ_RETRY_MAX):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=True,
+        )
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        return []
+            stdout, stderr = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            return []
 
-    if proc.returncode != 0:
+        if proc.returncode == 0:
+            try:
+                return json.loads(stdout or "[]") or []
+            except Exception:
+                return []
+
+        if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(stderr):
+            time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
+            continue
         return []
-    try:
-        return json.loads(stdout or "[]") or []
-    except Exception:
-        return []
+    return []
 
 
 def _az_rest(url: str, resource: str | None = None) -> dict:
-    """Call az rest GET and return parsed JSON. Raises RuntimeError on failure."""
+    """Call az rest GET and return parsed JSON. Raises RuntimeError on failure.
+
+    Retries up to _AZ_RETRY_MAX times when the MSAL token cache is locked.
+    """
     cmd = ["az", "rest", "--method", "GET", "--url", url, "--output", "json"]
     if resource:
         cmd += ["--resource", resource]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=60)
-    except subprocess.TimeoutExpired as exc:
+    last_stderr = ""
+    for attempt in range(_AZ_RETRY_MAX):
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=True,
+        )
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.communicate()
-        raise RuntimeError(f"az rest timed out after 60s: {url}") from exc
+            stdout, stderr = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            raise RuntimeError(f"az rest timed out after 60s: {url}") from exc
 
-    if proc.returncode != 0:
-        raise RuntimeError(stderr.strip()[:200])
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        preview = (stdout or "").replace("\n", " ")[:200]
-        raise RuntimeError(f"az rest returned invalid JSON: {exc.msg}; output={preview!r}") from exc
+        if proc.returncode == 0:
+            try:
+                return json.loads(stdout)
+            except json.JSONDecodeError as exc:
+                preview = (stdout or "").replace("\n", " ")[:200]
+                raise RuntimeError(f"az rest returned invalid JSON: {exc.msg}; output={preview!r}") from exc
+
+        last_stderr = stderr.strip()
+        if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(last_stderr):
+            time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
+            continue
+        raise RuntimeError(last_stderr[:200])
+    raise RuntimeError(last_stderr[:200])
 
 
 def safe_str(value: Any) -> str | None:

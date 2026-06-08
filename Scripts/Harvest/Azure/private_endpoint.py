@@ -19,7 +19,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for pe in raw:
-        props = pe.get("properties") or {}
+        props = pe.get("properties") or pe
 
         # The linked resource is in privateLinkServiceConnections[0].privateLinkServiceId
         plscs = props.get("privateLinkServiceConnections") or []

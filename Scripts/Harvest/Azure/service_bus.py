@@ -14,7 +14,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     results = []
 
     for ns in raw:
-        props = ns.get("properties") or {}
+        props = ns.get("properties") or ns
         fqdn = safe_str(props.get("serviceBusEndpoint", "")
                         .replace("https://", "").replace(":443/", "").rstrip("/")) or None
 
