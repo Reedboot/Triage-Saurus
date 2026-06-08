@@ -15851,14 +15851,15 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     # ── App Gateway ───────────────────────────────────────────────────────────
     if "applicationgateway" in arm_type_lc:
         title   = "App Gateway — Routing Rules"
-        columns = ["Gateway", "Listener / Hostname", "Protocol", "URL Path",
+        columns = ["Name / Hostname", "Protocol", "URL Path",
                    "Backend Pool", "Backend Targets", "WAF Policy"]
         gw_rows = conn.execute(
             f"""SELECT gateway_name, listener_name, hostname, protocol, url_path,
-                       backend_pool_name, backend_fqdns, backend_port, waf_policy_name
+                       backend_pool_name, backend_fqdns, backend_port, waf_policy_name,
+                       COALESCE(exposure_level, 'Public') AS exposure_level
                 FROM appgw_routing_rules
                 WHERE subscription_id=? AND gateway_name IN ({ph})
-                ORDER BY gateway_name, hostname, url_path""",
+                ORDER BY exposure_level DESC, gateway_name, hostname, url_path""",
             [sub_id] + names,
         ).fetchall() if names else []
 
@@ -15866,8 +15867,10 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
             return {"title": title, "view_type": "table", "columns": columns, "rows": [],
                     "empty_message": "No routing rules harvested yet — run Scripts/Harvest/appgw_routing_map.py"}
 
-        rows = []
-        for gw_name, listener, hostname, protocol, url_path, pool, be_json, be_port, waf in gw_rows:
+        # Group by exposure_level → gateway_name → list of rule rows
+        from collections import defaultdict
+        by_exposure = defaultdict(lambda: defaultdict(list))
+        for gw_name, listener, hostname, protocol, url_path, pool, be_json, be_port, waf, exposure in gw_rows:
             try:
                 be_fqdns = _json.loads(be_json) if be_json else []
             except Exception:
@@ -15877,16 +15880,65 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 targets += f" +{len(be_fqdns)-3} more"
             if be_port:
                 targets += f":{be_port}"
-            rows.append([
-                gw_name,
-                hostname or listener or "—",
-                protocol or "HTTPS",
-                url_path if url_path and url_path != "/*" else "/*",
-                pool or "—",
-                targets or "—",
-                "🛡️ " + waf if waf else "—",
-            ])
-        return _table_result(title=title, columns=columns, rows=rows)
+            by_exposure[exposure][gw_name].append({
+                "hostname": hostname or listener or "—",
+                "protocol": protocol or "HTTPS",
+                "url_path": url_path if url_path and url_path != "/*" else "/*",
+                "pool":     pool or "—",
+                "targets":  targets or "—",
+                "waf":      "🛡️ " + waf if waf else "—",
+            })
+
+        # Build tree_table sections: Public first, then Internal/Private
+        exposure_order = ["Public"] + [e for e in by_exposure if e != "Public"]
+        exposure_labels = {"Public": "🌐 Public", "Internal": "🔒 Internal", "Private": "🔒 Private"}
+        sections = []
+        for exposure in exposure_order:
+            if exposure not in by_exposure:
+                continue
+            gateways = by_exposure[exposure]
+            label = exposure_labels.get(exposure, exposure)
+            gw_count = len(gateways)
+            rule_count = sum(len(rules) for rules in gateways.values())
+            section_rows = []
+            for gw_name, rules in gateways.items():
+                parent_id = f"{exposure}::{gw_name}"
+                # Parent row — gateway summary
+                section_rows.append({
+                    "id":          parent_id,
+                    "parent_id":   None,
+                    "cells":       [gw_name, "—", "—", "—", "—", rules[0]["waf"] if rules else "—"],
+                    "child_count": len(rules),
+                    "search_text": gw_name,
+                })
+                # Child rows — individual routing rules
+                for idx, rule in enumerate(rules):
+                    section_rows.append({
+                        "id":        f"{parent_id}::rule{idx}",
+                        "parent_id": parent_id,
+                        "cells":     [
+                            rule["hostname"],
+                            rule["protocol"],
+                            rule["url_path"],
+                            rule["pool"],
+                            rule["targets"],
+                            rule["waf"],
+                        ],
+                        "search_text": f"{rule['hostname']} {rule['pool']} {rule['targets']}",
+                    })
+            sections.append({
+                "title":    label,
+                "subtitle": f"{gw_count} gateway{'s' if gw_count != 1 else ''} · {rule_count} rule{'s' if rule_count != 1 else ''}",
+                "rows":     section_rows,
+            })
+
+        return {
+            "title":     title,
+            "view_type": "tree_table",
+            "columns":   columns,
+            "sections":  sections,
+            "icon_path": icon_path,
+        }
 
     # ── APIM ──────────────────────────────────────────────────────────────────
     elif "apimanagement" in arm_type_lc:
