@@ -16257,6 +16257,104 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
             ])
         return _table_result(title=title, columns=columns, rows=rows)
 
+    # ── SQL Server → nested databases ────────────────────────────────────────
+    elif "sql/servers" in arm_type_lc and "databases" not in arm_type_lc:
+        n_servers = len(names)
+        title = f"SQL Server{'s' if n_servers > 1 else ''} — Databases"
+        columns = ["Name", "SKU / Pool", "Exposure", "Entry Points"]
+
+        # Build entry-point map: which App GWs route to each SQL server
+        entry_map: dict[str, list[str]] = {}
+        try:
+            for gw_name, be_json in conn.execute(
+                "SELECT gateway_name, backend_fqdns FROM appgw_routing_rules WHERE subscription_id=?",
+                (sub_id,),
+            ).fetchall():
+                be_fqdns = _json.loads(be_json) if be_json else []
+                for svr_name in names:
+                    if any(svr_name.lower() in str(f).lower() for f in be_fqdns):
+                        entry_map.setdefault(svr_name, []).append(f"App GW: {gw_name}")
+        except Exception:
+            pass
+
+        sections: list[dict] = []
+        all_rows: list[dict] = []
+
+        for res in resources:
+            svr_name = res.get("name") or ""
+            if not svr_name:
+                continue
+
+            svr_row = conn.execute(
+                """SELECT name, resource_group, fqdn, is_public, is_restricted, sku
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND name=?
+                     AND LOWER(type)='microsoft.sql/servers' LIMIT 1""",
+                (sub_id, svr_name),
+            ).fetchone()
+            if not svr_row:
+                continue
+
+            svr_n, svr_rg, svr_fqdn, svr_pub, svr_restr, svr_sku = svr_row
+            svr_fqdn = svr_fqdn or f"{svr_n}.database.windows.net"
+
+            db_rows = conn.execute(
+                """SELECT name, is_public, is_restricted, sku
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND resource_group=?
+                     AND LOWER(type)='microsoft.sql/servers/databases'
+                   ORDER BY name""",
+                (sub_id, svr_rg),
+            ).fetchall()
+
+            entry_pts = ", ".join(sorted(set(entry_map.get(svr_n, [])))) or "—"
+            parent_id = f"sqlserver::{svr_n}"
+
+            parent_row: dict = {
+                "id": parent_id,
+                "parent_id": None,
+                "cells": [
+                    {"label": svr_n, "style": "font-weight:600;"},
+                    svr_fqdn,
+                    _exposure(svr_pub, svr_restr),
+                    entry_pts,
+                ],
+                "child_count": len(db_rows),
+                "search_text": f"{svr_n} {svr_rg} {svr_fqdn}".lower(),
+            }
+
+            child_rows: list[dict] = []
+            for db_name, db_pub, db_restr, db_sku in db_rows:
+                child_rows.append({
+                    "id": f"{parent_id}::{db_name}",
+                    "parent_id": parent_id,
+                    "cells": [
+                        db_name,
+                        db_sku or "—",
+                        _exposure(db_pub, db_restr),
+                        "—",
+                    ],
+                    "child_count": 0,
+                    "search_text": f"{db_name} {db_sku or ''}".lower(),
+                })
+
+            sections.append({
+                "title": svr_n,
+                "subtitle": svr_rg,
+                "rows": [parent_row] + child_rows,
+            })
+            all_rows.append(parent_row)
+            all_rows.extend(child_rows)
+
+        if not all_rows:
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No SQL server details found in provisioned assets"}
+
+        result = _table_result(title=title, columns=columns, rows=all_rows)
+        result["view_type"] = "tree_table"
+        result["sections"] = sections
+        return result
+
     # ── Generic resources ─────────────────────────────────────────────────────
     else:
         type_label = _friendly_type(arm_type) if arm_type else "Resources"
