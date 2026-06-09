@@ -17,6 +17,7 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.web/hostingenvironments",
     "microsoft.servicefabric/clusters",
     "microsoft.servicebus/namespaces",
+    "microsoft.network/firewallpolicies",
 }
 
 SUBSCRIPTION_FQDN_SUFFIXES = {
@@ -148,7 +149,6 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
         return (asset.get("arm_type") or asset.get("type") or "").lower()
 
     asset_map = {_key(asset): dict(asset) for asset in assets}
-    hidden_keys: set[tuple[str, str]] = set()
     hosted_by_parent: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for site_rg, site_name, plan_rg, plan_name in plan_links:
@@ -163,18 +163,12 @@ def subscription_apply_plan_hierarchy(assets: list[dict], plan_links: list | Non
             token in parent_type for token in ("serverfarms", "hostingenvironment")
         ):
             continue
-        if site_key in hidden_keys:
-            continue
-        hidden_keys.add(site_key)
         hosted_by_parent[plan_key].append(site_asset)
 
     visible_assets: list[dict] = []
     for asset in assets:
         asset_copy = dict(asset)
         key = _key(asset_copy)
-        if key in hidden_keys:
-            continue
-
         children = hosted_by_parent.get(key)
         if children and any(token in _type(asset_copy) for token in ("serverfarms", "hostingenvironment")):
             child_fqdns = [subscription_primary_fqdn(child) for child in children if subscription_primary_fqdn(child)]
@@ -340,9 +334,7 @@ def subscription_register_node(
         "title": asset.get("name") or asset.get("friendly_type") or "resource",
         "arm_type": asset.get("arm_type"),
         "resources": resources,
-        "can_drill": bool(resources) and (
-            arm_type in SUBSCRIPTION_DRILLABLE_ARM_TYPES or len(resources) > 1
-        ),
+        "can_drill": bool(resources),
     }
 
 

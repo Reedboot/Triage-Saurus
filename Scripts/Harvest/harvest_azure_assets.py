@@ -712,15 +712,14 @@ def harvest_subscription(
     except Exception as exc:
         print(f"  [AKS Routes] FAILED ({exc})")
 
-    # APIM API → backend routes
+    # APIM API → backend routes (staged backfill: operations enrich asynchronously)
     print(f"  [APIM Routes] harvesting API→backend mappings...", flush=True)
     try:
         phase_started = time.perf_counter()
-        route_count = apim.harvest_routes(sub_id, conn, dry_run=dry_run)
-        if route_count and not dry_run:
-            conn.commit()
+        result = apim.harvest_routes(sub_id, conn, dry_run=dry_run, stage_backfill=True)
+        asset_count, backfill_count = _store_result(result)
         action = "would write" if dry_run else "written"
-        print(f"  [APIM Routes] {route_count} routes {action} in {time.perf_counter() - phase_started:.2f}s")
+        print(f"  [APIM Routes] {asset_count} routes {action}, {backfill_count} operation(s) queued for backfill in {time.perf_counter() - phase_started:.2f}s")
     except Exception as exc:
         print(f"  [APIM Routes] FAILED ({exc})")
 
@@ -760,6 +759,14 @@ def harvest_subscription(
         print(f"  [Firewall Rules] {nat_count} NAT rules, {app_count} app rules {action}")
     except Exception as exc:
         print(f"  [Firewall Rules] FAILED ({exc})")
+
+    print(f"  [Firewall Policies] harvesting policy summaries...", flush=True)
+    try:
+        policy_count = firewall.harvest_policies(sub_id, conn, dry_run=dry_run)
+        action = "would write" if dry_run else "written"
+        print(f"  [Firewall Policies] {policy_count} policies {action}")
+    except Exception as exc:
+        print(f"  [Firewall Policies] FAILED ({exc})")
 
     processed_backfills = _flush_backfill_jobs(pending_backfill_jobs, conn, dry_run, seen_ids)
     total += processed_backfills

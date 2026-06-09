@@ -34,7 +34,7 @@ from Azure._helpers import (
     route_path_matches,
 )
 from Azure._staged import BackfillJob, StagedRows
-from Azure import app_configuration, storage, aks, key_vault
+from Azure import app_configuration, storage, aks, key_vault, sql_server
 
 
 def _is_ip_address(value: str) -> bool:
@@ -469,7 +469,9 @@ from Azure.aks import (
 )
 from Azure import apim
 from Azure.apim import _get_gateway_hosts, _get_apim_exposure_level
-from Azure.function_apps import _extract_http_triggers
+from Azure import function_apps
+from Azure import service_fabric
+from Azure.function_apps import _derive_trigger_auth_methods, _extract_http_triggers
 from Azure.firewall import _extract_nat_rules, _extract_app_rules, _get_firewall_exposure_level
 from Azure.front_door import _extract_classic_routes, _extract_afd_route
 
@@ -1227,6 +1229,108 @@ class TestFunctionTriggerParsing:
         assert triggers[0]["auth_level"] == "function"
         assert triggers[0]["methods"] == []
 
+    def test_trigger_auth_methods_mark_auth_required_without_anonymous(self):
+        triggers = [
+            {"function_name": "A", "route": "a", "auth_level": "function", "methods": ["GET"]},
+            {"function_name": "B", "route": "b", "auth_level": "admin", "methods": ["POST"]},
+        ]
+        methods = _derive_trigger_auth_methods(triggers)
+        assert "function_http_auth_required" in methods
+        assert "function_http_anonymous" not in methods
+        assert "function_key" in methods
+
+    def test_trigger_auth_methods_mark_anonymous_when_present(self):
+        triggers = [
+            {"function_name": "A", "route": "a", "auth_level": "anonymous", "methods": ["GET"]},
+            {"function_name": "B", "route": "b", "auth_level": "function", "methods": ["POST"]},
+        ]
+        methods = _derive_trigger_auth_methods(triggers)
+        assert "function_http_anonymous" in methods
+        assert "function_http_auth_required" not in methods
+
+    def test_az_list_functions_parses_output_with_warning_noise(self, monkeypatch):
+        class _Result:
+            returncode = 0
+            stdout = "WARNING: preview command\\n[{\"name\":\"app/Fn\",\"config\":{\"bindings\":[{\"type\":\"httpTrigger\",\"authLevel\":\"Function\"}]}}]"
+            stderr = ""
+
+        monkeypatch.setattr(function_apps.subprocess, "run", lambda *args, **kwargs: _Result())
+        rows = function_apps._az_list_functions("app", "rg", "sub")
+        assert isinstance(rows, list)
+        assert rows and rows[0]["name"] == "app/Fn"
+
+    def test_az_list_functions_degrades_on_cli_json_parse_error(self, monkeypatch):
+        class _Result:
+            returncode = 1
+            stdout = ""
+            stderr = "Failed: JSON.parse: unexpected character at line 1 column 1 of the JSON data"
+
+        monkeypatch.setattr(function_apps.subprocess, "run", lambda *args, **kwargs: _Result())
+        rows = function_apps._az_list_functions("app", "rg", "sub")
+        assert rows == []
+
+
+class TestServiceFabricHarvest:
+    def test_harvest_extracts_applications_and_services(self, monkeypatch):
+        cluster = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-sf/providers/Microsoft.ServiceFabric/clusters/sfha",
+            "name": "sfha",
+            "resourceGroup": "rg-sf",
+            "location": "uksouth",
+            "type": "Microsoft.ServiceFabric/clusters",
+            "tags": {"pipeline": "sf-pipeline"},
+            "properties": {
+                "managementEndpoint": "https://sfha.example.com:19080",
+                "clusterState": "Ready",
+                "clusterCodeVersion": "11.4.205.1",
+                "nodeTypes": [{"name": "nt1"}],
+                "reliabilityLevel": "Silver",
+                "upgradeMode": "Manual",
+            },
+        }
+        monkeypatch.setattr(service_fabric, "az", lambda args, subscription_id: [cluster])
+
+        class _Result:
+            def __init__(self, stdout):
+                self.returncode = 0
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(cmd, capture_output, text, encoding, errors, timeout):
+            if cmd[:4] == ["az", "sf", "application", "list"]:
+                return _Result(json.dumps([
+                    {
+                        "id": "/clusters/sfha/applications/fabric:/OrderApp",
+                        "name": "fabric:/OrderApp",
+                        "properties": {"typeName": "OrderAppType"},
+                    }
+                ]))
+            if cmd[:4] == ["az", "sf", "service", "list"]:
+                return _Result(json.dumps([
+                    {
+                        "id": "/clusters/sfha/services/fabric:/OrderApp/OrderService",
+                        "name": "fabric:/OrderApp/OrderService",
+                        "properties": {
+                            "serviceTypeName": "OrderServiceType",
+                            "serviceStatus": "Active",
+                            "healthState": "Ok",
+                        },
+                    }
+                ]))
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr(service_fabric.subprocess, "run", fake_run)
+
+        rows = service_fabric.harvest("sub-1")
+        types = {r["type"] for r in rows}
+        assert "Microsoft.ServiceFabric/clusters" in types
+        assert "Microsoft.ServiceFabric/clusters/applications" in types
+        assert "Microsoft.ServiceFabric/clusters/services" in types
+        svc = next(r for r in rows if r["type"] == "Microsoft.ServiceFabric/clusters/services")
+        assert svc["name"] == "fabric:/OrderApp/OrderService"
+        assert svc["resource_group"] == "rg-sf"
+        assert svc["fqdn"] == "sfha.example.com"
+
 
 class TestFirewallNatRules:
     def test_extracts_destination_and_translation_fields(self):
@@ -1293,6 +1397,151 @@ class TestFirewallExposureLevel:
     def test_internal_without_public_ip(self):
         firewall = {"properties": {"ipConfigurations": [{"properties": {}}]}}
         assert _get_firewall_exposure_level(firewall) == "Internal"
+
+
+class TestFirewallPolicyHarvest:
+    def test_persists_policy_summary_and_rule_counts(self, monkeypatch):
+        from Scripts.Harvest.Azure import firewall
+
+        fw = {
+            "name": "fw-one",
+            "resourceGroup": "rg-net",
+            "properties": {
+                "firewallPolicy": {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/firewallPolicies/policy-one"},
+            },
+        }
+        policy_stub = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/firewallPolicies/policy-one",
+            "name": "policy-one",
+            "resourceGroup": "rg-net",
+        }
+        policy_detail = {
+            "properties": {
+                "policySettings": {
+                    "mode": "Detection",
+                    "threatIntelMode": "Alert",
+                },
+                "dnsSettings": {"enableProxy": True},
+            }
+        }
+        rule_groups = {
+            "value": [
+                {
+                    "name": "group-one",
+                    "properties": {
+                        "priority": 100,
+                        "ruleCollections": [
+                            {
+                                "name": "nat-collection",
+                                "properties": {
+                                    "priority": 100,
+                                    "ruleCollectionType": "FirewallPolicyNatRuleCollection",
+                                    "action": "Dnat",
+                                    "rules": [
+                                        {"name": "nat-1"},
+                                        {"name": "nat-2"},
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["network", "firewall", "list"]:
+                return [fw]
+            if args == ["network", "firewall", "policy", "list"]:
+                return [policy_stub]
+            if args == ["network", "firewall", "policy", "show", "--name", "policy-one", "--resource-group", "rg-net"]:
+                return policy_detail
+            raise AssertionError(f"unexpected az args: {args}")
+
+        monkeypatch.setattr(firewall, "az", fake_az)
+        monkeypatch.setattr(firewall, "_az_show", lambda args, subscription_id, timeout=120: policy_detail if args[:4] == ["network", "firewall", "policy", "show"] else None)
+        monkeypatch.setattr(firewall, "_az_rest", lambda url: rule_groups)
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE firewall_nat_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    firewall_name TEXT,
+                    resource_group TEXT,
+                    collection_name TEXT,
+                    rule_name TEXT,
+                    entry_hosts TEXT,
+                    translated_address TEXT,
+                    translated_fqdn TEXT,
+                    translated_port TEXT,
+                    protocols TEXT,
+                    exposure_level TEXT,
+                    last_synced TEXT
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE firewall_app_rules (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    firewall_name TEXT,
+                    resource_group TEXT,
+                    collection_name TEXT,
+                    rule_name TEXT,
+                    source_addresses TEXT,
+                    target_fqdns TEXT,
+                    protocols TEXT,
+                    last_synced TEXT
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE firewall_policies (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    name TEXT,
+                    resource_group TEXT,
+                    associated_firewalls TEXT,
+                    mode TEXT,
+                    threat_intelligence_mode TEXT,
+                    dns_proxy_enabled INTEGER,
+                    rule_collection_groups TEXT,
+                    nat_rule_count INTEGER,
+                    app_rule_count INTEGER,
+                    last_synced TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO firewall_nat_rules (id, subscription_id, firewall_name, resource_group) VALUES (?, ?, ?, ?)",
+                ("nat-1", "sub-1", "fw-one", "rg-net"),
+            )
+            conn.execute(
+                "INSERT INTO firewall_app_rules (id, subscription_id, firewall_name, resource_group) VALUES (?, ?, ?, ?)",
+                ("app-1", "sub-1", "fw-one", "rg-net"),
+            )
+
+            count = firewall.harvest_policies("sub-1", conn, dry_run=False)
+            assert count == 1
+            row = conn.execute(
+                "SELECT name, associated_firewalls, mode, threat_intelligence_mode, dns_proxy_enabled, nat_rule_count, app_rule_count, rule_collection_groups FROM firewall_policies WHERE name = ?",
+                ("policy-one",),
+            ).fetchone()
+            assert row[0] == "policy-one"
+            assert json.loads(row[1]) == ["fw-one"]
+            assert row[2] == "Detection"
+            assert row[3] == "Alert"
+            assert row[4] == 1
+            assert row[5] == 1
+            assert row[6] == 1
+            assert json.loads(row[7])[0]["collections"][0]["rule_count"] == 2
+        finally:
+            conn.close()
 
 
 class TestHarvestSubscription:
@@ -1973,3 +2222,55 @@ class TestKeyVaultHarvest:
         assert extra["ip_rule_count"] == 2
         assert extra["virtual_network_rule_count"] == 1
         assert extra["ip_restriction_count"] == 3
+
+
+class TestSqlServerHarvest:
+    def test_classifies_firewalled_server_as_restricted(self, monkeypatch):
+        server = {
+            "id": "/subscriptions/sub-1/resourceGroups/cbuk-core-prodgreen-sql-uksouth/providers/Microsoft.Sql/servers/cbuk-core-prodgreen-sql-uksouth",
+            "name": "cbuk-core-prodgreen-sql-uksouth",
+            "resourceGroup": "cbuk-core-prodgreen-sql-uksouth",
+            "location": "uksouth",
+            "type": "Microsoft.Sql/servers",
+            "properties": {
+                "publicNetworkAccess": "Enabled",
+                "fullyQualifiedDomainName": "cbuk-core-prodgreen-sql-uksouth.database.windows.net",
+            },
+        }
+        firewall_rules = [
+            {
+                "name": "hub_mgmt_zpa_uks",
+                "startIpAddress": "40.81.155.226",
+                "endIpAddress": "40.81.155.226",
+            },
+            {
+                "name": "internalprod_firewall_uks",
+                "startIpAddress": "4.234.150.176",
+                "endIpAddress": "4.234.150.183",
+            },
+        ]
+
+        def fake_az(args, subscription_id):
+            if args == ["sql", "server", "list"]:
+                return [server]
+            if args == ["sql", "server", "firewall-rule", "list", "-s", "cbuk-core-prodgreen-sql-uksouth", "-g", "cbuk-core-prodgreen-sql-uksouth"]:
+                return firewall_rules
+            if args == ["sql", "server", "ad-admin", "list", "--server", "cbuk-core-prodgreen-sql-uksouth", "--resource-group", "cbuk-core-prodgreen-sql-uksouth"]:
+                return []
+            if args == ["sql", "db", "list", "--server", "cbuk-core-prodgreen-sql-uksouth", "--resource-group", "cbuk-core-prodgreen-sql-uksouth"]:
+                return []
+            raise AssertionError(f"unexpected az args: {args}")
+
+        monkeypatch.setattr(sql_server, "az", fake_az)
+        monkeypatch.setattr(sql_server, "build_endpoints", lambda entries, timeout=5: "[]")
+
+        rows = sql_server.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "cbuk-core-prodgreen-sql-uksouth"
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 1
+        assert json.loads(row["ip_restrictions"]) == [
+            "40.81.155.226-40.81.155.226",
+            "4.234.150.176-4.234.150.183",
+        ]

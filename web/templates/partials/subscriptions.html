@@ -68,9 +68,9 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   inset: 0;
   z-index: 80;
   display: none;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 2px;
+  padding: 2px 2px 0;
   background: rgba(0, 0, 0, 0.72);
 }
 .subscription-diagram-dialog {
@@ -311,6 +311,33 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     return !!(window.mermaid && typeof window.mermaid.run === 'function');
   }
 
+  function fitDiagramToViewport(transformTarget, viewport) {
+    if (!transformTarget || !viewport) return 1;
+    const svgEl = transformTarget.querySelector('svg');
+    if (!svgEl) return 1;
+
+    const cw = viewport.clientWidth - 48;
+    const ch = viewport.clientHeight - 48;
+    if (cw <= 0 || ch <= 0) return 1;
+
+    let sw = parseFloat(svgEl.getAttribute('width')) || 0;
+    let sh = parseFloat(svgEl.getAttribute('height')) || 0;
+    if (!sw || !sh) {
+      const vb = svgEl.viewBox?.baseVal;
+      sw = vb?.width || svgEl.scrollWidth || 0;
+      sh = vb?.height || svgEl.scrollHeight || 0;
+    }
+    if (!sw || !sh) return 1;
+
+    let fitScale = Math.min(cw / sw, ch / sh) * 0.9;
+    fitScale = Math.min(4, Math.max(0.05, fitScale));
+    transformTarget.style.transformOrigin = '0 0';
+    transformTarget.style.transform = `scale(${fitScale})`;
+    viewport.scrollLeft = 0;
+    viewport.scrollTop = 0;
+    return fitScale;
+  }
+
   function escapeHtml(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
@@ -337,6 +364,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     bar.style.cssText = 'display:flex;gap:4px;margin-bottom:4px;';
     [['🔍+','data-diagram-zoom-in'],['🔍−','data-diagram-zoom-out'],['⊡ Fit','data-diagram-fit'],['💾 Export','data-diagram-export']].forEach(([txt, attr]) => {
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.textContent = txt;
       btn.style.cssText = btnStyle;
       btn.setAttribute(attr, containerId);
@@ -366,6 +394,18 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
 
   function populateDrilldownCell(span, cell) {
     if (!span) return;
+    if (cell && typeof cell === 'object' && cell.href && cell.label !== undefined) {
+      if (cell.style) span.style.cssText = cell.style;
+      const link = document.createElement('a');
+      link.href = String(cell.href);
+      link.textContent = String(cell.label);
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      if (cell.title) link.title = String(cell.title);
+      link.style.cssText = 'color:#60a5fa;text-decoration:underline;word-break:break-all;';
+      span.appendChild(link);
+      return;
+    }
     if (cell && typeof cell === 'object' && cell.label !== undefined) {
       if (cell.style) span.style.cssText = cell.style;
       appendDrilldownText(span, cell.label);
@@ -426,6 +466,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
   }
 
   function renderTreeDrilldown(content, data) {
+    const iconPath = data.icon_path || '';
     const sections = Array.isArray(data.sections) && data.sections.length
       ? data.sections
       : [{ title: data.title || '', subtitle: data.subtitle || '', rows: data.rows || [] }];
@@ -591,6 +632,18 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
                 wrap.appendChild(spacer);
               }
 
+              if (iconPath) {
+                const icon = document.createElement('img');
+                icon.src = iconPath;
+                icon.alt = '';
+                icon.width = 14;
+                icon.height = 14;
+                icon.loading = 'lazy';
+                icon.decoding = 'async';
+                icon.style.cssText = 'flex:0 0 auto;object-fit:contain;';
+                wrap.appendChild(icon);
+              }
+
               const labelWrap = document.createElement('span');
               labelWrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap;';
               const valueSpan = document.createElement('span');
@@ -679,7 +732,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         .replace(/^flowchart-/, '')
         .replace(/-\d+$/, '');
       const entry = nodeMap[nodeId];
-      if (!entry || !entry.can_drill) return;
+      if (!entry || !entry.resources || !entry.resources.length) return;
 
       el.classList.add('node-drillable');
       el.setAttribute('title', `Click to explore ${entry.title}`);
@@ -762,7 +815,7 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         .replace(/^flowchart-/, '')
         .replace(/-\d+$/, '');
       const entry = nodeMap[nodeId];
-      if (!entry || !entry.can_drill) return;
+      if (!entry || !entry.resources || !entry.resources.length) return;
 
       evt.stopPropagation();
       evt.preventDefault();
@@ -806,9 +859,10 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     const content = document.getElementById('drilldown-content');
     const modalContent = modal?.querySelector('.modal-content');
     const isAppGateway = String(entry?.arm_type || '').toLowerCase().includes('applicationgateway');
+    const isAksCluster = String(entry?.arm_type || '').toLowerCase().includes('managedcluster');
 
     if (modalContent) {
-      if (isAppGateway) {
+      if (isAppGateway || isAksCluster) {
         modalContent.style.maxWidth = 'min(98vw, 1600px)';
         modalContent.style.width = '98vw';
       } else {
@@ -846,6 +900,82 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         h.style.cssText = 'margin:0 0 12px;color:var(--text-primary,#e5e7eb);font-size:1rem;';
         content.appendChild(h);
       }
+      const resourceType = String(data.resource_type || entry?.arm_type || '').trim();
+      if (resourceType) {
+        const meta = document.createElement('div');
+        meta.style.cssText = 'margin:-8px 0 12px;color:var(--text-muted,#94a3b8);font-size:0.8rem;';
+        meta.appendChild(document.createTextNode('Resource type: '));
+        const code = document.createElement('code');
+        code.style.cssText = 'color:var(--text-primary,#e5e7eb);';
+        code.textContent = resourceType;
+        meta.appendChild(code);
+        content.appendChild(meta);
+      }
+
+      // App Gateway drilldown: always offer manual routing refresh.
+      if (isAppGateway && subId) {
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px;';
+
+        const btn = document.createElement('button');
+        btn.textContent = '🔄 Refresh routing data';
+        btn.style.cssText = 'padding:6px 14px;background:#1e40af;color:#e2e8f0;border:none;border-radius:6px;cursor:pointer;font-size:0.82rem;';
+
+        const statusEl = document.createElement('p');
+        statusEl.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin:0;';
+
+        actions.appendChild(btn);
+        actions.appendChild(statusEl);
+        content.appendChild(actions);
+
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          btn.textContent = '⏳ Harvesting…';
+          statusEl.textContent = 'Running routing harvest — this may take 1–3 minutes…';
+          try {
+            const startResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing`, { method: 'POST' });
+            const startData = await startResp.json();
+            const taskId = startData.task_id;
+            if (!taskId) throw new Error(startData.error || 'No task ID returned');
+
+            // Poll for completion
+            const pollInterval = setInterval(async () => {
+              try {
+                const pollResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing/${taskId}`);
+                const pollData = await pollResp.json();
+                if (pollData.status === 'done') {
+                  clearInterval(pollInterval);
+                  statusEl.textContent = '✅ Done — reloading…';
+                  setTimeout(() => _loadDrilldownContent(entry, subId), 800);
+                } else if (pollData.status === 'error') {
+                  clearInterval(pollInterval);
+                  statusEl.textContent = `❌ Harvest failed: ${(pollData.output || '').split('\n').pop()}`;
+                  btn.disabled = false;
+                  btn.textContent = '🔄 Retry';
+                }
+              } catch (_) { /* keep polling */ }
+            }, 3000);
+          } catch(e) {
+            statusEl.textContent = `❌ ${e.message}`;
+            btn.disabled = false;
+            btn.textContent = '🔄 Retry';
+          }
+        });
+      }
+
+      if (data.view_type === 'tree_table') {
+        const sections = Array.isArray(data.sections) ? data.sections : [];
+        const hasTreeRows = sections.some(section => Array.isArray(section.rows) && section.rows.length > 0);
+        if (!hasTreeRows) {
+          const msg = document.createElement('p');
+          msg.style.cssText = 'color:var(--text-muted);font-size:0.875rem;padding:8px 0;';
+          msg.textContent = data.empty_message || 'No data available.';
+          content.appendChild(msg);
+          return;
+        }
+        renderTreeDrilldown(content, data);
+        return;
+      }
 
       // ── Empty state ────────────────────────────────────────────────────────
       if (!data.rows || data.rows.length === 0) {
@@ -853,57 +983,6 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         msg.style.cssText = 'color:var(--text-muted);font-size:0.875rem;padding:8px 0;';
         msg.textContent = data.empty_message || 'No data available.';
         content.appendChild(msg);
-
-        // Offer a UI-triggered routing harvest when routing tables are empty
-        const emptyMsg = (data.empty_message || '').toLowerCase();
-        if (emptyMsg.includes('harvest') && subId) {
-          const btn = document.createElement('button');
-          btn.textContent = '🔄 Refresh routing data';
-          btn.style.cssText = 'margin-top:10px;padding:6px 14px;background:#1e40af;color:#e2e8f0;border:none;border-radius:6px;cursor:pointer;font-size:0.82rem;';
-          const statusEl = document.createElement('p');
-          statusEl.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin-top:8px;';
-          content.appendChild(btn);
-          content.appendChild(statusEl);
-
-          btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            btn.textContent = '⏳ Harvesting…';
-            statusEl.textContent = 'Running routing harvest — this may take 1–3 minutes…';
-            try {
-              const startResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing`, { method: 'POST' });
-              const startData = await startResp.json();
-              const taskId = startData.task_id;
-              if (!taskId) throw new Error(startData.error || 'No task ID returned');
-
-              // Poll for completion
-              const pollInterval = setInterval(async () => {
-                try {
-                  const pollResp = await fetch(`/api/subscriptions/${encodeURIComponent(subId)}/harvest-routing/${taskId}`);
-                  const pollData = await pollResp.json();
-                  if (pollData.status === 'done') {
-                    clearInterval(pollInterval);
-                    statusEl.textContent = '✅ Done — reloading…';
-                    setTimeout(() => _loadDrilldownContent(entry, subId), 800);
-                  } else if (pollData.status === 'error') {
-                    clearInterval(pollInterval);
-                    statusEl.textContent = `❌ Harvest failed: ${(pollData.output || '').split('\n').pop()}`;
-                    btn.disabled = false;
-                    btn.textContent = '🔄 Retry';
-                  }
-                } catch (_) { /* keep polling */ }
-              }, 3000);
-            } catch(e) {
-              statusEl.textContent = `❌ ${e.message}`;
-              btn.disabled = false;
-              btn.textContent = '🔄 Retry';
-            }
-          });
-        }
-        return;
-      }
-
-      if (data.view_type === 'tree_table') {
-        renderTreeDrilldown(content, data);
         return;
       }
 
@@ -979,9 +1058,18 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
               wrap.appendChild(text);
             }
             td.appendChild(wrap);
+          } else if (cell && typeof cell === 'object' && cell.href && cell.label) {
+              const link = document.createElement('a');
+              link.href = String(cell.href);
+              link.textContent = String(cell.label);
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              if (cell.title) link.title = String(cell.title);
+              link.style.cssText = 'color:#60a5fa;text-decoration:underline;word-break:break-all;';
+              td.appendChild(link);
           } else if (cell && typeof cell === 'object' && cell.label) {
-            // Exposure badge cell
-            td.innerHTML = `<span style="${cell.style || ''}">${cell.label}</span>`;
+              // Exposure badge cell
+              td.innerHTML = `<span style="${cell.style || ''}">${cell.label}</span>`;
           } else {
             if (val === '—') {
               td.textContent = val;
@@ -1413,6 +1501,12 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
         }
         const nodeMap = view.node_drilldown_map || diagram.node_drilldown_map || {};
         transformTarget.querySelectorAll('svg').forEach(svg => _attachDrilldownHandlers(svg, nodeMap, subId));
+
+        // Keep 1:1 scale by default so users can zoom/pan naturally.
+        transformTarget.style.transform = '';
+        transformTarget.style.transformOrigin = '';
+        viewport.scrollLeft = 0;
+        viewport.scrollTop = 0;
       } catch (e) {
         const err = document.createElement('div');
         err.style.cssText = 'color:#fca5a5;font-size:0.82rem;margin-top:8px;';
@@ -1448,6 +1542,9 @@ python Scripts/Harvest/correlate_assets.py --subscription "My-Prod-Sub"</pre>
     const modeHost = document.getElementById('subscription-diagram-mode-host');
 
     wrap.style.display = 'flex';
+    wrap.scrollTop = 0;
+    wrap.scrollLeft = 0;
+    try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch (_) { window.scrollTo(0, 0); }
     document.body.style.overflow = 'hidden';
     loading.style.display = 'flex';
     if (loadingText) loadingText.textContent = 'Fetching architecture data…';

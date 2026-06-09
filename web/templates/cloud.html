@@ -9,35 +9,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <script src="/static/js/mermaid-loader.js"></script>
   <script src="/static/js/mermaid-icon-injector.js" defer></script>
-  <script>
-    // Expose render function that works with mermaid.run()
-    window.TriageMermaid = {
-      render: async function(container) {
-        console.log('[TriageMermaid] render() called');
-        
-        // Wait for mermaid to be ready
-        let attempts = 0;
-        while (!window.mermaid && attempts < 50) {
-          console.log('[TriageMermaid] waiting for mermaid...');
-          await new Promise(r => setTimeout(r, 100));
-          attempts++;
-        }
-        
-        if (!window.mermaid) {
-          console.error('[TriageMermaid] Mermaid failed to load after 5s');
-          return;
-        }
-        
-        try {
-          console.log('[TriageMermaid] Calling mermaid.run()');
-          const result = await window.mermaid.run();
-          console.log('[TriageMermaid] mermaid.run() completed, result:', result);
-        } catch (e) {
-          console.error('[TriageMermaid] Error calling mermaid.run():', e);
-        }
-      }
-    };
-  </script>
+  <script src="/static/js/cloud-mermaid-helper.js" defer></script>
 </head>
 <body>
 

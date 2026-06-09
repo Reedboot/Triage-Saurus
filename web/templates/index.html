@@ -496,12 +496,15 @@
     </div>
   </div>
 
+  <!-- Configuration: injected by Flask template engine -->
   <script>
-    window._triage = window._triage || {};
-    window._triage.moduleScanConcurrency = {{ (scan_flags.module_scan_concurrency if scan_flags else 1) | tojson }};
-    window._triage.scanFeatureFlags = {{ (scan_flags if scan_flags else {}) | tojson }};
+   window._triage = window._triage || {};
+   window._triage.moduleScanConcurrency = {{ (scan_flags.module_scan_concurrency if scan_flags else 1) | tojson }};
+   window._triage.scanFeatureFlags = {{ (scan_flags if scan_flags else {}) | tojson }};
   </script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <!-- External libraries and feature modules (deferred for non-blocking load) -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="/static/table-resize.js" defer></script>
   <script type="module" src="/static/js/main.js?v=4"></script>
   <script src="/static/assets.js" defer></script>
@@ -510,29 +513,9 @@
   <script src="/static/overview.js" defer></script>
   <script src="/static/subscription.js" defer></script>
   <script src="/static/open-questions.js" defer></script>
+  <script src="/static/js/index-init.js" defer></script>
+  
   <!-- Mermaid is loaded by mermaid-loader.js in <head> — do NOT add a second script tag here -->
-
-  <script>
-    // ── Smart hide/show buttons ──────────────────────────────────────────────
-    function setScanButtonsVisible(visible) {
-      var diagramBtn = document.getElementById('toggle-diagram-btn-persistent');
-      var logBtn = document.getElementById('toggle-log-btn');
-      if (diagramBtn) diagramBtn.style.visibility = visible ? 'visible' : 'hidden';
-      if (logBtn) logBtn.style.visibility = visible ? 'visible' : 'hidden';
-    }
-    document.addEventListener('DOMContentLoaded', function () {
-      setScanButtonsVisible(false);
-    });
-
-    // Hook into SSE streaming — triagePipeline is populated by alpine-store.js
-    // Expose a stable reference so scan-control.js can call it before Alpine is ready
-    window.triagePipeline = window.triagePipeline || {
-      onScanStart:    function() {},
-      onScanLine:     function() {},
-      onScanComplete: function() {},
-      showModal:      function() {},
-    };
-  </script>
 </body>
 
 </html>

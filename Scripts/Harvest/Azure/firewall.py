@@ -1,8 +1,9 @@
-"""Harvest Azure Firewall assets and rule summaries."""
+"""Harvest Azure Firewall assets, rules, and policy summaries."""
 from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +21,17 @@ def _dedupe_strs(values: list[str]) -> list[str]:
             seen.add(normalized)
             result.append(value)
     return result
+
+
+def _az_show(args: list[str], subscription_id: str, timeout: int = 120) -> dict | None:
+    cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            return None
+        return json.loads(r.stdout or "null")
+    except Exception:
+        return None
 
 
 def _tail(resource_id: str | None) -> str | None:
@@ -145,6 +157,40 @@ def _fetch_policy_rule_collections(policy_id: str) -> list[dict[str, Any]]:
         group_props = group.get("properties") or {}
         collections.extend(group_props.get("ruleCollections") or [])
     return collections
+
+
+def _fetch_policy_rule_collection_groups(policy_id: str) -> list[dict[str, Any]]:
+    response = _az_rest(f"https://management.azure.com{policy_id}/ruleCollectionGroups?api-version=2024-05-01")
+    return response.get("value") or []
+
+
+def _summarize_rule_collection_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for group in groups or []:
+        props = group.get("properties") or {}
+        collections = props.get("ruleCollections") or []
+        collection_summaries: list[dict[str, Any]] = []
+        total_rules = 0
+        for collection in collections:
+            collection_props = collection.get("properties") or {}
+            rules = _collection_rules(collection)
+            rule_count = len(rules)
+            total_rules += rule_count
+            collection_summaries.append({
+                "name": _collection_name(collection),
+                "priority": collection_props.get("priority"),
+                "type": safe_str(collection_props.get("ruleCollectionType") or collection.get("ruleCollectionType")),
+                "action": safe_str(collection_props.get("action") or collection.get("action")),
+                "rule_count": rule_count,
+            })
+        summaries.append({
+            "name": safe_str(group.get("name") or props.get("name")),
+            "priority": props.get("priority"),
+            "collection_count": len(collections),
+            "rule_count": total_rules,
+            "collections": collection_summaries,
+        })
+    return summaries
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -282,3 +328,112 @@ def harvest_rules(
             print(f"SKIPPED ({exc})")
 
     return nat_total, app_total
+
+
+def harvest_policies(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    dry_run: bool = False,
+) -> int:
+    """Harvest Azure Firewall policy summaries."""
+    firewalls = az(["network", "firewall", "list"], subscription_id)
+    if not firewalls:
+        return 0
+
+    firewall_to_policy: dict[str, str] = {}
+    for firewall in firewalls:
+        fw_name = safe_str(firewall.get("name"))
+        policy_id = safe_str(((firewall.get("properties") or {}).get("firewallPolicy") or {}).get("id"))
+        if fw_name and policy_id:
+            firewall_to_policy[fw_name] = policy_id
+
+    policies = az(["network", "firewall", "policy", "list"], subscription_id)
+    if not policies:
+        return 0
+
+    now = datetime.now(timezone.utc).isoformat()
+    policy_total = 0
+
+    for policy_stub in policies:
+        pol_name = safe_str(policy_stub.get("name"))
+        pol_rg = safe_str(policy_stub.get("resourceGroup"))
+        pol_id = safe_str(policy_stub.get("id"))
+        if not pol_name or not pol_id:
+            continue
+
+        print(f"    [firewall-policies] {pol_name}...", end=" ", flush=True)
+        try:
+            policy = _az_show(["network", "firewall", "policy", "show", "--name", pol_name, "--resource-group", pol_rg], subscription_id) or policy_stub
+            props = policy.get("properties") or {}
+            policy_settings = props.get("policySettings") or {}
+            groups = _fetch_policy_rule_collection_groups(pol_id)
+            summaries = _summarize_rule_collection_groups(groups)
+
+            associated_firewalls = sorted([
+                fw_name for fw_name, fw_policy_id in firewall_to_policy.items()
+                if fw_policy_id.rstrip("/").lower() == pol_id.rstrip("/").lower()
+            ])
+            if not associated_firewalls:
+                associated_firewalls = sorted([
+                    fw_name for fw_name, fw_policy_id in firewall_to_policy.items()
+                    if fw_policy_id.split("/")[-1].lower() == pol_name.lower()
+                ])
+
+            nat_count = 0
+            app_count = 0
+            if associated_firewalls:
+                placeholders = ",".join("?" for _ in associated_firewalls)
+                nat_row = conn.execute(
+                    f"SELECT COUNT(*) FROM firewall_nat_rules WHERE subscription_id=? AND firewall_name IN ({placeholders})",
+                    [subscription_id] + associated_firewalls,
+                ).fetchone()
+                app_row = conn.execute(
+                    f"SELECT COUNT(*) FROM firewall_app_rules WHERE subscription_id=? AND firewall_name IN ({placeholders})",
+                    [subscription_id] + associated_firewalls,
+                ).fetchone()
+                nat_count = int(nat_row[0]) if nat_row else 0
+                app_count = int(app_row[0]) if app_row else 0
+
+            if not dry_run:
+                conn.execute(
+                    """
+                    INSERT INTO firewall_policies (
+                        id, subscription_id, name, resource_group, associated_firewalls,
+                        mode, threat_intelligence_mode, dns_proxy_enabled,
+                        rule_collection_groups, nat_rule_count, app_rule_count, last_synced
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        subscription_id = excluded.subscription_id,
+                        resource_group = excluded.resource_group,
+                        associated_firewalls = excluded.associated_firewalls,
+                        mode = excluded.mode,
+                        threat_intelligence_mode = excluded.threat_intelligence_mode,
+                        dns_proxy_enabled = excluded.dns_proxy_enabled,
+                        rule_collection_groups = excluded.rule_collection_groups,
+                        nat_rule_count = excluded.nat_rule_count,
+                        app_rule_count = excluded.app_rule_count,
+                        last_synced = excluded.last_synced
+                    """,
+                    (
+                        pol_id,
+                        subscription_id,
+                        pol_name,
+                        pol_rg,
+                        json.dumps(associated_firewalls),
+                        policy_settings.get("mode"),
+                        policy_settings.get("threatIntelMode"),
+                        1 if (props.get("dnsSettings") or {}).get("enableProxy") else 0,
+                        json.dumps(summaries),
+                        nat_count,
+                        app_count,
+                        now,
+                    ),
+                )
+                conn.commit()
+
+            policy_total += 1
+            print(f"{len(summaries)} groups, {nat_count} NAT, {app_count} app")
+        except Exception as exc:
+            print(f"FAILED ({exc})")
+
+    return policy_total

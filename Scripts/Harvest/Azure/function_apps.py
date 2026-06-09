@@ -5,6 +5,7 @@ import json
 import sqlite3
 import subprocess
 import time
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -155,7 +156,98 @@ def _extract_http_triggers(functions: list[dict[str, Any]]) -> list[dict[str, An
     return triggers
 
 
+def _derive_trigger_auth_methods(triggers: list[dict[str, Any]]) -> list[str]:
+    """Return auth posture markers inferred from HTTP trigger auth levels."""
+    levels = {
+        (safe_str(trigger.get("auth_level")) or "").strip().lower()
+        for trigger in triggers
+    }
+    levels.discard("")
+    if not levels:
+        return []
+
+    methods: list[str] = []
+    if "anonymous" in levels:
+        methods.append("function_http_anonymous")
+    if any(level in {"function", "admin"} for level in levels):
+        methods.append("function_key")
+    if "admin" in levels:
+        methods.append("function_admin_key")
+    if levels.issubset({"function", "admin"}):
+        methods.append("function_http_auth_required")
+    return methods
+
+
+def _update_function_app_auth_methods(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    function_app_id: str,
+    trigger_auth_methods: list[str],
+) -> None:
+    """Merge trigger-derived auth markers into provisioned_assets.auth_methods."""
+    row = conn.execute(
+        """
+        SELECT auth_methods
+        FROM provisioned_assets
+        WHERE subscription_id = ? AND id = ?
+        LIMIT 1
+        """,
+        (subscription_id, function_app_id),
+    ).fetchone()
+    if not row:
+        return
+
+    existing_raw = row[0] if isinstance(row, tuple) else row["auth_methods"]
+    try:
+        existing = json.loads(existing_raw or "[]")
+        if not isinstance(existing, list):
+            existing = []
+    except Exception:
+        existing = []
+
+    methods = {str(method).strip() for method in existing if safe_str(method)}
+    methods.discard("function_http_anonymous")
+    methods.discard("function_http_auth_required")
+    methods.discard("function_admin_key")
+    methods.update(trigger_auth_methods)
+
+    conn.execute(
+        """
+        UPDATE provisioned_assets
+        SET auth_methods = ?
+        WHERE subscription_id = ? AND id = ?
+        """,
+        (json.dumps(sorted(methods)), subscription_id, function_app_id),
+    )
+
+
 def _az_list_functions(app_name: str, resource_group: str, subscription_id: str) -> list[dict[str, Any]]:
+    def _parse_function_list_output(raw_output: str | None) -> list[dict[str, Any]] | None:
+        """Parse az CLI output, tolerating warning/noise around a JSON payload."""
+        if raw_output is None:
+            return []
+        text = str(raw_output).strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", text)
+            if not match:
+                return None
+            try:
+                parsed = json.loads(match.group(1))
+            except Exception:
+                return None
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            value = parsed.get("value")
+            if isinstance(value, list):
+                return value
+            return []
+        return []
+
     cmd = [
         "az", "functionapp", "function", "list",
         "--name", app_name,
@@ -166,15 +258,35 @@ def _az_list_functions(app_name: str, resource_group: str, subscription_id: str)
     last_stderr = ""
     for attempt in range(_AZ_RETRY_MAX):
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+            )
         except Exception as exc:
             raise RuntimeError(str(exc)[:200]) from exc
+
+        parsed_output = _parse_function_list_output(result.stdout)
+        if parsed_output is not None:
+            return parsed_output
+
         if result.returncode == 0:
-            return json.loads(result.stdout or "[]") or []
+            # Successful command but no parseable payload; treat as empty set.
+            return []
+
         last_stderr = result.stderr.strip()
         if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(last_stderr):
             time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
             continue
+
+        # Some az builds surface parser issues in stderr while still returning
+        # no useful payload. Degrade gracefully so one app doesn't abort harvest.
+        if "json.parse" in last_stderr.lower():
+            return []
+
         # Extract the last meaningful line for a clean error message
         last_line = next((ln.strip() for ln in reversed(last_stderr.splitlines()) if ln.strip()), last_stderr)
         raise RuntimeError(last_line[:200])
@@ -206,6 +318,7 @@ def harvest_http_triggers(
         try:
             functions = _az_list_functions(function_app_name, resource_group, subscription_id)
             triggers = _extract_http_triggers(functions)
+            trigger_auth_methods = _derive_trigger_auth_methods(triggers)
             fqdn = safe_str(app.get("defaultHostName")) or infer_fqdn(app)
             props = app.get("properties") or {}
             app_is_public = 1 if (props.get("publicNetworkAccess") or app.get("publicNetworkAccess") or "Enabled") != "Disabled" else 0
@@ -271,6 +384,12 @@ def harvest_http_triggers(
                             row["last_synced"],
                         ),
                     )
+                _update_function_app_auth_methods(
+                    conn=conn,
+                    subscription_id=subscription_id,
+                    function_app_id=function_app_id,
+                    trigger_auth_methods=trigger_auth_methods,
+                )
                 conn.commit()
 
             total += len(rows)

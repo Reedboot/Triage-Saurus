@@ -55,6 +55,30 @@ export async function waitForMermaid(timeoutMs = 10000) {
 export function applyDiagramScale(container, scale) {
   if (!container) return;
   const scaledVal = Math.min(4, Math.max(0.1, scale));
+  const svgEl = container.querySelector('svg');
+  if (svgEl) {
+    const baseW = parseFloat(svgEl.dataset.baseWidth || '') ||
+      parseFloat(svgEl.getAttribute('width') || '') ||
+      svgEl.viewBox?.baseVal?.width ||
+      svgEl.scrollWidth ||
+      0;
+    const baseH = parseFloat(svgEl.dataset.baseHeight || '') ||
+      parseFloat(svgEl.getAttribute('height') || '') ||
+      svgEl.viewBox?.baseVal?.height ||
+      svgEl.scrollHeight ||
+      0;
+    if (baseW > 0 && baseH > 0) {
+      svgEl.dataset.baseWidth = String(baseW);
+      svgEl.dataset.baseHeight = String(baseH);
+      svgEl.style.width = `${baseW * scaledVal}px`;
+      svgEl.style.height = `${baseH * scaledVal}px`;
+      svgEl.setAttribute('width', `${baseW * scaledVal}`);
+      svgEl.setAttribute('height', `${baseH * scaledVal}`);
+      container.style.transform = '';
+      container.style.transformOrigin = '';
+      return scaledVal;
+    }
+  }
   container.style.transformOrigin = '0 0';
   container.style.transform = `scale(${scaledVal})`;
   return scaledVal;

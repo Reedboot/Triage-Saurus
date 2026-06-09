@@ -1178,12 +1178,112 @@ class TestCloudPage:
         assert modal_style["width"] == "98vw", modal_style
         assert modal_style["maxWidth"] == "min(98vw, 1600px)", modal_style
         expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal")).to_contain_text("Resource type:")
+        expect(page.locator("#drilldown-modal")).to_contain_text("microsoft.network/applicationgateways")
         # Table should contain the mocked row data
         expect(page.locator("#drilldown-modal table td").first).to_contain_text("test-appgw")
         fqdn_link = page.locator("#drilldown-modal a[href='https://gw.example.com']").first
         expect(fqdn_link).to_be_visible(timeout=5000)
         assert fqdn_link.get_attribute("target") == "_blank"
         assert "noopener" in (fqdn_link.get_attribute("rel") or "")
+
+    def test_dblclick_opens_generic_resource_details(self, page: Page, live_server: str):
+        """Double-clicking a non-special resource node must still open generic details."""
+        import json
+
+        mermaid_source = (
+            "graph LR\n"
+            '    test_storage["Storage Account"]\n'
+        )
+        node_map = {
+            "test_storage": {
+                "title": "test-storage",
+                "arm_type": "Microsoft.Storage/storageAccounts",
+                "resources": [{"rg": "test-rg", "name": "test-storage"}],
+                "can_drill": False,
+            }
+        }
+        ingress_views = {
+            "connectivity": {
+                "mermaid": mermaid_source,
+                "css_code": "",
+                "icon_map": {},
+                "node_drilldown_map": node_map,
+                "description": "Connectivity mock view",
+                "legend": ["Connectivity legend"],
+                "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 0, "data_stores": 1, "public_assets": 0},
+            }
+        }
+
+        page.route(
+            "**/api/subscriptions",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscriptions": [{
+                        "id": self._SUB_ID,
+                        "display_name": "Test Subscription",
+                        "environment": "production",
+                        "env_badge": "danger",
+                        "provider": "Azure",
+                        "state": "Enabled",
+                        "last_synced": None,
+                        "asset_count": 1,
+                        "public_count": 0,
+                    }]
+                }),
+            ),
+        )
+        page.route(
+            f"**/{self._SUB_ID}/diagram",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "subscription_name": "Test Subscription",
+                    "environment": "production",
+                    "total_assets": 1,
+                    "ingress_diagram": {
+                        "mermaid": mermaid_source,
+                        "css_code": "",
+                        "icon_map": {},
+                        "node_drilldown_map": node_map,
+                        "default_view": "connectivity",
+                        "views": ingress_views,
+                        "asset_summary": {"entry_points": 0, "api_layer": 0, "backends": 0, "data_stores": 1, "public_assets": 0},
+                    },
+                    "diagrams": [],
+                }),
+            ),
+        )
+        page.route(
+            f"**/{self._SUB_ID}/drilldown",
+            lambda route: route.fulfill(
+                content_type="application/json",
+                body=json.dumps({
+                    "title": "Storage Account — 1 resource",
+                    "view_type": "table",
+                    "columns": ["Resource", "Resource Group", "Resource Type", "URL / FQDN", "Exposure", "Entry Points", "SKU"],
+                    "rows": [["test-storage", "test-rg", "Microsoft.Storage/storageAccounts", "—", {"label": "Private"}, "—", "—"]],
+                }),
+            ),
+        )
+
+        page.goto(live_server + "/cloud")
+        page.wait_for_selector(".subscription-name-cell", timeout=8000)
+        page.locator(".subscription-name-cell").first.click()
+        page.wait_for_selector("#ingress-diagram-div svg", timeout=15000)
+        page.wait_for_timeout(1000)
+
+        storage_node = page.locator("#ingress-diagram-div svg g.node-drillable")
+        expect(storage_node).to_have_count(1, timeout=5000)
+        storage_node.dblclick()
+
+        expect(page.locator("#drilldown-modal")).to_be_visible(timeout=8000)
+        expect(page.locator("#drilldown-modal")).to_contain_text("Resource type:")
+        expect(page.locator("#drilldown-modal")).to_contain_text("Microsoft.Storage/storageAccounts")
+        expect(page.locator("#drilldown-modal table")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal table")).to_contain_text("Resource Type")
+        expect(page.locator("#drilldown-modal table")).to_contain_text("Microsoft.Storage/storageAccounts")
 
 
 class TestCloudPageAseNestedDrilldown:
@@ -1404,6 +1504,7 @@ class TestCloudPageApimNestedDrilldown:
                 body=json.dumps({
                     "title": "APIM — APIs & Methods",
                     "view_type": "tree_table",
+                    "icon_path": "/static/assets/icons/azure/integration/api-management.svg",
                     "columns": ["API", "Method", "Path", "Backend", "Auth"],
                     "rows": [
                         {
@@ -1512,6 +1613,7 @@ class TestCloudPageApimNestedDrilldown:
 
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::get']")).to_be_visible(timeout=5000)
         expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders::post']")).to_be_visible(timeout=5000)
+        expect(page.locator("#drilldown-modal tr[data-row-id='test-apim::orders'] td:first-child img")).to_be_visible(timeout=5000)
         backend_link = page.locator("#drilldown-modal a[href='https://orders.example.com']").first
         expect(backend_link).to_be_visible(timeout=5000)
         assert backend_link.get_attribute("target") == "_blank"
@@ -1542,13 +1644,17 @@ class TestIngressDiagramGeneration:
             )
         ]
 
-    def _call(self, rows=None, plan_links=None):
+    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         os.environ.setdefault("FLASK_APP", "web/app.py")
         from web.app import _build_ingress_diagram
-        return _build_ingress_diagram(rows if rows is not None else self._make_rows(), plan_links=plan_links)
+        return _build_ingress_diagram(
+            rows if rows is not None else self._make_rows(),
+            plan_links=plan_links,
+            firewall_policy_rows=firewall_policy_rows,
+        )
 
     def test_internet_node_defined_once(self):
         """Internet node must appear exactly once in the generated Mermaid source."""
@@ -1580,8 +1686,62 @@ class TestIngressDiagramGeneration:
             "The same FQDN is being applied to every listener arrow."
         )
 
-    def test_traffic_manager_routes_to_enabled_target(self):
-        """Traffic Manager should route to its enabled target instead of the APIM fallback."""
+    def test_firewall_policy_node_is_rendered(self):
+        """Azure Firewall should surface an attached firewall policy in the diagram."""
+        import json
+
+        rows = [
+            (
+                "fw-one",
+                "Microsoft.Network/azureFirewalls",
+                "rg-net",
+                "",
+                1,
+                "Standard",
+                "fw-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+            ),
+        ]
+        firewall_policy_rows = [
+            (
+                "policy-one",
+                "rg-net",
+                json.dumps(["fw-one"]),
+                json.dumps([
+                    {
+                        "name": "group-one",
+                        "priority": 100,
+                        "collection_count": 1,
+                        "rule_count": 2,
+                        "collections": [
+                            {
+                                "name": "nat-collection",
+                                "priority": 100,
+                                "type": "FirewallPolicyNatRuleCollection",
+                                "action": "Dnat",
+                                "rule_count": 2,
+                            }
+                        ],
+                    }
+                ]),
+                1,
+                1,
+                "Enabled",
+            ),
+        ]
+
+        result = self._call(rows=rows, firewall_policy_rows=firewall_policy_rows)
+        mermaid = result.get("mermaid", "")
+        assert "Policy: policy-one" in mermaid, mermaid
+        titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
+        assert "policy-one" in titles, titles
+
+    def test_traffic_manager_is_omitted_from_overview_diagram(self):
+        """Traffic Manager is DNS-only and should be omitted from overview connectivity diagrams."""
         import json
 
         tm_targets = json.dumps([
@@ -1647,8 +1807,10 @@ class TestIngressDiagramGeneration:
         tm_node = "rg_tm_tm"
         appgw_node = "rg_app_appgw"
         apim_node = "grp_APIM_Private"
-        assert f'{tm_node} -->|"DNS routing"| {appgw_node}' in mermaid, mermaid
-        assert f'{tm_node} -->|"DNS routing"| {apim_node}' not in mermaid, mermaid
+        assert tm_node not in mermaid, mermaid
+        assert f'Internet -->|"DNS routing"| {tm_node}' not in mermaid, mermaid
+        assert f'{tm_node} -->|"DNS → backend"| {appgw_node}' not in mermaid, mermaid
+        assert f'{tm_node} -->|"DNS → apim"| {apim_node}' not in mermaid, mermaid
 
     def test_drilldown_map_contains_appgw(self):
         """App Gateway must appear in node_drilldown_map with can_drill=True."""
@@ -1697,11 +1859,11 @@ class TestIngressDiagramGeneration:
             rows=rows,
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-plan")],
         )
-        assert result.get("asset_summary", {}).get("backends") == 1, result.get("asset_summary")
-        assert "hosted on" not in result.get("mermaid", ""), result.get("mermaid", "")
-        assert "orders-fn-app" not in result.get("mermaid", ""), result.get("mermaid", "")
+        assert result.get("asset_summary", {}).get("backends") == 2, result.get("asset_summary")
+        assert "hosted on" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "orders-fn-app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
-        assert titles == {"test-plan"}, titles
+        assert titles == {"test-plan", "orders-fn-app"}, titles
 
     def test_function_app_rows_fold_into_app_service_environment(self):
         """App Service Environment rows should also fold hosted apps beneath the parent node."""
@@ -1733,10 +1895,10 @@ class TestIngressDiagramGeneration:
             rows=rows,
             plan_links=[("rg-app", "orders-fn-app", "rg-app", "test-ase")],
         )
-        assert "hosted on" not in result.get("mermaid", ""), result.get("mermaid", "")
-        assert "orders-fn-app" not in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "hosted on" in result.get("mermaid", ""), result.get("mermaid", "")
+        assert "orders-fn-app" in result.get("mermaid", ""), result.get("mermaid", "")
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
-        assert titles == {"test-ase"}, titles
+        assert titles == {"test-ase", "orders-fn-app"}, titles
 
     def test_app_service_plan_drilldown_lists_hosted_apps(self):
         """The App Service Plan drilldown must list hosted app services."""
@@ -1787,7 +1949,7 @@ class TestIngressDiagramGeneration:
                         "orders.example.com",
                         1,
                         0,
-                        f'{{"appServicePlanId": "{plan_id}", "kind": "functionapp,linux"}}',
+                        f'{{"serverFarmId": "{plan_id}", "kind": "functionapp,linux"}}',
                         "Microsoft.Web/sites",
                         "sub-1",
                         site_id,
@@ -1807,6 +1969,307 @@ class TestIngressDiagramGeneration:
         assert result["view_type"] == "table", result
         assert result["rows"], result
         assert any(row[0] == "orders-fn-app" for row in result["rows"]), result["rows"]
+
+    def test_aks_drilldown_uses_service_type_and_hides_cluster_column(self):
+        """AKS drilldown should infer service type and omit redundant cluster column."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE aks_routes (
+                    subscription_id TEXT,
+                    cluster_name TEXT,
+                    resource_group TEXT,
+                    namespace TEXT,
+                    ingress_name TEXT,
+                    host TEXT,
+                    path TEXT,
+                    service_name TEXT,
+                    service_port TEXT,
+                    deployment_name TEXT,
+                    git_repository TEXT,
+                    pod_template_labels TEXT
+                )
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO aks_routes (
+                    subscription_id, cluster_name, resource_group, namespace, ingress_name, host, path,
+                    service_name, service_port, deployment_name, git_repository, pod_template_labels
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "sub-1",
+                        "aks-one",
+                        "rg-app",
+                        "orders",
+                        "orders-ingress",
+                        "orders.example.com",
+                        "/api/orders",
+                        "orders-svc",
+                        "443",
+                        "orders-api",
+                        "https://example/repo-a",
+                        '{"app.kubernetes.io/component":"api"}',
+                    ),
+                    (
+                        "sub-1",
+                        "aks-one",
+                        "rg-app",
+                        "batch",
+                        "batch-ingress",
+                        "batch.example.com",
+                        "/run",
+                        "batch-svc",
+                        "443",
+                        "nightly-cronjob",
+                        "https://example/repo-b",
+                        '{"workload":"cronjob"}',
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.ContainerService/managedClusters",
+                [{"rg": "rg-app", "name": "aks-one"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table", result
+        assert result["columns"][0] == "Namespace", result["columns"]
+        assert result["columns"][1] == "Service Type", result["columns"]
+        assert "Cluster" not in result["columns"], result["columns"]
+        by_namespace = {row[0]: row[1] for row in result["rows"]}
+        assert by_namespace["orders"] == "API", result["rows"]
+        assert by_namespace["batch"] == "Job", result["rows"]
+
+    def test_aks_drilldown_repo_links_to_scanned_repo(self):
+        """AKS repo column should link to a matching scanned repository when available."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE aks_routes (
+                    subscription_id TEXT,
+                    cluster_name TEXT,
+                    resource_group TEXT,
+                    namespace TEXT,
+                    ingress_name TEXT,
+                    host TEXT,
+                    path TEXT,
+                    service_name TEXT,
+                    service_port TEXT,
+                    deployment_name TEXT,
+                    git_repository TEXT,
+                    pod_template_labels TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE repositories (
+                    id INTEGER PRIMARY KEY,
+                    experiment_id TEXT,
+                    repo_name TEXT,
+                    repo_url TEXT,
+                    scanned_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO aks_routes (
+                    subscription_id, cluster_name, resource_group, namespace, ingress_name, host, path,
+                    service_name, service_port, deployment_name, git_repository, pod_template_labels
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-1",
+                    "aks-one",
+                    "rg-app",
+                    "orders",
+                    "orders-ingress",
+                    "orders.example.com",
+                    "/api/orders",
+                    "orders-svc",
+                    "443",
+                    "orders-api",
+                    "https://github.com/org/orders-service.git",
+                    '{"app.kubernetes.io/component":"api"}',
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO repositories (experiment_id, repo_name, repo_url, scanned_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("exp-100", "orders-service", "https://github.com/org/orders-service", "2026-01-01T00:00:00Z"),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.ContainerService/managedClusters",
+                [{"rg": "rg-app", "name": "aks-one"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table", result
+        repo_cell = result["rows"][0][6]
+        assert isinstance(repo_cell, dict), result["rows"]
+        assert repo_cell["label"] == "https://github.com/org/orders-service.git", repo_cell
+        assert repo_cell["href"] == "/?experiment=exp-100", repo_cell
+
+    def test_app_gateway_drilldown_uses_gateway_level_waf_policy_fallback(self):
+        """App Gateway drilldown should surface policy from appgw_waf_policies when rule column is empty."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE appgw_routing_rules (
+                    gateway_name TEXT,
+                    listener_name TEXT,
+                    hostname TEXT,
+                    protocol TEXT,
+                    url_path TEXT,
+                    backend_pool_name TEXT,
+                    backend_fqdns TEXT,
+                    backend_port INTEGER,
+                    waf_policy_name TEXT,
+                    exposure_level TEXT,
+                    subscription_id TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE appgw_waf_policies (
+                    name TEXT,
+                    subscription_id TEXT,
+                    state TEXT,
+                    associated_gateways TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_routing_rules (
+                    gateway_name, listener_name, hostname, protocol, url_path,
+                    backend_pool_name, backend_fqdns, backend_port, waf_policy_name,
+                    exposure_level, subscription_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "gw-one",
+                    "https-listener",
+                    "gw.example.com",
+                    "Https",
+                    "/*",
+                    "pool-one",
+                    '["backend.example.com"]',
+                    443,
+                    None,
+                    "Public",
+                    "sub-1",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO appgw_waf_policies (name, subscription_id, state, associated_gateways)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("waf-policy-prod", "sub-1", "Enabled", '["gw-one"]'),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Network/applicationGateways",
+                [{"rg": "rg-net", "name": "gw-one"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "tree_table", result
+        assert result["sections"], result
+        rows = result["sections"][0]["rows"]
+        assert rows and all(row.get("parent_id") is None for row in rows), rows
+        assert any(
+            isinstance(row.get("cells"), list) and "🛡️ waf-policy-prod" in row["cells"][-1].lower()
+            for row in rows
+        ), rows
+
+    def test_firewall_policy_drilldown_renders_rule_groups(self):
+        """Firewall policy drilldown should not crash and should render group rows."""
+        import sqlite3
+
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE firewall_policies (
+                    name TEXT,
+                    resource_group TEXT,
+                    associated_firewalls TEXT,
+                    mode TEXT,
+                    rule_collection_groups TEXT,
+                    nat_rule_count INTEGER,
+                    app_rule_count INTEGER,
+                    subscription_id TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO firewall_policies (
+                    name, resource_group, associated_firewalls, mode, rule_collection_groups,
+                    nat_rule_count, app_rule_count, subscription_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "fw-policy-one",
+                    "rg-net",
+                    '["fw-one"]',
+                    "Alert",
+                    '[{"name":"group-a","priority":100,"collection_count":2,"rule_count":5}]',
+                    1,
+                    3,
+                    "sub-1",
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Network/firewallPolicies",
+                [{"rg": "rg-net", "name": "fw-policy-one"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "tree_table", result
+        assert result["sections"], result
+        assert result["sections"][0]["title"] == "fw-policy-one", result["sections"]
 
     def test_apim_drilldown_nests_methods_under_apis(self):
         """APIM drill-down should return expandable API rows with nested methods."""
@@ -1932,6 +2395,80 @@ class TestIngressDiagramGeneration:
         assert "class rgnet_appgwone entryPointProtected;" in mermaid, mermaid
         assert "linkStyle 0 stroke:#f97316" in mermaid, mermaid
         assert "linkStyle 1 stroke:#f97316" in mermaid, mermaid
+
+    def test_acr_label_shows_public_and_credential_requirement(self):
+        """ACR node label should state public/private and credential requirement."""
+        rows = [
+            (
+                "acr-one",
+                "Microsoft.ContainerRegistry/registries",
+                "rg-acr",
+                "acr-one.azurecr.io",
+                1,
+                "Standard",
+                "acr-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                '{"properties":{"policies":{"anonymousPullEnabled":false}}}',
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "acr-one (Public, Creds required)" in mermaid, mermaid
+
+    def test_event_hub_label_shows_public_and_auth_requirement(self):
+        """Event Hub node label should include exposure and auth requirement posture."""
+        rows = [
+            (
+                "events-hubns",
+                "Microsoft.EventHub/namespaces",
+                "rg-data",
+                "events-hubns.servicebus.windows.net",
+                1,
+                "Standard",
+                "eh-id",
+                0,
+                None,
+                0,
+                None,
+                None,
+                "{}",
+                '["azure_ad","sas_key"]',
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert "events-hubns (Public, Auth required)" in mermaid, mermaid
+
+    def test_app_services_not_grouped_above_threshold(self):
+        """App Service and Function App nodes should not collapse into grouped backend nodes."""
+        rows = []
+        for idx in range(6):
+            rows.append(
+                (
+                    f"appsvc-{idx}",
+                    "Microsoft.Web/sites",
+                    "rg-app",
+                    f"appsvc-{idx}.azurewebsites.net",
+                    0,
+                    "P1v3",
+                    f"site-{idx}",
+                    0,
+                    None,
+                    0,
+                    None,
+                    None,
+                    "{}",
+                )
+            )
+        result = self._call(rows=rows)
+        titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
+        assert "App Service" not in titles, titles
+        for idx in range(6):
+            assert f"appsvc-{idx}" in titles, titles
 
     def test_ip_restricted_key_vault_uses_allowlist_edge(self):
         """IP-restricted data stores should be rendered as orange allowlist edges."""
@@ -2147,8 +2684,87 @@ class TestCosmosDbFqdnResolution:
 
         assert result["view_type"] == "table"
         assert result["rows"], result
-        assert result["rows"][0][2] == "cosmos-one.documents.azure.com", result["rows"]
-        assert result["rows"][0][3]["label"] == "🌐 Public", result["rows"]
+        assert "SKU" not in result["columns"], result["columns"]
+        assert result["rows"][0][3] == "cosmos-one.documents.azure.com", result["rows"]
+        assert result["rows"][0][4]["label"] == "🌐 Public", result["rows"]
+
+    def test_drilldown_table_marks_cosmos_ip_restrictions(self):
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    tags TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    fqdn TEXT,
+                    pipeline_tag TEXT,
+                    raw_json TEXT,
+                    endpoints TEXT,
+                    auth_methods TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    status TEXT DEFAULT 'active',
+                    is_restricted INTEGER DEFAULT 0,
+                    ip_restrictions TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    tags, is_public, fqdn, pipeline_tag, raw_json, endpoints, auth_methods,
+                    first_detected, last_synced, status, is_restricted, ip_restrictions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "/subscriptions/sub-1/resourceGroups/rg-data/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-two",
+                    "sub-1",
+                    "rg-data",
+                    "cosmos-two",
+                    "Microsoft.DocumentDB/databaseAccounts",
+                    "westus",
+                    None,
+                    None,
+                    0,
+                    None,
+                    None,
+                    "{}",
+                    None,
+                    None,
+                    "2026-06-01T00:00:00Z",
+                    "2026-06-01T00:00:00Z",
+                    "active",
+                    1,
+                    '["10.10.0.0/24"]',
+                ),
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.DocumentDB/databaseAccounts",
+                [{"rg": "rg-data", "name": "cosmos-two"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table"
+        assert result["rows"], result
+        assert result["rows"][0][4]["label"] == "⚠️ IP restricted", result["rows"]
 
 
 class TestSubscriptionOverlayViews:
@@ -2250,6 +2866,21 @@ class TestCloudPosture:
                 state TEXT,
                 associated_gateways TEXT
             );
+            CREATE TABLE function_app_http_triggers (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT NOT NULL,
+                function_app_id TEXT NOT NULL,
+                function_app_name TEXT NOT NULL,
+                resource_group TEXT,
+                function_name TEXT NOT NULL,
+                route TEXT,
+                auth_level TEXT,
+                methods TEXT,
+                fqdn TEXT,
+                full_url TEXT,
+                is_public INTEGER DEFAULT 0,
+                last_synced TEXT
+            );
             """
         )
 
@@ -2338,6 +2969,29 @@ class TestCloudPosture:
             """,
             ("policy-one", "sub-1", "Enabled", '["appgwone"]'),
         )
+        conn.execute(
+            """
+            INSERT INTO function_app_http_triggers (
+                id, subscription_id, function_app_id, function_app_name, resource_group,
+                function_name, route, auth_level, methods, fqdn, full_url, is_public, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-api::GetOrders",
+                "sub-1",
+                "/subscriptions/sub-1/resourceGroups/rg-app/providers/Microsoft.Web/sites/orders-api",
+                "orders-api",
+                "rg-app",
+                "GetOrders",
+                "orders",
+                "function",
+                '["GET"]',
+                "orders.example.com",
+                "https://orders.example.com/api/orders",
+                0,
+                "2026-06-01T00:00:00Z",
+            ),
+        )
         return conn
 
     def test_gateway_waf_policy_marks_repo_behind_waf(self):
@@ -2352,6 +3006,119 @@ class TestCloudPosture:
         assert posture["behind_app_gateway"] is True, posture
         assert posture["app_gateway_name"] == "appgwone", posture
         assert posture["behind_waf"] is True, posture
+        assert posture["function_http_trigger_count"] == 1, posture
+        assert posture["function_http_auth_required"] is True, posture
+        assert posture["function_http_has_anonymous"] is False, posture
+
+    def test_cloud_posture_api_uses_cached_metadata(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(app_module, "_get_experiment_for_repo", lambda conn, repo_name, experiment_id: experiment_id)
+        monkeypatch.setattr(
+            app_module.db_helpers,
+            "get_context_metadata",
+            lambda *args, **kwargs: json.dumps({
+                "behind_app_gateway": True,
+                "behind_waf": True,
+                "behind_apim": False,
+                "aks_cluster": None,
+                "aks_secured": False,
+                "endpoint_exposure": "restricted",
+                "auth_methods": [],
+            }),
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_compute_cloud_posture",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not recompute")),
+        )
+
+        client = app_module.app.test_client()
+        resp = client.get("/api/cloud-posture/exp-1/orders")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["posture"]["behind_waf"] is True
+
+    def test_subscription_diagram_uses_persistent_cache(self, monkeypatch):
+        import json
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                environment TEXT,
+                state TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE provisioned_assets (
+                id TEXT PRIMARY KEY,
+                subscription_id TEXT,
+                name TEXT,
+                type TEXT,
+                resource_group TEXT,
+                last_synced TEXT
+            );
+            CREATE TABLE subscription_diagram_cache (
+                sub_id TEXT PRIMARY KEY,
+                cache_signature TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (id, display_name, environment, state, last_synced) VALUES (?, ?, ?, ?, ?)",
+            ("sub-1", "Demo Subscription", "production", "Enabled", "2026-06-09T10:00:00Z"),
+        )
+        conn.execute(
+            "INSERT INTO provisioned_assets (id, subscription_id, name, type, resource_group, last_synced) VALUES (?, ?, ?, ?, ?, ?)",
+            ("asset-1", "sub-1", "gw-one", "Microsoft.Network/applicationGateways", "rg-net", "2026-06-09T10:00:00Z"),
+        )
+        signature, _ = app_module._subscription_diagram_cache_signature(conn, "sub-1")
+        payload = {
+            "subscription_name": "Demo Subscription",
+            "environment": "production",
+            "total_assets": 1,
+            "ingress_diagram": {"mermaid": "graph TD", "node_drilldown_map": {}},
+        }
+        conn.execute(
+            "INSERT INTO subscription_diagram_cache (sub_id, cache_signature, payload_json) VALUES (?, ?, ?)",
+            ("sub-1", signature, json.dumps(payload)),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: conn)
+        monkeypatch.setattr(
+            app_module,
+            "_build_ingress_diagram",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not rebuild")),
+        )
+
+        client = app_module.app.test_client()
+        resp = client.get("/api/subscriptions/sub-1/diagram")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["subscription_name"] == "Demo Subscription"
+        assert data["ingress_diagram"]["mermaid"] == "graph TD"
 
 
 def _cloud_assets_payload():

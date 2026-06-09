@@ -234,6 +234,13 @@ _BASE_TABLES_SQL = """
       UNIQUE(experiment_id, repo_id, namespace, key)
     );
 
+    CREATE TABLE IF NOT EXISTS subscription_diagram_cache (
+      sub_id TEXT PRIMARY KEY,
+      cache_signature TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS write_operation_log (
       id INTEGER PRIMARY KEY,
       idempotency_key TEXT NOT NULL UNIQUE,
@@ -777,6 +784,24 @@ _BASE_TABLES_SQL = """
     );
     CREATE INDEX IF NOT EXISTS idx_fw_app_sub      ON firewall_app_rules(subscription_id);
     CREATE INDEX IF NOT EXISTS idx_fw_app_firewall ON firewall_app_rules(firewall_name);
+
+    -- Azure Firewall policy summaries (populated by firewall.harvest_policies)
+    CREATE TABLE IF NOT EXISTS firewall_policies (
+        id                   TEXT PRIMARY KEY,   -- ARM resource ID
+        subscription_id      TEXT NOT NULL,
+        name                 TEXT NOT NULL,
+        resource_group       TEXT,
+        associated_firewalls TEXT,               -- JSON array of firewall names
+        mode                 TEXT,
+        threat_intelligence_mode TEXT,
+        dns_proxy_enabled    INTEGER DEFAULT 0,
+        rule_collection_groups TEXT,              -- JSON array of summary objects
+        nat_rule_count       INTEGER DEFAULT 0,
+        app_rule_count       INTEGER DEFAULT 0,
+        last_synced          DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_fw_policy_sub  ON firewall_policies(subscription_id);
+    CREATE INDEX IF NOT EXISTS idx_fw_policy_name ON firewall_policies(name);
 
     -- Private DNS zones (populated by private_dns_map.py)
     CREATE TABLE IF NOT EXISTS private_dns_zones (

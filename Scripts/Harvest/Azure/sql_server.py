@@ -67,7 +67,7 @@ def _classify_exposure(
         try:
             firewall_rules = az(
                 ["sql", "server", "firewall-rule", "list",
-                 "--name", server_name, "--resource-group", resource_group],
+                 "-s", server_name, "-g", resource_group],
                 subscription_id,
             )
         except Exception:

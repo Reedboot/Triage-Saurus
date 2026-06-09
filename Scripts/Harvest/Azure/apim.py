@@ -367,6 +367,8 @@ def _fetch_api_bundle(
     api: dict[str, Any],
     subscription_id: str,
     now: str,
+    *,
+    include_operations: bool = True,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     apim_name = safe_str(service.get("name"))
     resource_group = safe_str(service.get("resourceGroup"))
@@ -412,36 +414,38 @@ def _fetch_api_bundle(
         "gateway_hosts": json.dumps(_get_gateway_hosts(service)),
         "exposure_level": _get_apim_exposure_level(service),
         "normalized_api_path": normalize_route_path(api_path),
+        "api_policy_flags": api_policy_flags,
         "last_synced": now,
     }
 
     operation_specs: list[dict[str, Any]] = []
-    ops = _az_list_operations(apim_name, resource_group, api_name, subscription_id)
-    for op in ops or []:
-        op_id = safe_str(op.get("name") or (op.get("id") or "").split("/")[-1])
-        if not op_id:
-            continue
-        operation_specs.append(
-            {
-                "id": f"{apim_name}::{api_name}::{op_id}",
-                "subscription_id": subscription_id,
-                "apim_name": apim_name,
-                "resource_group": resource_group,
-                "api_name": api_name,
-                "api_display_name": api_display,
-                "api_path": api_path,
-                "backend_url": api_backend_url,
-                "operation_id": op_id,
-                "display_name": safe_str(op.get("displayName") or op_id),
-                "method": safe_str(op.get("method") or ""),
-                "url_template": safe_str(op.get("urlTemplate") or op.get("url") or ""),
-                "normalized_url_template": normalize_route_path(op.get("urlTemplate") or op.get("url") or ""),
-                "description": safe_str(op.get("description") or ""),
-                "requires_subscription": requires_subscription,
-                "api_policy_flags": api_policy_flags,
-                "last_synced": now,
-            }
-        )
+    if include_operations:
+        ops = _az_list_operations(apim_name, resource_group, api_name, subscription_id)
+        for op in ops or []:
+            op_id = safe_str(op.get("name") or (op.get("id") or "").split("/")[-1])
+            if not op_id:
+                continue
+            operation_specs.append(
+                {
+                    "id": f"{apim_name}::{api_name}::{op_id}",
+                    "subscription_id": subscription_id,
+                    "apim_name": apim_name,
+                    "resource_group": resource_group,
+                    "api_name": api_name,
+                    "api_display_name": api_display,
+                    "api_path": api_path,
+                    "backend_url": api_backend_url,
+                    "operation_id": op_id,
+                    "display_name": safe_str(op.get("displayName") or op_id),
+                    "method": safe_str(op.get("method") or ""),
+                    "url_template": safe_str(op.get("urlTemplate") or op.get("url") or ""),
+                    "normalized_url_template": normalize_route_path(op.get("urlTemplate") or op.get("url") or ""),
+                    "description": safe_str(op.get("description") or ""),
+                    "requires_subscription": requires_subscription,
+                    "api_policy_flags": api_policy_flags,
+                    "last_synced": now,
+                }
+            )
 
     return route, operation_specs
 
@@ -480,6 +484,49 @@ def _materialize_operation_row(op_spec: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _build_operation_specs_for_api(api_spec: dict[str, Any]) -> list[dict[str, Any]]:
+    ops = _az_list_operations(
+        api_spec["apim_name"],
+        api_spec["resource_group"],
+        api_spec["api_name"],
+        api_spec["subscription_id"],
+    )
+    operation_specs: list[dict[str, Any]] = []
+    for op in ops or []:
+        op_id = safe_str(op.get("name") or (op.get("id") or "").split("/")[-1])
+        if not op_id:
+            continue
+        operation_specs.append(
+            {
+                "id": f"{api_spec['apim_name']}::{api_spec['api_name']}::{op_id}",
+                "subscription_id": api_spec["subscription_id"],
+                "apim_name": api_spec["apim_name"],
+                "resource_group": api_spec["resource_group"],
+                "api_name": api_spec["api_name"],
+                "api_display_name": api_spec["api_display_name"],
+                "api_path": api_spec["api_path"],
+                "backend_url": api_spec["backend_url"],
+                "operation_id": op_id,
+                "display_name": safe_str(op.get("displayName") or op_id),
+                "method": safe_str(op.get("method") or ""),
+                "url_template": safe_str(op.get("urlTemplate") or op.get("url") or ""),
+                "normalized_url_template": normalize_route_path(op.get("urlTemplate") or op.get("url") or ""),
+                "description": safe_str(op.get("description") or ""),
+                "requires_subscription": api_spec["requires_subscription"],
+                "api_policy_flags": api_spec["api_policy_flags"],
+                "last_synced": api_spec["last_synced"],
+            }
+        )
+    return operation_specs
+
+
+def _materialize_api_operations(api_spec: dict[str, Any]) -> list[dict[str, Any]]:
+    operation_specs = _build_operation_specs_for_api(api_spec)
+    if not operation_specs:
+        return []
+    return [row for row in (_materialize_operation_row(spec) for spec in operation_specs) if row]
+
+
 def _harvest_service_route_bundle(
     service: dict[str, Any],
     subscription_id: str,
@@ -502,6 +549,7 @@ def _harvest_service_route_bundle(
     )
     route_rows: list[dict[str, Any]] = []
     operation_specs: list[dict[str, Any]] = []
+    api_backfill_specs: list[dict[str, Any]] = []
 
     if apis:
         max_workers = min(_APIM_API_WORKERS, len(apis))
@@ -512,7 +560,14 @@ def _harvest_service_route_bundle(
         api_phase_started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(_fetch_api_bundle, service, api, subscription_id, now): safe_str(api.get("name")) or "<unknown>"
+                pool.submit(
+                    _fetch_api_bundle,
+                    service,
+                    api,
+                    subscription_id,
+                    now,
+                    include_operations=not stage_backfill,
+                ): safe_str(api.get("name")) or "<unknown>"
                 for api in apis
             }
             completed = 0
@@ -527,6 +582,21 @@ def _harvest_service_route_bundle(
                     continue
                 if route:
                     route_rows.append(route)
+                    if stage_backfill:
+                        api_backfill_specs.append(
+                            {
+                                "subscription_id": subscription_id,
+                                "apim_name": apim_name,
+                                "resource_group": resource_group,
+                                "api_name": route["api_name"],
+                                "api_display_name": route["api_display_name"],
+                                "api_path": route["api_path"],
+                                "backend_url": route["backend_url"],
+                                "requires_subscription": route["requires_subscription"],
+                                "api_policy_flags": route["api_policy_flags"],
+                                "last_synced": now,
+                            }
+                        )
                 if api_operation_specs:
                     operation_specs.extend(api_operation_specs)
                 if completed == 1 or completed % 5 == 0 or completed == total_apis:
@@ -550,15 +620,15 @@ def _harvest_service_route_bundle(
 
     if stage_backfill:
         print(
-            f"    [apim-routes] {apim_name}: queued {len(operation_specs)} operation policy backfill job(s)",
+            f"    [apim-routes] {apim_name}: queued {len(api_backfill_specs)} API operation backfill job(s)",
             flush=True,
         )
         print(
             f"    [apim-routes] {apim_name}: bundle complete in {_format_elapsed(time.perf_counter() - bundle_started)} "
-            f"({len(route_rows)} route(s), {len(operation_specs)} operation backfill spec(s))",
+            f"({len(route_rows)} route(s), {len(api_backfill_specs)} API backfill spec(s))",
             flush=True,
         )
-        return apim_name, route_rows, operation_specs
+        return apim_name, route_rows, api_backfill_specs
 
     operation_rows: list[dict[str, Any]] = []
     if operation_specs:
@@ -681,10 +751,10 @@ def harvest_routes(
                 if route_rows:
                     core_rows.extend(route_rows)
                 for spec in operation_rows:
-                    backfill_future = _get_backfill_executor().submit(_materialize_operation_row, spec)
+                    backfill_future = _get_backfill_executor().submit(_materialize_api_operations, spec)
                     backfill_jobs.append(
                         BackfillJob(
-                            label=f"{apim_name}::{safe_str(spec.get('operation_id') or spec.get('id')) or 'operation'}",
+                            label=f"{apim_name}::{safe_str(spec.get('api_name') or spec.get('id')) or 'api'}",
                             future=backfill_future,
                         )
                     )

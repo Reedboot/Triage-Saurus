@@ -175,6 +175,60 @@ def _provider_matches_resource(resource: dict, requested_provider: str) -> bool:
     return detected.lower() == requested_provider.lower()
 
 
+def _fetch_appgw_listener_data(subscription_id: str) -> List[dict]:
+    """Fetch HTTP Listener and WAF policy data from appgw_routing_rules and appgw_waf_policies tables.
+    
+    Returns a list of listener dicts with:
+    - gateway_name: the Application Gateway name
+    - listener_name: unique listener name
+    - hostname: public hostname from listener
+    - protocol: HTTP or HTTPS
+    - waf_policy_name: WAF policy name (or None if no WAF)
+    - exposure_level: Public or Internal
+    """
+    listeners = []
+    
+    try:
+        with get_db_connection() as conn:
+            # Query appgw routing rules for all public listeners
+            # Include listeners with and without WAF policies
+            cursor = conn.execute("""
+                SELECT DISTINCT
+                    ar.gateway_name,
+                    ar.listener_name,
+                    ar.hostname,
+                    ar.protocol,
+                    ar.waf_policy_name,
+                    ar.exposure_level
+                FROM appgw_routing_rules ar
+                WHERE ar.subscription_id = ?
+                AND ar.exposure_level = 'Public'
+                AND ar.hostname IS NOT NULL
+                ORDER BY ar.gateway_name, ar.listener_name, ar.hostname
+            """, (subscription_id,))
+            
+            for row in cursor.fetchall():
+                # Skip 'None' string values from Azure
+                waf_name = row['waf_policy_name']
+                if waf_name == 'None':
+                    waf_name = None
+                
+                listeners.append({
+                    'gateway_name': row['gateway_name'],
+                    'listener_name': row['listener_name'],
+                    'hostname': row['hostname'],
+                    'protocol': row['protocol'],
+                    'waf_policy_name': waf_name,
+                    'exposure_level': row['exposure_level'],
+                })
+    except Exception as e:
+        # If appgw tables don't exist or query fails, silently continue
+        # (harvest may not have been run for this subscription yet)
+        pass
+    
+    return listeners
+
+
 class HierarchicalDiagramBuilder:
     """Build hierarchical architecture diagrams with proper nesting."""
     
@@ -577,7 +631,159 @@ class HierarchicalDiagramBuilder:
         
         # Infer data flow connections from metadata
         self._infer_data_connections()
-    
+         
+        # Enhance diagrams with HTTP Listener and WAF Policy nodes for Application Gateways
+        self._enrich_appgw_with_listeners_and_waf()
+     
+    def _enrich_appgw_with_listeners_and_waf(self) -> None:
+        """Enrich diagram with HTTP Listener and WAF Policy nodes for Application Gateways.
+         
+        For each Application Gateway with public HTTP listeners and enabled WAF policies,
+        creates synthetic nodes for:
+        - HTTP Listener (as entry point from Internet)
+        - WAF Policy (if policy name is set)
+         
+        Creates connections: Internet → Listener → WAF → App Gateway
+        """
+        # Find all Application Gateway resources
+        appgw_resources = [
+            r for r in self.resources
+            if 'application_gateway' in (r.get('resource_type') or '').lower()
+        ]
+         
+        if not appgw_resources:
+            return
+         
+        # Get subscription IDs for the app gateways (heuristically extract from multiple fields)
+        subscription_ids = set()
+        for gw in appgw_resources:
+            # Try to extract subscription ID from properties or raw_json
+            props = gw.get('properties') or {}
+            if isinstance(props, str):
+                try:
+                    props = json.loads(props)
+                except:
+                    props = {}
+             
+            sub_id = gw.get('subscription_id')
+            if sub_id:
+                subscription_ids.add(sub_id)
+         
+        if not subscription_ids:
+            return
+         
+        # Track new synthetic resources and connections
+        new_resources = []
+        new_connections = []
+         
+        # Process each subscription's listeners
+        for sub_id in subscription_ids:
+            listeners = _fetch_appgw_listener_data(sub_id)
+            if not listeners:
+                continue
+             
+            # Group listeners by gateway name
+            gateways_with_listeners = {}
+            for listener in listeners:
+                gw_name = listener['gateway_name']
+                if gw_name not in gateways_with_listeners:
+                    gateways_with_listeners[gw_name] = []
+                gateways_with_listeners[gw_name].append(listener)
+             
+            # For each gateway, create listener and WAF policy nodes
+            for gw_name, gw_listeners in gateways_with_listeners.items():
+                # Find the corresponding gateway resource
+                gw_resource = None
+                for r in appgw_resources:
+                    if r.get('resource_name') == gw_name:
+                        gw_resource = r
+                        break
+                 
+                if not gw_resource:
+                    continue
+                 
+                processed_listeners = set()
+                 
+                for listener in gw_listeners:
+                    # Skip duplicate listeners (by hostname + listener_name combination)
+                    listener_key = (listener['hostname'], listener['listener_name'])
+                    if listener_key in processed_listeners:
+                        continue
+                    processed_listeners.add(listener_key)
+                     
+                    # Create HTTP Listener synthetic resource
+                    listener_node_name = f"{gw_name}::{listener['hostname']}"
+                    listener_resource = {
+                        'id': len(self.resources) + len(new_resources) + 10000,
+                        'resource_name': listener_node_name,
+                        'resource_type': 'application_gateway_http_listener',
+                        'provider': 'azure',
+                        'properties': {
+                            'protocol': listener['protocol'],
+                            'hostname': listener['hostname'],
+                            'gateway_name': gw_name,
+                            'listener_name': listener['listener_name'],
+                        }
+                    }
+                    new_resources.append(listener_resource)
+                     
+                    # Add Internet → Listener connection
+                    new_connections.append({
+                        'source': 'Internet',
+                        'target': listener_node_name,
+                        'connection_type': 'internet_ingress',
+                        'confirmed': True,
+                    })
+                     
+                    # Create WAF Policy node if policy name is set
+                    if listener['waf_policy_name']:
+                        waf_node_name = f"WAF::{listener['waf_policy_name']}"
+                        waf_resource = {
+                            'id': len(self.resources) + len(new_resources) + 20000,
+                            'resource_name': waf_node_name,
+                            'resource_type': 'application_gateway_waf_policy',
+                            'provider': 'azure',
+                            'properties': {
+                                'policy_name': listener['waf_policy_name'],
+                            }
+                        }
+                        new_resources.append(waf_resource)
+                         
+                        # Add Listener → WAF connection
+                        new_connections.append({
+                            'source': listener_node_name,
+                            'target': waf_node_name,
+                            'connection_type': 'waf_protection',
+                            'confirmed': True,
+                        })
+                         
+                        # Add WAF → App Gateway connection
+                        new_connections.append({
+                            'source': waf_node_name,
+                            'target': gw_name,
+                            'connection_type': 'protects',
+                            'confirmed': True,
+                        })
+                    else:
+                        # No WAF policy, connect listener directly to gateway
+                        new_connections.append({
+                            'source': listener_node_name,
+                            'target': gw_name,
+                            'connection_type': 'routes_to',
+                            'confirmed': True,
+                        })
+         
+        # Add new resources to the diagram
+        if new_resources:
+            self.resources.extend(new_resources)
+            for r in new_resources:
+                self._assign_resource_by_name(r['resource_name'], r)
+                self.resource_by_id[r['id']] = r
+         
+        # Add new connections
+        if new_connections:
+            self.connections.extend(new_connections)
+     
     def _apply_security_group_rule_nesting(self) -> None:
         """Apply rendering transformation: nest resources under SG rules for diagram visualization.
         
@@ -1810,7 +2016,8 @@ class HierarchicalDiagramBuilder:
                       'network_acl', 'load_balancer', 'firewall', 'availability_zone',
                       'eks_cluster', 'eks_node_group', 'eks_fargate',
                       'kubernetes_cluster', 'container_cluster',
-                      'vpn', 'express_route', 'public_ip']
+                      'vpn', 'express_route', 'public_ip',
+                      'http_listener', 'waf_policy']  # Add synthetic HTTP Listener and WAF Policy nodes
         return any(tok in rtype for tok in net_tokens)
 
     def _get_sg_protected_computes(self, sg: dict, candidate_computes: List[dict]) -> List[dict]:
@@ -2875,7 +3082,56 @@ class HierarchicalDiagramBuilder:
         # Render gateways and other network resources
         for gw in gateways:
             if gw['resource_name'] not in self.emitted_nodes:
-                lines.append(self.render_node(gw, indent="    "))
+                # Check if this is an Application Gateway with HTTP listeners
+                gw_rtype = (gw.get('resource_type') or '').lower()
+                if 'application_gateway' in gw_rtype:
+                    # Look for HTTP Listener nodes for this gateway
+                    gw_listeners = [
+                        r for r in self.resources
+                        if r.get('resource_type') == 'application_gateway_http_listener'
+                        and gw['resource_name'] in r.get('resource_name', '')
+                    ]
+                     
+                    if gw_listeners:
+                        # Render gateway as a subgraph containing its listeners and WAF policies
+                        gw_node_id = self._get_node_id(gw)
+                        gw_label = self._wrap_mermaid_label(gw['resource_name'])
+                        lines.append(f'    subgraph {gw_node_id}[{self._quote_mermaid_label(gw_label)}]')
+                        self._emitted_mermaid_ids.add(gw_node_id)
+                        self._node_id_first_owner[gw_node_id] = str(gw.get('id', ''))
+                        self.subgraph_nodes.add(gw['resource_name'])
+                        self.node_id_override[gw['resource_name']] = gw_node_id
+                         
+                        # Render listeners inside the gateway subgraph
+                        for listener in gw_listeners:
+                            if listener['resource_name'] not in self.emitted_nodes:
+                                lines.append(self.render_node(listener, indent="      "))
+                                self.emitted_nodes.add(listener['resource_name'])
+                         
+                        # Render any WAF policy nodes associated with these listeners
+                        waf_nodes = set()
+                        for listener in gw_listeners:
+                            # Look for WAF policy nodes connected to this listener
+                            for conn in self.connections:
+                                if conn.get('source') == listener['resource_name']:
+                                    target = conn.get('target')
+                                    if target and 'WAF::' in target:
+                                        waf_nodes.add(target)
+                         
+                        for waf_name in waf_nodes:
+                            waf_resource = self._get_primary_resource(waf_name)
+                            if waf_resource and waf_resource['resource_name'] not in self.emitted_nodes:
+                                lines.append(self.render_node(waf_resource, indent="      "))
+                                self.emitted_nodes.add(waf_resource['resource_name'])
+                         
+                        lines.append('    end')
+                    else:
+                        # No listeners, render gateway as simple node
+                        lines.append(self.render_node(gw, indent="    "))
+                else:
+                    # Not an application gateway, render as simple node
+                    lines.append(self.render_node(gw, indent="    "))
+                 
                 self.emitted_nodes.add(gw['resource_name'])
                 self._tier_nodes['network_tier'].append(gw['resource_name'])
         
