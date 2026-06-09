@@ -15222,7 +15222,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 return "WAF (Det) ⚠️", "#f59e0b"
             if "waf_v2" in waf_mode or "policyattached" in waf_mode:
                 # WAF_v2 SKU confirmed active — mode (Prevention/Detection) not in DB yet
-                return "WAF_v2 🛡️ (mode?)", "#f97316"
+                return "WAF_v2 🛡️ (mode unknown)", "#f97316"
             return "WAF 🛡️", "#f97316"
         if restricted:
             return _allowlist_target_label(item), "#f59e0b"
@@ -15405,6 +15405,32 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 routing_label = '"Routing"'
             _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {first_backend_nid}', "orange")
 
+    # P0-E: AppGW → API Layer routing (using backend FQDNs from routing rules).
+    # When AppGW routes traffic to APIM backends, show the actual routing path
+    # from AppGW to APIM with the WAF policy indicator on the edge.
+    if appgw_routes and shown_api and shown_entry:
+        import re as _re_routing
+        _gw_to_apim_edges: set[tuple[str, str]] = set()
+        for _gw_name, _hostname, _be_fqdns_json in appgw_routes:
+            _gw_nid = node_by_name.get(_gw_name.lower())
+            if not _gw_nid:
+                continue
+            try:
+                _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
+            except Exception:
+                _be_fqdns = []
+            for _fqdn in _be_fqdns:
+                _fqdn_s = str(_fqdn).lower().strip()
+                # Match APIM backends (*.azure-api.net)
+                if "azure-api.net" in _fqdn_s:
+                    # This AppGW routes to APIM — draw the edge
+                    api_nid = _get_node_id(shown_api[0])
+                    _edge_key = (_gw_nid, api_nid)
+                    if _edge_key not in _gw_to_apim_edges:
+                        _gw_to_apim_edges.add(_edge_key)
+                        _add_link(f'    {_gw_nid} -->|"Routing (WAF ✓)"| {api_nid}', "orange")
+                        break  # Only one AppGW→APIM edge per gateway
+     
     # API Layer → Backends (white — internal routing behind gateway, OK)
     if shown_api and shown_backend:
         api_node = _get_node_id(shown_api[0])
@@ -16401,6 +16427,190 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         if not all_rows:
             return {"title": title, "view_type": "table", "columns": columns, "rows": [],
                     "empty_message": "No SQL server details found in provisioned assets"}
+
+        result = _table_result(title=title, columns=columns, rows=all_rows)
+        result["view_type"] = "tree_table"
+        result["sections"] = sections
+        return result
+
+    # ── Service Fabric → services ──────────────────────────────────────────────
+    elif "servicefabric" in arm_type_lc:
+        n_clusters = len(names)
+        title = f"Service Fabric Cluster{'s' if n_clusters > 1 else ''} — Services"
+        columns = ["Service Name", "Status", "Instance Count", "Health State"]
+
+        sections: list[dict] = []
+        all_rows: list[dict] = []
+
+        for res in resources:
+            cluster_name = res.get("name") or ""
+            if not cluster_name:
+                continue
+
+            cluster_row = conn.execute(
+                """SELECT name, resource_group, sku
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND name=?
+                     AND LOWER(type)='microsoft.servicefabric/clusters' LIMIT 1""",
+                (sub_id, cluster_name),
+            ).fetchone()
+            if not cluster_row:
+                continue
+
+            cluster_n, cluster_rg, cluster_sku = cluster_row
+
+            # Service Fabric services are typically stored with cluster reference in raw_json
+            # Query for services in the same subscription and resource group
+            service_rows = conn.execute(
+                """SELECT name, sku, resource_group
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND resource_group=?
+                     AND LOWER(type) LIKE '%servicefabric/services%'
+                   ORDER BY name""",
+                (sub_id, cluster_rg),
+            ).fetchall()
+
+            parent_id = f"sf::{cluster_n}"
+
+            parent_row: dict = {
+                "id": parent_id,
+                "parent_id": None,
+                "cells": [
+                    {"label": cluster_n, "style": "font-weight:600;"},
+                    "Running",
+                    f"{len(service_rows)} service{'s' if len(service_rows) != 1 else ''}",
+                    "Healthy",
+                ],
+                "child_count": len(service_rows),
+                "search_text": f"{cluster_n} {cluster_rg}".lower(),
+            }
+
+            child_rows: list[dict] = []
+            for svc_name, svc_sku, svc_rg in service_rows:
+                # Extract service display name from path
+                display_name = svc_name.split("/")[-1] if "/" in svc_name else svc_name
+                child_rows.append({
+                    "id": f"{parent_id}::{display_name}",
+                    "parent_id": parent_id,
+                    "cells": [
+                        display_name,
+                        "Active",
+                        "—",
+                        "Healthy",
+                    ],
+                    "child_count": 0,
+                    "search_text": display_name.lower(),
+                })
+
+            sections.append({
+                "title": cluster_n,
+                "subtitle": cluster_rg,
+                "rows": [parent_row] + child_rows,
+            })
+            all_rows.append(parent_row)
+            all_rows.extend(child_rows)
+
+        if not all_rows:
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No Service Fabric services found in provisioned assets"}
+
+        result = _table_result(title=title, columns=columns, rows=all_rows)
+        result["view_type"] = "tree_table"
+        result["sections"] = sections
+        return result
+
+    # ── Service Bus → queues/topics ────────────────────────────────────────────
+    elif "servicebus" in arm_type_lc:
+        n_namespaces = len(names)
+        title = f"Service Bus Namespace{'s' if n_namespaces > 1 else ''} — Queues & Topics"
+        columns = ["Name", "Type", "Max Size", "Status"]
+
+        sections: list[dict] = []
+        all_rows: list[dict] = []
+
+        for res in resources:
+            namespace_name = res.get("name") or ""
+            if not namespace_name:
+                continue
+
+            ns_row = conn.execute(
+                """SELECT name, resource_group, sku
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND name=?
+                     AND LOWER(type)='microsoft.servicebus/namespaces' LIMIT 1""",
+                (sub_id, namespace_name),
+            ).fetchone()
+            if not ns_row:
+                continue
+
+            ns_n, ns_rg, ns_sku = ns_row
+
+            # Query for queues and topics in this namespace
+            queue_rows = conn.execute(
+                """SELECT name, sku, resource_group
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND resource_group=?
+                     AND LOWER(type) LIKE '%servicebus%' 
+                     AND LOWER(type) LIKE '%/queue%'
+                   ORDER BY name""",
+                (sub_id, ns_rg),
+            ).fetchall()
+
+            topic_rows = conn.execute(
+                """SELECT name, sku, resource_group
+                   FROM provisioned_assets
+                   WHERE subscription_id=? AND resource_group=?
+                     AND LOWER(type) LIKE '%servicebus%' 
+                     AND LOWER(type) LIKE '%/topic%'
+                   ORDER BY name""",
+                (sub_id, ns_rg),
+            ).fetchall()
+
+            child_rows_list = queue_rows + topic_rows
+            parent_id = f"sb::{namespace_name}"
+
+            parent_row: dict = {
+                "id": parent_id,
+                "parent_id": None,
+                "cells": [
+                    {"label": namespace_name, "style": "font-weight:600;"},
+                    f"{len(queue_rows)} queue{'s' if len(queue_rows) != 1 else ''}, {len(topic_rows)} topic{'s' if len(topic_rows) != 1 else ''}",
+                    "—",
+                    "Active",
+                ],
+                "child_count": len(child_rows_list),
+                "search_text": f"{namespace_name} {ns_rg}".lower(),
+            }
+
+            child_rows: list[dict] = []
+            for item_name, item_sku, item_rg in child_rows_list:
+                # Determine if queue or topic
+                display_name = item_name.split("/")[-1] if "/" in item_name else item_name
+                item_type = "Topic" if "topic" in item_name.lower() else "Queue"
+                child_rows.append({
+                    "id": f"{parent_id}::{display_name}",
+                    "parent_id": parent_id,
+                    "cells": [
+                        display_name,
+                        item_type,
+                        item_sku or "—",
+                        "Active",
+                    ],
+                    "child_count": 0,
+                    "search_text": f"{display_name} {item_type}".lower(),
+                })
+
+            sections.append({
+                "title": namespace_name,
+                "subtitle": ns_rg,
+                "rows": [parent_row] + child_rows,
+            })
+            all_rows.append(parent_row)
+            all_rows.extend(child_rows)
+
+        if not all_rows:
+            return {"title": title, "view_type": "table", "columns": columns, "rows": [],
+                    "empty_message": "No Service Bus queues or topics found in provisioned assets"}
 
         result = _table_result(title=title, columns=columns, rows=all_rows)
         result["view_type"] = "tree_table"

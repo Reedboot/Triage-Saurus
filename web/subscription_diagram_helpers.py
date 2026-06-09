@@ -15,6 +15,8 @@ SUBSCRIPTION_DRILLABLE_ARM_TYPES = {
     "microsoft.web/sites",
     "microsoft.web/serverfarms",
     "microsoft.web/hostingenvironments",
+    "microsoft.servicefabric/clusters",
+    "microsoft.servicebus/namespaces",
 }
 
 SUBSCRIPTION_FQDN_SUFFIXES = {
