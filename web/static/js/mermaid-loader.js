@@ -12,7 +12,11 @@
     console.info('✓ Mermaid loaded from local static directory');
     // Initialize mermaid
     if (window.mermaid && typeof window.mermaid.initialize === 'function') {
-      window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        maxTextSize: 500000,
+      });
       console.info('✓ Mermaid initialized');
     }
   }, function () {
