@@ -4488,6 +4488,7 @@ class HierarchicalDiagramBuilder:
         # suppress edge labels for these unless auth/protocol/port provides additional value.
         SUPPRESS_LABEL_TYPES = frozenset({
             'data_access', 'data access', 'uses_database', 'depends_on', 'references',
+            'internet_ingress', 'confirmed_public',
         })
         INDIRECT_REACHABLE_COLOR = '#f59e0b'
 
