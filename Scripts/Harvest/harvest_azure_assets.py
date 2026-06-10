@@ -54,6 +54,7 @@ from Azure._staged import BackfillJob, StagedRows
 from Azure._helpers import set_probe_enabled
 import appgw_routing_map
 import apim_routing_map
+import private_dns_map
 
 # ---------------------------------------------------------------------------
 # Providers registry — order matters: gateways/APIM first for correlation
@@ -702,6 +703,18 @@ def harvest_subscription(
         )
     except Exception as exc:
         print(f"  [App Gateway Routing] FAILED ({exc})")
+
+    # Private DNS zones/records for internal host resolution coverage
+    print(f"  [Private DNS] harvesting zones, records, and VNet links...", flush=True)
+    try:
+        dns_summary = private_dns_map.harvest_private_dns(sub_id, conn, dry_run=dry_run)
+        action = "would harvest" if dry_run else "written"
+        print(
+            f"  [Private DNS] {dns_summary.get('zones', 0)} zones, "
+            f"{dns_summary.get('records', 0)} records {action}"
+        )
+    except Exception as exc:
+        print(f"  [Private DNS] FAILED ({exc})")
 
     # AKS ingress → service → deployment route model
     print(f"  [AKS Routes] harvesting ingress→service→deployment mappings...", flush=True)

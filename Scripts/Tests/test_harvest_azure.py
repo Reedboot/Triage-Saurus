@@ -34,7 +34,7 @@ from Azure._helpers import (
     route_path_matches,
 )
 from Azure._staged import BackfillJob, StagedRows
-from Azure import app_configuration, storage, aks, key_vault, sql_server
+from Azure import app_configuration, storage, aks, key_vault, sql_server, service_bus, event_hub
 
 
 def _is_ip_address(value: str) -> bool:
@@ -2274,3 +2274,157 @@ class TestSqlServerHarvest:
             "40.81.155.226-40.81.155.226",
             "4.234.150.176-4.234.150.183",
         ]
+
+
+class TestServiceBusHarvest:
+    def test_classifies_public_service_bus_as_public(self, monkeypatch):
+        ns = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/sb-public",
+            "name": "sb-public",
+            "resourceGroup": "rg-msg",
+            "location": "westus",
+            "type": "Microsoft.ServiceBus/namespaces",
+            "sku": {"name": "Standard", "tier": "Standard"},
+            "properties": {
+                "serviceBusEndpoint": "https://sb-public.servicebus.windows.net:443/",
+                "status": "Active",
+                "publicNetworkAccess": "Enabled",
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["servicebus", "namespace", "list"]:
+                return [ns]
+            if args[:3] == ["servicebus", "namespace", "network-rule-set"]:
+                return []
+            raise AssertionError(f"unexpected az args: {args}")
+
+        monkeypatch.setattr(service_bus, "az", fake_az)
+        monkeypatch.setattr(
+            service_bus,
+            "build_endpoints",
+            lambda entries, timeout=5: json.dumps([
+                {"address": address, "port": port, "protocol": protocol}
+                for address, port, protocol in entries
+            ]),
+        )
+
+        rows = service_bus.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "sb-public"
+        assert row["is_public"] == 1
+        assert row["is_restricted"] == 0
+        assert json.loads(row["ip_restrictions"]) == []
+
+    def test_classifies_restricted_service_bus_as_restricted(self, monkeypatch):
+        ns = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/sb-restricted",
+            "name": "sb-restricted",
+            "resourceGroup": "rg-msg",
+            "location": "westus",
+            "type": "Microsoft.ServiceBus/namespaces",
+            "sku": {"name": "Standard", "tier": "Standard"},
+            "properties": {
+                "serviceBusEndpoint": "https://sb-restricted.servicebus.windows.net:443/",
+                "status": "Active",
+                "publicNetworkAccess": "Enabled",
+            },
+        }
+
+        network_rules = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/sb-restricted/networkRuleSets/default",
+            "name": "default",
+            "type": "Microsoft.ServiceBus/namespaces/networkRuleSets",
+            "properties": {
+                "defaultAction": "Deny",
+                "ipRules": [
+                    {"value": "192.168.1.0/24", "action": "Allow"},
+                ],
+                "virtualNetworkRules": [
+                    {"id": "/subscriptions/sub-1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/prod/subnets/default"}
+                ],
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["servicebus", "namespace", "list"]:
+                return [ns]
+            if args[:5] == ["servicebus", "namespace", "network-rule-set", "show", "--namespace-name"]:
+                return [network_rules]
+            raise AssertionError(f"unexpected az args: {args}")
+
+        monkeypatch.setattr(service_bus, "az", fake_az)
+        monkeypatch.setattr(
+            service_bus,
+            "build_endpoints",
+            lambda entries, timeout=5: json.dumps([
+                {"address": address, "port": port, "protocol": protocol}
+                for address, port, protocol in entries
+            ]),
+        )
+
+        rows = service_bus.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "sb-restricted"
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 1
+        restrictions = json.loads(row["ip_restrictions"])
+        assert "192.168.1.0/24" in restrictions
+        assert any("vnet:" in r for r in restrictions)
+
+
+class TestEventHubHarvest:
+    def test_classifies_restricted_event_hub_as_restricted(self, monkeypatch):
+        ns = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.EventHub/namespaces/eh-restricted",
+            "name": "eh-restricted",
+            "resourceGroup": "rg-msg",
+            "location": "westus",
+            "type": "Microsoft.EventHub/namespaces",
+            "sku": {"name": "Standard", "tier": "Standard", "capacity": 1},
+            "properties": {
+                "serviceBusEndpoint": "https://eh-restricted.servicebus.windows.net:443/",
+                "isAutoInflateEnabled": False,
+                "publicNetworkAccess": "Enabled",
+            },
+        }
+
+        network_rules = {
+            "id": "/subscriptions/sub-1/resourceGroups/rg-msg/providers/Microsoft.EventHub/namespaces/eh-restricted/networkRuleSets/default",
+            "name": "default",
+            "type": "Microsoft.EventHub/namespaces/networkRuleSets",
+            "properties": {
+                "defaultAction": "Deny",
+                "ipRules": [
+                    {"value": "10.0.0.0/8", "action": "Allow"},
+                ],
+                "virtualNetworkRules": [],
+            },
+        }
+
+        def fake_az(args, subscription_id):
+            if args == ["eventhubs", "namespace", "list"]:
+                return [ns]
+            if args[:5] == ["eventhubs", "namespace", "network-rule-set", "show", "--namespace-name"]:
+                return [network_rules]
+            raise AssertionError(f"unexpected az args: {args}")
+
+        monkeypatch.setattr(event_hub, "az", fake_az)
+        monkeypatch.setattr(
+            event_hub,
+            "build_endpoints",
+            lambda entries, timeout=5: json.dumps([
+                {"address": address, "port": port, "protocol": protocol}
+                for address, port, protocol in entries
+            ]),
+        )
+
+        rows = event_hub.harvest("sub-1")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "eh-restricted"
+        assert row["is_public"] == 0
+        assert row["is_restricted"] == 1
+        assert json.loads(row["ip_restrictions"]) == ["10.0.0.0/8"]

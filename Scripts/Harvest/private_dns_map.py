@@ -412,6 +412,78 @@ def _check_issues(conn: sqlite3.Connection, subscription_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reusable harvest entry point (for integration in main subscription harvest)
+# ---------------------------------------------------------------------------
+
+def harvest_private_dns(
+    subscription_id: str,
+    conn: sqlite3.Connection,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Harvest private DNS data for one subscription into an existing DB connection."""
+    _ensure_schema(conn)
+    _ensure_dns_schema(conn)
+
+    now = datetime.now(timezone.utc).isoformat()
+    zones = list_zones(subscription_id)
+    if not zones:
+        return {
+            "zones": 0,
+            "records": 0,
+            "zone_types": {},
+            "issues_checked": False,
+        }
+
+    fqdn_to_asset: dict[str, tuple[str, str]] = {
+        row[2]: (row[0], row[1])
+        for row in conn.execute(
+            "SELECT id, name, fqdn FROM provisioned_assets WHERE subscription_id = ? AND fqdn IS NOT NULL",
+            (subscription_id,),
+        ).fetchall()
+    }
+
+    apim_backend_fqdns: set[str] = set()
+    try:
+        for (url,) in conn.execute(
+            "SELECT backend_url FROM apim_api_routes WHERE subscription_id = ? AND backend_url IS NOT NULL",
+            (subscription_id,),
+        ).fetchall():
+            host = url.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+            if host:
+                apim_backend_fqdns.add(host)
+    except Exception:
+        # Table may not exist yet in older DBs or partial schema states.
+        pass
+
+    total_records = 0
+    zone_types: dict[str, int] = {}
+    for zone in zones:
+        zone_type = _classify_zone(zone["name"])
+        zone_types[zone_type] = zone_types.get(zone_type, 0) + 1
+        stats = process_zone(
+            zone=zone,
+            subscription_id=subscription_id,
+            conn=conn,
+            fqdn_to_asset=fqdn_to_asset,
+            apim_backend_fqdns=apim_backend_fqdns,
+            dry_run=dry_run,
+            now=now,
+        )
+        total_records += int(stats.get("record_count", 0))
+
+    if not dry_run:
+        _check_issues(conn, subscription_id)
+
+    return {
+        "zones": len(zones),
+        "records": total_records,
+        "zone_types": zone_types,
+        "issues_checked": not dry_run,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -460,13 +532,13 @@ def main() -> None:
         sub_id   = sub["id"]
         sub_name = sub.get("name") or sub_id
         print(f"\n[subscription] {sub_name}")
-
         zones = list_zones(sub_id)
         if not zones:
             print("  No private DNS zones found")
             continue
 
-        # Build FQDN → asset lookup
+        print(f"  {len(zones)} zones to process...")
+        # Keep detailed per-zone logs in CLI mode.
         fqdn_to_asset: dict[str, tuple[str, str]] = {
             row[2]: (row[0], row[1])
             for row in conn.execute(
@@ -474,32 +546,35 @@ def main() -> None:
                 (sub_id,),
             ).fetchall()
         }
-
-        # Build set of APIM backend hostnames for cross-referencing
         apim_backend_fqdns: set[str] = set()
-        for (url,) in conn.execute(
-            "SELECT backend_url FROM apim_api_routes WHERE subscription_id = ? AND backend_url IS NOT NULL",
-            (sub_id,),
-        ).fetchall():
-            host = url.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
-            if host:
-                apim_backend_fqdns.add(host)
+        try:
+            for (url,) in conn.execute(
+                "SELECT backend_url FROM apim_api_routes WHERE subscription_id = ? AND backend_url IS NOT NULL",
+                (sub_id,),
+            ).fetchall():
+                host = url.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+                if host:
+                    apim_backend_fqdns.add(host)
+        except Exception:
+            pass
 
-        print(f"  {len(zones)} zones to process...")
         total_records = 0
         zone_types: dict[str, int] = {}
-
         for zone in zones:
             zone_name = zone["name"]
             zone_type = _classify_zone(zone_name)
             zone_types[zone_type] = zone_types.get(zone_type, 0) + 1
-
             stats = process_zone(
-                zone, sub_id, conn, fqdn_to_asset, apim_backend_fqdns,
-                args.dry_run, now,
+                zone=zone,
+                subscription_id=sub_id,
+                conn=conn,
+                fqdn_to_asset=fqdn_to_asset,
+                apim_backend_fqdns=apim_backend_fqdns,
+                dry_run=args.dry_run,
+                now=now,
             )
             total_records += stats["record_count"]
-            if stats["record_count"] > 1:  # skip empty zones
+            if stats["record_count"] > 1:  # skip near-empty zones
                 print(
                     f"  {'[dry]' if args.dry_run else '     '} "
                     f"{zone_name:70s} "
@@ -512,7 +587,6 @@ def main() -> None:
 
         print(f"\n  Summary: {len(zones)} zones, {total_records} records")
         print(f"  Zone types: {zone_types}")
-
         if not args.dry_run:
             _check_issues(conn, sub_id)
 

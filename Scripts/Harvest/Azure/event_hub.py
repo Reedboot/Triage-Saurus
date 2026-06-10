@@ -13,6 +13,23 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["eventhubs", "namespace", "list"], subscription_id)
     results = []
 
+    # Pre-fetch network rule sets for all namespaces
+    network_rules_map: dict[str, dict[str, Any]] = {}
+    try:
+        for ns in raw:
+            ns_name = ns.get("name")
+            rg_name = ns.get("resourceGroup")
+            if ns_name and rg_name:
+                rules = az([
+                    "eventhubs", "namespace", "network-rule-set", "show",
+                    "--namespace-name", ns_name,
+                    "--resource-group", rg_name
+                ], subscription_id)
+                if rules:
+                    network_rules_map[ns_name] = rules[0] if isinstance(rules, list) else rules
+    except Exception:
+        pass
+
     for ns in raw:
         props = ns.get("properties") or ns
         endpoint_raw = props.get("serviceBusEndpoint", "")
@@ -21,7 +38,11 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         ) or None
 
         sku = (ns.get("sku") or {}).get("name")
-        is_public, is_restricted, ip_restrictions = _classify_exposure(props)
+        ns_name = ns.get("name")
+        is_public, is_restricted, ip_restrictions = _classify_exposure(
+            props,
+            network_rules_map.get(ns_name) if ns_name else None
+        )
 
         endpoints = build_endpoints([
             (fqdn, 5671, "amqp+tls"),
@@ -64,13 +85,19 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def _classify_exposure(props: dict[str, Any]) -> tuple[int, int, list[str]]:
+def _classify_exposure(props: dict[str, Any], network_rules: dict[str, Any] | None = None) -> tuple[int, int, list[str]]:
     if props.get("publicNetworkAccess", "Enabled") == "Disabled":
         return 0, 0, []
 
-    network_rules = props.get("networkRuleSets") or {}
-    vnet_rules = network_rules.get("virtualNetworkRules") or []
-    ip_rules = network_rules.get("ipRules") or []
+    # Check network rules from separate network-rule-set query first
+    if network_rules:
+        vnet_rules = network_rules.get("properties", {}).get("virtualNetworkRules") or []
+        ip_rules = network_rules.get("properties", {}).get("ipRules") or []
+    else:
+        # Fallback to rules in properties (rarely present in list output)
+        network_rules_obj = props.get("networkRuleSets") or {}
+        vnet_rules = network_rules_obj.get("virtualNetworkRules") or []
+        ip_rules = network_rules_obj.get("ipRules") or []
 
     if vnet_rules or ip_rules:
         cidrs = extract_ip_restrictions(ip_rules=ip_rules, vnet_rules=vnet_rules)

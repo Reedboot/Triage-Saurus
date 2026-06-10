@@ -66,6 +66,44 @@ def _sanitize_sf_name(value: str | None) -> str:
     return raw.replace("fabric:/", "").replace("fabric:", "").replace("/", "_")
 
 
+def _extract_placement_constraints(svc_props: dict[str, Any]) -> dict[str, Any]:
+    """Extract placement constraint information from service properties.
+    
+    Returns a dict with:
+    - node_type_constraints: list of node type names from placement constraints
+    - placement_constraint: raw constraint string (e.g. "NodeTypeName==Primary")
+    - replica_count: stateless instance or stateful replica count if available
+    - service_kind: 'Stateless' or 'Stateful'
+    """
+    placement = svc_props.get("placementConstraints", "")
+    
+    node_type_constraints = []
+    if placement:
+        # Typical format: "NodeTypeName==Primary" or "NodeTypeName!=Primary && other constraints"
+        parts = placement.split("&&")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("NodeTypeName=="):
+                node_type = part.replace("NodeTypeName==", "").strip()
+                if node_type:
+                    node_type_constraints.append(node_type)
+    
+    kind = svc_props.get("serviceKind", "Stateless")
+    result = {
+        "placement_constraint": placement or None,
+        "node_type_constraints": node_type_constraints,
+        "service_kind": kind,
+    }
+    
+    if kind == "Stateless":
+        result["instance_count"] = svc_props.get("instanceCount")
+    elif kind == "Stateful":
+        result["target_replica_set_size"] = svc_props.get("targetReplicaSetSize")
+        result["min_replica_set_size"] = svc_props.get("minReplicaSetSize")
+    
+    return result
+
+
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
     raw = az(["sf", "cluster", "list"], subscription_id)
     results = []
@@ -85,6 +123,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         ] if fqdn else [])
 
         node_types = props.get("nodeTypes") or []
+        node_type_names = [nt.get("name") for nt in node_types if nt.get("name")]
         extra = {
             "cluster_state": props.get("clusterState"),
             "cluster_code_version": props.get("clusterCodeVersion"),
@@ -114,6 +153,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
         ) if cluster_rg and cluster_name else []
         extra["application_count"] = len(applications)
         extra["service_count"] = 0
+        extra["apps_by_node_type"] = {nt: [] for nt in node_type_names}
 
         for app in applications:
             app_name = safe_str(app.get("name"))
@@ -144,6 +184,7 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                         "cluster_id": cluster_id,
                         "cluster_name": cluster_name,
                         "application_name": app_name,
+                        "node_types": node_type_names,
                     },
                 }),
             })
@@ -163,12 +204,23 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
             ) if cluster_rg and cluster_name else []
             extra["service_count"] += len(services)
 
+            app_node_types = set()
             for svc in services:
                 svc_name = safe_str(svc.get("name"))
                 if not svc_name:
                     continue
                 svc_id = safe_str(svc.get("id")) or f"{cluster_id}/services/{_sanitize_sf_name(app_name)}::{_sanitize_sf_name(svc_name)}"
                 svc_props = svc.get("properties") or {}
+                
+                placement_info = _extract_placement_constraints(svc_props)
+                
+                # Track which node types this app uses
+                if placement_info["node_type_constraints"]:
+                    app_node_types.update(placement_info["node_type_constraints"])
+                else:
+                    # If no constraint, service can run on all node types
+                    app_node_types.update(node_type_names)
+                
                 results.append({
                     "id": svc_id,
                     "subscription_id": subscription_id,
@@ -194,9 +246,15 @@ def harvest(subscription_id: str) -> list[dict[str, Any]]:
                             "application_id": app_id,
                             "service_status": safe_str(svc_props.get("serviceStatus")) or safe_str(svc.get("serviceStatus")),
                             "health_state": safe_str(svc_props.get("healthState")) or safe_str(svc.get("healthState")),
+                            **placement_info,
                         },
                     }),
                 })
+            
+            # Track which apps use which node types
+            for nt in app_node_types:
+                if nt in extra["apps_by_node_type"]:
+                    extra["apps_by_node_type"][nt].append(app_name)
 
         results.append({
             "id": cluster_id,
