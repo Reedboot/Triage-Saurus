@@ -13271,6 +13271,40 @@ def api_settings_post():
     return jsonify({"ok": True, "settings": _load_app_settings(force=True)})
 
 
+@app.route("/api/settings/cloud-cache/clear", methods=["POST"])
+def api_settings_cloud_cache_clear():
+    """Clear persisted cloud diagram cache (DB + in-memory) used by subscription diagrams."""
+    conn = _get_db_with_schema()
+    if conn is None:
+        return jsonify({"ok": False, "error": "DB unavailable"}), 503
+
+    try:
+        cleared_db_rows = 0
+        if _table_exists(conn, "subscription_diagram_cache"):
+            row = conn.execute("SELECT COUNT(*) AS n FROM subscription_diagram_cache").fetchone()
+            if row is not None:
+                try:
+                    cleared_db_rows = int(row["n"] or 0)
+                except (TypeError, KeyError, IndexError):
+                    cleared_db_rows = int(row[0] or 0)
+            conn.execute("DELETE FROM subscription_diagram_cache")
+            conn.commit()
+
+        cleared_memory_entries = len(_SUBSCRIPTION_DIAGRAM_CACHE)
+        _SUBSCRIPTION_DIAGRAM_CACHE.clear()
+        return jsonify(
+            {
+                "ok": True,
+                "cleared": {
+                    "db_rows": cleared_db_rows,
+                    "memory_entries": cleared_memory_entries,
+                },
+            }
+        )
+    finally:
+        conn.close()
+
+
 @app.route("/api/subscriptions")
 def api_subscriptions_list():
     """List all harvested Azure subscriptions with asset counts."""
@@ -13431,6 +13465,9 @@ def api_harvest_routing_status(sub_id: str, task_id: str):
 
 _SUBSCRIPTION_DIAGRAM_CACHE: dict[str, tuple[float, str, dict]] = {}
 _SUBSCRIPTION_DIAGRAM_CACHE_TTL = 600  # 10 minutes
+# Bump this whenever diagram rendering logic changes (listener icons, pool icons, edge labels, etc.)
+# so the DB cache is automatically invalidated for all subscriptions.
+_DIAGRAM_CODE_VERSION = "v11"  # bumped: ensure synthetic ingress nodes include drilldown metadata
 
 
 def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None, tuple[str, str] | None]:
@@ -13444,6 +13481,7 @@ def _subscription_diagram_cache_signature(conn, sub_id: str) -> tuple[str | None
     import hashlib as _hashlib
 
     parts = [
+        _DIAGRAM_CODE_VERSION,  # bust cache on any code change to diagram rendering
         str(sub_id),
         str(sub_row["display_name"] or ""),
         str(sub_row["environment"] or ""),
@@ -13708,7 +13746,8 @@ def api_subscription_diagram(sub_id: str):
 
         # Fetch AppGW routing rules for hostname count labels (P1-B) and
         # direct-backend edge detection (P1-A).
-        # Each row: (gateway_name, hostname, backend_fqdns_json, backend_pool_name).
+        # Each row:
+        # (gateway_name, hostname, backend_fqdns_json, backend_pool_name, listener_name, url_path).
         appgw_routes: list = []
         # Set of gateway names that have at least one routing rule with exposure_level='Public'.
         # Used to seed _gw_public in _build_ingress_diagram so DNS failure on external
@@ -13716,8 +13755,13 @@ def api_subscription_diagram(sub_id: str):
         public_appgw_names: set[str] = set()
         try:
             if _table_exists(conn, "appgw_routing_rules"):
+                appgw_cols = _table_columns(conn, "appgw_routing_rules")
+                listener_select = "listener_name" if "listener_name" in appgw_cols else "NULL AS listener_name"
+                path_select = "url_path" if "url_path" in appgw_cols else "NULL AS url_path"
+                protocol_select = "protocol" if "protocol" in appgw_cols else "NULL AS protocol"
+                waf_select = "waf_policy_name" if "waf_policy_name" in appgw_cols else "NULL AS waf_policy_name"
                 appgw_routes = conn.execute(
-                    "SELECT gateway_name, hostname, backend_fqdns, backend_pool_name"
+                    f"SELECT gateway_name, hostname, backend_fqdns, backend_pool_name, {listener_select}, {path_select}, {protocol_select}, {waf_select}"
                     " FROM appgw_routing_rules WHERE subscription_id=?",
                     (sub_id,),
                 ).fetchall()
@@ -13896,6 +13940,9 @@ def _get_icon_path(resource_type: str) -> str | None:
         # Direct ARM type to icon mapping (for better coverage)
         arm_to_icon_map = {
             "microsoft.network/applicationgateways": "azurerm_app_gateway",
+            "microsoft.network/applicationgatewaybackendpools": "azurerm_app_gateway_backend_pool",
+            "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
+            "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
             "microsoft.network/azurefirewalls": "azurerm_firewall",
@@ -14007,6 +14054,9 @@ def _get_icon_class(resource_type: str) -> str:
         # Shared ARM → terraform-style map (kept in sync with _get_icon_path)
         arm_to_icon_map = {
             "microsoft.network/applicationgateways": "azurerm_app_gateway",
+            "microsoft.network/applicationgatewaybackendpools": "azurerm_app_gateway_backend_pool",
+            "microsoft.network/applicationgatewaylisteners/http": "azurerm_app_gateway_listener_http",
+            "microsoft.network/applicationgatewaylisteners/https": "azurerm_app_gateway_listener_https",
             "microsoft.network/frontdoors": "azurerm_front_door_and_cdn_profiles",
             "microsoft.network/trafficmanagerprofiles": "azurerm_traffic_manager",
             "microsoft.apimanagement/service": "azurerm_apim",
@@ -14609,8 +14659,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _iter_appgw_route_rows():
         """Yield normalized App Gateway route tuples.
 
-        Supports both historical rows (gw, host, backends) and newer rows
-        (gw, host, backends, backend_pool_name).
+        Supports historical/current row layouts and normalizes to:
+        (gw, host, backends, backend_pool_name, listener_name, url_path, listener_protocol, waf_policy_name).
         """
         for _row in (appgw_routes or []):
             try:
@@ -14618,9 +14668,13 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                 _hostname = _row[1]
                 _be_fqdns_json = _row[2]
                 _pool_name = _row[3] if len(_row) > 3 else None
+                _listener_name = _row[4] if len(_row) > 4 else None
+                _url_path = _row[5] if len(_row) > 5 else None
+                _listener_protocol = _row[6] if len(_row) > 6 else None
+                _waf_policy_name = _row[7] if len(_row) > 7 else None
             except Exception:
                 continue
-            yield _gw_name, _hostname, _be_fqdns_json, _pool_name
+            yield _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name
     
     for row in rows:
         name, rtype, rg, fqdn, is_public, sku = row[:6]
@@ -14714,7 +14768,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # Seed with gateways confirmed public via routing-rules exposure_level so that
     # DNS failure on listener hostnames never hides a genuinely public gateway.
     _gw_public: dict[str, bool] = {name.lower(): True for name in (public_appgw_names or set())}
-    for _gw_name, _hostname, _be, _pool_name in _iter_appgw_route_rows():
+    for _gw_name, _hostname, _be, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
         _gw_key = (_gw_name or "").lower()
         if _hostname and _dns_is_internet_reachable(str(_hostname)):
             _gw_public[_gw_key] = True
@@ -15084,7 +15138,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     if appgw_routes:
         import re as _re_gw
         _gw_hostnames: dict[str, set[str]] = {}
-        for _gw_name, _hostname, _be_fqdns_json, _pool_name in _iter_appgw_route_rows():
+        for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             if _hostname and _hostname.lower() not in ("", "none", "null"):
                 _gw_hostnames.setdefault(_gw_name.lower(), set()).add(_hostname.lower())
         for _ep_item in grouped_entry_points:
@@ -15261,6 +15315,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         safe_label = label.replace('"', "&quot;")
         return f'    {node_id}["{safe_label}"]'
 
+    # Metadata for synthetic App Gateway child nodes used in drilldown map.
+    appgw_node_resources_by_id: dict[str, list[dict]] = {}
+    appgw_node_title_by_id: dict[str, str] = {}
+
     # Add nodes with icon classes
     for item in shown_entry:
         node_id = _get_node_id(item)
@@ -15269,6 +15327,9 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if item.get("has_waf") or item.get("waf_mode") or item.get("is_restricted"):
             label = f"{label} 🛡️"
         lines.append(_node_line(node_id, label, arm_type))
+        if "applicationgateway" in (arm_type or "").lower():
+            appgw_node_resources_by_id[node_id] = item.get("resources") or [{"rg": item.get("rg"), "name": item.get("name")}]
+            appgw_node_title_by_id[node_id] = item.get("name") or item.get("label") or "App Gateway"
         if "azurefirewalls" in arm_type.lower():
             policy = firewall_policy_by_firewall.get((item.get("name") or "").lower())
             if policy and policy.get("name"):
@@ -15291,35 +15352,117 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # --- Listener and WAF policy nodes for App Gateways ---
     # Maps gw_nid → list of (listener_nid, is_insecure_http)
     _listener_nids: dict[str, list[tuple[str, bool]]] = {}
-    # Maps gw_nid → waf_nid
+    listener_node_specs: list[dict] = []
+    # Maps gw_nid → default/fallback waf_nid
     _waf_nids: dict[str, str] = {}
+    # Maps listener node id → explicit WAF policy node id
+    _listener_waf_nids: dict[str, str] = {}
+    # Maps (gw_nid, policy_name_lower) → WAF policy node id
+    _waf_nids_by_policy: dict[tuple[str, str], str] = {}
+    # Maps gw_nid → all WAF policy node ids created for that gateway
+    _waf_nids_by_gateway: dict[str, list[str]] = {}
+    waf_node_specs: list[dict] = []
+    # Maps gateway name (lowercase) → list of (protocol, hostname) tuples (ordered, unique)
+    _gw_listener_pairs: dict[str, list[tuple[str, str]]] = {}
+    # Maps (gateway, protocol, hostname) → named WAF policy from routing rules
+    _gw_listener_waf_policy: dict[tuple[str, str, str], str] = {}
+    for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
+        _gw_key = str(_gw_name or "").lower().strip()
+        _host = str(_hostname or "").strip()
+        _proto = str(_listener_protocol or "").upper().strip() if _listener_protocol else "HTTPS"
+        if not _gw_key or not _host:
+            continue
+        pair = (_proto, _host)
+        if pair not in _gw_listener_pairs.get(_gw_key, []):
+            _gw_listener_pairs.setdefault(_gw_key, []).append(pair)
+        _waf_name = str(_waf_policy_name or "").strip()
+        if _waf_name:
+            _listener_key = (_gw_key, _proto, _host)
+            if _listener_key not in _gw_listener_waf_policy:
+                _gw_listener_waf_policy[_listener_key] = _waf_name
 
     for item in shown_entry:
         arm_type_low = (item.get("arm_type") or item.get("type") or "").lower()
         if "applicationgateway" not in arm_type_low:
             continue
         gw_nid = _get_node_id(item)
-        listeners_str = item.get("listeners") or ""
+        gw_name_lc = str(item.get("name") or "").lower().strip()
+        listener_pairs = list(_gw_listener_pairs.get(gw_name_lc, []))
+        if not listener_pairs:
+            # Fallback for environments where appgw_routing_rules are not yet harvested.
+            raw_listeners = item.get("listeners") or ""
+            if isinstance(raw_listeners, list):
+                raw_tokens = [str(t or "").strip() for t in raw_listeners if str(t or "").strip()]
+            else:
+                raw_tokens = [t.strip() for t in str(raw_listeners).split(",") if t.strip()]
+            for token in raw_tokens:
+                if ":" in token:
+                    proto_raw, listener_hint_raw = token.split(":", 1)
+                    proto = str(proto_raw or "").upper().strip() or "HTTPS"
+                    listener_hint = str(listener_hint_raw or "").strip()
+                else:
+                    proto = str(token or "").upper().strip() or "HTTPS"
+                    listener_hint = ""
+                if not listener_hint:
+                    fqdns = item.get("fqdns") or []
+                    listener_hint = str(fqdns[0]).strip() if fqdns else str(item.get("fqdn") or "").strip()
+                if not listener_hint:
+                    listener_hint = proto
+                pair = (proto, listener_hint)
+                if pair not in listener_pairs:
+                    listener_pairs.append(pair)
         l_nids: list[tuple[str, bool]] = []
-        seen_protos: set[str] = set()
-        for token in [t.strip() for t in listeners_str.split(",") if t.strip()]:
-            upper = token.upper()
-            # Deduplicate identical protocol:port combinations per gateway
-            if upper in seen_protos:
-                continue
-            seen_protos.add(upper)
-            l_nid = f"l_{gw_nid}_{_sanitise_node_id(token)}"
-            is_http = upper.startswith("HTTP:") and not upper.startswith("HTTPS:")
-            label = f"🔴 {token}" if is_http else f"🔒 {token}"
-            safe_lbl = label.replace('"', "&quot;")
-            lines.append(f'    {l_nid}["{safe_lbl}"]')
+          
+        # Create one listener node per unique (protocol, hostname) pair
+        for proto, host in listener_pairs:
+            is_http = proto.startswith("HTTP") and not proto.startswith("HTTPS")
+            l_nid = f"l_{gw_nid}_{_sanitise_node_id(f'{proto}_{host}')}"
+            proto_label = "HTTP listener" if is_http else "HTTPS listener"
+            label = f"🔴 {proto_label} ({host})" if is_http else f"🔒 {proto_label} ({host})"
+            arm_type = "microsoft.network/applicationgatewaylisteners/http" if is_http else "microsoft.network/applicationgatewaylisteners/https"
+            lines.append(_node_line(l_nid, label, arm_type))
             l_nids.append((l_nid, is_http))
+            _waf_policy_name = _gw_listener_waf_policy.get((gw_name_lc, proto, host))
+            if _waf_policy_name:
+                _waf_key = (gw_nid, _waf_policy_name.lower())
+                _waf_nid = _waf_nids_by_policy.get(_waf_key)
+                if not _waf_nid:
+                    _waf_nid = f"waf_{gw_nid}_{_sanitise_node_id(_waf_policy_name)}"
+                    _waf_nids_by_policy[_waf_key] = _waf_nid
+                    _waf_nids_by_gateway.setdefault(gw_nid, []).append(_waf_nid)
+                    lines.append(_node_line(_waf_nid, f"🛡️ WAF: {_waf_policy_name}", "microsoft.network/firewallpolicies"))
+                    waf_node_specs.append({
+                        "node_id": _waf_nid,
+                        "gateway_node_id": gw_nid,
+                        "gateway_name": item.get("name") or "",
+                        "resource_group": item.get("rg") or "",
+                        "policy_name": _waf_policy_name,
+                    })
+                _listener_waf_nids[l_nid] = _waf_nid
+            listener_node_specs.append({
+                "node_id": l_nid,
+                "gateway_node_id": gw_nid,
+                "gateway_name": item.get("name") or "",
+                "resource_group": item.get("rg") or "",
+                "protocol": proto,
+                "hostname": host,
+                "title": label,
+            })
         if l_nids:
             _listener_nids[gw_nid] = l_nids
-        if item.get("has_waf") or item.get("waf_mode"):
+        if _waf_nids_by_gateway.get(gw_nid):
+            _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
+        elif item.get("has_waf") or item.get("waf_mode"):
             w_nid = f"waf_{gw_nid}"
             lines.append(f'    {w_nid}["🛡️ WAF Policy"]')
             _waf_nids[gw_nid] = w_nid
+            waf_node_specs.append({
+                "node_id": w_nid,
+                "gateway_node_id": gw_nid,
+                "gateway_name": item.get("name") or "",
+                "resource_group": item.get("rg") or "",
+                "policy_name": "",
+            })
 
     for item in shown_api:
         node_id = _get_node_id(item)
@@ -15371,18 +15514,32 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # App Gateway backend pool nodes: show explicit egress path
     # App Gateway -> Backend Pool -> Destination.
     appgw_pool_nodes: dict[tuple[str, str], str] = {}
-    for _gw_name, _hostname, _be_fqdns_json, _pool_name in _iter_appgw_route_rows():
+    appgw_pool_node_specs: dict[str, dict] = {}
+    # Collect all listener names per (gw_nid, pool_key) so every listener routing to
+    # a pool appears on the gateway→pool edge label, not just the first iterated row.
+    appgw_pool_listeners: dict[tuple[str, str], list[str]] = {}
+    for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
         _gw_nid = node_by_name.get(str(_gw_name or "").lower())
         if not _gw_nid:
             continue
         _pool_label = str(_pool_name or "default-backend-pool").strip() or "default-backend-pool"
         _pool_key = _pool_label.lower()
         _pool_node_key = (_gw_nid, _pool_key)
+        _raw_listener = str(_listener_name or "").strip()
+        _listener_tokens = [t.strip() for t in _raw_listener.split(" / ") if t.strip()] if _raw_listener else []
+        for _ln in _listener_tokens:
+            if _ln not in appgw_pool_listeners.get(_pool_node_key, []):
+                appgw_pool_listeners.setdefault(_pool_node_key, []).append(_ln)
         if _pool_node_key in appgw_pool_nodes:
             continue
         _pool_nid = f"agpool_{_sanitise_node_id(_gw_nid)}_{_sanitise_node_id(_pool_key)}"
         appgw_pool_nodes[_pool_node_key] = _pool_nid
-        lines.append(_node_line(_pool_nid, f"Pool: {_pool_label}", "microsoft.network/applicationgateways"))
+        lines.append(_node_line(_pool_nid, _pool_label, "microsoft.network/applicationgatewaybackendpools"))
+        appgw_pool_node_specs[_pool_nid] = {
+            "gateway_node_id": _gw_nid,
+            "gateway_name": _gw_name or "",
+            "pool_name": _pool_label,
+        }
     
     # Add connections — track link index so linkStyle can colour each arrow
     # Convention: red = direct internet exposure, orange = internet-reachable path, white = internal/OK
@@ -15394,6 +15551,43 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     def _add_link(line: str, color: str, *, dasharray: str | None = None) -> None:
         link_styles.append((color, dasharray) if dasharray else color)
         lines.append(line)
+
+    # Track structural listener chain edges so we can safely add them from multiple
+    # branches without creating duplicates.
+    listener_chain_edges: set[tuple[str, str]] = set()
+    listener_waf_edges: set[tuple[str, str]] = set()
+
+    def _ensure_listener_chain(
+        gateway_nid: str,
+        listeners: list[tuple[str, bool]],
+        waf_nid: str | None,
+        *,
+        listener_waf_nids: dict[str, str] | None = None,
+        color: str = "orange",
+    ) -> None:
+        waf_targets: set[str] = set()
+        for listener_nid, _is_http in listeners:
+            listener_waf_nid = (listener_waf_nids or {}).get(listener_nid)
+            target_nid = listener_waf_nid or waf_nid or gateway_nid
+            edge = (listener_nid, target_nid)
+            if edge in listener_chain_edges:
+                continue
+            listener_chain_edges.add(edge)
+            if listener_waf_nid:
+                waf_targets.add(listener_waf_nid)
+                _add_link(f'    {listener_nid} --> {listener_waf_nid}', color)
+            elif waf_nid:
+                waf_targets.add(waf_nid)
+                _add_link(f'    {listener_nid} --> {waf_nid}', color)
+            else:
+                _add_link(f'    {listener_nid} --> {gateway_nid}', color)
+        if waf_nid and not waf_targets and not listeners:
+            waf_targets.add(waf_nid)
+        for waf_target in sorted(waf_targets):
+            waf_edge = (waf_target, gateway_nid)
+            if waf_edge not in listener_waf_edges:
+                listener_waf_edges.add(waf_edge)
+                _add_link(f'    {waf_target} --> {gateway_nid}', color)
 
     def _fqdn_label(fqdns: list, suffix: str = "") -> str:
         """Build a concise arrow label from a list of FQDNs."""
@@ -15408,6 +15602,31 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         if suffix:
             label += f" {suffix}"
         return label
+
+    def _listener_edge_label(listener_name: str | None) -> str:
+        """Label AppGW→pool edges with listener name, fallback to generic text."""
+        label = str(listener_name or "").strip()
+        return label or "Backend pool"
+
+    def _pool_edge_labels(gw_nid: str, pool_key: str) -> list[str]:
+        """Return per-listener labels for gateway→pool edges."""
+        listeners = appgw_pool_listeners.get((gw_nid, pool_key), [])
+        return listeners if listeners else ["Backend pool"]
+
+    def _pool_edge_color(edge_label: str) -> str:
+        """Color listener edges by exposure: internal/private lower-risk than public."""
+        lbl = str(edge_label or "").lower()
+        is_private = ("_private" in lbl) or (" private" in lbl) or ("internal" in lbl and "_public" not in lbl)
+        return "white" if is_private else "orange"
+
+    def _apim_route_edge_label(url_path: str | None) -> str:
+        """Label Backend-pool→APIM edges with the routed API path when available."""
+        path = str(url_path or "").strip()
+        if not path or path == "/*":
+            return "APIM route"
+        if len(path) > 48:
+            path = path[:46] + "…"
+        return f"API {path}"
 
     def _azure_fqdn_suffix(arm_type: str) -> str | None:
         """Return the well-known Azure FQDN suffix for resource types whose FQDN
@@ -15635,43 +15854,41 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
 
             if l_nids:
                 sorted_l_nids = sorted(l_nids, key=lambda x: x[1])  # False < True
-                if protected_label:
-                    for l_nid, _is_http in sorted_l_nids:
-                        _add_link(f'    Internet -->|"{protected_label}"| {l_nid}', protected_color or "orange")
-                        if w_nid:
-                            _add_link(f'    {l_nid} --> {w_nid}', protected_color or "orange")
-                        else:
-                            _add_link(f'    {l_nid} --> {node_id}', protected_color or "orange")
-                    if w_nid:
-                        _add_link(f'    {w_nid} --> {node_id}', protected_color or "orange")
-                else:
-                    # Internet → each listener → [WAF] → App Gateway.
-                    # The FQDN label is shown only on the first (most secure) listener
-                    # arrow to avoid the same label appearing on every parallel arrow.
-                    # Subsequent arrows carry a short protocol name so each line is
-                    # visually distinct and the user can tell HTTP from HTTPS at a glance.
-                    # Sort HTTPS (is_http=False) before HTTP (is_http=True) so the FQDN
-                    # is attached to the secure listener by default.
-                    for i, (l_nid, is_http) in enumerate(sorted_l_nids):
-                        arrow_color = "red" if is_http else "orange"
-                        if i == 0:
-                            label = fqdn_label  # first arrow gets the FQDN
-                        else:
-                            label = "HTTP" if is_http else "HTTPS"
-                        _add_link(f'    Internet -->|"{label}"| {l_nid}', arrow_color)
-                        if w_nid:
-                            _add_link(f'    {l_nid} --> {w_nid}', "orange")
-                        else:
-                            _add_link(f'    {l_nid} --> {node_id}', "orange")
-                    if w_nid:
-                        _add_link(f'    {w_nid} --> {node_id}', "orange")
+                # Internet → each listener → [WAF] → App Gateway.
+                for l_nid, is_http in sorted_l_nids:
+                    arrow_color = "red" if is_http else "orange"
+                    _add_link(f'    Internet --> {l_nid}', arrow_color)
+                _ensure_listener_chain(
+                    node_id,
+                    sorted_l_nids,
+                    w_nid,
+                    listener_waf_nids=_listener_waf_nids,
+                    color=protected_color or "orange",
+                )
             elif w_nid:
                 # No listener data but WAF / allowlist protection known.
                 _add_link(f'    Internet -->|"{protected_label}"| {w_nid}', protected_color or "orange")
-                _add_link(f'    {w_nid} --> {node_id}', protected_color or "orange")
+                _ensure_listener_chain(node_id, [], w_nid, color=protected_color or "orange")
             else:
                 # Non-App Gateway or no listener data.
                 _add_link(f'    Internet -->|"{protected_label}"| {node_id}', protected_color or "orange")
+
+    # Ensure listener routing chains are always visible so listener nodes stay to
+    # the left of their App Gateway, even when Internet ingress arrows are hidden
+    # (for example when DNS confirms private-only exposure).
+    if shown_entry:
+        for entry in shown_entry:
+            arm_type_low = (entry.get("arm_type") or entry.get("type") or "").lower()
+            if "applicationgateway" not in arm_type_low:
+                continue
+            node_id = _get_node_id(entry)
+            _ensure_listener_chain(
+                node_id,
+                sorted(_listener_nids.get(node_id, []), key=lambda x: x[1]),
+                _waf_nids.get(node_id),
+                listener_waf_nids=_listener_waf_nids,
+                color="orange",
+            )
 
     # Entry Points → API Layer (orange — still part of the internet-reachable routing chain)
     if shown_entry and shown_api:
@@ -15729,8 +15946,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     if appgw_routes and shown_api and shown_entry:
         import re as _re_routing
         _gw_to_apim_edges: set[tuple[str, str]] = set()
-        _gw_to_pool_edges: set[tuple[str, str]] = set()
-        for _gw_name, _hostname, _be_fqdns_json, _pool_name in _iter_appgw_route_rows():
+        _gw_to_pool_edges: set[tuple[str, str, str]] = set()
+        for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
             if not _gw_nid:
                 continue
@@ -15738,10 +15955,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _pool_nid = appgw_pool_nodes.get((_gw_nid, _pool_key))
             _source_nid = _pool_nid or _gw_nid
             if _pool_nid:
-                _gw_pool_edge = (_gw_nid, _pool_nid)
-                if _gw_pool_edge not in _gw_to_pool_edges:
-                    _gw_to_pool_edges.add(_gw_pool_edge)
-                    _add_link(f'    {_gw_nid} -->|"Backend pool"| {_pool_nid}', "orange")
+                for _edge_label in _pool_edge_labels(_gw_nid, _pool_key):
+                    _gw_pool_edge = (_gw_nid, _pool_nid, _edge_label)
+                    if _gw_pool_edge not in _gw_to_pool_edges:
+                        _gw_to_pool_edges.add(_gw_pool_edge)
+                        _add_link(
+                            f'    {_gw_nid} -->|"{_edge_label}"| {_pool_nid}',
+                            _pool_edge_color(_edge_label),
+                        )
             try:
                 _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
             except Exception:
@@ -15755,7 +15976,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     _edge_key = (_source_nid, api_nid)
                     if _edge_key not in _gw_to_apim_edges:
                         _gw_to_apim_edges.add(_edge_key)
-                        _add_link(f'    {_source_nid} -->|"Routing (WAF ✓)"| {api_nid}', "orange")
+                        _add_link(
+                            f'    {_source_nid} -->|"{_apim_route_edge_label(_url_path)}"| {api_nid}',
+                            "orange",
+                        )
                         break  # Only one AppGW→APIM edge per gateway
      
     # API Layer → Backends (white — internal routing behind gateway, OK)
@@ -15774,8 +15998,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     if appgw_routes:
         import re as _re_appgw
         _direct_edges_emitted: set[tuple[str, str]] = set()
-        _gw_to_pool_edges: set[tuple[str, str]] = set()
-        for _gw_name, _hostname, _be_fqdns_json, _pool_name in _iter_appgw_route_rows():
+        _gw_to_pool_edges: set[tuple[str, str, str]] = set()
+        for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
             if not _gw_nid:
                 continue
@@ -15783,10 +16007,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _pool_nid = appgw_pool_nodes.get((_gw_nid, _pool_key))
             _source_nid = _pool_nid or _gw_nid
             if _pool_nid:
-                _gw_pool_edge = (_gw_nid, _pool_nid)
-                if _gw_pool_edge not in _gw_to_pool_edges:
-                    _gw_to_pool_edges.add(_gw_pool_edge)
-                    _add_link(f'    {_gw_nid} -->|"Backend pool"| {_pool_nid}', "orange")
+                for _edge_label in _pool_edge_labels(_gw_nid, _pool_key):
+                    _gw_pool_edge = (_gw_nid, _pool_nid, _edge_label)
+                    if _gw_pool_edge not in _gw_to_pool_edges:
+                        _gw_to_pool_edges.add(_gw_pool_edge)
+                        _add_link(
+                            f'    {_gw_nid} -->|"{_edge_label}"| {_pool_nid}',
+                            _pool_edge_color(_edge_label),
+                        )
             try:
                 _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
             except Exception:
@@ -15957,17 +16185,17 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             lines.append(f'    linkStyle {idx} stroke:{style},stroke-width:2px')
     lines.append("")
     # classDef declarations for semantic node roles
-    lines.append('    classDef entryPoint stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry (no WAF)
-    lines.append('    classDef entryPointProtected stroke:#00897b,stroke-width:2px;')  # Dark teal = WAF-protected
-    lines.append('    classDef apiGateway stroke:#00897b,stroke-width:2px;')  # Dark teal = APIM
-    lines.append('    classDef backend stroke:#388e3c,stroke-width:2px;')  # Dark green = Compute (AKS, App Service)
-    lines.append('    classDef dataStore stroke:#1565c0,stroke-width:2px;')  # Dark blue = Data services
-    lines.append('    classDef dataStorePublic stroke:#d32f2f,stroke-width:2px;')  # Deep red = Public/exposed data
-    lines.append('    classDef internet stroke:#d32f2f,stroke-width:2px;')  # Deep red = Internet entry
-    lines.append('    classDef summary stroke:#6a1b9a,stroke-width:2px;')  # Dark purple = Summary nodes
-    lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
-    lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px;')  # Teal = HTTPS listener
-    lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px;')  # Deep orange = WAF policy
+    lines.append('    classDef entryPoint stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a;')  # Deep red = Internet entry (no WAF)
+    lines.append('    classDef entryPointProtected stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Dark teal = WAF-protected
+    lines.append('    classDef apiGateway stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Dark teal = APIM
+    lines.append('    classDef backend stroke:#388e3c,stroke-width:2px,fill:#052e16;')  # Dark green = Compute (AKS, App Service)
+    lines.append('    classDef dataStore stroke:#1565c0,stroke-width:2px,fill:#0b1f3a;')  # Dark blue = Data services
+    lines.append('    classDef dataStorePublic stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a;')  # Deep red = Public/exposed data
+    lines.append('    classDef internet stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a;')  # Deep red = Internet entry
+    lines.append('    classDef summary stroke:#6a1b9a,stroke-width:2px,fill:#2b1639;')  # Dark purple = Summary nodes
+    lines.append('    classDef listenerHttp stroke:#d32f2f,stroke-width:2px,fill:#3b0a0a,stroke-dasharray:4,2;')  # Red dashed = HTTP listener
+    lines.append('    classDef listenerHttps stroke:#00897b,stroke-width:2px,fill:#0f2f2b;')  # Teal = HTTPS listener
+    lines.append('    classDef wafPolicy stroke:#e65100,stroke-width:2px,fill:#3d1c0d;')  # Deep orange = WAF policy
     
     for item in shown_entry:
         style_class = "entryPointProtected" if (item.get("has_waf") or item.get("waf_mode") or item.get("is_restricted")) else "entryPoint"
@@ -15976,8 +16204,12 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
         gw_nid = _get_node_id(item)
         for (l_nid, is_http) in _listener_nids.get(gw_nid, []):
             lines.append(f'    class {l_nid} {"listenerHttp" if is_http else "listenerHttps"};')
-        if gw_nid in _waf_nids:
-            lines.append(f'    class {_waf_nids[gw_nid]} wafPolicy;')
+    _styled_waf_nodes: set[str] = set()
+    for spec in waf_node_specs:
+        node_id = spec.get("node_id")
+        if node_id and node_id not in _styled_waf_nodes:
+            _styled_waf_nodes.add(node_id)
+            lines.append(f"    class {node_id} wafPolicy;")
     
     for item in shown_api:
         lines.append(f'    class {_get_node_id(item)} apiGateway;')
@@ -16055,6 +16287,80 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             "arm_type": spec["arm_type"],
             "resources": [{"rg": spec["resource_group"], "name": spec["policy_name"]}],
             "can_drill": True,
+        }
+
+    # Ensure all rendered ingress nodes can open a popup with context.
+    node_drilldown_map["Internet"] = {
+        "title": "Internet exposure overview",
+        "arm_type": "internet",
+        "resources": [],
+        "can_drill": True,
+    }
+
+    for spec in listener_node_specs:
+        gw_resources = appgw_node_resources_by_id.get(spec["gateway_node_id"]) or [{
+            "rg": spec.get("resource_group") or "",
+            "name": spec.get("gateway_name") or "",
+        }]
+        listener_resources = []
+        for gw_res in gw_resources:
+            listener_resources.append({
+                "rg": gw_res.get("rg") or spec.get("resource_group") or "",
+                "name": gw_res.get("name") or spec.get("gateway_name") or "",
+                "listener_hostname": spec.get("hostname") or "",
+                "listener_protocol": spec.get("protocol") or "",
+            })
+        node_drilldown_map[spec["node_id"]] = {
+            "title": spec.get("title") or f"Listener {spec.get('hostname') or ''}".strip(),
+            "arm_type": "microsoft.network/applicationgateways",
+            "resources": listener_resources,
+            "can_drill": bool(listener_resources),
+        }
+
+    for spec in waf_node_specs:
+        gw_resources = appgw_node_resources_by_id.get(spec["gateway_node_id"]) or [{
+            "rg": spec.get("resource_group") or "",
+            "name": spec.get("gateway_name") or "",
+        }]
+        policy_name = str(spec.get("policy_name") or "").strip()
+        gateway_title = appgw_node_title_by_id.get(spec["gateway_node_id"]) or spec.get("gateway_name") or "App Gateway"
+        if policy_name:
+            title = f"🛡️ WAF Policy: {policy_name} ({gateway_title})"
+        else:
+            title = f"🛡️ WAF Policy ({gateway_title})"
+        waf_resources = []
+        for gw_res in gw_resources:
+            entry = {
+                "rg": gw_res.get("rg") or "",
+                "name": gw_res.get("name") or spec.get("gateway_name") or "",
+            }
+            if policy_name:
+                entry["waf_policy_name"] = policy_name
+            waf_resources.append(entry)
+        node_drilldown_map[spec["node_id"]] = {
+            "title": title,
+            "arm_type": "microsoft.network/applicationgateways",
+            "resources": waf_resources,
+            "can_drill": bool(waf_resources),
+        }
+
+    for pool_node_id, pool_spec in appgw_pool_node_specs.items():
+        gw_resources = appgw_node_resources_by_id.get(pool_spec["gateway_node_id"]) or [{
+            "rg": "",
+            "name": pool_spec.get("gateway_name") or "",
+        }]
+        pool_resources = []
+        for gw_res in gw_resources:
+            pool_resources.append({
+                "rg": gw_res.get("rg") or "",
+                "name": gw_res.get("name") or pool_spec.get("gateway_name") or "",
+                "backend_pool_name": pool_spec.get("pool_name") or "",
+            })
+        node_drilldown_map[pool_node_id] = {
+            "title": f"Backend pool: {pool_spec.get('pool_name') or 'default'}",
+            "arm_type": "microsoft.network/applicationgateways",
+            "resources": pool_resources,
+            "can_drill": bool(pool_resources),
         }
 
     connectivity_view = {
@@ -16225,11 +16531,57 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
             result["empty_message"] = empty_message
         return result
 
+    # ── Internet exposure summary ──────────────────────────────────────────────
+    if arm_type_lc == "internet":
+        title = "Internet — Exposure Summary"
+        columns = ["Resource Type", "Public Asset Count", "Restricted Count"]
+        rows = conn.execute(
+            """
+            SELECT type,
+                   COUNT(*) AS public_n,
+                   SUM(CASE WHEN is_restricted=1 THEN 1 ELSE 0 END) AS restricted_n
+            FROM provisioned_assets
+            WHERE subscription_id=? AND is_public=1
+            GROUP BY type
+            ORDER BY public_n DESC, type
+            LIMIT 200
+            """,
+            (sub_id,),
+        ).fetchall()
+        return _table_result(
+            title=title,
+            columns=columns,
+            rows=[
+                [
+                    _friendly_type(r[0] or ""),
+                    int(r[1] or 0),
+                    int(r[2] or 0),
+                ]
+                for r in rows
+            ],
+            empty_message="No public assets were found for this subscription.",
+        )
+
     # ── App Gateway ───────────────────────────────────────────────────────────
     if "applicationgateway" in arm_type_lc:
         title   = "App Gateway — Routing Rules"
         columns = ["Name / Hostname", "Protocol", "URL Path",
                    "Backend Pool", "Backend Targets", "WAF Policy"]
+        listener_hosts = {
+            str(r.get("listener_hostname") or "").strip().lower()
+            for r in resources
+            if isinstance(r, dict) and r.get("listener_hostname")
+        }
+        listener_protocols = {
+            str(r.get("listener_protocol") or "").strip().upper()
+            for r in resources
+            if isinstance(r, dict) and r.get("listener_protocol")
+        }
+        backend_pools = {
+            str(r.get("backend_pool_name") or "").strip().lower()
+            for r in resources
+            if isinstance(r, dict) and r.get("backend_pool_name")
+        }
         gateway_waf_policies: dict[str, list[str]] = {}
         if _table_exists(conn, "appgw_waf_policies") and names:
             policy_rows = conn.execute(
@@ -16261,20 +16613,40 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                        COALESCE(exposure_level, 'Public') AS exposure_level
                 FROM appgw_routing_rules
                 WHERE subscription_id=? AND gateway_name IN ({ph})
-                ORDER BY exposure_level DESC, gateway_name, hostname, url_path""",
+                ORDER BY exposure_level DESC, gateway_name, backend_pool_name, hostname, url_path""",
             [sub_id] + names,
         ).fetchall() if names else []
+
+        if listener_hosts or listener_protocols or backend_pools:
+            filtered_rows = []
+            for row in gw_rows:
+                _row_host = str(row[2] or "").strip().lower()
+                _row_proto = str(row[3] or "").strip().upper()
+                _row_pool = str(row[5] or "").strip().lower()
+                if listener_hosts and _row_host not in listener_hosts:
+                    continue
+                if listener_protocols and _row_proto not in listener_protocols:
+                    continue
+                if backend_pools and _row_pool not in backend_pools:
+                    continue
+                filtered_rows.append(row)
+            gw_rows = filtered_rows
 
         if not gw_rows:
             return {"title": title, "view_type": "table", "columns": columns, "rows": [],
                     "empty_message": "No routing rules harvested yet — run Scripts/Harvest/appgw_routing_map.py"}
 
-        # Group by exposure_level → gateway_name → list of rule rows
+        # Build a map of HTTP listeners to their WAF policies from routing rules
+        listener_waf_map: dict[tuple[str, str, str], list[str]] = {}  # (gw_name, hostname, protocol) -> [policy_names]
+        
+        # Group by exposure_level → backend_pool (parent) → rules (children)
         from collections import defaultdict
         by_exposure = defaultdict(lambda: defaultdict(list))
         for gw_name, listener, hostname, protocol, url_path, pool, be_json, be_port, waf, exposure in gw_rows:
             gw_policy_names = gateway_waf_policies.get(str(gw_name or "").strip().lower(), [])
-            effective_waf = waf or ", ".join(gw_policy_names)
+            # Use rule-specific WAF policy if present, otherwise use gateway-level policies
+            effective_waf_list = [waf] if waf else gw_policy_names
+            
             try:
                 be_fqdns = _json.loads(be_json) if be_json else []
             except Exception:
@@ -16284,13 +16656,34 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 targets += f" +{len(be_fqdns)-3} more"
             if be_port:
                 targets += f":{be_port}"
-            by_exposure[exposure][gw_name].append({
+            
+            # Track WAF policies for this listener
+            listener_key = (gw_name, hostname or listener or "—", protocol or "HTTPS")
+            if listener_key not in listener_waf_map:
+                listener_waf_map[listener_key] = []
+            for policy_name in effective_waf_list:
+                if policy_name and policy_name not in listener_waf_map[listener_key]:
+                    listener_waf_map[listener_key].append(policy_name)
+            
+            # Format WAF display
+            waf_display = ""
+            if effective_waf_list and any(effective_waf_list):
+                waf_display = "🛡️ " + ", ".join(effective_waf_list)
+            else:
+                waf_display = "—"
+            
+            pool_key = f"{exposure}::{gw_name}::{pool or '—'}"
+            by_exposure[exposure][pool_key].append({
+                "gateway_name": gw_name,
                 "hostname": hostname or listener or "—",
                 "protocol": protocol or "HTTPS",
                 "url_path": url_path if url_path and url_path != "/*" else "/*",
                 "pool":     pool or "—",
                 "targets":  targets or "—",
-                "waf":      "🛡️ " + effective_waf if effective_waf else "—",
+                "waf":      waf_display,
+                "waf_list": effective_waf_list,
+                "be_fqdns": be_fqdns,
+                "be_port": be_port,
             })
 
         # Build tree_table sections: Public first, then Internal/Private
@@ -16300,29 +16693,69 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
         for exposure in exposure_order:
             if exposure not in by_exposure:
                 continue
-            gateways = by_exposure[exposure]
+            pools_dict = by_exposure[exposure]
             label = exposure_labels.get(exposure, exposure)
-            gw_count = len(gateways)
-            rule_count = sum(len(rules) for rules in gateways.values())
+            
             section_rows = []
-            for gw_name, rules in gateways.items():
+            for pool_key in sorted(pools_dict.keys()):
+                rules = pools_dict[pool_key]
+                # Extract pool name from key
+                parts = pool_key.split("::")
+                gw_name = parts[1] if len(parts) > 1 else "—"
+                pool_name = parts[2] if len(parts) > 2 else "—"
+                
+                # Get unique target info from all rules pointing to this pool
+                all_targets = set()
+                all_be_fqdns = []
+                be_port = None
+                for rule in rules:
+                    all_targets.add(rule["targets"])
+                    all_be_fqdns.extend(rule["be_fqdns"])
+                    if rule["be_port"]:
+                        be_port = rule["be_port"]
+                
+                targets_summary = ", ".join(sorted(all_targets))
+                
+                parent_id = pool_key
+                parent_row = {
+                    "id": parent_id,
+                    "parent_id": None,
+                    "cells": [
+                        {"label": pool_name, "style": "font-weight:600;color:#0ea5e9;"},
+                        "—",
+                        "—",
+                        f"{len(rules)} route{'s' if len(rules) != 1 else ''}",
+                        targets_summary if len(all_targets) <= 2 else targets_summary[:40] + "…",
+                        "—",
+                    ],
+                    "child_count": len(rules),
+                    "search_text": f"{pool_name} {targets_summary}".lower(),
+                }
+                section_rows.append(parent_row)
+                
+                # Add child rows for each route to this pool
                 for idx, rule in enumerate(rules):
-                    section_rows.append({
-                        "id": f"{exposure}::{gw_name}::rule{idx}",
-                        "parent_id": None,
+                    child_row = {
+                        "id": f"{parent_id}::{idx}",
+                        "parent_id": parent_id,
                         "cells": [
                             rule["hostname"],
                             rule["protocol"],
                             rule["url_path"],
-                            rule["pool"],
+                            "↪ " + rule["pool"],  # Indented indicator
                             rule["targets"],
                             rule["waf"],
                         ],
-                        "search_text": f"{gw_name} {rule['hostname']} {rule['pool']} {rule['targets']}",
-                    })
+                        "child_count": 0,
+                        "search_text": f"{rule['hostname']} {rule['protocol']} {rule['url_path']}".lower(),
+                    }
+                    section_rows.append(child_row)
+            
+            gw_count = len(set(k.split("::")[1] for k in pools_dict.keys()))
+            rule_count = sum(len(rules) for rules in pools_dict.values())
             sections.append({
                 "title":    label,
-                "subtitle": f"{gw_count} gateway{'s' if gw_count != 1 else ''} · {rule_count} rule{'s' if rule_count != 1 else ''}",
+                "subtitle": f"{gw_count} gateway{'s' if gw_count != 1 else ''} · {rule_count} route{'s' if rule_count != 1 else ''}",
                 "rows":     section_rows,
             })
 
@@ -16900,7 +17333,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     elif "servicefabric" in arm_type_lc:
         n_clusters = len(names)
         title = f"Service Fabric Cluster{'s' if n_clusters > 1 else ''} — Services"
-        columns = ["Service Name", "Status", "Instance Count", "Health State"]
+        columns = ["Service Name", "Status", "Instance Count", "Health State", "FQDN"]
 
         sections: list[dict] = []
         all_rows: list[dict] = []
@@ -16943,6 +17376,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                     "Running",
                     f"{len(service_rows)} service{'s' if len(service_rows) != 1 else ''}",
                     "Healthy",
+                    "—",
                 ],
                 "child_count": len(service_rows),
                 "search_text": f"{cluster_n} {cluster_rg}".lower(),
@@ -16960,6 +17394,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                         "Active",
                         "—",
                         "Healthy",
+                        "—",
                     ],
                     "child_count": 0,
                     "search_text": display_name.lower(),
@@ -16986,7 +17421,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
     elif "servicebus" in arm_type_lc:
         n_namespaces = len(names)
         title = f"Service Bus Namespace{'s' if n_namespaces > 1 else ''} — Queues & Topics"
-        columns = ["Name", "Type", "Max Size", "Status"]
+        columns = ["Name", "Type", "Max Size", "Status", "FQDN"]
 
         sections: list[dict] = []
         all_rows: list[dict] = []
@@ -17007,6 +17442,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                 continue
 
             ns_n, ns_rg, ns_sku = ns_row
+            ns_fqdn = f"{ns_n}.servicebus.windows.net"
 
             # Query for queues and topics in this namespace
             queue_rows = conn.execute(
@@ -17040,6 +17476,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                     f"{len(queue_rows)} queue{'s' if len(queue_rows) != 1 else ''}, {len(topic_rows)} topic{'s' if len(topic_rows) != 1 else ''}",
                     "—",
                     "Active",
+                    ns_fqdn,
                 ],
                 "child_count": len(child_rows_list),
                 "search_text": f"{namespace_name} {ns_rg}".lower(),
@@ -17058,6 +17495,7 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
                         item_type,
                         item_sku or "—",
                         "Active",
+                        "—",
                     ],
                     "child_count": 0,
                     "search_text": f"{display_name} {item_type}".lower(),
@@ -17238,9 +17676,9 @@ def _build_child_table(conn, sub_id: str, arm_type: str, resources: list) -> dic
             f"""SELECT name, resource_group, fqdn, is_public, is_restricted,
                        endpoints, auth_methods, sku, type, {ip_restrictions_expr}
                 FROM provisioned_assets
-                WHERE subscription_id=? AND name IN ({ph})
+                WHERE subscription_id=? AND LOWER(type)=? AND name IN ({ph})
                 ORDER BY name""",
-            [sub_id] + names,
+            [sub_id, arm_type_lc] + names,
         ).fetchall() if names else []
 
         # Build entry-point map: which App GWs / APIMs route to each resource

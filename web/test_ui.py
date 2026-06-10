@@ -1644,7 +1644,7 @@ class TestIngressDiagramGeneration:
             )
         ]
 
-    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None):
+    def _call(self, rows=None, plan_links=None, firewall_policy_rows=None, appgw_routes=None):
         import sys
         import os
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1654,6 +1654,7 @@ class TestIngressDiagramGeneration:
             rows if rows is not None else self._make_rows(),
             plan_links=plan_links,
             firewall_policy_rows=firewall_policy_rows,
+            appgw_routes=appgw_routes,
         )
 
     def test_internet_node_defined_once(self):
@@ -1668,23 +1669,67 @@ class TestIngressDiagramGeneration:
             f"Internet node defined {len(internet_defs)} time(s); expected 1.\n{mermaid}"
         )
 
-    def test_listener_arrows_have_distinct_labels(self):
-        """Internet→listener arrows must carry distinct labels (not the same FQDN twice)."""
+    def test_listener_arrows_are_unlabeled(self):
+        """Internet→listener arrows should not duplicate protocol/host labels already in nodes."""
         result = self._call()
         mermaid = result.get("mermaid", "")
-        # Collect labels from Internet --> |"label"| lines
         import re
-        internet_labels = re.findall(
-            r'Internet\s*-->?\|"([^"]+)"\|', mermaid
+        labeled_listener_edges = re.findall(r'Internet\s*-->\|"[^"]+"\|\s*l_', mermaid)
+        assert not labeled_listener_edges, (
+            "Internet→listener edges should be unlabeled to avoid duplicating node text.\n"
+            f"Found labeled edges: {labeled_listener_edges!r}\n{mermaid}"
         )
-        # A gateway with HTTP + HTTPS listeners should produce 2 arrow lines
-        assert len(internet_labels) >= 2, (
-            f"Expected ≥2 Internet→ arrow labels, got {internet_labels!r}.\n{mermaid}"
-        )
-        assert len(set(internet_labels)) > 1, (
-            f"All Internet→ arrow labels are identical: {internet_labels!r}.\n"
-            "The same FQDN is being applied to every listener arrow."
-        )
+
+    def test_https_listeners_route_to_named_waf_policies(self):
+        """Each HTTPS listener should route to its own named WAF policy when rule data includes policy names."""
+        rows = [
+            (
+                "test-appgw",
+                "Microsoft.Network/applicationGateways",
+                "test-rg",
+                "gw.example.com",
+                1,
+                "WAF_v2",
+                "fake-id",
+                1,
+                "HTTPS:443",
+            )
+        ]
+        appgw_routes = [
+            (
+                "test-appgw",
+                "mtls.api.clearbank.co.uk",
+                '["apim-one.azure-api.net"]',
+                "pool-a",
+                "listener-a",
+                "/api/a/*",
+                "HTTPS",
+                "waf-policy-a",
+            ),
+            (
+                "test-appgw",
+                "payments.api.clearbank.co.uk",
+                '["apim-one.azure-api.net"]',
+                "pool-b",
+                "listener-b",
+                "/api/b/*",
+                "HTTPS",
+                "waf-policy-b",
+            ),
+        ]
+
+        result = self._call(rows=rows, appgw_routes=appgw_routes)
+        mermaid = result.get("mermaid", "")
+        assert "🛡️ WAF: waf-policy-a" in mermaid, mermaid
+        assert "🛡️ WAF: waf-policy-b" in mermaid, mermaid
+        assert (
+            'l_test_rg_test_appgw_HTTPS_mtls_api_clearbank_co_uk --> waf_test_rg_test_appgw_waf_policy_a'
+            in mermaid
+        ), mermaid
+        assert (
+            'l_test_rg_test_appgw_HTTPS_payments_api_clearbank_co_uk --> waf_test_rg_test_appgw_waf_policy_b'
+            in mermaid
+        ), mermaid
 
     def test_firewall_policy_node_is_rendered(self):
         """Azure Firewall should surface an attached firewall policy in the diagram."""
@@ -1739,6 +1784,30 @@ class TestIngressDiagramGeneration:
         assert "Policy: policy-one" in mermaid, mermaid
         titles = {v.get("title") for v in result.get("node_drilldown_map", {}).values()}
         assert "policy-one" in titles, titles
+
+    def test_private_appgw_keeps_listener_chain_to_waf_and_gateway(self):
+        """Listener nodes should still route to WAF/AppGW when Internet edges are absent."""
+        rows = [
+            (
+                "appgw-private",
+                "Microsoft.Network/applicationGateways",
+                "rgnet",
+                "appgw-private.internal",
+                0,
+                "WAF_v2",
+                "appgw-private-id",
+                1,
+                "HTTPS:443, HTTP:80",
+                0,
+                "Prevention",
+                None,
+            ),
+        ]
+        result = self._call(rows=rows)
+        mermaid = result.get("mermaid", "")
+        assert 'l_rgnet_appgw_private_HTTPS_443 --> waf_rgnet_appgw_private' in mermaid, mermaid
+        assert 'l_rgnet_appgw_private_HTTP_80 --> waf_rgnet_appgw_private' in mermaid, mermaid
+        assert 'waf_rgnet_appgw_private --> rgnet_appgw_private' in mermaid, mermaid
 
     def test_traffic_manager_is_omitted_from_overview_diagram(self):
         """Traffic Manager is DNS-only and should be omitted from overview connectivity diagrams."""
@@ -2766,6 +2835,124 @@ class TestCosmosDbFqdnResolution:
         assert result["rows"], result
         assert result["rows"][0][4]["label"] == "⚠️ IP restricted", result["rows"]
 
+    def test_generic_drilldown_filters_rows_to_selected_resource_type(self):
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        from web.app import _build_child_table
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE provisioned_assets (
+                    id TEXT PRIMARY KEY,
+                    subscription_id TEXT,
+                    resource_group TEXT,
+                    name TEXT,
+                    type TEXT,
+                    location TEXT,
+                    sku TEXT,
+                    tags TEXT,
+                    is_public INTEGER DEFAULT 0,
+                    fqdn TEXT,
+                    pipeline_tag TEXT,
+                    raw_json TEXT,
+                    endpoints TEXT,
+                    auth_methods TEXT,
+                    first_detected TEXT,
+                    last_synced TEXT,
+                    status TEXT DEFAULT 'active',
+                    is_restricted INTEGER DEFAULT 0
+                )
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO provisioned_assets (
+                    id, subscription_id, resource_group, name, type, location, sku,
+                    tags, is_public, fqdn, pipeline_tag, raw_json, endpoints, auth_methods,
+                    first_detected, last_synced, status, is_restricted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Cache/Redis/cbuk-core-prodgreen-fx-jpm-connector",
+                        "sub-1",
+                        "rg-redis",
+                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "Microsoft.Cache/Redis",
+                        "uksouth",
+                        "Standard",
+                        None,
+                        0,
+                        "cbuk-core-prodgreen-fx-jpm-connector.redis.cache.windows.net",
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        "active",
+                        0,
+                    ),
+                    (
+                        "/subscriptions/sub-1/resourceGroups/rg-cosmos/providers/Microsoft.DocumentDB/databaseAccounts/cbuk-core-prodgreen-fx-jpm-connector",
+                        "sub-1",
+                        "rg-cosmos",
+                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "Microsoft.DocumentDB/databaseAccounts",
+                        "uksouth",
+                        None,
+                        None,
+                        0,
+                        "cbuk-core-prodgreen-fx-jpm-connector.documents.azure.com:443",
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        "active",
+                        1,
+                    ),
+                    (
+                        "/subscriptions/sub-1/resourceGroups/rg-redis/providers/Microsoft.Network/privateEndpoints/cbuk-core-prodgreen-fx-jpm-connector",
+                        "sub-1",
+                        "rg-redis",
+                        "cbuk-core-prodgreen-fx-jpm-connector",
+                        "Microsoft.Network/privateEndpoints",
+                        "uksouth",
+                        None,
+                        None,
+                        0,
+                        "cbuk-core-prodgreen-fx-jpm-connector.redis.cache.windows.net",
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        "2026-06-01T00:00:00Z",
+                        "2026-06-01T00:00:00Z",
+                        "active",
+                        0,
+                    ),
+                ],
+            )
+
+            result = _build_child_table(
+                conn,
+                "sub-1",
+                "Microsoft.Cache/Redis",
+                [{"rg": "rg-redis", "name": "cbuk-core-prodgreen-fx-jpm-connector"}],
+            )
+        finally:
+            conn.close()
+
+        assert result["view_type"] == "table"
+        assert len(result["rows"]) == 1, result["rows"]
+        assert result["rows"][0][2] == "Redis Cache", result["rows"]
+
 
 class TestSubscriptionOverlayViews:
     """Regression tests for the shared subscription overlay helper."""
@@ -3119,6 +3306,51 @@ class TestCloudPosture:
         data = resp.get_json()
         assert data["subscription_name"] == "Demo Subscription"
         assert data["ingress_diagram"]["mermaid"] == "graph TD"
+
+    def test_settings_api_can_clear_cloud_model_cache(self, monkeypatch, tmp_path):
+        import os
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT))
+        os.environ.setdefault("FLASK_APP", "web/app.py")
+        import web.app as app_module
+
+        db_path = tmp_path / "cache.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            """
+            CREATE TABLE subscription_diagram_cache (
+                sub_id TEXT PRIMARY KEY,
+                cache_signature TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO subscription_diagram_cache (sub_id, cache_signature, payload_json)
+            VALUES ('sub-1', 'sig-1', '{"cached": true}');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(app_module, "_get_db_with_schema", lambda: sqlite3.connect(str(db_path)))
+        app_module._SUBSCRIPTION_DIAGRAM_CACHE["sub-1"] = (0.0, "sig-1", {"cached": True})
+
+        client = app_module.app.test_client()
+        resp = client.post("/api/settings/cloud-cache/clear")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["cleared"]["db_rows"] == 1
+        assert data["cleared"]["memory_entries"] == 1
+        assert app_module._SUBSCRIPTION_DIAGRAM_CACHE == {}
+
+        check = sqlite3.connect(str(db_path))
+        try:
+            remaining = check.execute("SELECT COUNT(*) FROM subscription_diagram_cache").fetchone()[0]
+            assert remaining == 0
+        finally:
+            check.close()
 
 
 def _cloud_assets_payload():
