@@ -6,7 +6,13 @@
   <title>Settings — Triage-Saurus</title>
   <link rel="stylesheet" href="/static/app.css">
   <style>
-    body { background: var(--bg-base); color: var(--text); font-family: system-ui, sans-serif; margin: 0; }
+    body {
+      background: var(--bg-base);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      overflow-y: auto;
+    }
 
     .settings-shell { display: flex; flex-direction: column; min-height: 100vh; }
 
@@ -82,6 +88,13 @@
       font-size: 0.9rem; font-weight: 700; cursor: pointer; margin-top: 8px;
     }
     .settings-save-btn:hover { background: var(--accent-hover); }
+    .settings-danger-btn {
+      background: var(--red); color: #fff; border: none;
+      border-radius: 6px; padding: 8px 14px;
+      font-size: 0.82rem; font-weight: 700; cursor: pointer;
+    }
+    .settings-danger-btn:hover { filter: brightness(1.08); }
+    .inline-status { font-size: 0.78rem; color: var(--text-muted); margin-left: 10px; }
     .model-tag {
       font-size: 0.7rem; background: var(--accent-dim); color: var(--accent);
       border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: middle;
@@ -341,6 +354,17 @@
           <option value="">None (always ask)</option>
         </select>
       </div>
+
+      <div class="settings-row">
+        <div>
+          <div class="settings-row-label">Model Cache (Cloud)</div>
+          <div class="settings-row-hint">Clears cached subscription diagram payloads so the next render always rebuilds from current cloud data.</div>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:flex-end;">
+          <button class="settings-danger-btn" id="clear-cloud-model-cache-btn" onclick="clearCloudModelCache('clear-cloud-model-cache-btn', 'cloud-model-cache-status')">🧹 Clear model cache</button>
+          <span class="inline-status" id="cloud-model-cache-status"></span>
+        </div>
+      </div>
     </div>
 
     <div style="display:flex; gap:12px; align-items:center;">
@@ -405,6 +429,33 @@
     return out;
   }
 
+  async function clearCloudModelCache(buttonId, statusId) {
+    const btn = document.getElementById(buttonId);
+    const status = document.getElementById(statusId);
+    if (!btn || !status) return;
+
+    btn.disabled = true;
+    status.textContent = 'Clearing…';
+    status.style.color = 'var(--text-muted)';
+    try {
+      const res = await fetch('/api/settings/cloud-cache/clear', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Cloud cache clear failed');
+      const rows = Number(data.cleared?.db_rows || 0);
+      status.textContent = `✓ Cleared ${rows} cached ${rows === 1 ? 'entry' : 'entries'}`;
+      status.style.color = 'var(--green)';
+    } catch {
+      status.textContent = '✗ Clear failed';
+      status.style.color = 'var(--red)';
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => {
+        status.textContent = '';
+        status.style.color = 'var(--text-muted)';
+      }, 4000);
+    }
+  }
+
   async function saveSettings() {
     const btn    = document.getElementById('save-btn');
     const status = document.getElementById('save-status');
@@ -423,478 +474,6 @@
         status.className = 'save-status ok';
       } else { throw new Error(); }
     } catch {
-      status.textContent = '✗ Save failed';
-      status.className = 'save-status err';
-    } finally {
-      btn.disabled = false;
-      setTimeout(() => { status.textContent = ''; status.className = 'save-status'; }, 4000);
-    }
-  }
-</script>
-</body>
-</html>
-
-  <style>
-    body { background: var(--bg-base); color: var(--text); font-family: system-ui, sans-serif; margin: 0; }
-
-    .settings-shell {
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-    }
-
-    .settings-topbar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 20px;
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-    .settings-topbar a {
-      color: var(--text-muted);
-      text-decoration: none;
-      font-size: 0.85rem;
-    }
-    .settings-topbar a:hover { color: var(--accent); }
-    .settings-topbar .sep { color: var(--text-faint); }
-    .settings-topbar .page-title {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .settings-topbar .save-status {
-      margin-left: auto;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      min-width: 120px;
-      text-align: right;
-      transition: color 0.3s;
-    }
-    .settings-topbar .save-status.ok   { color: var(--green); }
-    .settings-topbar .save-status.err  { color: var(--red); }
-
-    .settings-body {
-      max-width: 780px;
-      margin: 0 auto;
-      padding: 32px 24px 64px;
-      width: 100%;
-    }
-
-    .settings-section {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      margin-bottom: 28px;
-      overflow: hidden;
-    }
-    .settings-section-header {
-      padding: 14px 20px 12px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .settings-section-header h2 {
-      margin: 0;
-      font-size: 0.95rem;
-      font-weight: 700;
-      color: var(--text);
-    }
-    .settings-section-header .section-icon { font-size: 1.1rem; }
-    .settings-section-desc {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-left: auto;
-    }
-
-    .settings-row {
-      display: grid;
-      grid-template-columns: 1fr 200px;
-      align-items: center;
-      gap: 16px;
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .settings-row:last-child { border-bottom: none; }
-    .settings-row-label { font-size: 0.875rem; font-weight: 600; color: var(--text); }
-    .settings-row-hint  { font-size: 0.75rem; color: var(--text-muted); margin-top: 3px; }
-
-    /* Inputs */
-    .settings-select,
-    .settings-input-num {
-      background: var(--bg-subtle);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 0.85rem;
-      padding: 6px 10px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    .settings-select:focus,
-    .settings-input-num:focus {
-      outline: none;
-      border-color: var(--accent-border);
-      box-shadow: 0 0 0 3px var(--accent-dim);
-    }
-
-    /* Toggle switch */
-    .toggle-wrap {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 10px;
-    }
-    .toggle-label-text { font-size: 0.8rem; color: var(--text-muted); }
-    .toggle {
-      position: relative;
-      display: inline-block;
-      width: 40px;
-      height: 22px;
-      flex-shrink: 0;
-    }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider {
-      position: absolute;
-      inset: 0;
-      background: var(--bg-subtle);
-      border: 1px solid var(--border);
-      border-radius: 22px;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    .toggle-slider::before {
-      content: "";
-      position: absolute;
-      width: 14px; height: 14px;
-      left: 3px; top: 3px;
-      background: var(--text-muted);
-      border-radius: 50%;
-      transition: transform 0.2s, background 0.2s;
-    }
-    .toggle input:checked + .toggle-slider { background: var(--accent-dim); border-color: var(--accent-border); }
-    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--accent); }
-
-    /* Save button */
-    .settings-save-btn {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      padding: 10px 28px;
-      font-size: 0.9rem;
-      font-weight: 700;
-      cursor: pointer;
-      margin-top: 8px;
-    }
-    .settings-save-btn:hover { background: var(--accent-hover); }
-
-    .model-tag {
-      font-size: 0.7rem;
-      background: var(--accent-dim);
-      color: var(--accent);
-      border-radius: 4px;
-      padding: 1px 6px;
-      margin-left: 6px;
-      vertical-align: middle;
-    }
-  </style>
-</head>
-<body>
-<div class="settings-shell">
-
-  <!-- Top bar -->
-  <div class="settings-topbar">
-    {% include "partials/burger_menu.html" %}
-    <a href="/">🦖 Triage-Saurus</a>
-    <span class="sep">›</span>
-    <span class="page-title">⚙ Settings</span>
-    <span class="save-status" id="save-status"></span>
-  </div>
-
-  <div class="settings-body">
-
-    <!-- ── AI Models ─────────────────────────────────────────────── -->
-    <div class="settings-section">
-      <div class="settings-section-header">
-        <span class="section-icon">🤖</span>
-        <h2>AI Models</h2>
-        <span class="settings-section-desc">Per-phase model selection. Leave blank to inherit from global default.</span>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Global Default <span class="model-tag">all phases</span></div>
-          <div class="settings-row-hint">Used by any phase without a specific override below.</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="global_default" id="model-global">
-          {{ model_options(settings.ai_models.global_default) }}
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Architecture Diagrams <span class="model-tag">COPILOT_MODEL_ARCHITECTURE</span></div>
-          <div class="settings-row-hint">Mermaid diagram generation pass.</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="architecture" id="model-architecture">
-          {{ model_options(settings.ai_models.architecture, include_inherit=true) }}
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Overview &amp; Enrichment <span class="model-tag">COPILOT_MODEL_OVERVIEW</span></div>
-          <div class="settings-row-hint">Repo overview, finding enrichment, theme analysis.</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="overview" id="model-overview">
-          {{ model_options(settings.ai_models.overview, include_inherit=true) }}
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Rule Scanning <span class="model-tag">COPILOT_MODEL_RULES</span></div>
-          <div class="settings-row-hint">Security rule evaluation pass.</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="rules" id="model-rules">
-          {{ model_options(settings.ai_models.rules, include_inherit=true) }}
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Theme Analysis <span class="model-tag">COPILOT_MODEL_THEMES</span></div>
-          <div class="settings-row-hint">Cross-finding pattern analysis (requires enable below).</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="themes" id="model-themes">
-          {{ model_options(settings.ai_models.themes, include_inherit=true) }}
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Image Summaries <span class="model-tag">COPILOT_MODEL_IMAGE_SUMMARIES</span></div>
-          <div class="settings-row-hint">Container image summary pass (requires enable below).</div>
-        </div>
-        <select class="settings-select" data-section="ai_models" data-key="image_summaries" id="model-image-summaries">
-          {{ model_options(settings.ai_models.image_summaries, include_inherit=true) }}
-        </select>
-      </div>
-    </div>
-
-    <!-- ── AI Behaviour ───────────────────────────────────────────── -->
-    <div class="settings-section">
-      <div class="settings-section-header">
-        <span class="section-icon">🧠</span>
-        <h2>AI Behaviour</h2>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Review Mode</div>
-          <div class="settings-row-hint"><b>minimal</b> — SecurityAgent only &nbsp;|&nbsp; <b>standard</b> — + Context &nbsp;|&nbsp; <b>full</b> — + Skeptics (most thorough, slowest)</div>
-        </div>
-        <select class="settings-select" data-section="ai_behaviour" data-key="review_mode" id="review-mode">
-          <option value="minimal"  {% if settings.ai_behaviour.review_mode == 'minimal'  %}selected{% endif %}>minimal</option>
-          <option value="standard" {% if settings.ai_behaviour.review_mode == 'standard' %}selected{% endif %}>standard</option>
-          <option value="full"     {% if settings.ai_behaviour.review_mode == 'full'     %}selected{% endif %}>full</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Enable Theme Analysis</div>
-          <div class="settings-row-hint">Groups findings into cross-cutting security themes. Adds time and cost. Off by default.</div>
-        </div>
-        <div class="toggle-wrap">
-          <span class="toggle-label-text" id="themes-label">{{ 'On' if settings.ai_behaviour.enable_themes else 'Off' }}</span>
-          <label class="toggle">
-            <input type="checkbox" data-section="ai_behaviour" data-key="enable_themes" id="enable-themes"
-              {% if settings.ai_behaviour.enable_themes %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Enable Container Image Summaries</div>
-          <div class="settings-row-hint">Summarises base images found in Dockerfiles. Off by default.</div>
-        </div>
-        <div class="toggle-wrap">
-          <span class="toggle-label-text" id="image-summaries-label">{{ 'On' if settings.ai_behaviour.enable_image_summaries else 'Off' }}</span>
-          <label class="toggle">
-            <input type="checkbox" data-section="ai_behaviour" data-key="enable_image_summaries" id="enable-image-summaries"
-              {% if settings.ai_behaviour.enable_image_summaries %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">AI Stream Timeout <span class="model-tag">seconds</span></div>
-          <div class="settings-row-hint">Max wait for a streaming AI response before the phase is considered stalled (default 600 s).</div>
-        </div>
-        <input type="number" class="settings-input-num" min="30" max="7200" step="30"
-          data-section="ai_behaviour" data-key="stream_timeout_seconds" id="stream-timeout"
-          value="{{ settings.ai_behaviour.stream_timeout_seconds }}">
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">AI Job Timeout <span class="model-tag">seconds</span></div>
-          <div class="settings-row-hint">Max wall-clock time for a full AI job before it is force-killed (default 3600 s).</div>
-        </div>
-        <input type="number" class="settings-input-num" min="60" max="86400" step="60"
-          data-section="ai_behaviour" data-key="job_timeout_seconds" id="job-timeout"
-          value="{{ settings.ai_behaviour.job_timeout_seconds }}">
-      </div>
-    </div>
-
-    <!-- ── Performance ───────────────────────────────────────────── -->
-    <div class="settings-section">
-      <div class="settings-section-header">
-        <span class="section-icon">⚡</span>
-        <h2>Performance &amp; Parallelism</h2>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Module Scan Concurrency</div>
-          <div class="settings-row-hint">Number of repo modules scanned in parallel. Higher = faster but heavier AI API usage. Recommended: 1–4.</div>
-        </div>
-        <input type="number" class="settings-input-num" min="1" max="16" step="1"
-          data-section="performance" data-key="module_scan_concurrency" id="concurrency"
-          value="{{ settings.performance.module_scan_concurrency }}">
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Pipeline Parallel Mode</div>
-          <div class="settings-row-hint">Run scan pipeline phases in parallel where possible. Disable only for debugging sequential ordering.</div>
-        </div>
-        <div class="toggle-wrap">
-          <span class="toggle-label-text" id="parallel-label">{{ 'On' if settings.performance.pipeline_parallel_mode else 'Off' }}</span>
-          <label class="toggle">
-            <input type="checkbox" data-section="performance" data-key="pipeline_parallel_mode" id="pipeline-parallel"
-              {% if settings.performance.pipeline_parallel_mode %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Single Writer Queue</div>
-          <div class="settings-row-hint">Serialise all DB writes through a single queue. Prevents SQLite lock contention in parallel scans. Recommended: On.</div>
-        </div>
-        <div class="toggle-wrap">
-          <span class="toggle-label-text" id="writer-queue-label">{{ 'On' if settings.performance.single_writer_queue_enabled else 'Off' }}</span>
-          <label class="toggle">
-            <input type="checkbox" data-section="performance" data-key="single_writer_queue_enabled" id="single-writer-queue"
-              {% if settings.performance.single_writer_queue_enabled %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-section" id="cloud-integration-section-2">
-      <div class="settings-section-header">
-        <span class="section-icon">☁️</span>
-        <h2>Cloud Integration</h2>
-        <span class="settings-section-desc">Pre-select a default Azure subscription for new repo scans.</span>
-      </div>
-
-      <div class="settings-row">
-        <div>
-          <div class="settings-row-label">Default Cloud Subscription</div>
-          <div class="settings-row-hint">
-            Pre-selects this subscription in the cloud-link prompt before each scan.
-            Stored in browser localStorage — override per-repo in the scan prompt.
-          </div>
-        </div>
-        <select class="settings-select" id="default-cloud-sub-select-2">
-          <option value="">None (always ask)</option>
-        </select>
-      </div>
-    </div>
-
-    <div style="display:flex; gap:12px; align-items:center;">
-      <button class="settings-save-btn" id="save-btn" onclick="saveSettings()">💾 Save Settings</button>
-      <span style="font-size:0.8rem;color:var(--text-muted)">Settings are applied immediately to the next scan. No restart required.</span>
-    </div>
-
-  </div><!-- /settings-body -->
-</div><!-- /settings-shell -->
-
-<script>
-  // ── Collect current form state ────────────────────────────────────────────
-  function collectSettings() {
-    const out = { ai_models: {}, ai_behaviour: {}, performance: {} };
-
-    document.querySelectorAll('[data-section][data-key]').forEach(el => {
-      const section = el.dataset.section;
-      const key     = el.dataset.key;
-      let value;
-      if (el.type === 'checkbox') {
-        value = el.checked;
-      } else if (el.type === 'number') {
-        value = parseInt(el.value, 10);
-        if (isNaN(value)) value = 0;
-      } else {
-        value = el.value;
-      }
-      if (out[section]) out[section][key] = value;
-    });
-
-    return out;
-  }
-
-  // ── Auto-update toggle label text ─────────────────────────────────────────
-  document.querySelectorAll('input[type="checkbox"][data-key]').forEach(cb => {
-    const labelMap = {
-      enable_themes:               'themes-label',
-      enable_image_summaries:      'image-summaries-label',
-      pipeline_parallel_mode:      'parallel-label',
-      single_writer_queue_enabled: 'writer-queue-label',
-    };
-    const labelId = labelMap[cb.dataset.key];
-    if (labelId) {
-      cb.addEventListener('change', () => {
-        document.getElementById(labelId).textContent = cb.checked ? 'On' : 'Off';
-      });
-    }
-  });
-
-  // ── Save ──────────────────────────────────────────────────────────────────
-  async function saveSettings() {
-    const btn    = document.getElementById('save-btn');
-    const status = document.getElementById('save-status');
-    btn.disabled = true;
-    status.className = 'save-status';
-    status.textContent = 'Saving…';
-
-    try {
-      const res = await fetch('/api/settings', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(collectSettings()),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        status.textContent = '✓ Saved';
-        status.className = 'save-status ok';
-      } else {
-        throw new Error('Server returned ok=false');
-      }
-    } catch (err) {
       status.textContent = '✗ Save failed';
       status.className = 'save-status err';
     } finally {
