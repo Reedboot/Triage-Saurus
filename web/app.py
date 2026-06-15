@@ -15995,10 +15995,18 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
     # "VNet-routed (no APIM)" highlights that APIM auth is bypassed for these paths
     # even though an attacker still needs to reach them via AppGW.
     # Render whenever App Gateway route data exists.
+    #
+    # DEDUPLICATION: Group by unique FQDN to avoid multiple arrows per listener.
+    # Each unique backend FQDN gets ONE arrow with consolidated listener metadata.
     if appgw_routes:
         import re as _re_appgw
         _direct_edges_emitted: set[tuple[str, str]] = set()
         _gw_to_pool_edges: set[tuple[str, str, str]] = set()
+        
+        # Group routing rules by (source_nid, backend_nid, fqdn) to deduplicate arrows
+        # Value: {listeners: set, protocols: set, waf_policies: set, hostnames: set}
+        _fqdn_edge_metadata: dict[tuple[str, str, str], dict] = {}
+        
         for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
             if not _gw_nid:
@@ -16034,13 +16042,61 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                     _prefix = _fqdn_s.split(".")[0]
                     _be_nid = node_by_name.get(_prefix)
                 if _be_nid and _be_nid != _gw_nid:
-                    _edge = (_source_nid, _be_nid)
-                    if _edge not in _direct_edges_emitted:
-                        _direct_edges_emitted.add(_edge)
-                        _add_link(
-                            f'    {_source_nid} -->|"VNet-routed (no APIM) 🔶"| {_be_nid}',
-                            "#f59e0b",
-                        )
+                    # Aggregate metadata for this unique FQDN connection
+                    _edge_key = (_source_nid, _be_nid, _fqdn_s)
+                    if _edge_key not in _fqdn_edge_metadata:
+                        _fqdn_edge_metadata[_edge_key] = {
+                            'listeners': set(),
+                            'protocols': set(),
+                            'waf_policies': set(),
+                            'hostnames': set(),
+                            'exposure': 'public'  # Default to public; can be refined later
+                        }
+                    # Collect listener metadata
+                    if _listener_name:
+                        _fqdn_edge_metadata[_edge_key]['listeners'].add(_listener_name)
+                    if _listener_protocol:
+                        _fqdn_edge_metadata[_edge_key]['protocols'].add(_listener_protocol.upper())
+                    if _waf_policy_name:
+                        _fqdn_edge_metadata[_edge_key]['waf_policies'].add(_waf_policy_name)
+                    if _hostname:
+                        _fqdn_edge_metadata[_edge_key]['hostnames'].add(_hostname)
+        
+        # Emit one arrow per unique FQDN with consolidated metadata
+        for (_source_nid, _be_nid, _fqdn_s), _metadata in _fqdn_edge_metadata.items():
+            _edge = (_source_nid, _be_nid)
+            if _edge not in _direct_edges_emitted:
+                _direct_edges_emitted.add(_edge)
+                
+                # Build edge label with consolidated info
+                _protocols_str = ", ".join(sorted(_metadata['protocols'])) if _metadata['protocols'] else "HTTPS"
+                _listener_count = len(_metadata['listeners'])
+                _has_waf = len(_metadata['waf_policies']) > 0
+                
+                if _listener_count > 1:
+                    _edge_label = f"VNet-routed ({_protocols_str}, {_listener_count} listeners) 🔶"
+                else:
+                    _edge_label = f"VNet-routed ({_protocols_str}) 🔶"
+                
+                if _has_waf:
+                    _edge_label = _edge_label.replace("🔶", "🛡️")
+                
+                # Add edge with metadata as comment for future click handling
+                _metadata_json = json.dumps({
+                    'fqdn': _fqdn_s,
+                    'listeners': list(_metadata['listeners']),
+                    'protocols': list(_metadata['protocols']),
+                    'waf_policies': list(_metadata['waf_policies']),
+                    'hostnames': list(_metadata['hostnames']),
+                    'exposure': _metadata['exposure'],
+                    'source': _source_nid,
+                    'target': _be_nid,
+                })
+                
+                _add_link(
+                    f'    {_source_nid} -->|"{_edge_label}"| {_be_nid}  %% {_metadata_json}',
+                    "#f59e0b",
+                )
 
 
     # Connect one representative from each major backend category rather than just
