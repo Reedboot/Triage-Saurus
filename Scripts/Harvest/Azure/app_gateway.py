@@ -2,14 +2,31 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import signal
 import sqlite3
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from ._helpers import az, build_endpoints, extract_ip_restrictions, infer_sku, safe_str
 
+# Retry configuration for MSAL token cache lockfile contention
+_AZ_RETRY_MAX = 3
+_AZ_RETRY_BACKOFF = 1.0
+_MSAL_LOCK_RE = re.compile(
+    r"msal_token_cache.*\.lockfile|Permission denied.*lockfile",
+    re.IGNORECASE,
+)
+
 RESOURCE_TYPE = "Microsoft.Network/applicationGateways"
+
+
+def _is_msal_lock_error(stderr: str) -> bool:
+    """Return True when az CLI failed due to MSAL token-cache lock contention."""
+    return bool(_MSAL_LOCK_RE.search(stderr))
 
 
 def harvest(subscription_id: str) -> list[dict[str, Any]]:
@@ -186,15 +203,42 @@ def get_backend_fqdns(subscription_id: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _az_show(args: list[str], subscription_id: str, timeout: int = 120) -> dict | None:
-    """Run an az show command and return parsed JSON, or None on failure."""
+    """Run az CLI show command with retry logic for MSAL token cache lockfile contention."""
     cmd = ["az"] + args + ["--subscription", subscription_id, "--output", "json"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if r.returncode != 0:
+    for attempt in range(_AZ_RETRY_MAX):
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.communicate()
+                return None
+            
+            if proc.returncode == 0:
+                try:
+                    return json.loads(stdout or "null")
+                except Exception:
+                    return None
+            
+            if attempt < _AZ_RETRY_MAX - 1 and _is_msal_lock_error(stderr):
+                time.sleep(_AZ_RETRY_BACKOFF * (attempt + 1))
+                continue
             return None
-        return json.loads(r.stdout or "null")
-    except Exception:
-        return None
+        except Exception:
+            return None
+    return None
 
 
 def _id_tail(resource_id: str | None) -> str:
