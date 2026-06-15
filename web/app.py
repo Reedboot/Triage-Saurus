@@ -15941,12 +15941,20 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _add_link(f'    {_get_node_id(entry)} -->|{routing_label}| {first_backend_nid}', "orange")
 
     # P0-E: AppGW → API Layer routing (using backend FQDNs from routing rules).
-    # When AppGW routes traffic to APIM backends, show the actual routing path
-    # from AppGW to APIM with the WAF policy indicator on the edge.
+    # SIMPLIFIED: One arrow to APIM, labeled with protocol/WAF info.
     if appgw_routes and shown_api and shown_entry:
         import re as _re_routing
-        _gw_to_apim_edges: set[tuple[str, str]] = set()
         _gw_to_pool_edges: set[tuple[str, str, str]] = set()
+        
+        # Collect info about APIM connections (deduplicate at target level)
+        _apim_connection_info: dict = {
+            'protocols': set(),
+            'has_waf': False,
+            'sources': set(),
+            'url_paths': set(),
+        }
+        _has_apim_routes = False
+        
         for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
             if not _gw_nid:
@@ -15954,6 +15962,7 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _pool_key = str(_pool_name or "default-backend-pool").strip().lower() or "default-backend-pool"
             _pool_nid = appgw_pool_nodes.get((_gw_nid, _pool_key))
             _source_nid = _pool_nid or _gw_nid
+            
             if _pool_nid:
                 for _edge_label in _pool_edge_labels(_gw_nid, _pool_key):
                     _gw_pool_edge = (_gw_nid, _pool_nid, _edge_label)
@@ -15963,24 +15972,51 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                             f'    {_gw_nid} -->|"{_edge_label}"| {_pool_nid}',
                             _pool_edge_color(_edge_label),
                         )
+            
             try:
                 _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
             except Exception:
                 _be_fqdns = []
+            
             for _fqdn in _be_fqdns:
                 _fqdn_s = str(_fqdn).lower().strip()
                 # Match APIM backends (*.azure-api.net)
                 if "azure-api.net" in _fqdn_s:
-                    # This AppGW routes to APIM — draw the edge
-                    api_nid = _get_node_id(shown_api[0])
-                    _edge_key = (_source_nid, api_nid)
-                    if _edge_key not in _gw_to_apim_edges:
-                        _gw_to_apim_edges.add(_edge_key)
-                        _add_link(
-                            f'    {_source_nid} -->|"{_apim_route_edge_label(_url_path)}"| {api_nid}',
-                            "orange",
-                        )
-                        break  # Only one AppGW→APIM edge per gateway
+                    _has_apim_routes = True
+                    _apim_connection_info['sources'].add(_source_nid)
+                    if _listener_protocol:
+                        _apim_connection_info['protocols'].add(_listener_protocol.upper())
+                    if _waf_policy_name:
+                        _apim_connection_info['has_waf'] = True
+                    if _url_path:
+                        _apim_connection_info['url_paths'].add(_url_path)
+                    break
+        
+        # Emit ONE arrow to APIM with consolidated info
+        if _has_apim_routes:
+            api_nid = _get_node_id(shown_api[0])
+            _source_nid = sorted(_apim_connection_info['sources'])[0]  # Pick one source
+            
+            _protocols = sorted(_apim_connection_info['protocols']) if _apim_connection_info['protocols'] else ['HTTPS']
+            _protocol_str = "/".join(_protocols)
+            
+            if _apim_connection_info['has_waf']:
+                _edge_label = f"{_protocol_str} + WAF"
+            else:
+                _edge_label = _protocol_str
+            
+            _metadata_json = json.dumps({
+                'target': 'APIM',
+                'protocols': _protocols,
+                'has_waf': _apim_connection_info['has_waf'],
+                'source_pools': list(_apim_connection_info['sources']),
+                'url_paths': list(_apim_connection_info['url_paths']),
+            })
+            
+            _add_link(
+                f'    {_source_nid} -->|"{_edge_label}"| {api_nid}  %% {_metadata_json}',
+                "orange",
+            )
      
     # API Layer → Backends (white — internal routing behind gateway, OK)
     if shown_api and shown_backend:
@@ -15989,23 +16025,14 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _add_link(f'    {api_node} --> {_get_node_id(backend)}', "white")
 
     # P1-A: AppGW → Direct Backend edges (routes that bypass APIM).
-    # Some AppGW routing rules point directly to ASE/app backends rather than APIM.
-    # These backends are VNet-internal (ILB ASE, *.internal.cbinnovation.uk) and are
-    # NOT directly Internet-accessible — they require going via AppGW. The edge label
-    # "VNet-routed (no APIM)" highlights that APIM auth is bypassed for these paths
-    # even though an attacker still needs to reach them via AppGW.
-    # Render whenever App Gateway route data exists.
-    #
-    # DEDUPLICATION: Group by unique FQDN to avoid multiple arrows per listener.
-    # Each unique backend FQDN gets ONE arrow with consolidated listener metadata.
+    # SIMPLIFIED: One arrow per unique backend, labeled with protocol + auth type.
     if appgw_routes:
         import re as _re_appgw
-        _direct_edges_emitted: set[tuple[str, str]] = set()
         _gw_to_pool_edges: set[tuple[str, str, str]] = set()
         
-        # Group routing rules by (source_nid, backend_nid, fqdn) to deduplicate arrows
-        # Value: {listeners: set, protocols: set, waf_policies: set, hostnames: set}
-        _fqdn_edge_metadata: dict[tuple[str, str, str], dict] = {}
+        # Group ALL routing info by backend target ONLY (not by source pool)
+        # Key: backend_nid, Value: {protocols, has_waf, fqdns, sources}
+        _backend_connections: dict[str, dict] = {}
         
         for _gw_name, _hostname, _be_fqdns_json, _pool_name, _listener_name, _url_path, _listener_protocol, _waf_policy_name in _iter_appgw_route_rows():
             _gw_nid = node_by_name.get(_gw_name.lower())
@@ -16014,6 +16041,8 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             _pool_key = str(_pool_name or "default-backend-pool").strip().lower() or "default-backend-pool"
             _pool_nid = appgw_pool_nodes.get((_gw_nid, _pool_key))
             _source_nid = _pool_nid or _gw_nid
+            
+            # Create gateway→pool edge if pool exists
             if _pool_nid:
                 for _edge_label in _pool_edge_labels(_gw_nid, _pool_key):
                     _gw_pool_edge = (_gw_nid, _pool_nid, _edge_label)
@@ -16023,80 +16052,75 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
                             f'    {_gw_nid} -->|"{_edge_label}"| {_pool_nid}',
                             _pool_edge_color(_edge_label),
                         )
+            
             try:
                 _be_fqdns = json.loads(_be_fqdns_json) if _be_fqdns_json else []
             except Exception:
                 _be_fqdns = []
+            
             for _fqdn in _be_fqdns:
                 _fqdn_s = str(_fqdn).lower().strip()
                 if "azure-api.net" in _fqdn_s:
-                    continue  # APIM endpoint — covered by AppGW→APIM edge already
-                # Try exact FQDN match, then ASE-name extraction, then hostname prefix
+                    continue  # APIM endpoint — covered separately
+                
+                # Resolve backend node ID
                 _be_nid = node_by_fqdn.get(_fqdn_s)
                 if not _be_nid:
-                    # Extract ASE name from FQDN: "app.ase-name.appserviceenvironment.net"
                     _ase_match = _re_appgw.search(r'\.([^.]+)\.appserviceenvironment\.net$', _fqdn_s)
                     if _ase_match:
                         _be_nid = node_by_name.get(_ase_match.group(1))
                 if not _be_nid:
                     _prefix = _fqdn_s.split(".")[0]
                     _be_nid = node_by_name.get(_prefix)
+                
                 if _be_nid and _be_nid != _gw_nid:
-                    # Aggregate metadata for this unique FQDN connection
-                    _edge_key = (_source_nid, _be_nid, _fqdn_s)
-                    if _edge_key not in _fqdn_edge_metadata:
-                        _fqdn_edge_metadata[_edge_key] = {
-                            'listeners': set(),
+                    # Aggregate by backend target only
+                    if _be_nid not in _backend_connections:
+                        _backend_connections[_be_nid] = {
                             'protocols': set(),
-                            'waf_policies': set(),
-                            'hostnames': set(),
-                            'exposure': 'public'  # Default to public; can be refined later
+                            'has_waf': False,
+                            'fqdns': set(),
+                            'sources': set(),
+                            'has_auth': False,  # Placeholder for future auth detection
                         }
-                    # Collect listener metadata
-                    if _listener_name:
-                        _fqdn_edge_metadata[_edge_key]['listeners'].add(_listener_name)
+                    
                     if _listener_protocol:
-                        _fqdn_edge_metadata[_edge_key]['protocols'].add(_listener_protocol.upper())
+                        _backend_connections[_be_nid]['protocols'].add(_listener_protocol.upper())
                     if _waf_policy_name:
-                        _fqdn_edge_metadata[_edge_key]['waf_policies'].add(_waf_policy_name)
-                    if _hostname:
-                        _fqdn_edge_metadata[_edge_key]['hostnames'].add(_hostname)
+                        _backend_connections[_be_nid]['has_waf'] = True
+                    _backend_connections[_be_nid]['fqdns'].add(_fqdn_s)
+                    _backend_connections[_be_nid]['sources'].add(_source_nid)
         
-        # Emit one arrow per unique FQDN with consolidated metadata
-        for (_source_nid, _be_nid, _fqdn_s), _metadata in _fqdn_edge_metadata.items():
-            _edge = (_source_nid, _be_nid)
-            if _edge not in _direct_edges_emitted:
-                _direct_edges_emitted.add(_edge)
-                
-                # Build edge label with consolidated info
-                _protocols_str = ", ".join(sorted(_metadata['protocols'])) if _metadata['protocols'] else "HTTPS"
-                _listener_count = len(_metadata['listeners'])
-                _has_waf = len(_metadata['waf_policies']) > 0
-                
-                if _listener_count > 1:
-                    _edge_label = f"VNet-routed ({_protocols_str}, {_listener_count} listeners) 🔶"
-                else:
-                    _edge_label = f"VNet-routed ({_protocols_str}) 🔶"
-                
-                if _has_waf:
-                    _edge_label = _edge_label.replace("🔶", "🛡️")
-                
-                # Add edge with metadata as comment for future click handling
-                _metadata_json = json.dumps({
-                    'fqdn': _fqdn_s,
-                    'listeners': list(_metadata['listeners']),
-                    'protocols': list(_metadata['protocols']),
-                    'waf_policies': list(_metadata['waf_policies']),
-                    'hostnames': list(_metadata['hostnames']),
-                    'exposure': _metadata['exposure'],
-                    'source': _source_nid,
-                    'target': _be_nid,
-                })
-                
-                _add_link(
-                    f'    {_source_nid} -->|"{_edge_label}"| {_be_nid}  %% {_metadata_json}',
-                    "#f59e0b",
-                )
+        # Emit ONE arrow per unique backend target
+        for _be_nid, _conn_info in _backend_connections.items():
+            # Pick ONE source to draw the arrow from (prefer first pool source)
+            _source_nid = sorted(_conn_info['sources'])[0]
+            
+            # Build simple label: protocol + auth/WAF indicator
+            _protocols = sorted(_conn_info['protocols']) if _conn_info['protocols'] else ['HTTPS']
+            _protocol_str = "/".join(_protocols)
+            
+            if _conn_info['has_waf']:
+                _edge_label = f"{_protocol_str} + WAF"
+            elif _conn_info['has_auth']:
+                _edge_label = f"{_protocol_str} + Auth"
+            else:
+                _edge_label = _protocol_str
+            
+            # Add metadata as JSON comment for double-click functionality
+            _metadata_json = json.dumps({
+                'fqdns': list(_conn_info['fqdns']),
+                'protocols': _protocols,
+                'has_waf': _conn_info['has_waf'],
+                'has_auth': _conn_info['has_auth'],
+                'source_pools': list(_conn_info['sources']),
+                'target': _be_nid,
+            })
+            
+            _add_link(
+                f'    {_source_nid} -->|"{_edge_label}"| {_be_nid}  %% {_metadata_json}',
+                "#f59e0b",
+            )
 
 
     # Connect one representative from each major backend category rather than just
