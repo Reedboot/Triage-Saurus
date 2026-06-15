@@ -105,62 +105,12 @@ Targeted helpers (stdout-only):
      - Allow freeform input for custom repo names/patterns
    - If wildcard pattern selected: expand to concrete names and confirm before scanning.
    - **DO NOT hand off to general-purpose agent yet**
-   - **Phase 1 - Fast Context Discovery (~10 seconds per repo):**
-      - Run `opengrep scan --config Rules/ <repo>` immediately after discovery; log the command in the audit log. Only fall back to manual grep if opengrep is unavailable, and document the outage.
-
-     - Run `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root_path>` for each repo
-     - Script discovers: languages, IaC/orchestration (Terraform, Helm, Skaffold), container runtime (Dockerfile analysis), network topology (VNets, NSGs), hosting, CI/CD, routes, authentication, dependencies.
-     - Script automatically creates `Output/Summary/Repos/<RepoName>.md` with:
-       - 🗺️ Architecture Diagram (Mermaid) - infrastructure topology with colored borders
-       - 📊 TL;DR - Executive summary with Phase 2 TODO markers
-       - 🛡️ Security Observations - Detected controls, Phase 2 guidance
-       - 🧭 Overview - Purpose, hosting, dependencies, auth, container/network details
-       - 🚦 Traffic Flow - Phase 2 TODO marker with detected hints and route mappings table
-     - Script automatically updates `Output/Knowledge/Repos.md` with repository entry
-     - When running in **experiment isolation** mode (i.e., `--output-dir Output/Learning/experiments/<id>_<name>`), the script also generates an experiment-scoped provider architecture summary under `Summary/Cloud/Architecture_<Provider>.md`.
-     - Review the generated summary before proceeding
-   - **Phase 2a Enhancement (.NET Projects - Experiment 001 Learning):**
-     - For .NET repositories, parse `.csproj` files to extract:
-       - Target framework version: `<TargetFramework>net8.0</TargetFramework>`
-       - NuGet package references: `<PackageReference Include="MediatR" Version="..." />`
-       - Project type indicators (Web, API, Worker, Test)
-     - Analyze `Startup.cs` / `Program.cs` for:
-       - Middleware pipeline configuration (execution order)
-       - Authentication/authorization scheme registration
-       - Custom auth patterns (header-based, token validation)
-       - Dependency injection patterns
-     - Update repo summary with framework-specific context
-   - **Phase 2 - Deeper Context Search (~30-60 seconds per repo):**
-     - Launch ONE explore agent to complete Phase 2 TODO markers
-     - Agent traces middleware execution order, routing logic, business purpose
-     - Updates Traffic Flow section with complete details
-     - See Agents/ContextDiscoveryAgent.md for Phase 2 prompt template
-   - **Phase 3 - Apply ALL Detection Rules (CRITICAL for 100% detection):**
-     - **IMPORTANT:** Apply ALL rules from `Rules/Misconfigurations/*.yml` (not a selective subset)
-     - Experiment 015 learning: Selective rule application achieved only 50% detection in initial pass
-     - Applying all 42 rules ensures complete ground truth coverage (100% detection rate)
-     - For each finding, invoke DevSkeptic + PlatformSkeptic for context-aware severity scoring
-     - Reference rule ID in finding metadata: `detected_by_rule: rule-id`
-     - **Identity Best Practice:** Strongly recommend **IAM Roles for Service Accounts (IRSA)** or **Workload Identity Federation** over long-lived secrets (Experiment 006 learning).
-     - **Container Security Best Practice:** Strongly recommend against `privileged: true`. Use granular Linux capabilities instead.
-     - See `Output/Learning/experiments/015_Rules_Engine_Clean_Scan/RESULTS.md` for validation
-   - **Phase 4 - Security Review (manual, based on gathered context):**
-     - Use Phase 1 + Phase 2 context to perform qualitative security review
-     - Check auth flows, IaC configs, routing logic, error handling
-     - Deep dive on complex attack chains and business logic vulnerabilities
-     - Validate mitigating controls (network rules, managed identities, RBAC)
-     - Update TL;DR and Security Observations sections
-     - **Manual Finding Import (Experiment 001 Learning):**
-       - When Phase 3 rules produce 0 security findings, Phase 4 manual review is CRITICAL
-       - Use `python3 Scripts/Persist/import_manual_finding.py` to store manual findings:
-         - Accepts: --title, --severity, --file, --line, --description, --remediation
-         - Auto-generates: finding_name, llm_enriched_at, repo_name, scan_date
-         - Enables skeptic reviews on manually discovered vulnerabilities
-       - Document findings using `Templates/CodeFinding.md` template
-       - Ensure database schema includes `finding_name TEXT` column (required for skeptics)
-   - **Phase 5 - Cloud Architecture Update (if IaC detected):**
-     - Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`
-     - Shows where this repo/service fits in overall cloud estate
+   - **Phase 1 — Fast Context Discovery (~10 seconds):** Run `python3 Scripts/Context/discover_repo_context.py <repo_path> --repos-root <repos_root_path>`. Creates `Output/Summary/Repos/<RepoName>.md` and updates `Output/Knowledge/Repos.md`. See `Agents/ContextDiscoveryAgent.md` for full detection capabilities and output spec.
+   - **Phase 2a — .NET Enhancement:** For .NET repos, parse `.csproj` and `Startup.cs`/`Program.cs` for framework version, NuGet packages, middleware pipeline, and auth registration.
+   - **Phase 2 — Deeper Context Search (~30-60 seconds):** Launch ONE explore agent to complete Phase 2 TODO markers in the repo summary. See `Agents/ContextDiscoveryAgent.md` for the Phase 2 prompt template.
+   - **Phase 3 — Apply ALL Detection Rules (CRITICAL):** Run `opengrep scan --config Rules/ <repo>` immediately; log command in audit log. Apply ALL rules — Experiment 015 shows selective application achieves only 50% detection. For each finding, invoke DevSkeptic + PlatformSkeptic. Reference `detected_by_rule: rule-id` in finding metadata. Only fall back to manual grep if opengrep is unavailable (document the outage).
+   - **Phase 4 — Security Review:** Use Phase 1 + Phase 2 context for qualitative review (auth flows, IaC configs, routing, error handling, attack chains). See `Agents/SecurityAgent.md`. When Phase 3 produces 0 findings, Phase 4 manual review is CRITICAL — use `python3 Scripts/Persist/import_manual_finding.py` to store manual findings.
+   - **Phase 5 — Cloud Architecture Update (if IaC detected):** Launch ArchitectureAgent to update `Output/Summary/Cloud/Architecture_<Provider>.md`. See `Agents/ArchitectureAgent.md`.
    - **Optional - Automated Vulnerability Scanning (if requested):**
      - SCA (dependency vulnerabilities), SAST (code scanning), Secrets, IaC misconfiguration scans
      - These are separate from the security review above
