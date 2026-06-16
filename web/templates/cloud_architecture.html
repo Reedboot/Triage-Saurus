@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloud Architecture — Triage-Saurus</title>
+  <link rel="stylesheet" href="/static/tailwind.css?v=1" />
+  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="stylesheet" href="/static/vendor/reactflow.css" />
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <style>
+    body {
+      margin: 0;
+      background: var(--bg-base);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .cloud-arch-shell {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cloud-arch-topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-surface);
+      flex-wrap: wrap;
+    }
+
+    .cloud-arch-view-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-base);
+    }
+
+    .cloud-arch-view-toggle button {
+      border: 0;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .cloud-arch-view-toggle button.is-active {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .cloud-arch-view-toggle button:focus-visible {
+      outline: 2px solid var(--accent-border);
+      outline-offset: 2px;
+    }
+
+    .cloud-arch-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+
+    .cloud-arch-title .emoji {
+      font-size: 1.15rem;
+    }
+
+    .cloud-arch-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .cloud-arch-input {
+      min-width: 220px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-base);
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+
+    .cloud-arch-input::placeholder {
+      color: var(--text-faint);
+    }
+
+    .cloud-arch-input:focus {
+      outline: none;
+      border-color: var(--accent-border);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    .cloud-arch-main {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cloud-arch-status {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: min(440px, calc(100vw - 28px));
+      pointer-events: none;
+    }
+
+    .cloud-arch-status-card {
+      pointer-events: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      padding: 12px 14px;
+      position: relative;
+      transition: all 0.3s ease;
+    }
+    
+    .cloud-arch-status-card.collapsed {
+      padding: 8px 10px;
+    }
+    
+    .cloud-arch-status-card.collapsed .cloud-arch-status-content {
+      display: none;
+    }
+    
+    .cloud-arch-status-collapse-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-base);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: bold;
+      transition: all 0.2s ease;
+      z-index: 1;
+    }
+    
+    .cloud-arch-status-collapse-btn:hover {
+      background: var(--bg-subtle);
+      color: var(--text);
+      border-color: var(--text-muted);
+    }
+
+    .cloud-arch-status-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .cloud-arch-status-line strong {
+      color: var(--text);
+    }
+
+    .cloud-arch-provider-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .cloud-arch-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .cloud-arch-pill .count {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .cloud-arch-error {
+      color: var(--red);
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+    }
+
+    .cloud-arch-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 24px;
+    }
+
+    .cloud-arch-empty[hidden] {
+      display: none !important;
+    }
+
+    #cloud-arch-root {
+      display: flex;
+      flex-direction: column;
+    }
+
+    #cloud-arch-root[hidden] {
+      display: none !important;
+    }
+
+    .cloud-node {
+      width: 100%;
+      height: 100%;
+      padding: 12px 12px 10px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cloud-node--synthetic {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border-style: dashed;
+    }
+
+    .cloud-node__header {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .cloud-node__icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 1.05rem;
+    }
+
+    .cloud-node__title-wrap {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .cloud-node__title {
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.15;
+      word-break: break-word;
+    }
+
+    .cloud-node__type {
+      margin-top: 2px;
+      color: var(--text-muted);
+      font-size: 0.74rem;
+    }
+
+    .cloud-node__provider {
+      margin-top: 1px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent-border);
+      color: var(--accent);
+      font-size: 0.68rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .cloud-node__meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+    }
+
+    .cloud-node__source {
+      margin-top: 6px;
+      color: var(--text-faint);
+      font-size: 0.68rem;
+      word-break: break-all;
+    }
+
+    .cloud-node__badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+
+    .cloud-node__badge--public {
+      color: var(--yellow);
+      border-color: color-mix(in srgb, var(--yellow) 35%, var(--border));
+    }
+    
+    .cloud-node__badge--restricted {
+      color: var(--orange);
+      border-color: color-mix(in srgb, var(--orange) 35%, var(--border));
+    }
+
+    .cloud-node__badge--private {
+      color: var(--text-muted);
+    }
+
+    .cloud-node__security-icons {
+      display: flex;
+      gap: 4px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+
+    .cloud-node__security-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border);
+    }
+
+    .cloud-node__security-icon--waf {
+      background: color-mix(in srgb, var(--green) 20%, var(--bg-subtle));
+      border-color: var(--green);
+    }
+
+    .cloud-node__security-icon--auth {
+      background: color-mix(in srgb, var(--blue) 20%, var(--bg-subtle));
+      border-color: var(--blue);
+    }
+
+    .cloud-node__security-icon--logging {
+      background: color-mix(in srgb, var(--purple) 20%, var(--bg-subtle));
+      border-color: var(--purple);
+    }
+
+    .cloud-node__expand-btn {
+      position: absolute;
+      top: 10px;
+      right: 48px;
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-base);
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: bold;
+      line-height: 1;
+      transition: all 0.2s ease;
+      z-index: 10;
+    }
+    
+    .cloud-node__expand-btn:hover {
+      background: var(--bg-subtle);
+      border-color: var(--text);
+      transform: scale(1.1);
+    }
+    
+    .cloud-node--child {
+      background: color-mix(in srgb, var(--bg-surface) 95%, var(--blue) 5%);
+      border-style: dashed;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+    
+    .cloud-node--group {
+      background: color-mix(in srgb, var(--bg-surface) 90%, var(--purple) 10%);
+      border-width: 2px;
+      border-style: solid;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.15);
+    }
+    
+    .cloud-node--group .cloud-node__header {
+      background: color-mix(in srgb, var(--bg-subtle) 50%, transparent);
+      margin: -12px -12px 8px -12px;
+      padding: 10px 12px;
+      border-radius: 15px 15px 0 0;
+    }
+
+    .react-flow__attribution {
+      display: none;
+    }
+    
+    /* Edge label z-index fix - ensure labels are in front of edges */
+    .react-flow__edge-textbg,
+    .react-flow__edge-text {
+      z-index: 1000 !important;
+      pointer-events: all;
+      cursor: pointer;
+    }
+    
+    /* Make edges clickable */
+    .react-flow__edge-path {
+      cursor: pointer;
+    }
+    
+    .react-flow__edge-path:hover {
+      stroke-width: 4 !important;
+    }
+
+    /* Component Detail Modal */
+    .cloud-arch-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .cloud-arch-modal-overlay[hidden] {
+      display: none;
+    }
+
+    .cloud-arch-modal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3);
+      width: 100%;
+      max-width: 900px;
+      max-height: 90vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cloud-arch-modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .cloud-arch-modal-header-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 1.4rem;
+    }
+
+    .cloud-arch-modal-header-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .cloud-arch-modal-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      word-break: break-word;
+      margin-bottom: 4px;
+    }
+
+    .cloud-arch-modal-subtitle {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .cloud-arch-modal-close {
+      flex-shrink: 0;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-base);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+
+    .cloud-arch-modal-close:hover {
+      background: var(--bg-subtle);
+      color: var(--text);
+    }
+
+    .cloud-arch-modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    .cloud-arch-modal-section {
+      margin-bottom: 24px;
+    }
+
+    .cloud-arch-modal-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .cloud-arch-modal-section-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cloud-arch-modal-section-icon {
+      font-size: 1.1rem;
+    }
+
+    .cloud-arch-modal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+
+    .cloud-arch-modal-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .cloud-arch-modal-field-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .cloud-arch-modal-field-value {
+      font-size: 0.9rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .cloud-arch-modal-field-value code {
+      background: var(--bg-base);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
+
+    .cloud-arch-modal-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      border: 1px solid;
+    }
+
+    .cloud-arch-modal-badge--success {
+      background: color-mix(in srgb, var(--green) 15%, transparent);
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    .cloud-arch-modal-badge--warning {
+      background: color-mix(in srgb, var(--yellow) 15%, transparent);
+      border-color: var(--yellow);
+      color: var(--yellow);
+    }
+
+    .cloud-arch-modal-badge--danger {
+      background: color-mix(in srgb, var(--red) 15%, transparent);
+      border-color: var(--red);
+      color: var(--red);
+    }
+
+    .cloud-arch-modal-badge--info {
+      background: color-mix(in srgb, var(--blue) 15%, transparent);
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .cloud-arch-modal-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .cloud-arch-modal-list-item {
+      padding: 8px 12px;
+      background: var(--bg-base);
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+
+    .cloud-arch-modal-list-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .cloud-arch-modal-empty {
+      padding: 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      background: var(--bg-base);
+      border-radius: 8px;
+    }
+
+    .cloud-arch-modal-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="cloud-arch-shell">
+    <header class="cloud-arch-topbar">
+      {% include "partials/burger_menu.html" %}
+      <div class="cloud-arch-title">
+        <span class="emoji">☁️</span>
+        <span>Cloud Architecture</span>
+      </div>
+      <div class="cloud-arch-view-toggle" role="group" aria-label="Graph view mode">
+        <button type="button" data-cloud-arch-view="overview" class="is-active">Overview</button>
+        <button type="button" data-cloud-arch-view="full">Full graph</button>
+      </div>
+      <form class="cloud-arch-form" id="cloud-arch-form">
+        <input class="cloud-arch-input" id="subscription-input" name="sub" value="{{ initial_subscription }}" placeholder="Subscription id or name" />
+        <button class="btn-diagram" type="submit">Load architecture</button>
+      </form>
+    </header>
+
+    <main class="cloud-arch-main">
+      <div class="cloud-arch-status">
+        <div class="cloud-arch-status-card" id="cloud-arch-status-card">
+          <button class="cloud-arch-status-collapse-btn" id="cloud-arch-status-collapse-btn" title="Toggle legend" aria-label="Toggle legend">
+            <span id="cloud-arch-collapse-icon">−</span>
+          </button>
+          <div class="cloud-arch-status-content">
+            <div class="cloud-arch-status-line" id="cloud-arch-summary-line">
+              <span>Loading architecture from CozoDB…</span>
+            </div>
+            <div class="cloud-arch-provider-legend" id="cloud-arch-provider-legend"></div>
+            <div class="cloud-arch-connection-legend" id="cloud-arch-connection-legend" style="margin-top: 12px; padding: 12px; background: var(--bg-base); border-radius: 8px; font-size: 0.85rem; display: none;">
+              <div style="font-weight: 700; margin-bottom: 8px; color: var(--text);">🔗 Connection Risk Levels & Symbols:</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;">
+                <span style="display: flex; align-items: center; gap: 6px;">
+                  <span style="display: inline-block; width: 24px; height: 3px; background: #ef4444; border-radius: 2px;"></span>
+                  <span style="color: var(--text-muted);">Public (High Risk)</span>
+                </span>
+                <span style="display: flex; align-items: center; gap: 6px;">
+                  <span style="display: inline-block; width: 24px; height: 3px; background: #f59e0b; border-radius: 2px;"></span>
+                  <span style="color: var(--text-muted);">WAF / Firewall Protected</span>
+                </span>
+                <span style="display: flex; align-items: center; gap: 6px;">
+                  <span style="display: inline-block; width: 24px; height: 3px; background: #10b981; border-radius: 2px;"></span>
+                  <span style="color: var(--text-muted);">Internal (Secured)</span>
+                </span>
+              </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 12px; border-top: 1px solid var(--border); padding-top: 8px; font-size: 0.82rem;">
+                <span style="color: var(--text-muted);">🔑 = Managed Identity</span>
+                <span style="color: var(--text-muted);">🛡️ = WAF Enabled</span>
+                <span style="color: var(--text-muted);">🌐 = Public IP</span>
+                <span style="color: var(--text-muted);">🔗 = DNS Name</span>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+        <div class="cloud-arch-status-card" id="cloud-arch-error-card" hidden>
+          <div class="cloud-arch-error" id="cloud-arch-error"></div>
+        </div>
+      </div>
+
+      <div id="cloud-arch-root" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;"></div>
+      <div class="cloud-arch-empty" id="cloud-arch-empty" hidden>
+        <div>
+          <div style="font-size: 2rem; margin-bottom: 8px;">🕸️</div>
+          <div>No cloud architecture data was found for the selected subscription.</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Component Detail Modal -->
+  <div class="cloud-arch-modal-overlay" id="cloud-arch-modal-overlay" hidden>
+    <div class="cloud-arch-modal">
+      <div class="cloud-arch-modal-header">
+        <div class="cloud-arch-modal-header-icon" id="modal-icon" style="background: rgba(0, 120, 212, 0.14); color: #0078d4;">
+          ☁
+        </div>
+        <div class="cloud-arch-modal-header-content">
+          <div class="cloud-arch-modal-title" id="modal-title">Loading...</div>
+          <div class="cloud-arch-modal-subtitle" id="modal-subtitle"></div>
+        </div>
+        <button class="cloud-arch-modal-close" id="modal-close-btn" aria-label="Close">×</button>
+      </div>
+      <div class="cloud-arch-modal-body" id="modal-body">
+        <div class="cloud-arch-modal-loading">Loading resource details...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.__TRIAGE_CLOUD_ARCH__ = {
+      initialSubscription: {{ initial_subscription|tojson }},
+      initialViewMode: {{ initial_view_mode|tojson }},
+    };
+  </script>
+  <script src="/static/vendor/react.production.min.js"></script>
+  <script src="/static/vendor/react-dom.production.min.js"></script>
+  <script src="/static/vendor/reactflow.umd.js"></script>
+  <script>
+    // Status card collapse/expand functionality
+    (function() {
+      const statusCard = document.getElementById('cloud-arch-status-card');
+      const collapseBtn = document.getElementById('cloud-arch-status-collapse-btn');
+      const collapseIcon = document.getElementById('cloud-arch-collapse-icon');
+      
+      // Load saved state from localStorage
+      const isCollapsed = localStorage.getItem('cloud-arch-legend-collapsed') === 'true';
+      if (isCollapsed) {
+        statusCard.classList.add('collapsed');
+        collapseIcon.textContent = '+';
+      }
+      
+      // Toggle collapse state
+      collapseBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const nowCollapsed = statusCard.classList.toggle('collapsed');
+        collapseIcon.textContent = nowCollapsed ? '+' : '−';
+        localStorage.setItem('cloud-arch-legend-collapsed', nowCollapsed);
+      });
+    })();
+  </script>
+  <script type="module" src="/static/js/cloud-architecture-reactflow.js?v=8"></script>
+</body>
+</html>

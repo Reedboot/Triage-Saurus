@@ -290,17 +290,13 @@ def subscription_asset_label(asset: dict, include_badges: bool = False, include_
 
 
 def subscription_html_node(node_id: str, label: str, arm_type: str | None, get_icon_path: Callable[[str], str | None]) -> str:
+    # Simplified node labels to avoid Mermaid 500-char line limit
     if arm_type:
         icon_path = get_icon_path(arm_type)
         if icon_path:
             safe_label = label.replace("'", "&#39;").replace('"', "&quot;")
-            html = (
-                "<div style='text-align:center;padding:0'>"
-                f"<img src='{icon_path}' style='width:24px;height:24px;aspect-ratio:1/1;"
-                "object-fit:contain;margin-bottom:0;border-radius:2px'/>"
-                f"<div style='font-size:0.75em;word-wrap:break-word;white-space:normal;line-height:1.1'>{safe_label}</div>"
-                "</div>"
-            )
+            # Compact HTML - use CSS classes instead of inline styles
+            html = f"<div class='nd'><img src='{icon_path}' class='ni'/><div class='nl'>{safe_label}</div></div>"
             return f'    {node_id}["{html}"]'
     safe_label = label.replace('"', "&quot;")
     return f'    {node_id}["{safe_label}"]'
