@@ -13256,7 +13256,70 @@ def _build_subscription_architecture_payload(
         assets.append(asset)
 
     # Add App Gateway listeners as virtual assets so the graph exposes public ingress.
+    # First, create synthetic App Gateway nodes if they don't exist in provisioned_assets
+    synthetic_gateways_created = set()
     if _table_exists(conn, "appgw_routing_rules"):
+        # Find gateways that have routing rules but aren't in provisioned_assets
+        gateway_names = conn.execute(
+            """
+            SELECT DISTINCT gateway_name, resource_group
+            FROM appgw_routing_rules
+            WHERE subscription_id = ?
+            """,
+            (sub_id,),
+        ).fetchall()
+        
+        existing_gateway_names = {
+            (asset.get("name") or "").lower()
+            for asset in assets
+            if "applicationgateway" in (asset.get("type") or "").lower()
+        }
+        
+        for gw_name_row in gateway_names:
+            gw_name = gw_name_row["gateway_name"]
+            if (gw_name or "").lower() not in existing_gateway_names:
+                # Create synthetic App Gateway node
+                synthetic_gw_id = f"synthetic-appgw::{gw_name}"
+                assets.append(
+                    {
+                        "id": synthetic_gw_id,
+                        "name": gw_name,
+                        "type": "microsoft.network/applicationgateways",
+                        "type_label": "App Gateway",
+                        "display_type_label": "App Gateway",
+                        "resource_group": gw_name_row["resource_group"] or "",
+                        "location": None,
+                        "sku": "Inferred from routing rules",
+                        "fqdn": None,
+                        "is_public": True,
+                        "status": "active",
+                        "pipeline_tag": None,
+                        "first_detected": None,
+                        "last_synced": None,
+                        "sub_id": sub_id,
+                        "sub_name": sub_name,
+                        "environment": sub_env,
+                        "cloud_provider": "Azure",
+                        "linked_repo": None,
+                        "kind": None,
+                        "parent_id": None,
+                        "parent_name": None,
+                        "parent_resource_group": None,
+                        "parent_type_label": None,
+                        "children_count": 0,
+                        "is_child": False,
+                        "depth": 0,
+                        "is_restricted": False,
+                        "waf_mode": None,
+                        "provider_key": "azure",
+                        "provider_label": "Azure",
+                        "tier": "entry",
+                        "_synthetic_gateway": True,
+                    }
+                )
+                synthetic_gateways_created.add((gw_name or "").lower())
+        
+        # Now create listener nodes
         listener_rows = conn.execute(
             """
             SELECT subscription_id, gateway_name, listener_name, hostname, protocol, resource_group
@@ -13268,6 +13331,13 @@ def _build_subscription_architecture_payload(
         ).fetchall()
         for lr in listener_rows:
             proto = (lr["protocol"] or "HTTP").upper()
+            gw_name_lower = (lr["gateway_name"] or "").lower()
+            
+            # Determine parent_id: use synthetic if created, otherwise will be resolved later
+            parent_id = None
+            if gw_name_lower in synthetic_gateways_created:
+                parent_id = f"synthetic-appgw::{lr['gateway_name']}"
+            
             assets.append(
                 {
                     "id": f"listener::{lr['gateway_name']}::{lr['listener_name']}::{lr['hostname']}",
@@ -13290,7 +13360,7 @@ def _build_subscription_architecture_payload(
                     "cloud_provider": "Azure",
                     "linked_repo": None,
                     "kind": None,
-                    "parent_id": None,
+                    "parent_id": parent_id,
                     "parent_name": lr["gateway_name"],
                     "parent_resource_group": lr["resource_group"] or "",
                     "parent_type_label": "App Gateway",
@@ -13302,6 +13372,118 @@ def _build_subscription_architecture_payload(
                     "provider_key": "azure",
                     "provider_label": "Azure",
                     "tier": "entry",
+                }
+            )
+
+    # Add WAF Policy nodes as separate visible nodes
+    if _table_exists(conn, "appgw_waf_policies"):
+        waf_policy_rows = conn.execute(
+            """
+            SELECT name, subscription_id, resource_group, mode, state, managed_rules_enabled, custom_rules_count, associated_gateways
+            FROM appgw_waf_policies
+            WHERE subscription_id = ? AND COALESCE(LOWER(state), 'enabled') != 'disabled'
+            ORDER BY name
+            """,
+            (sub_id,),
+        ).fetchall()
+        for waf_row in waf_policy_rows:
+            waf_mode = (waf_row["mode"] or "Unknown").strip()
+            state = (waf_row["state"] or "Enabled").strip()
+            managed_rules = "Managed Rules" if waf_row.get("managed_rules_enabled") else ""
+            custom_count = waf_row.get("custom_rules_count") or 0
+            sku_label = f"{waf_mode} · {state}" + (f" · {managed_rules}" if managed_rules else "") + (f" · {custom_count} custom rules" if custom_count > 0 else "")
+            assets.append(
+                {
+                    "id": f"waf::{waf_row['name']}",
+                    "name": waf_row["name"],
+                    "type": "microsoft.network/applicationgatewaywafpolicies",
+                    "type_label": "WAF Policy",
+                    "display_type_label": "WAF Policy",
+                    "resource_group": waf_row["resource_group"] or "",
+                    "location": None,
+                    "sku": sku_label,
+                    "fqdn": None,
+                    "is_public": False,
+                    "status": state.lower(),
+                    "pipeline_tag": None,
+                    "first_detected": None,
+                    "last_synced": None,
+                    "sub_id": sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Azure",
+                    "linked_repo": None,
+                    "kind": None,
+                    "parent_id": None,
+                    "parent_name": None,
+                    "parent_resource_group": None,
+                    "parent_type_label": None,
+                    "children_count": 0,
+                    "is_child": False,
+                    "depth": 0,
+                    "is_restricted": False,
+                    "waf_mode": waf_mode,
+                    "provider_key": "azure",
+                    "provider_label": "Azure",
+                    "tier": "entry",
+                    "_waf_policy": True,
+                    "_associated_gateways": waf_row.get("associated_gateways") or "[]",
+                }
+            )
+
+    # Add Network Firewall nodes if present
+    if _table_exists(conn, "firewall_policies"):
+        firewall_rows = conn.execute(
+            """
+            SELECT fp.id, fp.name, fp.resource_group, fp.location, fp.sku, fp.threat_intel_mode,
+                   (SELECT COUNT(*) FROM firewall_app_rules far WHERE far.firewall_policy_id = fp.id) as app_rules_count,
+                   (SELECT COUNT(*) FROM firewall_nat_rules fnr WHERE fnr.firewall_policy_id = fp.id) as nat_rules_count
+            FROM firewall_policies fp
+            WHERE fp.subscription_id = ?
+            ORDER BY fp.name
+            """,
+            (sub_id,),
+        ).fetchall() if _table_exists(conn, "firewall_app_rules") and _table_exists(conn, "firewall_nat_rules") else []
+        for fw_row in firewall_rows:
+            threat_mode = (fw_row["threat_intel_mode"] or "Alert").strip()
+            app_rules = fw_row.get("app_rules_count") or 0
+            nat_rules = fw_row.get("nat_rules_count") or 0
+            sku_label = f"{threat_mode} · {app_rules + nat_rules} rules"
+            assets.append(
+                {
+                    "id": fw_row["id"],
+                    "name": fw_row["name"],
+                    "type": "microsoft.network/firewallpolicies",
+                    "type_label": "Firewall Policy",
+                    "display_type_label": "Network Firewall",
+                    "resource_group": fw_row["resource_group"] or "",
+                    "location": fw_row["location"],
+                    "sku": sku_label,
+                    "fqdn": None,
+                    "is_public": False,
+                    "status": "active",
+                    "pipeline_tag": None,
+                    "first_detected": None,
+                    "last_synced": None,
+                    "sub_id": sub_id,
+                    "sub_name": sub_name,
+                    "environment": sub_env,
+                    "cloud_provider": "Azure",
+                    "linked_repo": None,
+                    "kind": None,
+                    "parent_id": None,
+                    "parent_name": None,
+                    "parent_resource_group": None,
+                    "parent_type_label": None,
+                    "children_count": app_rules + nat_rules,
+                    "is_child": False,
+                    "depth": 0,
+                    "is_restricted": False,
+                    "waf_mode": None,
+                    "provider_key": "azure",
+                    "provider_label": "Azure",
+                    "tier": "entry",
+                    "_firewall_policy": True,
                 }
             )
 
@@ -13393,6 +13575,7 @@ def _build_subscription_architecture_payload(
         provider_counts[asset["provider_key"]] += 1
 
     total_resource_count = len(assets)
+    all_assets_with_children = assets[:]  # Save full list including all children
     requested_mode = (view_mode or "").strip().lower()
     if requested_mode not in {"full", "overview"}:
         requested_mode = "overview" if total_resource_count > 250 else "full"
@@ -13599,7 +13782,11 @@ def _build_subscription_architecture_payload(
 
     overview_stats: dict[str, int] = {"displayed_resource_count": total_resource_count, "omitted_resource_count": 0}
     if requested_mode == "overview":
-        assets, overview_stats = _build_overview_subset()
+        parent_assets_subset, overview_stats = _build_overview_subset()
+        # Include child nodes (listeners, WAF policies) for parents that made it into the overview
+        parent_ids_in_overview = {a["id"] for a in parent_assets_subset}
+        child_nodes_for_overview = [a for a in all_assets_with_children if a.get("is_child") and a.get("parent_id") in parent_ids_in_overview]
+        assets = parent_assets_subset + child_nodes_for_overview
 
     node_icon_cache: dict[str, str | None] = {}
     def _asset_icon_path(asset_type: str | None) -> str | None:
@@ -13642,6 +13829,8 @@ def _build_subscription_architecture_payload(
             
             # Check if this is a group node
             is_group_node = bool(asset.get("_is_group_node"))
+            # Check if this is a child node (depth > 0 or has parent_id)
+            is_child_node = bool(asset.get("is_child") or asset.get("depth", 0) > 0 or asset.get("parent_id"))
             
             nodes.append(
                 {
@@ -13651,6 +13840,7 @@ def _build_subscription_architecture_payload(
                         "x": 80 + (col * 480) + min(depth * 28, 120),  # Increased from 420 to 480
                         "y": 72 + (idx * (180 if requested_mode == "overview" else 160)),
                     },
+                    "hidden": is_child_node,  # Start with child nodes hidden
                     "data": {
                         "label": (asset.get("short_name") or asset["name"]) if requested_mode == "overview" else asset["name"],
                         "providerKey": asset["provider_key"],
@@ -13672,6 +13862,8 @@ def _build_subscription_architecture_payload(
                         "groupType": asset.get("_group_type") if is_group_node else None,
                         "groupAccess": asset.get("_group_access") if is_group_node else None,
                         "childrenCount": asset.get("children_count") if is_group_node else None,
+                        "isChildNode": is_child_node,
+                        "parentNodeId": str(asset.get("parent_id")) if asset.get("parent_id") else None,
                     },
                     "style": {"width": 340, "minHeight": 132},
                 }
@@ -13705,14 +13897,73 @@ def _build_subscription_architecture_payload(
     provider_counts["external"] += 1
 
     edges: list[dict] = []
+    
+    # Add WAF Policy → App Gateway edges
+    waf_policies = [a for a in assets if a.get("_waf_policy")]
+    for waf_policy in waf_policies:
+        associated_gateways_json = waf_policy.get("_associated_gateways") or "[]"
+        try:
+            associated_gateways = json.loads(associated_gateways_json) if isinstance(associated_gateways_json, str) else (associated_gateways_json or [])
+        except Exception:
+            associated_gateways = []
+        # Find matching App Gateway assets
+        for gateway_name in associated_gateways:
+            gateway_asset = next(
+                (a for a in assets if (a.get("name") or "").lower() == str(gateway_name).lower() and "applicationgateway" in (a.get("type") or "").lower()),
+                None
+            )
+            if gateway_asset:
+                edges.append(
+                    {
+                        "id": f"edge-waf-{waf_policy['id']}-{gateway_asset['id']}",
+                        "source": str(waf_policy["id"]),
+                        "target": str(gateway_asset["id"]),
+                        "label": f"Protects · {waf_policy.get('waf_mode', 'WAF')}",
+                        "data": {
+                            "connection_type": "waf_protection",
+                            "protocol": None,
+                            "port": None,
+                            "auth_method": None,
+                            "is_encrypted": False,
+                            "is_cross_repo": False,
+                            "waf_mode": waf_policy.get("waf_mode"),
+                        },
+                        "style": {"stroke": "#f97316", "strokeWidth": 3},  # Orange for WAF protection
+                    }
+                )
+    
+    # Add Internet → Firewall edges for firewall policies
+    firewall_policies = [a for a in assets if a.get("_firewall_policy")]
+    for fw_policy in firewall_policies:
+        edges.append(
+            {
+                "id": f"edge-internet-fw-{fw_policy['id']}",
+                "source": "Internet",
+                "target": str(fw_policy["id"]),
+                "label": "Firewall ingress",
+                "data": {
+                    "connection_type": "firewall_ingress",
+                    "protocol": "Any",
+                    "port": "Any",
+                    "auth_method": None,
+                    "is_encrypted": False,
+                    "is_cross_repo": False,
+                },
+                "style": {"stroke": "#dc2626", "strokeWidth": 3},  # Red for firewall
+            }
+        )
+    
     for asset in assets:
         if asset.get("parent_id"):
+            # Edge from parent to child - start hidden
+            is_child = bool(asset.get("is_child") or asset.get("depth", 0) > 0)
             edges.append(
                 {
                     "id": f"edge-parent-{asset['id']}",
                     "source": str(asset["parent_id"]),
                     "target": str(asset["id"]),
                     "label": "contains",
+                    "hidden": is_child,  # Start with child edges hidden
                     "data": {
                         "connection_type": "contains",
                         "protocol": None,
@@ -13724,7 +13975,9 @@ def _build_subscription_architecture_payload(
                 }
             )
         if asset.get("is_public") and not asset.get("_overview_summary"):
-            if requested_mode == "overview" and (asset.get("tier") in {"entry", "api"}):
+            # In overview mode, skip entry tier (handled separately below with WAF info)
+            # But include API, backend, and data tier public resources
+            if requested_mode == "overview" and asset.get("tier") == "entry":
                 continue
             
             # Determine protocol/port based on asset type
@@ -13745,7 +13998,22 @@ def _build_subscription_architecture_payload(
                 protocol = "HTTPS"
                 port = "443"
             
-            label = f"Public · {protocol}:{port}"
+            # Determine edge color based on protection
+            has_waf = asset.get("has_waf") or asset.get("waf_mode")
+            is_restricted = asset.get("is_restricted")
+            
+            if has_waf and is_restricted:
+                edge_color = "#f97316"  # Orange - WAF + IP allowlist
+                label = f"WAF + Restricted · {protocol}:{port}"
+            elif has_waf:
+                edge_color = "#f97316"  # Orange - WAF protected
+                label = f"WAF · {protocol}:{port}"
+            elif is_restricted:
+                edge_color = "#f59e0b"  # Amber - IP restricted
+                label = f"IP Restricted · {protocol}:{port}"
+            else:
+                edge_color = "#ef4444"  # Red - Public unprotected
+                label = f"Public · {protocol}:{port}"
             
             edges.append(
                 {
@@ -13761,6 +14029,7 @@ def _build_subscription_architecture_payload(
                         "is_encrypted": protocol in {"HTTPS", "TDS"},
                         "is_cross_repo": False,
                     },
+                    "style": {"stroke": edge_color, "strokeWidth": 3},  # 3px for direct internet exposure
                 }
             )
 
@@ -13791,7 +14060,31 @@ def _build_subscription_architecture_payload(
 
         # Connect ALL entry points to Internet
         for entry in overview_entries:
-            waf_label = "WAF" if entry.get("has_waf") or entry.get("waf_mode") else ("Restricted" if entry.get("is_restricted") else "Public")
+            waf_mode = entry.get("waf_mode") or ""
+            has_waf = entry.get("has_waf") or waf_mode
+            is_restricted = entry.get("is_restricted")
+            
+            # Determine edge color and label based on protection level
+            if has_waf and is_restricted:
+                edge_color = "#f97316"  # Orange - WAF + IP allowlist
+                waf_label = "WAF + IP allowlist"
+            elif has_waf:
+                if "prevention" in waf_mode.lower():
+                    edge_color = "#f97316"  # Orange - WAF Prevention
+                    waf_label = "WAF (Prevention)"
+                elif "detection" in waf_mode.lower():
+                    edge_color = "#f59e0b"  # Amber - WAF Detection
+                    waf_label = "WAF (Detection)"
+                else:
+                    edge_color = "#f97316"  # Orange - WAF
+                    waf_label = "WAF"
+            elif is_restricted:
+                edge_color = "#f59e0b"  # Amber - IP restricted
+                waf_label = "IP Restricted"
+            else:
+                edge_color = "#ef4444"  # Red - Public unprotected
+                waf_label = "Public"
+            
             protocol = "HTTPS" if entry.get("fqdn") or entry.get("is_public") else "HTTP"
             port = "443" if protocol == "HTTPS" else "80"
             edge_label = f"{waf_label} · {protocol}:{port}"
@@ -13810,6 +14103,7 @@ def _build_subscription_architecture_payload(
                         "is_cross_repo": False,
                         "waf_protected": bool(entry.get("has_waf") or entry.get("waf_mode")),
                     },
+                    "style": {"stroke": edge_color, "strokeWidth": 3},  # 3px for ingress
                 })
         
         # Connect entry points to APIs or backends
@@ -13830,6 +14124,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": True,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#f97316", "strokeWidth": 2},  # Orange 2px for routing
                     })
         elif overview_backends:
             # If no APIs, connect entries directly to backends
@@ -13848,6 +14143,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": False,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#f97316", "strokeWidth": 2},  # Orange 2px for backend
                     })
         
         # Connect APIs to backends
@@ -13867,6 +14163,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": False,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#f59e0b", "strokeWidth": 2},  # Amber 2px for API→backend
                     })
         
         # Connect ALL backends to ALL data stores
@@ -13900,6 +14197,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": True,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#94a3b8", "strokeWidth": 1},  # Grey 1px for data access
                     })
         
         # Connect "other" tier resources to backends (for things like App Insights, Redis not in data tier)
@@ -13921,6 +14219,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": True,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#94a3b8", "strokeWidth": 1},  # Grey for telemetry
                     })
             # Azure Firewall: connect from VNets (approximate with backends)
             elif "firewall" in other_type or "azurefirewalls" in other_type:
@@ -13938,6 +14237,7 @@ def _build_subscription_architecture_payload(
                             "is_encrypted": False,
                             "is_cross_repo": False,
                         },
+                        "style": {"stroke": "#dc2626", "strokeWidth": 2},  # Red for firewall
                     })
             # Service Fabric: connect as backend tier
             elif "servicefabric" in other_type:
@@ -13956,6 +14256,7 @@ def _build_subscription_architecture_payload(
                                 "is_encrypted": False,
                                 "is_cross_repo": False,
                             },
+                            "style": {"stroke": "#94a3b8", "strokeWidth": 1},  # Grey for service calls
                         })
 
 
@@ -17630,19 +17931,10 @@ def _build_ingress_diagram(rows: list, plan_links: list | None = None, apim_back
             })
         if l_nids:
             _listener_nids[gw_nid] = l_nids
+        # Only use named WAF policies from routing rules - do not create fallback "WAF Policy" nodes
+        # for gateways without explicit WAF policies (disabled WAFs or no WAF configured)
         if _waf_nids_by_gateway.get(gw_nid):
             _waf_nids[gw_nid] = _waf_nids_by_gateway[gw_nid][0]
-        elif item.get("has_waf") or item.get("waf_mode"):
-            w_nid = f"waf_{gw_nid}"
-            lines.append(f'    {w_nid}["🛡️ WAF Policy"]')
-            _waf_nids[gw_nid] = w_nid
-            waf_node_specs.append({
-                "node_id": w_nid,
-                "gateway_node_id": gw_nid,
-                "gateway_name": item.get("name") or "",
-                "resource_group": item.get("rg") or "",
-                "policy_name": "",
-            })
 
     for item in shown_api:
         node_id = _get_node_id(item)
